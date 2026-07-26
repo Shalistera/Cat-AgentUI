@@ -1,0 +1,16 @@
+{
+  "name": "cat-agentui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cat-AgentUI — a lightweight multi-user AI chat & image panel (OpenAI / Anthropic / Gemini, MCP)",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w web && npm run build -w server",
+    "start": "npm run start -w server"
+  }
+}

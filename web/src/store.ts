@@ -1,0 +1,122 @@
+import { create } from 'zustand';
+import { api } from './api';
+import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, User } from './types';
+
+// ---- theme ----
+export type Theme = 'dark' | 'light';
+
+function applyTheme(t: Theme) {
+  document.documentElement.classList.toggle('light', t === 'light');
+  localStorage.setItem('cat-theme', t);
+}
+
+interface UiState {
+  theme: Theme;
+  sidebarOpen: boolean;
+  setTheme(t: Theme): void;
+  setSidebarOpen(v: boolean): void;
+}
+
+export const useUi = create<UiState>((set) => {
+  const saved = (localStorage.getItem('cat-theme') as Theme) || 'dark';
+  applyTheme(saved);
+  return {
+    theme: saved,
+    sidebarOpen: window.innerWidth > 900,
+    setTheme(t) { applyTheme(t); set({ theme: t }); },
+    setSidebarOpen(v) { set({ sidebarOpen: v }); },
+  };
+});
+
+// ---- auth ----
+interface AuthState {
+  user: User | null;
+  bootstrap: Bootstrap | null;
+  loaded: boolean;
+  refresh(): Promise<void>;
+  setUser(u: User | null): void;
+  logout(): Promise<void>;
+}
+
+export const useAuth = create<AuthState>((set) => ({
+  user: null,
+  bootstrap: null,
+  loaded: false,
+  async refresh() {
+    const bootstrap = await api.get<Bootstrap>('/api/auth/bootstrap').catch(() => null);
+    let user: User | null = null;
+    try {
+      const r = await api.get<{ user: User }>('/api/auth/me');
+      user = r.user;
+    } catch { /* not logged in */ }
+    set({ user, bootstrap, loaded: true });
+  },
+  setUser(u) { set({ user: u }); },
+  async logout() {
+    await api.post('/api/auth/logout').catch(() => { /* ignore */ });
+    set({ user: null });
+  },
+}));
+
+// ---- chats list (sidebar) ----
+interface ChatsState {
+  chats: ChatSummary[];
+  loaded: boolean;
+  load(): Promise<void>;
+  upsert(c: ChatSummary): void;
+  patch(id: string, p: Partial<ChatSummary>): void;
+  remove(id: string): void;
+}
+
+export const useChats = create<ChatsState>((set, get) => ({
+  chats: [],
+  loaded: false,
+  async load() {
+    const r = await api.get<{ chats: ChatSummary[] }>('/api/chats');
+    set({ chats: r.chats, loaded: true });
+  },
+  upsert(c) {
+    const rest = get().chats.filter((x) => x.id !== c.id);
+    set({ chats: [c, ...rest] });
+  },
+  patch(id, p) {
+    set({ chats: get().chats.map((c) => (c.id === id ? { ...c, ...p } : c)) });
+  },
+  remove(id) {
+    set({ chats: get().chats.filter((c) => c.id !== id) });
+  },
+}));
+
+// ---- models & mcp servers (shared caches) ----
+interface ModelsState {
+  models: ModelInfo[];
+  loaded: boolean;
+  load(force?: boolean): Promise<void>;
+}
+
+export const useModels = create<ModelsState>((set, get) => ({
+  models: [],
+  loaded: false,
+  async load(force) {
+    if (get().loaded && !force) return;
+    const r = await api.get<ModelInfo[]>('/api/models');
+    set({ models: Array.isArray(r) ? r : [], loaded: true });
+  },
+}));
+
+interface McpState {
+  servers: McpServerInfo[];
+  loaded: boolean;
+  load(force?: boolean): Promise<void>;
+}
+
+export const useMcp = create<McpState>((set, get) => ({
+  servers: [],
+  loaded: false,
+  async load(force) {
+    if (get().loaded && !force) return;
+    const r = await api.get<{ servers: McpServerInfo[] } | McpServerInfo[]>('/api/mcp/servers');
+    const servers = Array.isArray(r) ? r : r.servers ?? [];
+    set({ servers, loaded: true });
+  },
+}));

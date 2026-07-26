@@ -1,0 +1,113 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@theme {
+  /* dark (default) — black cat palette */
+  --color-bg0: #0b0b0e;
+  --color-bg1: #121216;
+  --color-bg2: #1a1a20;
+  --color-bg3: #23232b;
+  --color-line: #26262e;
+  --color-line2: #33333d;
+  --color-tx: #e9e9ee;
+  --color-tx2: #9b9ba6;
+  --color-tx3: #5f5f6b;
+  --color-acc: #f5b83d;
+  --color-acc2: #ffcb5c;
+  --color-accfg: #1d1503;
+  --color-ok: #4ade80;
+  --color-err: #f87171;
+  --color-info: #7dd3fc;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+html.light {
+  --color-bg0: #f7f6f3;
+  --color-bg1: #ffffff;
+  --color-bg2: #f0efeb;
+  --color-bg3: #e7e5e0;
+  --color-line: #e2e0da;
+  --color-line2: #d3d1c9;
+  --color-tx: #1c1c21;
+  --color-tx2: #6b6b76;
+  --color-tx3: #a3a3ad;
+  --color-acc: #b07d10;
+  --color-acc2: #96690a;
+  --color-accfg: #ffffff;
+  --color-ok: #16a34a;
+  --color-err: #dc2626;
+  --color-info: #0284c7;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--color-bg0);
+  color: var(--color-tx);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+* { scrollbar-width: thin; scrollbar-color: var(--color-line2) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--color-line2); border-radius: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+::selection { background: color-mix(in srgb, var(--color-acc) 30%, transparent); }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes pulseDot { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+.fade-up { animation: fadeUp .25s ease both; }
+
+.blink-cursor::after {
+  content: "▍";
+  color: var(--color-acc);
+  animation: pulseDot 1s ease-in-out infinite;
+  margin-left: 1px;
+}
+
+/* ---------- markdown ---------- */
+.md { line-height: 1.75; word-break: break-word; font-size: 0.9375rem; }
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 650; margin: 1.4em 0 .6em; line-height: 1.35; }
+.md h1 { font-size: 1.35em; } .md h2 { font-size: 1.2em; } .md h3 { font-size: 1.08em; } .md h4 { font-size: 1em; }
+.md p { margin: .65em 0; }
+.md ul, .md ol { margin: .65em 0; padding-left: 1.5em; }
+.md ul { list-style: disc; } .md ol { list-style: decimal; }
+.md li { margin: .25em 0; } .md li > p { margin: .25em 0; }
+.md ul ul { list-style: circle; }
+.md a { color: var(--color-acc); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--color-acc) 45%, transparent); }
+.md a:hover { text-decoration-color: var(--color-acc); }
+.md blockquote { border-left: 3px solid var(--color-acc); background: color-mix(in srgb, var(--color-acc) 6%, transparent); padding: .4em 1em; margin: .8em 0; border-radius: 0 8px 8px 0; color: var(--color-tx2); }
+.md hr { border: none; border-top: 1px solid var(--color-line); margin: 1.5em 0; }
+.md table { border-collapse: collapse; margin: .8em 0; display: block; overflow-x: auto; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--color-line); padding: .45em .8em; text-align: left; }
+.md th { background: var(--color-bg2); font-weight: 600; white-space: nowrap; }
+.md code:not(pre code) { background: var(--color-bg3); border: 1px solid var(--color-line); padding: .1em .35em; border-radius: 5px; font-family: var(--font-mono); font-size: .85em; }
+.md pre { margin: 0; }
+.md .codeblock { margin: .8em 0; border: 1px solid var(--color-line); border-radius: 10px; overflow: hidden; background: var(--color-bg1); }
+.md .codeblock-head { display: flex; align-items: center; justify-content: space-between; padding: .3rem .4rem .3rem .9rem; background: var(--color-bg2); border-bottom: 1px solid var(--color-line); font-size: .75rem; color: var(--color-tx2); font-family: var(--font-mono); }
+.md .codeblock pre { padding: .85rem 1rem; overflow-x: auto; font-family: var(--font-mono); font-size: .8125rem; line-height: 1.6; }
+.md .katex-display { overflow-x: auto; overflow-y: hidden; padding: .3em 0; }
+.md img { max-width: 100%; border-radius: 10px; }
+
+/* ---------- highlight.js — palette-matched, both themes ---------- */
+.hljs-comment, .hljs-quote { color: var(--color-tx3); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-template-tag, .hljs-type { color: #c792ea; }
+.hljs-string, .hljs-template-variable, .hljs-addition, .hljs-regexp { color: #8fd18c; }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: #f5a97f; }
+.hljs-title, .hljs-function .hljs-title, .hljs-title.function_, .hljs-section { color: #82aaff; }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-name, .hljs-selector-attr, .hljs-selector-class, .hljs-selector-id { color: #f5b83d; }
+.hljs-built_in, .hljs-class .hljs-title, .hljs-title.class_ { color: #ffcb6b; }
+.hljs-meta, .hljs-link { color: #89ddff; }
+.hljs-deletion { color: var(--color-err); }
+.hljs-emphasis { font-style: italic; } .hljs-strong { font-weight: bold; }
+html.light .hljs-keyword, html.light .hljs-selector-tag, html.light .hljs-template-tag, html.light .hljs-type { color: #9333ea; }
+html.light .hljs-string, html.light .hljs-template-variable, html.light .hljs-addition, html.light .hljs-regexp { color: #15803d; }
+html.light .hljs-number, html.light .hljs-literal, html.light .hljs-symbol, html.light .hljs-bullet { color: #c2410c; }
+html.light .hljs-title, html.light .hljs-function .hljs-title, html.light .hljs-title.function_, html.light .hljs-section { color: #1d4ed8; }
+html.light .hljs-attr, html.light .hljs-attribute, html.light .hljs-variable, html.light .hljs-name { color: #a16207; }
+html.light .hljs-built_in, html.light .hljs-class .hljs-title, html.light .hljs-title.class_ { color: #b45309; }
+html.light .hljs-meta, html.light .hljs-link { color: #0369a1; }

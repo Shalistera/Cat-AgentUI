@@ -1,0 +1,192 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { and, desc, eq, sql } from 'drizzle-orm';
+import { db, schema, now } from '../db/index.js';
+import { newId } from '../crypto.js';
+import { config } from '../config.js';
+import { requireAuth } from '../auth.js';
+import { getAdapter, toRuntimeConfig } from '../providers/index.js';
+import { recordUsage } from '../usage.js';
+import { readUploadBase64 } from './uploads.js';
+
+const generateSchema = z.object({
+  modelId: z.string(),
+  prompt: z.string().min(1).max(4000),
+  size: z.string().max(20).optional(),
+  quality: z.string().max(20).optional(),
+  n: z.number().int().min(1).max(4).optional(),
+  inputUploadIds: z.array(z.string()).max(4).optional(),
+});
+
+const MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+};
+
+function extForMime(mime: string): string {
+  if (mime === 'image/jpeg') return 'jpg';
+  if (mime === 'image/webp') return 'webp';
+  return 'png';
+}
+
+export async function imageRoutes(app: FastifyInstance) {
+  app.get('/api/images/models', async (req, reply) => {
+    requireAuth(req, reply);
+    return db.select({
+      id: schema.models.id,
+      modelId: schema.models.modelId,
+      displayName: schema.models.displayName,
+      providerName: schema.providers.name,
+      providerType: schema.providers.type,
+    }).from(schema.models)
+      .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
+      .where(and(
+        eq(schema.models.imageGen, 1),
+        eq(schema.models.enabled, 1),
+        eq(schema.providers.enabled, 1),
+      ))
+      .orderBy(schema.models.sortOrder)
+      .all();
+  });
+
+  app.post('/api/images/generate', async (req, reply) => {
+    requireAuth(req, reply);
+    const body = generateSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const { modelId, prompt, size, quality, n, inputUploadIds } = body.data;
+
+    const model = db.select().from(schema.models)
+      .where(and(
+        eq(schema.models.id, modelId),
+        eq(schema.models.enabled, 1),
+        eq(schema.models.imageGen, 1),
+      )).get();
+    if (!model) return reply.code(400).send({ error: '模型不可用' });
+
+    const provider = db.select().from(schema.providers)
+      .where(and(eq(schema.providers.id, model.providerId), eq(schema.providers.enabled, 1))).get();
+    if (!provider) return reply.code(400).send({ error: '模型不可用' });
+
+    const adapter = getAdapter(provider.type);
+    if (!adapter.generateImages) {
+      return reply.code(400).send({ error: '该 Provider 不支持图像生成' });
+    }
+
+    let inputImages: { mime: string; dataBase64: string }[] | undefined;
+    if (inputUploadIds && inputUploadIds.length > 0) {
+      inputImages = [];
+      for (const uploadId of inputUploadIds) {
+        const img = readUploadBase64(uploadId, req.user!.id);
+        if (!img) return reply.code(400).send({ error: '输入图片不存在' });
+        inputImages.push(img);
+      }
+    }
+
+    const t0 = Date.now();
+    const signal = AbortSignal.timeout(300_000);
+    let generated;
+    try {
+      generated = await adapter.generateImages(toRuntimeConfig(provider), {
+        model: model.modelId, prompt, size, quality, n, signal, inputImages,
+      });
+    } catch (err) {
+      // Adapter errors are already human-readable — pass through as-is.
+      return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+    const durationMs = Date.now() - t0;
+
+    const saved: { id: string; model: string; prompt: string; size: string | null; durationMs: number; createdAt: number; tokens: number | null }[] = [];
+    for (const img of generated) {
+      const imageId = newId();
+      const filename = `${imageId}.${extForMime(img.mime)}`;
+      fs.writeFileSync(path.join(config.dataDir, 'images', filename), Buffer.from(img.dataBase64, 'base64'));
+      const createdAt = now();
+      db.insert(schema.images).values({
+        id: imageId,
+        userId: req.user!.id,
+        providerId: provider.id,
+        model: model.modelId,
+        prompt,
+        size: size ?? null,
+        filename,
+        durationMs,
+        createdAt,
+      }).run();
+      saved.push({
+        id: imageId,
+        model: model.modelId,
+        prompt,
+        size: size ?? null,
+        durationMs,
+        createdAt,
+        tokens: img.usage?.totalTokens ?? null,
+      });
+    }
+
+    const usage = generated[0]?.usage;
+    recordUsage({
+      userId: req.user!.id,
+      providerId: provider.id,
+      providerType: provider.type,
+      model: model.modelId,
+      kind: 'image',
+      images: saved.length,
+      promptTokens: usage?.promptTokens,
+      completionTokens: usage?.completionTokens,
+      totalTokens: usage?.totalTokens,
+      durationMs,
+    });
+
+    return { images: saved };
+  });
+
+  app.get('/api/images', async (req, reply) => {
+    requireAuth(req, reply);
+    const q = req.query as { limit?: string; offset?: string };
+    const limit = Math.min(Math.max(Number(q.limit) || 40, 1), 100);
+    const offset = Math.max(Number(q.offset) || 0, 0);
+    const rows = db.select().from(schema.images)
+      .where(eq(schema.images.userId, req.user!.id))
+      .orderBy(desc(schema.images.createdAt))
+      .limit(limit).offset(offset).all();
+    const total = db.select({ c: sql<number>`count(*)` }).from(schema.images)
+      .where(eq(schema.images.userId, req.user!.id)).get()?.c ?? 0;
+    return { images: rows, total };
+  });
+
+  app.get('/api/images/:id/file', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const row = db.select().from(schema.images).where(eq(schema.images.id, id)).get();
+    if (!row || (row.userId !== req.user!.id && req.user!.role !== 'admin')) {
+      return reply.code(404).send({ error: '图片不存在' });
+    }
+    // Filename comes from the DB row, never from user path input.
+    const filePath = path.join(config.dataDir, 'images', row.filename);
+    if (!fs.existsSync(filePath)) return reply.code(404).send({ error: '图片不存在' });
+    const ext = path.extname(row.filename).slice(1).toLowerCase();
+    reply.header('content-type', MIME_BY_EXT[ext] ?? 'application/octet-stream');
+    reply.header('cache-control', 'private, max-age=31536000, immutable');
+    return reply.send(fs.createReadStream(filePath));
+  });
+
+  app.delete('/api/images/:id', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const row = db.select().from(schema.images).where(eq(schema.images.id, id)).get();
+    if (!row || (row.userId !== req.user!.id && req.user!.role !== 'admin')) {
+      return reply.code(404).send({ error: '图片不存在' });
+    }
+    try {
+      fs.unlinkSync(path.join(config.dataDir, 'images', row.filename));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    db.delete(schema.images).where(eq(schema.images.id, id)).run();
+    return { ok: true };
+  });
+}
