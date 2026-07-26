@@ -25,15 +25,17 @@ async function main() {
   });
 
   await app.register(cookie);
-  await app.register(authPlugin);
+  // NOTE: called directly (not app.register) so the auth hook applies at root
+  // scope and is inherited by every route plugin — register() would encapsulate it.
+  await authPlugin(app);
 
   app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
-    if (err.message === 'unauthorized' || err.message === 'forbidden') return; // reply already sent
+    if (reply.sent) return;
+    if (err.message === 'unauthorized') return reply.code(401).send({ error: '请先登录' });
+    if (err.message === 'forbidden') return reply.code(403).send({ error: '需要管理员权限' });
     req.log.error(err);
-    if (!reply.sent) {
-      reply.code(err.statusCode && err.statusCode >= 400 ? err.statusCode : 500)
-        .send({ error: err.statusCode === 413 ? '请求体过大' : '服务器内部错误' });
-    }
+    reply.code(err.statusCode && err.statusCode >= 400 ? err.statusCode : 500)
+      .send({ error: err.statusCode === 413 ? '请求体过大' : '服务器内部错误' });
   });
 
   app.get('/api/health', async () => ({ ok: true }));

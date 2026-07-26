@@ -271,7 +271,11 @@ export async function chatRoutes(app: FastifyInstance) {
     const sse = createSse(reply);
     const controller = new AbortController();
     let clientGone = false;
-    req.raw.on('close', () => { clientGone = true; controller.abort(); });
+    // response 'close' with writableEnded=false → client disconnected mid-stream
+    // (request 'close' fires as soon as the body is consumed on Node 16+, so it's unusable here)
+    reply.raw.on('close', () => {
+      if (!reply.raw.writableEnded) { clientGone = true; controller.abort(); }
+    });
 
     const assistantId = newId();
     db.insert(schema.messages).values({

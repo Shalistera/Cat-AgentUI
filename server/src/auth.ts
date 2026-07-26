@@ -116,19 +116,14 @@ export async function authPlugin(app: FastifyInstance) {
   });
 }
 
-export function requireAuth(req: FastifyRequest, reply: FastifyReply): asserts req is FastifyRequest & { user: SessionUser } {
-  if (!req.user) {
-    reply.code(401).send({ error: 'Unauthorized' });
-    throw new Error('unauthorized');
-  }
+// These throw; the root error handler maps them to 401/403 JSON responses.
+export function requireAuth(req: FastifyRequest, _reply?: FastifyReply): asserts req is FastifyRequest & { user: SessionUser } {
+  if (!req.user) throw new Error('unauthorized');
 }
 
-export function requireAdmin(req: FastifyRequest, reply: FastifyReply): asserts req is FastifyRequest & { user: SessionUser } {
+export function requireAdmin(req: FastifyRequest, reply?: FastifyReply): asserts req is FastifyRequest & { user: SessionUser } {
   requireAuth(req, reply);
-  if (req.user!.role !== 'admin') {
-    reply.code(403).send({ error: 'Forbidden' });
-    throw new Error('forbidden');
-  }
+  if (req.user!.role !== 'admin') throw new Error('forbidden');
 }
 
 // --- simple in-memory rate limiter (login etc.) ---
