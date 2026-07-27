@@ -66,9 +66,11 @@ export default function Chat() {
     if (chatModel) { setModelSel(chatModel); return; }
     if (modelSel && models.some((m) => m.id === modelSel.id)) return;
     const last = localStorage.getItem(LAST_MODEL_KEY);
-    const pick = models.find((m) => m.id === last && !m.imageGen)
+    // an image model is only ever picked deliberately, never as the default
+    const pick = models.find((m) => m.id === last)
       ?? models.find((m) => m.isDefault && !m.imageGen)
       ?? models.find((m) => !m.imageGen)
+      ?? models[0]
       ?? null;
     setModelSel(pick);
   }, [modelsLoaded, models, chat]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -218,6 +220,7 @@ export default function Chat() {
       onReasoning(t) { buf.reasoning += t; },
       onToolCall(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_call', ...d }] })); },
       onToolResult(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_result', ...d }] })); },
+      onImage(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'image', imageId: d.imageId, mime: d.mime }] })); },
       onUsage(d) {
         applyToAssistant((m) => ({
           ...m,
@@ -307,7 +310,7 @@ export default function Chat() {
   const composer = (
     <Composer
       streaming={streaming}
-      disabled={modelsLoaded && models.filter((m) => !m.imageGen).length === 0}
+      disabled={modelsLoaded && models.length === 0}
       model={modelSel}
       onModelChange={selectModel}
       mcpSelected={mcpSelected}
@@ -356,6 +359,7 @@ export default function Chat() {
                   key={m.id}
                   msg={m}
                   isStreaming={streaming && i === messages.length - 1 && m.role === 'assistant'}
+                  pendingLabel={modelSel?.imageGen ? '正在生成图片,可能需要 1–3 分钟…' : undefined}
                   onRegenerate={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? () => regenerate(m.id) : undefined}
                   onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
                 />

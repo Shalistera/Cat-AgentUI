@@ -11,7 +11,7 @@ export interface User {
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  | { type: 'image'; uploadId?: string; mime?: string; url?: string }
+  | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   | { type: 'tool_call'; id: string; name: string; args: string }
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean };
 
@@ -125,6 +125,7 @@ export interface StreamHandlers {
   onReasoning?(text: string): void;
   onToolCall?(d: { id: string; name: string; args: string }): void;
   onToolResult?(d: { toolCallId: string; name: string; result: string; isError?: boolean }): void;
+  onImage?(d: { imageId: string; mime?: string }): void;
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;
   onNotice?(message: string): void;
   onTitle?(title: string): void;

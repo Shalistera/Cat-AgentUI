@@ -205,20 +205,30 @@ export const geminiAdapter: ChatAdapter = {
   },
 
   async generateImages(cfg, req: ImageGenRequest): Promise<GeneratedImage[]> {
-    const parts: any[] = [{ text: req.prompt }];
-    for (const img of req.inputImages ?? []) {
-      parts.push({ inlineData: { mimeType: img.mime, data: img.dataBase64 } });
+    // Gemini image models are ordinary generateContent models, so a chat turn can
+    // hand over the whole conversation and get context-aware edits ("make it blue").
+    let contents: any[];
+    if (req.context?.length) {
+      contents = toContents(req.context);
+    } else {
+      const parts: any[] = [{ text: req.prompt }];
+      for (const img of req.inputImages ?? []) {
+        parts.push({ inlineData: { mimeType: img.mime, data: img.dataBase64 } });
+      }
+      contents = [{ role: 'user', parts }];
     }
-    const body = {
-      contents: [{ role: 'user', parts }],
+    const body: any = {
+      contents,
       generationConfig: {
         responseModalities: ['TEXT', 'IMAGE'],
         ...(req.size && /^\d+:\d+$/.test(req.size) ? { imageConfig: { aspectRatio: req.size } } : {}),
       },
     };
+    if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
     const { url, headers } = await endpoint(cfg, req.model, 'generateContent');
 
     const out: GeneratedImage[] = [];
+    let text = '';
     const n = Math.min(req.n || 1, 4);
     for (let i = 0; i < n; i++) {
       const res = await fetch(url, {
@@ -230,10 +240,16 @@ export const geminiAdapter: ChatAdapter = {
       for (const part of j?.candidates?.[0]?.content?.parts ?? []) {
         if (part.inlineData?.data) {
           out.push({ mime: part.inlineData.mimeType || 'image/png', dataBase64: part.inlineData.data, usage });
+        } else if (typeof part.text === 'string' && part.text && part.thought !== true) {
+          text += part.text;
         }
       }
     }
-    if (!out.length) throw new Error('Gemini 未返回图片数据');
+    if (!out.length) {
+      // A refusal/clarification comes back as text only — surface it instead of a generic error.
+      throw new Error(text.trim() ? `Gemini: ${text.trim().slice(0, 500)}` : 'Gemini 未返回图片数据');
+    }
+    if (text.trim()) out[0].text = text.trim();
     return out;
   },
 };

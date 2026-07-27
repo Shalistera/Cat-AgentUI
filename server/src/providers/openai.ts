@@ -260,16 +260,20 @@ export const openaiAdapter: ChatAdapter = {
 
   async generateImages(cfg, req: ImageGenRequest): Promise<GeneratedImage[]> {
     const isDallE = req.model.startsWith('dall-e');
+    // The images API takes a single prompt — a chat turn folds its context into it.
+    const prompt = req.system ? `${req.system}\n\n${req.prompt}` : req.prompt;
+    // dall-e-3 has no /images/edits endpoint; ignore reference images rather than 400.
+    const inputImages = req.model.startsWith('dall-e-3') ? undefined : req.inputImages;
     let res: Response;
-    if (req.inputImages?.length) {
+    if (inputImages?.length) {
       // image editing via multipart
       const form = new FormData();
       form.set('model', req.model);
-      form.set('prompt', req.prompt);
+      form.set('prompt', prompt);
       if (req.n) form.set('n', String(req.n));
       if (req.size && req.size !== 'auto') form.set('size', req.size);
       if (req.quality && req.quality !== 'auto' && !isDallE) form.set('quality', req.quality);
-      req.inputImages.forEach((img, i) => {
+      inputImages.forEach((img, i) => {
         const bytes = Buffer.from(img.dataBase64, 'base64');
         const ext = img.mime.includes('jpeg') ? 'jpg' : img.mime.includes('webp') ? 'webp' : 'png';
         form.append('image[]', new Blob([new Uint8Array(bytes)], { type: img.mime }), `input${i}.${ext}`);
@@ -278,7 +282,7 @@ export const openaiAdapter: ChatAdapter = {
         method: 'POST', headers: headers(cfg, false), body: form, signal: req.signal,
       });
     } else {
-      const body: Record<string, unknown> = { model: req.model, prompt: req.prompt, n: req.n || 1 };
+      const body: Record<string, unknown> = { model: req.model, prompt, n: req.n || 1 };
       if (req.size && req.size !== 'auto') body.size = req.size;
       if (req.quality && req.quality !== 'auto') body.quality = req.quality;
       if (isDallE) body.response_format = 'b64_json'; // gpt-image-* returns b64 by default and rejects this param

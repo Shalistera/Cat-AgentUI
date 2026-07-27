@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { getToolsForServers, callTool } from '../mcp/manager.js';
 import { readUploadBase64 } from './uploads.js';
+import { readImageBase64, saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
 import type { AdapterMessage, AdapterMessagePart, MessagePart, ToolDef } from '../types.js';
 
@@ -76,8 +77,11 @@ function toAdapterParts(parts: MessagePart[], ownerId: string, includeImages: bo
   // repair history written before this guard existed
   for (const p of closeDanglingToolCalls(parts, '(调用未完成)')) {
     if (p.type === 'text' && p.text) out.push({ type: 'text', text: p.text });
-    else if (p.type === 'image' && p.uploadId && includeImages) {
-      const img = readUploadBase64(p.uploadId, ownerId);
+    else if (p.type === 'image' && includeImages) {
+      // uploadId = user attachment, imageId = an image a model generated earlier
+      const img = p.uploadId ? readUploadBase64(p.uploadId, ownerId)
+        : p.imageId ? readImageBase64(p.imageId, ownerId)
+        : null;
       if (img) out.push({ type: 'image', mime: img.mime, dataBase64: img.dataBase64 });
     } else if (p.type === 'tool_call') {
       out.push({ type: 'tool_call', id: p.id, name: p.name, args: p.args });
@@ -119,13 +123,67 @@ function getModelWithProvider(modelDbId: string | null) {
   return row ? { model: row.models, provider: row.providers } : null;
 }
 
-function getDefaultModel() {
-  const rows = db.select().from(schema.models)
+function enabledModelRows() {
+  return db.select().from(schema.models)
     .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
     .where(and(eq(schema.models.enabled, 1), eq(schema.providers.enabled, 1)))
     .orderBy(asc(schema.models.sortOrder)).all();
+}
+
+function pickModel(rows: ReturnType<typeof enabledModelRows>) {
   const def = rows.find((r) => r.models.isDefault) ?? rows[0];
   return def ? { model: def.models, provider: def.providers } : null;
+}
+
+// Fallback when neither the request nor the chat names a model. Prefers a text
+// model — silently defaulting to an image model would surprise every new chat.
+function getDefaultModel() {
+  const rows = enabledModelRows();
+  const text = rows.filter((r) => !r.models.imageGen);
+  return pickModel(text.length ? text : rows);
+}
+
+// Titles need a text model: an image model can't answer the title prompt.
+function getTitleModel() {
+  return pickModel(enabledModelRows().filter((r) => !r.models.imageGen));
+}
+
+const IMAGE_TIMEOUT_MS = 300_000;
+const IMAGE_CONTEXT_CHARS = 3000;
+const IMAGE_MAX_REFS = 4;
+
+// Image APIs take one prompt, not a conversation, so flatten what was said before
+// into it. (Gemini additionally gets the real history — see ImageGenRequest.context.)
+function buildImageTurn(history: AdapterMessage[]) {
+  const textOf = (m: AdapterMessage) => m.parts
+    .filter((p) => p.type === 'text' && p.text).map((p) => p.text!).join('\n').trim();
+
+  const request = textOf(history[history.length - 1]) || '继续上面的对话,生成一张图片。';
+  const lines: string[] = [];
+  for (const m of history.slice(0, -1)) {
+    const label = m.role === 'user' ? '用户' : '助手';
+    const t = textOf(m).replace(/\s+/g, ' ');
+    if (t) lines.push(`${label}: ${t.slice(0, 600)}`);
+    else if (m.parts.some((p) => p.type === 'image')) lines.push(`${label}: (图片)`);
+  }
+  let prompt = request;
+  if (lines.length) {
+    let ctx = lines.join('\n');
+    if (ctx.length > IMAGE_CONTEXT_CHARS) ctx = `…${ctx.slice(-IMAGE_CONTEXT_CHARS)}`;
+    prompt = `[之前的对话]\n${ctx}\n\n[本次绘图要求]\n${request}`;
+  }
+
+  // Reference images = the most recent pictures in the conversation (attachments and
+  // earlier generations), so "把它改成蓝色" edits the image actually being discussed.
+  const refImages: { mime: string; dataBase64: string }[] = [];
+  for (const m of history) {
+    for (const p of m.parts) {
+      if (p.type === 'image' && p.dataBase64) {
+        refImages.push({ mime: p.mime || 'image/png', dataBase64: p.dataBase64 });
+      }
+    }
+  }
+  return { prompt, request, refImages: refImages.slice(-IMAGE_MAX_REFS) };
 }
 
 const partSchema = z.union([
@@ -285,9 +343,11 @@ export async function chatRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: '当前对话状态无法生成回复' });
     }
 
+    // Image models are fed pictures too — that's the whole point of "edit this one".
+    const withImages = !!model.vision || !!model.imageGen;
     const baseHistory: AdapterMessage[] = history.map((m) => ({
       role: m.role as 'user' | 'assistant',
-      parts: toAdapterParts(parseParts(m.parts), user.id, !!model.vision),
+      parts: toAdapterParts(parseParts(m.parts), user.id, withImages),
     })).filter((m) => m.parts.length > 0);
 
     // MCP tools
@@ -295,7 +355,7 @@ export async function chatRoutes(app: FastifyInstance) {
     try { mcpServerIds = JSON.parse(chat.mcpServerIds); } catch { /* ignore */ }
     let toolDefs: ToolDef[] | undefined;
     let toolErrors: { serverId: string; name: string; error: string }[] = [];
-    if (model.tools && mcpServerIds.length) {
+    if (model.tools && !model.imageGen && mcpServerIds.length) {
       const r = await getToolsForServers(mcpServerIds);
       toolDefs = r.tools.length ? r.tools : undefined;
       toolErrors = r.errors;
@@ -347,57 +407,99 @@ export async function chatRoutes(app: FastifyInstance) {
     const t0 = Date.now();
     let status: 'done' | 'error' | 'stopped' = 'done';
     let errMsg: string | null = null;
+    let imageCount = 0;
 
     try {
-      let iterations = 0;
-      for (;;) {
-        iterations++;
-        const messages = [...baseHistory];
-        if (parts.length) messages.push({ role: 'assistant', parts: toAdapterParts(parts, user.id, false) });
-        const pendingCalls: { id: string; name: string; args: string }[] = [];
-        let stopReason = 'stop';
-
-        for await (const ev of adapter.streamChat(cfg, {
-          model: model.modelId,
-          system: chat.systemPrompt || undefined,
-          messages,
-          tools: toolDefs,
-          temperature: chat.temperature ?? undefined,
-          maxTokens: chat.maxTokens ?? undefined,
-          signal: controller.signal,
-        })) {
-          if (ev.type === 'text') {
-            if (ttft === null) ttft = Date.now() - t0;
-            appendText(parts, 'text', ev.text);
-            sse.send('delta', { text: ev.text });
-          } else if (ev.type === 'reasoning') {
-            if (ttft === null) ttft = Date.now() - t0;
-            appendText(parts, 'reasoning', ev.text);
-            sse.send('reasoning', { text: ev.text });
-          } else if (ev.type === 'tool_call') {
-            parts.push({ type: 'tool_call', id: ev.id, name: ev.name, args: ev.args });
-            pendingCalls.push(ev);
-            sse.send('tool_call', { id: ev.id, name: ev.name, args: ev.args });
-          } else if (ev.type === 'usage') {
-            usage.prompt += ev.usage.promptTokens ?? 0;
-            usage.completion += ev.usage.completionTokens ?? 0;
-            usage.total += ev.usage.totalTokens ?? ((ev.usage.promptTokens ?? 0) + (ev.usage.completionTokens ?? 0));
-          } else if (ev.type === 'stop') {
-            stopReason = ev.reason;
+      if (model.imageGen) {
+        // ---- image-generation turn ----
+        if (!adapter.generateImages) throw new Error(`Provider「${provider.name}」不支持图像生成`);
+        const { prompt, request, refImages } = buildImageTurn(baseHistory);
+        let generated;
+        try {
+          generated = await adapter.generateImages(cfg, {
+            model: model.modelId,
+            prompt,
+            n: 1,
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(IMAGE_TIMEOUT_MS)]),
+            inputImages: refImages.length ? refImages : undefined,
+            system: chat.systemPrompt || undefined,
+            context: baseHistory,
+          });
+        } catch (e) {
+          if (!controller.signal.aborted && (e as Error)?.name === 'TimeoutError') {
+            throw new Error('图像生成超时(超过 5 分钟)');
           }
+          throw e;
         }
+        const elapsed = Date.now() - t0;
+        for (const g of generated) {
+          const saved = saveGeneratedImage({
+            userId: user.id, providerId: provider.id, model: model.modelId,
+            prompt: request, size: null, durationMs: elapsed, img: g,
+          });
+          const part: MessagePart = { type: 'image', imageId: saved.id, mime: g.mime };
+          parts.push(part);
+          sse.send('image', part);
+          if (g.text) { appendText(parts, 'text', g.text); sse.send('delta', { text: g.text }); }
+        }
+        // one response can carry several images with the same usage object — count it once
+        const u = generated[0]?.usage;
+        usage.prompt += u?.promptTokens ?? 0;
+        usage.completion += u?.completionTokens ?? 0;
+        usage.total += u?.totalTokens ?? ((u?.promptTokens ?? 0) + (u?.completionTokens ?? 0));
+        imageCount = generated.length;
+      } else {
+        // ---- normal text turn ----
+        let iterations = 0;
+        for (;;) {
+          iterations++;
+          const messages = [...baseHistory];
+          if (parts.length) messages.push({ role: 'assistant', parts: toAdapterParts(parts, user.id, false) });
+          const pendingCalls: { id: string; name: string; args: string }[] = [];
+          let stopReason = 'stop';
 
-        if (stopReason === 'tool_calls' && pendingCalls.length && iterations < config.maxToolIterations) {
-          for (const call of pendingCalls) {
-            const { result, isError } = await callTool(call.name, call.args, { timeoutMs: 120_000 });
-            const trimmed = result.length > 100_000 ? `${result.slice(0, 100_000)}\n…(结果已截断)` : result;
-            const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: trimmed, isError };
-            parts.push(part);
-            sse.send('tool_result', part);
+          for await (const ev of adapter.streamChat(cfg, {
+            model: model.modelId,
+            system: chat.systemPrompt || undefined,
+            messages,
+            tools: toolDefs,
+            temperature: chat.temperature ?? undefined,
+            maxTokens: chat.maxTokens ?? undefined,
+            signal: controller.signal,
+          })) {
+            if (ev.type === 'text') {
+              if (ttft === null) ttft = Date.now() - t0;
+              appendText(parts, 'text', ev.text);
+              sse.send('delta', { text: ev.text });
+            } else if (ev.type === 'reasoning') {
+              if (ttft === null) ttft = Date.now() - t0;
+              appendText(parts, 'reasoning', ev.text);
+              sse.send('reasoning', { text: ev.text });
+            } else if (ev.type === 'tool_call') {
+              parts.push({ type: 'tool_call', id: ev.id, name: ev.name, args: ev.args });
+              pendingCalls.push(ev);
+              sse.send('tool_call', { id: ev.id, name: ev.name, args: ev.args });
+            } else if (ev.type === 'usage') {
+              usage.prompt += ev.usage.promptTokens ?? 0;
+              usage.completion += ev.usage.completionTokens ?? 0;
+              usage.total += ev.usage.totalTokens ?? ((ev.usage.promptTokens ?? 0) + (ev.usage.completionTokens ?? 0));
+            } else if (ev.type === 'stop') {
+              stopReason = ev.reason;
+            }
           }
-          continue;
+
+          if (stopReason === 'tool_calls' && pendingCalls.length && iterations < config.maxToolIterations) {
+            for (const call of pendingCalls) {
+              const { result, isError } = await callTool(call.name, call.args, { timeoutMs: 120_000 });
+              const trimmed = result.length > 100_000 ? `${result.slice(0, 100_000)}\n…(结果已截断)` : result;
+              const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: trimmed, isError };
+              parts.push(part);
+              sse.send('tool_result', part);
+            }
+            continue;
+          }
+          break;
         }
-        break;
       }
     } catch (e) {
       if (controller.signal.aborted || clientGone) {
@@ -428,7 +530,8 @@ export async function chatRoutes(app: FastifyInstance) {
     recordUsage({
       userId: user.id, chatId, messageId: assistantId,
       providerId: provider.id, providerType: provider.type, model: model.modelId,
-      kind: 'chat',
+      kind: model.imageGen ? 'image' : 'chat',
+      images: imageCount,
       promptTokens: usage.prompt, completionTokens: usage.completion, totalTokens: usage.total,
       durationMs,
     });
@@ -438,18 +541,26 @@ export async function chatRoutes(app: FastifyInstance) {
       totalTokens: usage.total || null, durationMs, ttftMs: ttft,
     });
 
-    // auto-title on first successful exchange
-    if (!chat.title && status === 'done' && !clientGone) {
+    // auto-title on first successful exchange (an image model can't title, so borrow a text one)
+    const titlePick = model.imageGen ? getTitleModel() : { model, provider };
+    if (!chat.title && status === 'done' && !clientGone && titlePick) {
       try {
-        const titleMessages: AdapterMessage[] = [
-          ...baseHistory,
+        // text-only replay: the title never needs the pictures, and non-vision
+        // title models would choke on them
+        const titleMessages: AdapterMessage[] = history.map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          parts: toAdapterParts(parseParts(m.parts), user.id, false),
+        })).filter((m) => m.parts.length > 0);
+        while (titleMessages.length && titleMessages[0].role !== 'user') titleMessages.shift();
+        titleMessages.push(
           { role: 'assistant', parts: toAdapterParts(finalParts, user.id, false) },
           { role: 'user', parts: [{ type: 'text', text: TITLE_PROMPT }] },
-        ];
+        );
         let title = '';
         const tUsage = { prompt: 0, completion: 0, total: 0 };
-        for await (const ev of adapter.streamChat(cfg, {
-          model: model.modelId, messages: titleMessages, maxTokens: 500,
+        const tAdapter = getAdapter(titlePick.provider.type);
+        for await (const ev of tAdapter.streamChat(toRuntimeConfig(titlePick.provider), {
+          model: titlePick.model.modelId, messages: titleMessages, maxTokens: 500,
           signal: AbortSignal.timeout(20_000),
         })) {
           if (ev.type === 'text') title += ev.text;
@@ -465,8 +576,8 @@ export async function chatRoutes(app: FastifyInstance) {
           sse.send('title', { title });
         }
         recordUsage({
-          userId: user.id, chatId, providerId: provider.id, providerType: provider.type,
-          model: model.modelId, kind: 'title',
+          userId: user.id, chatId, providerId: titlePick.provider.id, providerType: titlePick.provider.type,
+          model: titlePick.model.modelId, kind: 'title',
           promptTokens: tUsage.prompt, completionTokens: tUsage.completion, totalTokens: tUsage.total,
         });
       } catch { /* title generation is best-effort */ }

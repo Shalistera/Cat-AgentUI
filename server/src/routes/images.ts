@@ -10,6 +10,7 @@ import { requireAuth } from '../auth.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
 import { readUploadBase64 } from './uploads.js';
+import type { GeneratedImage } from '../types.js';
 
 const generateSchema = z.object({
   modelId: z.string(),
@@ -31,6 +32,52 @@ function extForMime(mime: string): string {
   if (mime === 'image/jpeg') return 'jpg';
   if (mime === 'image/webp') return 'webp';
   return 'png';
+}
+
+export interface SavedImage {
+  id: string; model: string; prompt: string; size: string | null;
+  durationMs: number; createdAt: number; tokens: number | null;
+}
+
+// Write a generated image to disk + the gallery. Shared by the images page and
+// by image-model turns inside a chat, so both end up in the same gallery.
+export function saveGeneratedImage(opts: {
+  userId: string; providerId: string; model: string; prompt: string;
+  size: string | null; durationMs: number; img: GeneratedImage;
+}): SavedImage {
+  const id = newId();
+  const filename = `${id}.${extForMime(opts.img.mime)}`;
+  fs.writeFileSync(path.join(config.dataDir, 'images', filename), Buffer.from(opts.img.dataBase64, 'base64'));
+  const createdAt = now();
+  db.insert(schema.images).values({
+    id,
+    userId: opts.userId,
+    providerId: opts.providerId,
+    model: opts.model,
+    prompt: opts.prompt,
+    size: opts.size,
+    filename,
+    durationMs: opts.durationMs,
+    createdAt,
+  }).run();
+  return {
+    id, model: opts.model, prompt: opts.prompt, size: opts.size,
+    durationMs: opts.durationMs, createdAt, tokens: opts.img.usage?.totalTokens ?? null,
+  };
+}
+
+// Read a generated image back as base64 so it can be replayed as conversation
+// context. Ownership is enforced; filename comes from the DB row, never input.
+export function readImageBase64(imageId: string, userId: string): { mime: string; dataBase64: string } | null {
+  const row = db.select().from(schema.images).where(eq(schema.images.id, imageId)).get();
+  if (!row || row.userId !== userId) return null;
+  try {
+    const buf = fs.readFileSync(path.join(config.dataDir, 'images', row.filename));
+    const ext = path.extname(row.filename).slice(1).toLowerCase();
+    return { mime: MIME_BY_EXT[ext] ?? 'image/png', dataBase64: buf.toString('base64') };
+  } catch {
+    return null;
+  }
 }
 
 export async function imageRoutes(app: FastifyInstance) {
@@ -99,33 +146,15 @@ export async function imageRoutes(app: FastifyInstance) {
     }
     const durationMs = Date.now() - t0;
 
-    const saved: { id: string; model: string; prompt: string; size: string | null; durationMs: number; createdAt: number; tokens: number | null }[] = [];
-    for (const img of generated) {
-      const imageId = newId();
-      const filename = `${imageId}.${extForMime(img.mime)}`;
-      fs.writeFileSync(path.join(config.dataDir, 'images', filename), Buffer.from(img.dataBase64, 'base64'));
-      const createdAt = now();
-      db.insert(schema.images).values({
-        id: imageId,
-        userId: req.user!.id,
-        providerId: provider.id,
-        model: model.modelId,
-        prompt,
-        size: size ?? null,
-        filename,
-        durationMs,
-        createdAt,
-      }).run();
-      saved.push({
-        id: imageId,
-        model: model.modelId,
-        prompt,
-        size: size ?? null,
-        durationMs,
-        createdAt,
-        tokens: img.usage?.totalTokens ?? null,
-      });
-    }
+    const saved = generated.map((img) => saveGeneratedImage({
+      userId: req.user!.id,
+      providerId: provider.id,
+      model: model.modelId,
+      prompt,
+      size: size ?? null,
+      durationMs,
+      img,
+    }));
 
     const usage = generated[0]?.usage;
     recordUsage({

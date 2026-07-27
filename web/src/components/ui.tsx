@@ -53,11 +53,14 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
   );
 }
 
+// The knob is laid out by flexbox, not `absolute`: an absolutely positioned child
+// with no `left` falls back to its static position, which a button centers — that
+// put the knob mid-track when off and pushed it past the edge when on.
 export function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange(v: boolean): void; disabled?: boolean }) {
   return (
-    <button type="button" disabled={disabled} onClick={() => onChange(!checked)}
-      className={`relative h-5.5 w-10 shrink-0 rounded-full transition-colors cursor-pointer disabled:opacity-45 ${checked ? 'bg-acc' : 'bg-bg3 border border-line2'}`}>
-      <span className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-[1.2rem]' : 'translate-x-0.5'}`} />
+    <button type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)}
+      className={`inline-flex h-5.5 w-10 shrink-0 items-center rounded-full border p-0.5 transition-colors cursor-pointer disabled:opacity-45 ${checked ? 'border-acc bg-acc' : 'border-line2 bg-bg3'}`}>
+      <span className={`block h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-4.5' : 'translate-x-0'}`} />
     </button>
   );
 }

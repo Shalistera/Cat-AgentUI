@@ -88,14 +88,21 @@ function partsToPlainText(parts: MessagePart[]): string {
   return parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 }
 
+function partSrc(p: Extract<MessagePart, { type: 'image' }>): string | null {
+  if (p.imageId) return `/api/images/${p.imageId}/file`;
+  if (p.uploadId) return `/api/uploads/${p.uploadId}/file`;
+  return p.url ?? null;
+}
+
 interface Props {
   msg: Message;
   isStreaming: boolean; // this message is currently being generated
+  pendingLabel?: string; // shown while waiting for the first output
   onRegenerate?: () => void;
   onEdit?: (text: string) => void;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, onRegenerate, onEdit }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onEdit }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -106,8 +113,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, onRegen
       <div className="group flex flex-col items-end gap-1.5">
         {images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-2">
-            {images.map((p, i) => p.type === 'image' && p.uploadId && (
-              <img key={i} src={`/api/uploads/${p.uploadId}/file`} alt=""
+            {images.map((p, i) => p.type === 'image' && partSrc(p) && (
+              <img key={i} src={partSrc(p)!} alt=""
                 className="max-h-40 rounded-xl border border-line object-cover" />
             ))}
           </div>
@@ -169,6 +176,17 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, onRegen
       );
     } else if (p.type === 'tool_call') {
       rendered.push(<ToolBlock key={i} call={p} result={resultsByCallId.get(p.id)} />);
+    } else if (p.type === 'image') {
+      const src = partSrc(p);
+      if (src) {
+        rendered.push(
+          <a key={i} href={src} target="_blank" rel="noreferrer" title="在新标签页查看原图"
+            className="my-2 block w-fit max-w-full">
+            <img src={src} alt="模型生成的图片"
+              className="max-h-[28rem] max-w-full rounded-xl border border-line" />
+          </a>,
+        );
+      }
     }
   });
 
@@ -187,7 +205,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, onRegen
         {rendered}
         {isStreaming && msg.parts.length === 0 && (
           <div className="flex items-center gap-2 py-1 text-sm text-tx3">
-            <Spinner className="h-3.5 w-3.5" />正在连接模型…
+            <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在连接模型…'}
           </div>
         )}
         {msg.status === 'error' && msg.error && (

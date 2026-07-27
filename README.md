@@ -15,6 +15,7 @@
 - **流式输出**:SSE 流式回复、思考过程(reasoning)展示、随时停止
 - **每条回复的透明统计**:耗时、首字延迟、输入/输出 tokens、tokens/s
 - **绘图工坊**:OpenAI `gpt-image-1` 与 Google Nano Banana(`gemini-*-image`)系列,支持参考图(图生图/编辑)、画廊管理
+- **对话内直接出图**:在对话里直接选绘图模型即可作画,自动带上当前对话的上下文与图片,可以接着说「换成蓝色」「把背景改成雨天」;生成的图片同样进入画廊
 - **MCP 工具**:stdio / Streamable HTTP / SSE 三种传输,管理端配置 + 连接测试,对话中按需启用,工具调用过程完整可见
 - **多用户**:首个注册用户自动成为管理员;管理端可建用户、停用、重置密码;可关闭开放注册
 - **用量看板**:管理员可查看每用户/每模型/每日的 tokens、请求数与绘图量;用户可见自己的用量
@@ -63,6 +64,7 @@ npx pm2 save
 npm run dev:server     # tsx watch, :3000
 npm run dev:web        # vite dev, :5173(代理 /api → :3000)
 node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即可联调
+                               # 提供对话流式、工具调用、生图 / 改图(images/generations 与 images/edits)
 ```
 
 ## 🗄️ 数据与迁移

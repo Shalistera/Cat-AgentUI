@@ -97,6 +97,27 @@ export function Composer(props: ComposerProps) {
     ? models.filter((m) => `${m.displayName} ${m.modelId} ${m.providerName}`.toLowerCase().includes(modelQuery.toLowerCase()))
     : models;
   const chatModels = filteredModels.filter((m) => !m.imageGen);
+  const imageModels = filteredModels.filter((m) => m.imageGen);
+  const imageMode = !!model?.imageGen;
+
+  const modelRow = (m: ModelInfo) => (
+    <button key={m.id}
+      className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-bg2 ${m.id === model?.id ? 'bg-bg2' : ''}`}
+      onClick={() => { props.onModelChange(m); setModelOpen(false); setModelQuery(''); }}
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium text-tx">{m.displayName}</span>
+        <span className="block truncate text-[10px] text-tx3">
+          {m.providerName}{m.imageGen ? ' · 生图' : ''}{m.vision ? ' · 视觉' : ''}{m.tools ? ' · 工具' : ''}
+        </span>
+      </span>
+      {m.id === model?.id && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-acc" />}
+    </button>
+  );
+
+  const groupHead = (text: string) => (
+    <div className="px-2.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-tx3">{text}</div>
+  );
 
   return (
     <div className="w-full">
@@ -121,7 +142,9 @@ export function Composer(props: ComposerProps) {
           ref={taRef}
           rows={1}
           value={text}
-          placeholder={props.disabled ? '管理员尚未配置模型' : '给黑猫留言… (Enter 发送,Shift+Enter 换行)'}
+          placeholder={props.disabled ? '管理员尚未配置模型'
+            : imageMode ? '描述你想画的图… (Enter 发送,Shift+Enter 换行)'
+            : '给黑猫留言… (Enter 发送,Shift+Enter 换行)'}
           disabled={props.disabled}
           className="max-h-[220px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-tx outline-none placeholder:text-tx3"
           onChange={(e) => setText(e.target.value)}
@@ -152,24 +175,23 @@ export function Composer(props: ComposerProps) {
               />
             )}
             <div className="max-h-72 overflow-y-auto">
-              {chatModels.map((m) => (
-                <button key={m.id}
-                  className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-bg2 ${m.id === model?.id ? 'bg-bg2' : ''}`}
-                  onClick={() => { props.onModelChange(m); setModelOpen(false); setModelQuery(''); }}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium text-tx">{m.displayName}</span>
-                    <span className="block truncate text-[10px] text-tx3">{m.providerName}{m.vision ? ' · 视觉' : ''}{m.tools ? ' · 工具' : ''}</span>
-                  </span>
-                  {m.id === model?.id && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-acc" />}
-                </button>
-              ))}
-              {chatModels.length === 0 && <p className="px-2.5 py-3 text-center text-xs text-tx3">没有可用模型</p>}
+              {imageModels.length > 0 && chatModels.length > 0 && groupHead('对话模型')}
+              {chatModels.map(modelRow)}
+              {imageModels.length > 0 && (
+                <>
+                  {chatModels.length > 0 && groupHead('绘图模型')}
+                  {imageModels.map(modelRow)}
+                  <p className="px-2.5 pb-1 pt-1.5 text-[10px] leading-relaxed text-tx3">
+                    绘图模型会带着当前对话的上下文作图,可直接接着说「换成蓝色」。
+                  </p>
+                </>
+              )}
+              {filteredModels.length === 0 && <p className="px-2.5 py-3 text-center text-xs text-tx3">没有可用模型</p>}
             </div>
           </Popover>
 
           {/* mcp tools */}
-          {mcpServers.length > 0 && model?.tools && (
+          {mcpServers.length > 0 && model?.tools && !imageMode && (
             <Popover open={mcpOpen} setOpen={setMcpOpen} trigger={
               <button className={`${pillBtn} ${props.mcpSelected.length ? 'text-acc' : ''}`} title="MCP 工具">
                 <Wrench size={13} />
@@ -233,12 +255,12 @@ export function Composer(props: ComposerProps) {
             </div>
           </Popover>
 
-          {/* attach images */}
-          {model?.vision && (
+          {/* attach images — vision models read them, image models use them as references */}
+          {(model?.vision || imageMode) && (
             <>
               <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden
                 onChange={(e) => pickFiles(e.target.files)} />
-              <button className={pillBtn} title="添加图片" onClick={() => fileRef.current?.click()}
+              <button className={pillBtn} title={imageMode ? '添加参考图' : '添加图片'} onClick={() => fileRef.current?.click()}
                 disabled={images.length >= 4}>
                 <ImagePlus size={14} />
               </button>

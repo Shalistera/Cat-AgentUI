@@ -5,7 +5,8 @@
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  | { type: 'image'; uploadId?: string; mime?: string; url?: string } // user attachment or generated image
+  // user attachment (uploadId) or model-generated image (imageId → images table)
+  | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   | { type: 'tool_call'; id: string; name: string; args: string } // args = JSON string
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean };
 
@@ -85,12 +86,17 @@ export interface ImageGenRequest {
   signal: AbortSignal;
   // optional input images for editing (nano banana & gpt-image support image input)
   inputImages?: { mime: string; dataBase64: string }[];
+  system?: string;
+  // Full conversation, for providers whose image models are genuinely multi-turn
+  // (Gemini). Adapters that can't use it fall back to `prompt` + `inputImages`.
+  context?: AdapterMessage[];
 }
 
 export interface GeneratedImage {
   mime: string;
   dataBase64: string;
   usage?: UsageInfo;
+  text?: string; // commentary returned alongside the image (Gemini)
 }
 
 export interface ChatAdapter {
