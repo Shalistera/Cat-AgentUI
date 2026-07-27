@@ -3,11 +3,21 @@ import { api } from './api';
 import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, User } from './types';
 
 // ---- theme ----
+// Light is the product default; `html.dark` is the opt-in override. First-time
+// visitors inherit the OS preference instead of being forced into one theme.
 export type Theme = 'dark' | 'light';
 
+const THEME_KEY = 'cat-theme';
+
 function applyTheme(t: Theme) {
-  document.documentElement.classList.toggle('light', t === 'light');
-  localStorage.setItem('cat-theme', t);
+  document.documentElement.classList.toggle('dark', t === 'dark');
+  localStorage.setItem(THEME_KEY, t);
+}
+
+function initialTheme(): Theme {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved === 'dark' || saved === 'light') return saved;
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 interface UiState {
@@ -18,10 +28,10 @@ interface UiState {
 }
 
 export const useUi = create<UiState>((set) => {
-  const saved = (localStorage.getItem('cat-theme') as Theme) || 'dark';
-  applyTheme(saved);
+  const theme = initialTheme();
+  applyTheme(theme);
   return {
-    theme: saved,
+    theme,
     sidebarOpen: window.innerWidth > 900,
     setTheme(t) { applyTheme(t); set({ theme: t }); },
     setSidebarOpen(v) { set({ sidebarOpen: v }); },

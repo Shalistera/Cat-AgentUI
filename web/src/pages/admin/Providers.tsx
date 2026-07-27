@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Download, FlaskConical, Pencil, Plus, Server, Star, Trash2, X } from 'lucide-react';
 import { api } from '../../api';
 import {
-  Badge, Button, EmptyState, Field, Input, Modal, Select, Spinner, Textarea, Toggle,
-  confirmDialog, toast,
+  Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select, Spinner, StatusDot,
+  Textarea, Toggle, confirmDialog, toast,
 } from '../../components/ui';
 import type { AdminModel, AdminProvider } from '../../types';
 
@@ -208,12 +208,12 @@ function ProviderModal({ provider, onClose, onSaved }: {
           <KeyValueEditor pairs={headers} onChange={setHeaders} keyPlaceholder="Header 名称" valuePlaceholder="Header 值" />
         </Field>
 
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" onClick={onClose}>取消</Button>
+        <ModalActions>
+          <Button variant="outline" onClick={onClose}>取消</Button>
           <Button variant="primary" disabled={busy} onClick={submit}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}{isEdit ? '保存' : '添加'}
+            {busy && <Spinner className="h-3.5 w-3.5" />}{isEdit ? '保存更改' : '添加 Provider'}
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -264,15 +264,15 @@ function FetchModelsModal({ provider, models, onClose, onDone }: {
       <div className="space-y-3">
         <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索模型…" autoFocus />
         <div className="flex items-center gap-2 text-xs text-tx3">
-          <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(filtered.map((m) => m.id)))}>全选</Button>
-          <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>清空</Button>
-          <span className="ml-auto">共 {candidates.length} 个可添加,已选 {selected.size} 个</span>
+          <Button variant="outline" size="sm" onClick={() => setSelected(new Set(filtered.map((m) => m.id)))}>全选</Button>
+          <Button variant="outline" size="sm" onClick={() => setSelected(new Set())}>清空</Button>
+          <span className="ml-auto tabular-nums">共 {candidates.length} 个可添加,已选 {selected.size} 个</span>
         </div>
-        <div className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border border-line bg-bg2/30 p-1.5">
+        <div className="max-h-72 divide-y divide-line overflow-y-auto rounded-md border border-line">
           {filtered.map((m) => (
-            <label key={m.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-bg2">
-              <input type="checkbox" className="accent-acc" checked={selected.has(m.id)} onChange={() => toggle(m.id)} />
-              <span className="font-mono text-xs">{m.id}</span>
+            <label key={m.id} className="flex cursor-pointer items-center gap-2.5 px-3 py-2 transition-colors hover:bg-bg2">
+              <input type="checkbox" className="h-3.5 w-3.5 accent-[var(--color-accs)]" checked={selected.has(m.id)} onChange={() => toggle(m.id)} />
+              <span className="font-mono text-xs text-tx">{m.id}</span>
               {m.name && m.name !== m.id && <span className="min-w-0 truncate text-xs text-tx3">{m.name}</span>}
             </label>
           ))}
@@ -282,12 +282,12 @@ function FetchModelsModal({ provider, models, onClose, onDone }: {
             </p>
           )}
         </div>
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>取消</Button>
+        <ModalActions>
+          <Button variant="outline" onClick={onClose}>取消</Button>
           <Button variant="primary" disabled={busy || selected.size === 0} onClick={confirm}>
             {busy && <Spinner className="h-3.5 w-3.5" />}确认添加
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -328,9 +328,9 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
   }
 
   return (
-    <tr className="border-b border-line/60 last:border-0">
-      <td className="max-w-[220px] truncate py-1.5 pr-3 font-mono">{model.modelId}</td>
-      <td className="py-1.5 pr-3">
+    <tr className="group border-b border-line transition-colors last:border-0 hover:bg-bg2/60">
+      <td className="max-w-[220px] truncate py-2 pr-3 font-mono text-tx">{model.modelId}</td>
+      <td className="py-2 pr-3 text-tx2">
         {editingName ? (
           <div className="flex items-center gap-1">
             <div className="w-40">
@@ -340,34 +340,34 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
                 onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditingName(false); }}
               />
             </div>
-            <button className="cursor-pointer rounded p-1 text-ok hover:bg-bg2" title="保存" onClick={saveName}>
+            <button className="cursor-pointer rounded p-1 text-ok transition-colors hover:bg-bg3" title="保存" onClick={saveName}>
               <Check size={13} />
             </button>
           </div>
         ) : (
           <span className="inline-flex items-center gap-1.5">
             <span className={model.displayName ? '' : 'text-tx3'}>{model.displayName || '—'}</span>
-            <button className="cursor-pointer rounded p-0.5 text-tx3 hover:text-tx" title="编辑显示名"
+            <button className="cursor-pointer rounded p-0.5 text-tx3 transition-colors hover:text-tx" title="编辑显示名"
               onClick={() => { setNameVal(model.displayName ?? ''); setEditingName(true); }}>
               <Pencil size={12} />
             </button>
           </span>
         )}
       </td>
-      <td className="px-2 py-1.5 text-center"><Toggle checked={model.vision} disabled={busy} onChange={(v) => patch({ vision: v })} /></td>
-      <td className="px-2 py-1.5 text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></td>
-      <td className="px-2 py-1.5 text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></td>
-      <td className="px-2 py-1.5 text-center">
+      <td className="px-2 py-2 text-center"><Toggle checked={model.vision} disabled={busy} onChange={(v) => patch({ vision: v })} /></td>
+      <td className="px-2 py-2 text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></td>
+      <td className="px-2 py-2 text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></td>
+      <td className="px-2 py-2 text-center">
         <button
-          className="cursor-pointer rounded p-1 text-tx3 hover:text-acc disabled:opacity-45"
+          className="cursor-pointer rounded p-1 text-tx3 transition-colors hover:text-acc disabled:opacity-40"
           title={model.isDefault ? '当前默认模型' : '设为默认'} disabled={busy}
           onClick={() => { if (!model.isDefault) patch({ isDefault: true }, '已设为默认'); }}>
           <Star size={14} className={model.isDefault ? 'text-acc' : ''} fill={model.isDefault ? 'currentColor' : 'none'} />
         </button>
       </td>
-      <td className="px-2 py-1.5 text-center"><Toggle checked={model.enabled} disabled={busy} onChange={(v) => patch({ enabled: v })} /></td>
-      <td className="py-1.5 pl-2 text-right">
-        <button className="cursor-pointer rounded p-1 text-tx3 hover:text-err disabled:opacity-45" title="删除" disabled={busy} onClick={remove}>
+      <td className="px-2 py-2 text-center"><Toggle checked={model.enabled} disabled={busy} onChange={(v) => patch({ enabled: v })} /></td>
+      <td className="py-2 pl-2 text-right">
+        <button className="cursor-pointer rounded p-1 text-tx3 transition-colors hover:text-err disabled:opacity-40" title="删除" disabled={busy} onClick={remove}>
           <Trash2 size={13} />
         </button>
       </td>
@@ -444,55 +444,60 @@ function ProviderCard({ provider, reload, onEdit }: {
   }
 
   return (
-    <div className="rounded-2xl border border-line bg-bg1">
+    <div className="overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-line px-4 py-3">
-        <span className="font-medium">{provider.name}</span>
-        <Badge tone="acc">{TYPE_LABELS[provider.type]}</Badge>
-        <span className="min-w-0 max-w-[16rem] flex-1 truncate text-xs text-tx3" title={provider.baseUrl || DEFAULT_URLS[provider.type]}>
+        <StatusDot tone={!provider.enabled ? 'idle' : provider.hasKey ? 'ok' : 'warn'} />
+        <span className="text-[13px] font-semibold text-tx">{provider.name}</span>
+        <Badge>{TYPE_LABELS[provider.type]}</Badge>
+        <span className="min-w-0 max-w-[16rem] flex-1 truncate font-mono text-[11px] text-tx3" title={provider.baseUrl || DEFAULT_URLS[provider.type]}>
           {provider.baseUrl || DEFAULT_URLS[provider.type]}
         </span>
         <Badge tone={provider.hasKey ? 'ok' : 'err'}>{provider.hasKey ? '已配置 Key' : '未配置 Key'}</Badge>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1.5">
           <Toggle checked={provider.enabled} onChange={setEnabled} />
-          <Button variant="ghost" size="icon" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
-          <Button variant="ghost" size="sm" onClick={test} disabled={testing}>
+          <Button variant="outline" size="sm" onClick={test} disabled={testing}>
             {testing ? <Spinner className="h-3.5 w-3.5" /> : <FlaskConical size={13} />}测试
           </Button>
-          <Button variant="ghost" size="icon" title="删除" onClick={remove}><Trash2 size={14} /></Button>
+          <Button variant="ghost" size="iconSm" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
+          <Button variant="ghost" size="iconSm" className="hover:!bg-err/10 hover:!text-err" title="删除" onClick={remove}>
+            <Trash2 size={14} />
+          </Button>
         </div>
       </div>
 
       <div className="space-y-3 px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="subtle" size="sm" onClick={fetchModels} disabled={fetching}>
+          <Button variant="outline" size="sm" onClick={fetchModels} disabled={fetching}>
             {fetching ? <Spinner className="h-3.5 w-3.5" /> : <Download size={13} />}拉取模型列表
           </Button>
           <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); addManual(); }}>
             <div className="w-52">
               <Input value={manualId} onChange={(e) => setManualId(e.target.value)}
-                placeholder="手动输入模型 ID" className="py-1.5 text-xs" />
+                placeholder="手动输入模型 ID" className="!h-8 text-xs" />
             </div>
-            <Button variant="subtle" size="sm" type="submit" disabled={adding || !manualId.trim()}>
+            <Button variant="outline" size="sm" type="submit" disabled={adding || !manualId.trim()}>
               {adding ? <Spinner className="h-3.5 w-3.5" /> : <Plus size={13} />}手动添加
             </Button>
           </form>
         </div>
 
         {models.length === 0 ? (
-          <p className="py-2 text-xs text-tx3">尚未添加模型,点击「拉取模型列表」或手动添加</p>
+          <p className="rounded-md border border-dashed border-line2 px-3 py-4 text-center text-xs text-tx3">
+            尚未添加模型 — 点击「拉取模型列表」或手动输入模型 ID
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-line text-left text-tx3">
-                  <th className="py-1.5 pr-3 font-medium">模型 ID</th>
-                  <th className="py-1.5 pr-3 font-medium">显示名</th>
-                  <th className="px-2 py-1.5 text-center font-medium">视觉</th>
-                  <th className="px-2 py-1.5 text-center font-medium">工具</th>
-                  <th className="px-2 py-1.5 text-center font-medium">绘图</th>
-                  <th className="px-2 py-1.5 text-center font-medium">默认</th>
-                  <th className="px-2 py-1.5 text-center font-medium">启用</th>
-                  <th className="py-1.5 pl-2 text-right font-medium">删除</th>
+                <tr className="border-b border-line text-left">
+                  <th className="py-2 pr-3 text-[11px] font-semibold uppercase tracking-wider text-tx3">模型 ID</th>
+                  <th className="py-2 pr-3 text-[11px] font-semibold uppercase tracking-wider text-tx3">显示名</th>
+                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">视觉</th>
+                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">工具</th>
+                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">绘图</th>
+                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">默认</th>
+                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">启用</th>
+                  <th className="py-2 pl-2 text-right text-[11px] font-semibold uppercase tracking-wider text-tx3">删除</th>
                 </tr>
               </thead>
               <tbody>
@@ -533,7 +538,12 @@ export default function Providers() {
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="min-w-0 text-sm text-tx2">管理 AI 提供商及其模型,启用后即可在对话与绘图中使用。</p>
+        <div className="min-w-0">
+          <h1 className="text-base font-semibold tracking-tight text-tx">模型服务</h1>
+          <p className="mt-0.5 text-xs leading-relaxed text-tx3">
+            管理 AI 提供商及其模型,启用后即可在对话与绘图中选用。
+          </p>
+        </div>
         <Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true); }}>
           <Plus size={15} />添加 Provider
         </Button>
@@ -542,13 +552,20 @@ export default function Providers() {
       {loading ? (
         <div className="flex justify-center py-16"><Spinner className="h-6 w-6" /></div>
       ) : providers.length === 0 ? (
-        <EmptyState
-          icon={<Server size={32} />}
-          title="还没有配置提供商"
-          hint="点击「添加 Provider」接入 OpenAI 兼容、Anthropic 或 Google Gemini 服务"
-        />
+        <div className="rounded-xl border border-line bg-bg1 shadow-xs">
+          <EmptyState
+            icon={<Server size={22} />}
+            title="还没有配置模型服务"
+            hint="接入 OpenAI 兼容、Anthropic 或 Google Gemini 服务后,即可在对话中选择模型。"
+            action={(
+              <Button variant="primary" size="sm" onClick={() => { setEditing(null); setFormOpen(true); }}>
+                <Plus size={14} />添加 Provider
+              </Button>
+            )}
+          />
+        </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {providers.map((p) => (
             <ProviderCard key={p.id} provider={p} reload={load}
               onEdit={() => { setEditing(p); setFormOpen(true); }} />

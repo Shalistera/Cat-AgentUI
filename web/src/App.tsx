@@ -22,12 +22,14 @@ function Shell() {
   if (!user) return <Navigate to="/login" state={{ from: loc.pathname }} replace />;
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden bg-bg0">
       <Sidebar />
       {sidebarOpen && (
-        <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} />
+        <div className="fixed inset-0 z-30 bg-[var(--color-scrim)] md:hidden" onClick={() => setSidebarOpen(false)} />
       )}
-      <main className="relative flex min-w-0 flex-1 flex-col">
+      {/* Content sits on the raised white surface; the grey canvas stays behind
+          the rail, which is what separates navigation from work. */}
+      <main className="relative flex min-w-0 flex-1 flex-col bg-bg1">
         <Outlet />
       </main>
     </div>

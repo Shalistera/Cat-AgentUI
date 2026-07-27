@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, fmtTokens } from '../../api';
-import { Spinner, toast } from '../../components/ui';
+import { Spinner, Card, Stat, SegmentedControl, toast } from '../../components/ui';
 import type { AdminUsage, UsageByDay } from '../../types';
 
 const DAY_OPTIONS = [7, 30, 90] as const;
@@ -97,26 +97,10 @@ function DailyChart({ byDay, days }: { byDay: UsageByDay[]; days: number }) {
   );
 }
 
-function StatTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-line bg-bg1 p-4">
-      <div className="text-xl font-semibold">{value}</div>
-      <div className="mt-1 text-xs text-tx3">{label}</div>
-    </div>
-  );
-}
-
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-2xl border border-line bg-bg1 p-5">
-      <h2 className="mb-3 text-sm font-semibold">{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-const th = 'border-b border-line py-2 text-left font-medium text-tx3';
-const td = 'py-2';
+const th = 'border-b border-line py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-tx3';
+// `group-last` clears the rule on the final row only — `last` would strip it
+// from the last cell of every row instead.
+const td = 'border-b border-line py-2 text-tx2 group-last:border-0';
 
 export default function Dashboard() {
   const [days, setDays] = useState<number>(30);
@@ -142,34 +126,28 @@ export default function Dashboard() {
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-6">
       {/* filter row above everything it scopes */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-base font-semibold">用量总览</h1>
-        <div className="flex gap-1 rounded-lg border border-line bg-bg2 p-0.5">
-          {DAY_OPTIONS.map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => setDays(d)}
-              className={`cursor-pointer rounded-md px-2.5 py-1 text-xs transition-colors ${
-                days === d ? 'bg-acc font-medium text-accfg' : 'text-tx2 hover:text-tx'
-              }`}
-            >
-              {d} 天
-            </button>
-          ))}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-base font-semibold tracking-tight text-tx">用量总览</h1>
+          <p className="mt-0.5 text-xs text-tx3">统计范围内的 Token 消耗、请求与账号活跃度</p>
         </div>
+        <SegmentedControl<number>
+          value={days}
+          onChange={setDays}
+          options={DAY_OPTIONS.map((d) => ({ value: d as number, label: `${d} 天` }))}
+        />
       </div>
 
       {/* hold previous render at reduced opacity while refetching */}
       <div className={`space-y-5 transition-opacity ${busy ? 'opacity-60' : ''}`}>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatTile label="总 Tokens" value={fmtTokens(totals.totalTokens)} />
-          <StatTile label="请求次数" value={totals.requests.toLocaleString()} />
-          <StatTile label="生成图片" value={totals.images.toLocaleString()} />
-          <StatTile label="活跃用户" value={(totals.activeUsers ?? 0).toLocaleString()} />
+          <Stat label="总 Tokens" value={fmtTokens(totals.totalTokens)} />
+          <Stat label="请求次数" value={totals.requests.toLocaleString()} />
+          <Stat label="生成图片" value={totals.images.toLocaleString()} />
+          <Stat label="活跃用户" value={(totals.activeUsers ?? 0).toLocaleString()} />
         </div>
 
-        <Card title="每日用量">
+        <Card title="每日用量" desc={`最近 ${days} 天,按日聚合`}>
           <DailyChart byDay={byDay} days={days} />
         </Card>
 
@@ -182,18 +160,18 @@ export default function Dashboard() {
                 <thead>
                   <tr>
                     <th className={th}>用户</th>
-                    <th className={th}>Tokens</th>
-                    <th className={th}>请求</th>
-                    <th className={th}>图片</th>
+                    <th className={`${th} text-right`}>Tokens</th>
+                    <th className={`${th} text-right`}>请求</th>
+                    <th className={`${th} text-right`}>图片</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {byUser.map((u, i) => (
-                    <tr key={u.userId} className={`border-b border-line/60 last:border-0 ${i === 0 ? 'bg-acc/5' : ''}`}>
-                      <td className={`${td} font-medium`}>{u.username}</td>
-                      <td className={`${td} tabular-nums`}>{fmtTokens(u.totalTokens)}</td>
-                      <td className={`${td} tabular-nums`}>{u.requests.toLocaleString()}</td>
-                      <td className={`${td} tabular-nums`}>{u.images.toLocaleString()}</td>
+                  {byUser.map((u) => (
+                    <tr key={u.userId} className="group transition-colors hover:bg-bg2/60">
+                      <td className={`${td} font-medium text-tx`}>{u.username}</td>
+                      <td className={`${td} text-right tabular-nums`}>{fmtTokens(u.totalTokens)}</td>
+                      <td className={`${td} text-right tabular-nums`}>{u.requests.toLocaleString()}</td>
+                      <td className={`${td} text-right tabular-nums`}>{u.images.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -211,18 +189,18 @@ export default function Dashboard() {
                 <thead>
                   <tr>
                     <th className={th}>模型</th>
-                    <th className={th}>Tokens</th>
-                    <th className={th}>次数</th>
+                    <th className={`${th} text-right`}>Tokens</th>
+                    <th className={`${th} text-right`}>次数</th>
                   </tr>
                 </thead>
                 <tbody>
                   {byModel.map((m) => (
-                    <tr key={m.model} className="border-b border-line/60 last:border-0">
+                    <tr key={m.model} className="group transition-colors hover:bg-bg2/60">
                       <td className={td}>
-                        <div className="max-w-[200px] truncate" title={m.model}>{m.model}</div>
+                        <div className="max-w-[200px] truncate font-mono text-tx" title={m.model}>{m.model}</div>
                       </td>
-                      <td className={`${td} tabular-nums`}>{fmtTokens(m.totalTokens)}</td>
-                      <td className={`${td} tabular-nums`}>{m.requests.toLocaleString()}</td>
+                      <td className={`${td} text-right tabular-nums`}>{fmtTokens(m.totalTokens)}</td>
+                      <td className={`${td} text-right tabular-nums`}>{m.requests.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -238,18 +216,18 @@ export default function Dashboard() {
                 <thead>
                   <tr>
                     <th className={th}>类型</th>
-                    <th className={th}>Tokens</th>
-                    <th className={th}>次数</th>
-                    <th className={th}>图片</th>
+                    <th className={`${th} text-right`}>Tokens</th>
+                    <th className={`${th} text-right`}>次数</th>
+                    <th className={`${th} text-right`}>图片</th>
                   </tr>
                 </thead>
                 <tbody>
                   {byKind.map((k) => (
-                    <tr key={k.kind} className="border-b border-line/60 last:border-0">
-                      <td className={td}>{KIND_LABELS[k.kind] ?? k.kind}</td>
-                      <td className={`${td} tabular-nums`}>{fmtTokens(k.totalTokens)}</td>
-                      <td className={`${td} tabular-nums`}>{k.requests.toLocaleString()}</td>
-                      <td className={`${td} tabular-nums`}>{k.images.toLocaleString()}</td>
+                    <tr key={k.kind} className="group transition-colors hover:bg-bg2/60">
+                      <td className={`${td} text-tx`}>{KIND_LABELS[k.kind] ?? k.kind}</td>
+                      <td className={`${td} text-right tabular-nums`}>{fmtTokens(k.totalTokens)}</td>
+                      <td className={`${td} text-right tabular-nums`}>{k.requests.toLocaleString()}</td>
+                      <td className={`${td} text-right tabular-nums`}>{k.images.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -1,46 +1,37 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { PanelLeft, Check } from 'lucide-react';
 import { api, fmtTokens } from '../api';
 import { useAuth, useUi } from '../store';
-import { Button, Input, Field, Spinner, toast } from '../components/ui';
+import { Button, Input, Field, Spinner, Card, PageHeader, Stat, toast } from '../components/ui';
 import type { MyUsage, UsageByDay, User } from '../types';
 
-// ---------- section card ----------
-function Section({ title, desc, children }: { title: string; desc: string; children: ReactNode }) {
-  return (
-    <section className="rounded-2xl border border-line bg-bg1 p-5">
-      <h2 className="text-sm font-semibold">{title}</h2>
-      <p className="mt-0.5 text-xs text-tx3">{desc}</p>
-      <div className="mt-4">{children}</div>
-    </section>
-  );
-}
-
-// ---------- theme preview card ----------
-function ThemeCard({ active, label, swatch, dot, onClick }: {
-  active: boolean; label: string; swatch: string; dot: string; onClick(): void;
+/** Miniature of the theme it selects — a swatch pair plus a chrome bar, so the
+    choice is previewed rather than described. */
+function ThemeCard({ active, label, canvas, surface, line, ink, dot, onClick }: {
+  active: boolean; label: string; canvas: string; surface: string; line: string;
+  ink: string; dot: string; onClick(): void;
 }) {
   return (
-    <button type="button" onClick={onClick}
-      className={`cursor-pointer rounded-xl border p-3 text-left transition-colors ${active ? 'border-acc' : 'border-line hover:border-line2'}`}>
-      <div className="flex h-14 items-center justify-center rounded-lg border border-line" style={{ background: swatch }}>
-        <span className="h-2.5 w-2.5 rounded-full" style={{ background: dot }} />
+    <button type="button" onClick={onClick} aria-pressed={active}
+      className={`cursor-pointer rounded-lg border p-2.5 text-left transition-colors ${
+        active ? 'border-acc ring-1 ring-acc' : 'border-line hover:border-field'}`}>
+      <div className="flex h-16 overflow-hidden rounded-md border" style={{ background: canvas, borderColor: line }}>
+        <div className="w-1/3 border-r" style={{ borderColor: line }}>
+          <div className="m-1.5 h-1.5 w-8 rounded-full" style={{ background: dot }} />
+          <div className="m-1.5 h-1 w-6 rounded-full opacity-40" style={{ background: ink }} />
+          <div className="m-1.5 h-1 w-7 rounded-full opacity-40" style={{ background: ink }} />
+        </div>
+        <div className="flex-1 p-1.5" style={{ background: surface }}>
+          <div className="h-1.5 w-full rounded-full opacity-70" style={{ background: ink }} />
+          <div className="mt-1.5 h-1.5 w-2/3 rounded-full opacity-35" style={{ background: ink }} />
+          <div className="mt-1.5 h-1.5 w-1/2 rounded-full opacity-35" style={{ background: ink }} />
+        </div>
       </div>
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-xs font-medium">{label}</span>
-        {active && <Check size={13} className="text-acc" />}
+        <span className="text-[13px] font-medium text-tx">{label}</span>
+        {active && <Check size={14} className="text-acc" />}
       </div>
     </button>
-  );
-}
-
-// ---------- stat tile ----------
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-line bg-bg2/40 p-3">
-      <div className="text-[11px] text-tx3">{label}</div>
-      <div className="mt-1 text-lg font-semibold">{value}</div>
-    </div>
   );
 }
 
@@ -179,18 +170,19 @@ export default function Settings() {
 
   return (
     <>
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-4">
-        {!sidebarOpen && (
+      <PageHeader
+        title="设置"
+        subtitle="账号、外观与个人用量"
+        left={!sidebarOpen && (
           <Button variant="ghost" size="icon" title="展开侧栏" onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
-        <h1 className="text-sm font-semibold">设置</h1>
-      </header>
+      />
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="fade-up mx-auto max-w-3xl space-y-6 p-6">
-          <Section title="个人资料" desc="用户名不可修改,昵称将显示在界面各处。">
+      <div className="flex-1 overflow-y-auto bg-bg0">
+        <div className="fade-up mx-auto max-w-3xl space-y-5 p-6">
+          <Card title="个人资料" desc="用户名不可修改;昵称会显示在界面各处。">
             <div className="space-y-4">
               <Field label="用户名">
                 <Input value={user?.username ?? ''} disabled readOnly />
@@ -199,21 +191,21 @@ export default function Settings() {
                 <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="未设置" maxLength={64} />
               </Field>
-              <div className="flex justify-end">
+              <div className="flex justify-end border-t border-line pt-4">
                 <Button variant="primary" disabled={savingProfile} onClick={saveProfile}>
-                  {savingProfile ? '保存中…' : '保存'}
+                  {savingProfile ? '保存中…' : '保存更改'}
                 </Button>
               </div>
             </div>
-          </Section>
+          </Card>
 
-          <Section title="修改密码" desc="新密码至少 8 位,修改后立即生效。">
+          <Card title="修改密码" desc="新密码至少 8 位,提交后立即生效。">
             <div className="space-y-4">
               <Field label="原密码">
                 <Input type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)}
                   autoComplete="current-password" maxLength={128} />
               </Field>
-              <Field label="新密码" hint="至少 8 位">
+              <Field label="新密码" hint="至少 8 位字符">
                 <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
                   autoComplete="new-password" maxLength={128} />
               </Field>
@@ -221,25 +213,25 @@ export default function Settings() {
                 <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
                   autoComplete="new-password" maxLength={128} />
               </Field>
-              <div className="flex justify-end">
+              <div className="flex justify-end border-t border-line pt-4">
                 <Button variant="primary" disabled={savingPassword || !oldPassword || !newPassword || !confirmPassword}
                   onClick={changePassword}>
                   {savingPassword ? '提交中…' : '修改密码'}
                 </Button>
               </div>
             </div>
-          </Section>
+          </Card>
 
-          <Section title="外观" desc="选择界面主题,立即生效。">
+          <Card title="外观" desc="主题选择会保存在本机,立即生效。">
             <div className="grid grid-cols-2 gap-3">
-              <ThemeCard active={theme === 'dark'} label="深色" swatch="#0b0b0e" dot="#f5b83d"
-                onClick={() => setTheme('dark')} />
-              <ThemeCard active={theme === 'light'} label="浅色" swatch="#f7f6f3" dot="#b07d10"
-                onClick={() => setTheme('light')} />
+              <ThemeCard active={theme === 'light'} label="浅色" onClick={() => setTheme('light')}
+                canvas="#f6f7f9" surface="#ffffff" line="#e4e7ec" ink="#14181f" dot="#1f4fd8" />
+              <ThemeCard active={theme === 'dark'} label="深色" onClick={() => setTheme('dark')}
+                canvas="#0c0e13" surface="#14171e" line="#242a34" ink="#e7eaf0" dot="#7aa2ff" />
             </div>
-          </Section>
+          </Card>
 
-          <Section title="我的用量" desc="最近 30 天的 Token 消耗与请求统计。">
+          <Card title="我的用量" desc="最近 30 天的 Token 消耗与请求统计。">
             {!usage ? (
               <div className="flex justify-center py-10">
                 {usageFailed
@@ -247,7 +239,7 @@ export default function Settings() {
                   : <Spinner />}
               </div>
             ) : (
-              <div className="space-y-5">
+              <div className="space-y-6">
                 <div className="grid grid-cols-3 gap-3">
                   <Stat label="总 Tokens" value={fmtTokens(usage.totals.totalTokens)} />
                   <Stat label="请求次数" value={usage.totals.requests.toLocaleString()} />
@@ -255,28 +247,28 @@ export default function Settings() {
                 </div>
 
                 <div>
-                  <div className="mb-2 text-xs text-tx2">近 30 天每日 Tokens</div>
+                  <div className="eyebrow mb-2">近 30 天每日 Tokens</div>
                   <UsageChart byDay={usage.byDay} />
                 </div>
 
                 <div>
-                  <div className="mb-1 text-xs text-tx2">按模型统计</div>
+                  <div className="eyebrow mb-1.5">按模型统计</div>
                   {usage.byModel.length === 0 ? (
                     <p className="py-4 text-center text-xs text-tx3">暂无数据</p>
                   ) : (
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="border-b border-line text-tx3">
-                          <th className="py-2 pr-2 text-left font-medium">模型</th>
-                          <th className="py-2 pr-2 text-right font-medium">Tokens</th>
-                          <th className="py-2 text-right font-medium">次数</th>
+                        <tr className="border-b border-line">
+                          <th className="py-2 pr-2 text-left font-medium text-tx3">模型</th>
+                          <th className="py-2 pr-2 text-right font-medium text-tx3">Tokens</th>
+                          <th className="py-2 text-right font-medium text-tx3">次数</th>
                         </tr>
                       </thead>
                       <tbody>
                         {usage.byModel.map((m) => (
-                          <tr key={m.model} className="border-b border-line/40 last:border-0">
+                          <tr key={m.model} className="border-b border-line last:border-0">
                             <td className="py-2 pr-2 text-tx2">{m.model}</td>
-                            <td className="py-2 pr-2 text-right tabular-nums">{fmtTokens(m.totalTokens)}</td>
+                            <td className="py-2 pr-2 text-right tabular-nums text-tx">{fmtTokens(m.totalTokens)}</td>
                             <td className="py-2 text-right tabular-nums text-tx2">{m.requests.toLocaleString()}</td>
                           </tr>
                         ))}
@@ -286,7 +278,7 @@ export default function Settings() {
                 </div>
               </div>
             )}
-          </Section>
+          </Card>
         </div>
       </div>
     </>

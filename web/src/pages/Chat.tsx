@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowDown, PanelLeft } from 'lucide-react';
+import { ArrowDown, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
 import { useAuth, useChats, useMcp, useModels, useUi } from '../store';
 import { Composer, type PendingImage } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
-import { CatLogo } from '../components/Logo';
-import { Button, toast } from '../components/ui';
+import { CatMark } from '../components/Logo';
+import { Button, PageHeader, toast } from '../components/ui';
 import type { ChatDetail, Message, MessagePart, ModelInfo } from '../types';
 
 const LAST_MODEL_KEY = 'cat-last-model';
@@ -34,7 +34,7 @@ function draftToPatch(d: ChatSettingsDraft) {
 export default function Chat() {
   const { id: routeId } = useParams();
   const nav = useNavigate();
-  const { user } = useAuth();
+  const { user, bootstrap } = useAuth();
   const { sidebarOpen, setSidebarOpen } = useUi();
   const models = useModels((s) => s.models);
   const modelsLoaded = useModels((s) => s.loaded);
@@ -323,37 +323,58 @@ export default function Chat() {
     />
   );
 
+  const capabilities = [
+    { icon: <MessagesSquare size={15} />, title: '多模型对话', desc: '在同一界面切换不同服务商的模型' },
+    { icon: <Wrench size={15} />, title: 'MCP 工具', desc: '接入外部工具服务器,扩展模型能力' },
+    { icon: <ImageIcon size={15} />, title: '图像理解与生成', desc: '读图分析,或直接在对话中作图' },
+  ];
+
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-4">
-        {!sidebarOpen && (
+      <PageHeader
+        title={chat?.title || (routeId ? '对话' : '新建对话')}
+        subtitle={modelSel?.displayName ? `当前模型 · ${modelSel.displayName}` : undefined}
+        left={!sidebarOpen && (
           <Button variant="ghost" size="icon" title="打开侧栏" onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
-        <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">
-          {chat?.title || (routeId ? '对话' : '新对话')}
-        </h1>
+      >
         {user?.role === 'admin' && models.length === 0 && modelsLoaded && (
-          <Button variant="outline" size="sm" onClick={() => nav('/admin/providers')}>去配置模型</Button>
+          <Button variant="primary" size="sm" onClick={() => nav('/admin/providers')}>配置模型服务</Button>
         )}
-      </header>
+      </PageHeader>
 
       {isEmpty ? (
-        <div className="flex flex-1 flex-col items-center justify-center px-4 pb-24">
-          <div className="fade-up mb-8 flex flex-col items-center gap-4">
-            <div className="rounded-3xl border border-line bg-bg1 p-5 shadow-xl"><CatLogo size={64} /></div>
-            <div className="text-center">
-              <h2 className="text-lg font-semibold tracking-tight">今天想聊点什么?</h2>
-              <p className="mt-1 text-xs text-tx3">黑猫已就位 — 支持多模型对话、MCP 工具与图像理解</p>
+        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-10">
+          <div className="fade-up w-full max-w-2xl">
+            <div className="mb-8 flex flex-col items-center text-center">
+              <CatMark size={56} />
+              <h2 className="mt-4 text-xl font-semibold tracking-tight text-tx">
+                {bootstrap?.brand || 'Cat AgentUI'}
+              </h2>
+              <p className="mt-1.5 text-[13px] text-tx2">开始一段新对话,或从左侧继续此前的记录。</p>
+            </div>
+
+            {composer}
+
+            <div className="mt-8 grid gap-3 sm:grid-cols-3">
+              {capabilities.map((c) => (
+                <div key={c.title} className="rounded-lg border border-line bg-bg0 px-3.5 py-3">
+                  <div className="flex items-center gap-2 text-tx">
+                    <span className="text-tx3">{c.icon}</span>
+                    <span className="text-[13px] font-medium">{c.title}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-tx3">{c.desc}</p>
+                </div>
+              ))}
             </div>
           </div>
-          <div className="w-full max-w-2xl">{composer}</div>
         </div>
       ) : (
         <>
           <div ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
-            <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6">
+            <div className="mx-auto flex max-w-3xl flex-col gap-7 px-4 py-7 sm:px-6">
               {messages.map((m, i) => (
                 <ChatMessage
                   key={m.id}
@@ -367,17 +388,18 @@ export default function Chat() {
               <div className="h-2" />
             </div>
           </div>
-          <div className="relative shrink-0 px-4 pb-4">
+          <div className="relative shrink-0 border-t border-line bg-bg1 px-4 pb-3 pt-3 sm:px-6">
             {!stick && (
               <button
-                className="absolute -top-10 left-1/2 -translate-x-1/2 cursor-pointer rounded-full border border-line bg-bg1 p-2 text-tx2 shadow-lg transition-colors hover:text-tx"
+                title="回到底部"
+                className="absolute -top-11 left-1/2 flex h-8 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-full border border-line2 bg-bg1 text-tx2 shadow-md transition-colors hover:text-tx"
                 onClick={() => { setStick(true); if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }}
               >
                 <ArrowDown size={14} />
               </button>
             )}
             <div className="mx-auto max-w-3xl">{composer}</div>
-            <p className="mt-2 text-center text-[10px] text-tx3">AI 可能会犯错,请核实重要信息</p>
+            <p className="mt-2 text-center text-[11px] text-tx3">内容由 AI 生成,请自行核实关键信息。</p>
           </div>
         </>
       )}

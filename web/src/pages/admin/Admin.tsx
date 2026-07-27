@@ -1,7 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
 import { PanelLeft } from 'lucide-react';
 import { useUi } from '../../store';
-import { Button } from '../../components/ui';
+import { Button, PageHeader } from '../../components/ui';
 import Dashboard from './Dashboard';
 import Users from './Users';
 import Providers from './Providers';
@@ -22,24 +22,27 @@ export default function Admin() {
 
   return (
     <>
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-4">
-        {!sidebarOpen && (
+      <PageHeader
+        title="管理后台"
+        subtitle="用量、账号、模型服务与站点配置"
+        left={!sidebarOpen && (
           <Button variant="ghost" size="icon" title="展开侧栏" onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
-        <h1 className="text-sm font-semibold">管理后台</h1>
-      </header>
+      />
 
-      <nav className="flex shrink-0 items-center overflow-x-auto border-b border-line px-4">
+      {/* Ink underline, not a coloured one: the accent stays reserved for links
+          and data, so the active tab reads as structure rather than emphasis. */}
+      <nav className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line bg-bg1 px-4 sm:px-6">
         {tabs.map((t) => (
           <NavLink
             key={t.to}
             to={t.to}
             end={t.end}
             className={({ isActive }) =>
-              `-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2.5 text-[13px] transition-colors ${
-                isActive ? 'border-acc font-medium text-tx' : 'border-transparent text-tx2 hover:text-tx'
+              `-mb-px shrink-0 whitespace-nowrap border-b-2 px-2.5 py-3 text-[13px] font-medium transition-colors ${
+                isActive ? 'border-pri text-tx' : 'border-transparent text-tx2 hover:border-line2 hover:text-tx'
               }`}
           >
             {t.label}
@@ -47,7 +50,7 @@ export default function Admin() {
         ))}
       </nav>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto bg-bg0">
         <Routes>
           <Route index element={<Dashboard />} />
           <Route path="users" element={<Users />} />

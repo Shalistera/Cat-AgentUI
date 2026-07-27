@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ShieldCheck, Boxes, Wrench } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../store';
-import { CatLogo } from '../components/Logo';
+import { CatLogo, CatMark } from '../components/Logo';
 import { Button, Input, Field, toast } from '../components/ui';
 import type { User } from '../types';
+
+const highlights = [
+  { icon: <Boxes size={15} />, title: '统一接入多家模型服务', desc: 'OpenAI、Gemini 等服务商在同一控制台内集中管理。' },
+  { icon: <Wrench size={15} />, title: 'MCP 工具编排', desc: '为每个对话按需挂载外部工具服务器。' },
+  { icon: <ShieldCheck size={15} />, title: '用量与权限可审计', desc: '按用户、模型、类型统计 Token 消耗与请求。' },
+];
 
 export default function Login() {
   const nav = useNavigate();
@@ -22,6 +29,7 @@ export default function Login() {
   }, [bootstrap]);
 
   const canRegister = bootstrap?.needsSetup || bootstrap?.signupEnabled;
+  const brand = bootstrap?.brand || 'Cat AgentUI';
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -36,7 +44,7 @@ export default function Login() {
         `/api/auth/${mode}`, { username, password },
       );
       useAuth.setState({ user: r.user });
-      if (r.isFirstUser) toast('欢迎!你是第一位用户,已自动成为管理员 🐈‍⬛', 'ok');
+      if (r.isFirstUser) toast('已创建管理员账号,欢迎使用', 'ok');
       nav('/', { replace: true });
     } catch (err) {
       toast(err instanceof Error ? err.message : '操作失败', 'err');
@@ -46,49 +54,97 @@ export default function Login() {
   }
 
   return (
-    <div className="flex h-full items-center justify-center p-6">
-      <div className="fade-up w-full max-w-sm">
-        <div className="mb-8 flex flex-col items-center gap-3">
-          <div className="rounded-2xl border border-line bg-bg1 p-4 shadow-lg">
-            <CatLogo size={52} />
-          </div>
-          <h1 className="text-xl font-semibold tracking-tight">
-            {bootstrap?.brand || 'Cat-AgentUI'}
-          </h1>
-          <p className="text-xs text-tx3">
-            {bootstrap?.needsSetup ? '首次使用 — 注册的第一个账号将成为管理员' : '轻量 · 多模型 · AI 对话与绘图'}
-          </p>
+    <div className="flex h-full bg-bg1">
+      {/* Brand panel — an ink field is the one place the palette goes full
+          contrast, and it doubles as the product's value proposition. */}
+      <aside className="relative hidden w-[46%] max-w-xl shrink-0 flex-col justify-between overflow-hidden bg-brand p-10 lg:flex">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 opacity-[0.05]"
+          style={{
+            backgroundImage: 'linear-gradient(var(--color-brandfg) 1px, transparent 1px), linear-gradient(90deg, var(--color-brandfg) 1px, transparent 1px)',
+            backgroundSize: '32px 32px',
+          }}
+        />
+        <div className="relative flex items-center gap-3">
+          {/* Light tile: the mark is a black cat, so it needs a pale field to
+              read against the ink panel. */}
+          <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brandfg">
+            <CatLogo size={26} eye="#c98f24" />
+          </span>
+          <span className="text-[15px] font-semibold tracking-tight text-brandfg">{brand}</span>
         </div>
 
-        <form onSubmit={submit} className="space-y-4 rounded-2xl border border-line bg-bg1 p-6 shadow-xl">
-          <Field label="用户名">
-            <Input value={username} onChange={(e) => setUsername(e.target.value)}
-              autoFocus autoComplete="username" maxLength={32} required />
-          </Field>
-          <Field label="密码" hint={mode === 'register' ? '至少 8 位' : undefined}>
-            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'} maxLength={128} required />
-          </Field>
-          {mode === 'register' && (
-            <Field label="确认密码">
-              <Input type="password" value={password2} onChange={(e) => setPassword2(e.target.value)}
-                autoComplete="new-password" maxLength={128} required />
+        <div className="relative">
+          <h2 className="max-w-md text-[26px] font-semibold leading-snug tracking-tight text-brandfg">
+            面向团队的<br />AI 对话与绘图工作台
+          </h2>
+          <ul className="mt-8 space-y-5">
+            {highlights.map((h) => (
+              <li key={h.title} className="flex gap-3">
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brandfg/10 text-brandfg ring-1 ring-brandfg/15">
+                  {h.icon}
+                </span>
+                <div>
+                  <div className="text-[13px] font-medium text-brandfg">{h.title}</div>
+                  <div className="mt-0.5 max-w-sm text-xs leading-relaxed text-brandfg/60">{h.desc}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <p className="relative text-[11px] text-brandfg/55">自托管部署 · 数据留在你自己的服务器</p>
+      </aside>
+
+      {/* Form panel */}
+      <div className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto px-6 py-10">
+        <div className="fade-up w-full max-w-[364px]">
+          <div className="lg:hidden">
+            <CatMark size={44} />
+          </div>
+
+          <h1 className="mt-5 text-xl font-semibold tracking-tight text-tx lg:mt-0">
+            {bootstrap?.needsSetup ? '初始化管理员账号' : mode === 'login' ? `登录 ${brand}` : '创建账号'}
+          </h1>
+          <p className="mt-1.5 text-[13px] leading-relaxed text-tx2">
+            {bootstrap?.needsSetup
+              ? '这是第一次启动,注册的首个账号将自动获得管理员权限。'
+              : mode === 'login' ? '请输入你的账号信息以继续。' : '填写下列信息完成注册。'}
+          </p>
+
+          <form onSubmit={submit} className="mt-7 space-y-4">
+            <Field label="用户名" required>
+              <Input value={username} onChange={(e) => setUsername(e.target.value)}
+                autoFocus autoComplete="username" maxLength={32} required />
             </Field>
-          )}
-          <Button variant="primary" size="lg" className="w-full" disabled={busy}
-            onClick={(e) => submit(e as unknown as React.FormEvent)}>
-            {busy ? '请稍候…' : mode === 'login' ? '登录' : '注册'}
-          </Button>
-          {canRegister && !bootstrap?.needsSetup && (
-            <p className="text-center text-xs text-tx3">
-              {mode === 'login' ? (
-                <>没有账号?<button type="button" className="ml-1 cursor-pointer text-acc hover:underline" onClick={() => setMode('register')}>注册</button></>
-              ) : (
-                <>已有账号?<button type="button" className="ml-1 cursor-pointer text-acc hover:underline" onClick={() => setMode('login')}>登录</button></>
-              )}
-            </p>
-          )}
-        </form>
+            <Field label="密码" hint={mode === 'register' ? '至少 8 位字符' : undefined} required>
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'} maxLength={128} required />
+            </Field>
+            {mode === 'register' && (
+              <Field label="确认密码" required>
+                <Input type="password" value={password2} onChange={(e) => setPassword2(e.target.value)}
+                  autoComplete="new-password" maxLength={128} required />
+              </Field>
+            )}
+
+            <Button variant="primary" size="lg" className="!mt-6 w-full" disabled={busy}
+              onClick={(e) => submit(e as unknown as React.FormEvent)}>
+              {busy ? '请稍候…' : bootstrap?.needsSetup ? '创建管理员账号' : mode === 'login' ? '登录' : '注册'}
+            </Button>
+
+            {canRegister && !bootstrap?.needsSetup && (
+              <p className="pt-1 text-center text-[13px] text-tx2">
+                {mode === 'login' ? '还没有账号?' : '已有账号?'}
+                <button type="button" className="ml-1 cursor-pointer font-medium text-acc hover:underline"
+                  onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+                  {mode === 'login' ? '注册' : '返回登录'}
+                </button>
+              </p>
+            )}
+          </form>
+        </div>
       </div>
     </div>
   );

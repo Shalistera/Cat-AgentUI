@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Pencil, Plus, PlugZap, Server, Trash2, X } from 'lucide-react';
 import { api } from '../../api';
 import {
-  Badge, Button, EmptyState, Field, Input, Modal, Select, Spinner, Textarea, Toggle,
-  confirmDialog, toast,
+  Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select, Spinner, Textarea,
+  StatusDot, Toggle, confirmDialog, toast,
 } from '../../components/ui';
 import type { AdminMcpServer } from '../../types';
 
@@ -52,7 +52,7 @@ function KeyValueEditor({ pairs, onChange, keyPlaceholder = 'Key', valuePlacehol
           </Button>
         </div>
       ))}
-      <Button variant="ghost" size="sm" onClick={() => onChange([...pairs, { k: '', v: '' }])}>
+      <Button variant="outline" size="sm" onClick={() => onChange([...pairs, { k: '', v: '' }])}>
         <Plus size={13} />添加一行
       </Button>
     </div>
@@ -156,17 +156,20 @@ function McpModal({ server, onClose, onSaved }: {
           </>
         )}
 
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg2/50 px-3 py-2.5">
-          <div className="text-xs font-medium">启用</div>
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg0 px-3.5 py-3">
+          <div>
+            <div className="text-[13px] font-medium text-tx">启用该服务器</div>
+            <div className="mt-0.5 text-xs text-tx3">禁用后不会出现在对话的工具菜单里</div>
+          </div>
           <Toggle checked={enabled} onChange={setEnabled} />
         </div>
 
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" onClick={onClose}>取消</Button>
+        <ModalActions>
+          <Button variant="outline" onClick={onClose}>取消</Button>
           <Button variant="primary" disabled={busy} onClick={submit}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}{isEdit ? '保存' : '添加'}
+            {busy && <Spinner className="h-3.5 w-3.5" />}{isEdit ? '保存更改' : '添加服务器'}
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -217,39 +220,50 @@ function ServerCard({ server, reload, onEdit }: {
   }
 
   return (
-    <div className="space-y-2 rounded-2xl border border-line bg-bg1 p-4">
+    <div className="space-y-2.5 rounded-xl border border-line bg-bg1 p-4 shadow-xs">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-        <span className="font-medium">{server.name}</span>
-        <Badge tone="acc">{TRANSPORT_LABELS[server.transport]}</Badge>
+        <StatusDot tone={server.lastStatus === 'ok' ? 'ok' : server.lastStatus === 'error' ? 'err' : 'idle'} />
+        <span className="text-[13px] font-semibold text-tx">{server.name}</span>
+        <Badge>{TRANSPORT_LABELS[server.transport]}</Badge>
         <Badge tone={server.lastStatus === 'ok' ? 'ok' : server.lastStatus === 'error' ? 'err' : 'default'}>
-          {server.lastStatus === 'ok' ? '正常' : server.lastStatus === 'error' ? '异常' : '未测试'}
+          {server.lastStatus === 'ok' ? '连接正常' : server.lastStatus === 'error' ? '连接异常' : '未测试'}
         </Badge>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1.5">
           <Toggle checked={server.enabled} onChange={setEnabled} />
-          <Button variant="ghost" size="sm" onClick={test} disabled={testing}>
+          <Button variant="outline" size="sm" onClick={test} disabled={testing}>
             {testing ? <Spinner className="h-3.5 w-3.5" /> : <PlugZap size={13} />}测试连接
           </Button>
-          <Button variant="ghost" size="icon" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
-          <Button variant="ghost" size="icon" title="删除" onClick={remove}><Trash2 size={14} /></Button>
+          <Button variant="ghost" size="iconSm" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
+          <Button variant="ghost" size="iconSm" className="hover:!bg-err/10 hover:!text-err" title="删除" onClick={remove}>
+            <Trash2 size={14} />
+          </Button>
         </div>
       </div>
 
-      {summary && <div className="truncate font-mono text-xs text-tx3" title={summary}>{summary}</div>}
-      {server.lastError && <div className="text-xs text-err">{server.lastError}</div>}
+      {summary && (
+        <div className="truncate rounded-md border border-line bg-bg2/50 px-2.5 py-1.5 font-mono text-[11px] text-tx2" title={summary}>
+          {summary}
+        </div>
+      )}
+      {server.lastError && (
+        <div className="rounded-md border border-err/30 bg-err/8 px-2.5 py-1.5 text-xs leading-relaxed text-err">
+          {server.lastError}
+        </div>
+      )}
 
       {tools.length > 0 && (
         <div>
           <button
-            className="flex cursor-pointer items-center gap-1 text-xs text-tx2 transition-colors hover:text-tx"
+            className="flex cursor-pointer items-center gap-1 text-xs font-medium text-tx2 transition-colors hover:text-tx"
             onClick={() => setToolsOpen(!toolsOpen)}>
             {toolsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             {tools.length} 个工具
           </button>
           {toolsOpen && (
-            <div className="mt-2 space-y-1 rounded-lg border border-line bg-bg2/40 p-2.5">
+            <div className="mt-2 divide-y divide-line rounded-md border border-line">
               {tools.map((t) => (
-                <div key={t.name} className="flex min-w-0 items-baseline gap-2">
-                  <span className="shrink-0 font-mono text-xs">{t.name}</span>
+                <div key={t.name} className="flex min-w-0 items-baseline gap-2 px-2.5 py-1.5">
+                  <span className="shrink-0 font-mono text-xs text-tx">{t.name}</span>
                   <span className="min-w-0 truncate text-xs text-tx3">{t.description}</span>
                 </div>
               ))}
@@ -284,7 +298,12 @@ export default function Mcp() {
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="min-w-0 text-sm text-tx2">MCP 服务器为对话提供工具能力,在对话输入框的工具菜单中启用。</p>
+        <div className="min-w-0">
+          <h1 className="text-base font-semibold tracking-tight text-tx">MCP 服务器</h1>
+          <p className="mt-0.5 text-xs leading-relaxed text-tx3">
+            为对话提供外部工具能力,在输入框的「工具」菜单中按对话启用。
+          </p>
+        </div>
         <Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true); }}>
           <Plus size={15} />添加服务器
         </Button>
@@ -293,13 +312,20 @@ export default function Mcp() {
       {loading ? (
         <div className="flex justify-center py-16"><Spinner className="h-6 w-6" /></div>
       ) : servers.length === 0 ? (
-        <EmptyState
-          icon={<Server size={32} />}
-          title="还没有 MCP 服务器"
-          hint="点击「添加服务器」接入 Stdio、Streamable HTTP 或 SSE 方式的 MCP 服务"
-        />
+        <div className="rounded-xl border border-line bg-bg1 shadow-xs">
+          <EmptyState
+            icon={<Server size={22} />}
+            title="还没有 MCP 服务器"
+            hint="接入 Stdio、Streamable HTTP 或 SSE 方式的 MCP 服务,即可在对话中调用其工具。"
+            action={(
+              <Button variant="primary" size="sm" onClick={() => { setEditing(null); setFormOpen(true); }}>
+                <Plus size={14} />添加服务器
+              </Button>
+            )}
+          />
+        </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {servers.map((s) => (
             <ServerCard key={s.id} server={s} reload={load}
               onEdit={() => { setEditing(s); setFormOpen(true); }} />

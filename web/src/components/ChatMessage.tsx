@@ -6,15 +6,17 @@ import {
 import type { Message, MessagePart } from '../types';
 import { fmtDuration, fmtTokens } from '../api';
 import { Markdown } from './Markdown';
-import { CatLogo } from './Logo';
+import { CatMark } from './Logo';
 import { Spinner } from './ui';
+
+const iconBtn = 'flex h-6 w-6 cursor-pointer items-center justify-center rounded text-tx3 transition-colors hover:bg-bg2 hover:text-tx';
 
 function CopyBtn({ text, size = 12 }: { text: string; size?: number }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       title="复制"
-      className="cursor-pointer rounded p-1 text-tx3 transition-colors hover:bg-bg2 hover:text-tx"
+      className={iconBtn}
       onClick={() => navigator.clipboard.writeText(text).then(() => {
         setCopied(true); setTimeout(() => setCopied(false), 1500);
       })}
@@ -24,25 +26,41 @@ function CopyBtn({ text, size = 12 }: { text: string; size?: number }) {
   );
 }
 
+/** Shared shell for the collapsible reasoning / tool panels. */
+function Disclosure({ open, onToggle, icon, label, meta, children }: {
+  open: boolean; onToggle(): void; icon: React.ReactNode; label: React.ReactNode;
+  meta?: React.ReactNode; children?: React.ReactNode;
+}) {
+  return (
+    <div className="my-2.5 overflow-hidden rounded-lg border border-line bg-bg2/40">
+      <button
+        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-xs transition-colors hover:bg-bg2"
+        onClick={onToggle}
+      >
+        {icon}
+        {label}
+        {meta}
+        {open ? <ChevronDown size={13} className="ml-auto shrink-0 text-tx3" /> : <ChevronRight size={13} className="ml-auto shrink-0 text-tx3" />}
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean }) {
   const [open, setOpen] = useState(false);
   const show = open || streaming;
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-line bg-bg1/60">
-      <button
-        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-xs text-tx2 transition-colors hover:bg-bg2/60"
-        onClick={() => setOpen(!show)}
-      >
-        <BrainCircuit size={13} className={streaming ? 'animate-pulse text-acc' : 'text-tx3'} />
-        <span className="font-medium">{streaming ? '正在思考…' : '思考过程'}</span>
-        {show ? <ChevronDown size={12} className="ml-auto" /> : <ChevronRight size={12} className="ml-auto" />}
-      </button>
-      {show && (
-        <div className="max-h-64 overflow-y-auto border-t border-line px-3.5 py-2.5 text-[13px] leading-relaxed text-tx2 whitespace-pre-wrap">
-          {text}
-        </div>
-      )}
-    </div>
+    <Disclosure
+      open={show}
+      onToggle={() => setOpen(!show)}
+      icon={<BrainCircuit size={13} className={streaming ? 'animate-pulse text-acc' : 'text-tx3'} />}
+      label={<span className="font-medium text-tx2">{streaming ? '正在推理…' : '推理过程'}</span>}
+    >
+      <div className="max-h-64 overflow-y-auto whitespace-pre-wrap border-t border-line bg-bg1 px-3.5 py-2.5 text-[13px] leading-relaxed text-tx2">
+        {text}
+      </div>
+    </Disclosure>
   );
 }
 
@@ -54,33 +72,33 @@ function ToolBlock({ call, result }: {
   const prettyArgs = useMemo(() => {
     try { return JSON.stringify(JSON.parse(call.args || '{}'), null, 2); } catch { return call.args; }
   }, [call.args]);
+
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-line bg-bg1/60">
-      <button
-        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-xs transition-colors hover:bg-bg2/60"
-        onClick={() => setOpen(!open)}
-      >
-        <Wrench size={13} className={!result ? 'animate-pulse text-acc' : result.isError ? 'text-err' : 'text-ok'} />
-        <span className="font-mono font-medium text-tx2">{call.name}</span>
-        {!result && <span className="flex items-center gap-1.5 text-tx3"><Spinner className="h-3 w-3" />调用中…</span>}
-        {result?.isError && <span className="text-err">失败</span>}
-        {open ? <ChevronDown size={12} className="ml-auto text-tx3" /> : <ChevronRight size={12} className="ml-auto text-tx3" />}
-      </button>
-      {open && (
-        <div className="space-y-2 border-t border-line px-3.5 py-2.5">
-          <div>
-            <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-tx3">参数</div>
-            <pre className="max-h-40 overflow-auto rounded-lg bg-bg2 p-2 font-mono text-[11px] leading-relaxed text-tx2">{prettyArgs}</pre>
-          </div>
-          {result && (
-            <div>
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-tx3">结果</div>
-              <pre className={`max-h-64 overflow-auto rounded-lg bg-bg2 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap ${result.isError ? 'text-err' : 'text-tx2'}`}>{result.result}</pre>
-            </div>
-          )}
+    <Disclosure
+      open={open}
+      onToggle={() => setOpen(!open)}
+      icon={<Wrench size={13} className={!result ? 'animate-pulse text-acc' : result.isError ? 'text-err' : 'text-ok'} />}
+      label={<span className="truncate font-mono text-[12px] font-medium text-tx">{call.name}</span>}
+      meta={
+        !result ? <span className="flex shrink-0 items-center gap-1.5 text-tx3"><Spinner className="h-3 w-3" />调用中</span>
+        : result.isError ? <span className="shrink-0 text-err">失败</span>
+        : <span className="shrink-0 text-tx3">完成</span>
+      }
+    >
+      <div className="space-y-2.5 border-t border-line bg-bg1 px-3.5 py-2.5">
+        <div>
+          <div className="eyebrow mb-1">参数</div>
+          <pre className="max-h-40 overflow-auto rounded-md border border-line bg-bg2 p-2 font-mono text-[11px] leading-relaxed text-tx2">{prettyArgs}</pre>
         </div>
-      )}
-    </div>
+        {result && (
+          <div>
+            <div className="eyebrow mb-1">结果</div>
+            <pre className={`max-h-64 overflow-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[11px] leading-relaxed ${
+              result.isError ? 'border-err/30 bg-err/8 text-err' : 'border-line bg-bg2 text-tx2'}`}>{result.result}</pre>
+          </div>
+        )}
+      </div>
+    </Disclosure>
   );
 }
 
@@ -115,38 +133,38 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           <div className="flex flex-wrap justify-end gap-2">
             {images.map((p, i) => p.type === 'image' && partSrc(p) && (
               <img key={i} src={partSrc(p)!} alt=""
-                className="max-h-40 rounded-xl border border-line object-cover" />
+                className="max-h-40 rounded-lg border border-line object-cover" />
             ))}
           </div>
         )}
         {editing ? (
           <div className="w-full max-w-[85%]">
             <textarea
-              className="w-full resize-y rounded-xl border border-acc/50 bg-bg1 px-3.5 py-2.5 text-[15px] text-tx outline-none focus:ring-2 focus:ring-acc/15"
+              className="w-full resize-y rounded-lg border border-field bg-bg1 px-3.5 py-2.5 text-[15px] leading-relaxed text-tx"
               rows={Math.min(8, Math.max(2, draft.split('\n').length))}
               value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus
             />
-            <div className="mt-1.5 flex justify-end gap-2 text-xs">
-              <button className="cursor-pointer rounded-lg px-3 py-1.5 text-tx2 hover:bg-bg2" onClick={() => setEditing(false)}>取消</button>
-              <button className="cursor-pointer rounded-lg bg-acc px-3 py-1.5 font-medium text-accfg hover:bg-acc2"
+            <div className="mt-2 flex justify-end gap-2">
+              <button className="h-8 cursor-pointer rounded-md border border-line2 bg-bg1 px-3 text-[13px] font-medium text-tx transition-colors hover:bg-bg2"
+                onClick={() => setEditing(false)}>取消</button>
+              <button className="h-8 cursor-pointer rounded-md bg-pri px-3 text-[13px] font-medium text-prifg shadow-xs transition-colors hover:bg-pri2"
                 onClick={() => { setEditing(false); if (draft.trim()) onEdit?.(draft.trim()); }}>
-                发送
+                重新发送
               </button>
             </div>
           </div>
         ) : (
           text && (
-            <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-bg2 px-4 py-2.5 text-[15px] leading-relaxed">
+            <div className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-br-sm border border-line bg-bg2 px-3.5 py-2.5 text-[15px] leading-relaxed text-tx">
               {text}
             </div>
           )
         )}
         {!editing && (
-          <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
             <CopyBtn text={text} />
             {onEdit && (
-              <button title="编辑并重新发送" className="cursor-pointer rounded p-1 text-tx3 hover:bg-bg2 hover:text-tx"
-                onClick={() => { setDraft(text); setEditing(true); }}>
+              <button title="编辑并重新发送" className={iconBtn} onClick={() => { setDraft(text); setEditing(true); }}>
                 <Pencil size={12} />
               </button>
             )}
@@ -181,9 +199,9 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
       if (src) {
         rendered.push(
           <a key={i} href={src} target="_blank" rel="noreferrer" title="在新标签页查看原图"
-            className="my-2 block w-fit max-w-full">
+            className="my-2.5 block w-fit max-w-full">
             <img src={src} alt="模型生成的图片"
-              className="max-h-[28rem] max-w-full rounded-xl border border-line" />
+              className="max-h-[28rem] max-w-full rounded-lg border border-line" />
           </a>,
         );
       }
@@ -198,48 +216,46 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
 
   return (
     <div className="group flex gap-3">
-      <div className="mt-0.5 hidden h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-line bg-bg1 sm:flex">
-        <CatLogo size={20} />
-      </div>
+      <div className="mt-0.5 hidden shrink-0 sm:block"><CatMark size={30} /></div>
       <div className="min-w-0 flex-1">
         {rendered}
         {isStreaming && msg.parts.length === 0 && (
-          <div className="flex items-center gap-2 py-1 text-sm text-tx3">
+          <div className="flex items-center gap-2 py-1 text-[13px] text-tx3">
             <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在连接模型…'}
           </div>
         )}
         {msg.status === 'error' && msg.error && (
-          <div className="my-2 flex items-start gap-2 rounded-xl border border-err/30 bg-err/8 px-3.5 py-2.5 text-[13px] text-err">
+          <div className="my-2 flex items-start gap-2 rounded-lg border border-err/30 bg-err/8 px-3.5 py-2.5 text-[13px] leading-relaxed text-err">
             <CircleAlert size={15} className="mt-0.5 shrink-0" />
-            <span className="break-all">{msg.error}</span>
+            <span className="min-w-0 break-words">{msg.error}</span>
           </div>
         )}
         {msg.status === 'stopped' && (
           <div className="my-1.5 flex items-center gap-1.5 text-xs text-tx3"><Ban size={12} />已停止生成</div>
         )}
         {!isStreaming && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tx3">
-            <span className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tx3">
+            <span className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
               <CopyBtn text={plain} />
               {onRegenerate && (
-                <button title="重新生成" className="cursor-pointer rounded p-1 text-tx3 hover:bg-bg2 hover:text-tx" onClick={onRegenerate}>
+                <button title="重新生成" className={iconBtn} onClick={onRegenerate}>
                   <RefreshCw size={12} />
                 </button>
               )}
             </span>
-            {msg.model && <span className="font-mono">{msg.model}</span>}
+            {msg.model && <span className="font-mono text-tx2">{msg.model}</span>}
             {hasStats && (
               <>
-                <span className="flex items-center gap-1" title="总耗时"><Clock size={11} />{fmtDuration(msg.durationMs)}</span>
+                <span className="flex items-center gap-1 tabular-nums" title="总耗时"><Clock size={11} />{fmtDuration(msg.durationMs)}</span>
                 {msg.ttftMs != null && (
-                  <span className="flex items-center gap-1" title="首字延迟"><Zap size={11} />{fmtDuration(msg.ttftMs)}</span>
+                  <span className="flex items-center gap-1 tabular-nums" title="首字延迟"><Zap size={11} />{fmtDuration(msg.ttftMs)}</span>
                 )}
                 {msg.totalTokens != null && msg.totalTokens > 0 && (
-                  <span title={`输入 ${msg.promptTokens ?? '?'} tokens · 输出 ${msg.completionTokens ?? '?'} tokens`}>
+                  <span className="tabular-nums" title={`输入 ${msg.promptTokens ?? '?'} tokens · 输出 ${msg.completionTokens ?? '?'} tokens`}>
                     ↑{fmtTokens(msg.promptTokens)} ↓{fmtTokens(msg.completionTokens)} · 共 {fmtTokens(msg.totalTokens)} tokens
                   </span>
                 )}
-                {tps != null && tps > 0 && <span title="输出速度">{tps.toFixed(1)} tok/s</span>}
+                {tps != null && tps > 0 && <span className="tabular-nums" title="输出速度">{tps.toFixed(1)} tok/s</span>}
               </>
             )}
           </div>

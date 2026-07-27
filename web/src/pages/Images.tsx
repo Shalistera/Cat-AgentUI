@@ -5,7 +5,8 @@ import {
 import { useUi } from '../store';
 import { api, uploadFile, fmtDuration, fmtTime, fmtTokens } from '../api';
 import {
-  Button, Textarea, Select, Field, Modal, Badge, Spinner, toast, confirmDialog, EmptyState,
+  Button, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
+  toast, confirmDialog, EmptyState,
 } from '../components/ui';
 import type { ImageModel, ImageRecord } from '../types';
 
@@ -145,24 +146,26 @@ export default function Images() {
 
   return (
     <>
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-4">
-        {!sidebarOpen && (
+      <PageHeader
+        title="绘图工坊"
+        subtitle={total > 0 ? `已生成 ${total.toLocaleString()} 张图片` : '文生图与参考图编辑'}
+        left={!sidebarOpen && (
           <Button variant="ghost" size="icon" title="展开侧栏" onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
-        <h1 className="text-sm font-semibold">绘图工坊</h1>
-      </header>
+      />
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto bg-bg0">
         <div className="mx-auto max-w-5xl p-6">
           {/* ---- generation form ---- */}
-          <section className="fade-up rounded-2xl border border-line bg-bg1 p-5">
+          <Card title="新建生成" desc="描述目标画面,可附参考图作为编辑输入。" className="fade-up"
+            bodyClassName={models === null || models.length === 0 ? '!p-0' : ''}>
             {models === null ? (
               <div className="flex justify-center py-10"><Spinner className="h-5 w-5" /></div>
             ) : models.length === 0 ? (
               <EmptyState
-                icon={<ImageIcon size={28} />}
+                icon={<ImageIcon size={22} />}
                 title="管理员尚未配置图像模型"
                 hint="请联系管理员在后台添加支持图像生成的模型后再来创作。"
               />
@@ -221,20 +224,20 @@ export default function Images() {
                 </div>
 
                 <div>
-                  <div className="mb-1.5 text-xs font-medium text-tx2">参考图</div>
+                  <div className="mb-1.5 text-[13px] font-medium text-tx">参考图</div>
                   <div className="flex flex-wrap items-center gap-2">
                     {refIds.map((id) => (
                       <div key={id} className="relative h-16 w-16 shrink-0">
                         <img
                           src={`/api/uploads/${id}/file`}
                           alt="参考图"
-                          className="h-16 w-16 rounded-lg border border-line object-cover"
+                          className="h-16 w-16 rounded-md border border-line object-cover"
                         />
                         <button
                           type="button"
                           title="移除"
                           onClick={() => setRefIds((prev) => prev.filter((x) => x !== id))}
-                          className="absolute -right-1.5 -top-1.5 flex h-4.5 w-4.5 cursor-pointer items-center justify-center rounded-full border border-line2 bg-bg3 text-tx2 hover:bg-err/20 hover:text-err"
+                          className="absolute -right-1.5 -top-1.5 flex h-4.5 w-4.5 cursor-pointer items-center justify-center rounded-full border border-line bg-bg1 text-tx2 shadow-sm transition-colors hover:border-err/50 hover:text-err"
                         >
                           <X size={10} />
                         </button>
@@ -251,31 +254,41 @@ export default function Images() {
                       onChange={onPickFiles}
                     />
                   </div>
-                  <div className="mt-1 text-[11px] text-tx3">可选,最多 4 张,作为图像编辑 / 参考输入。</div>
+                  <div className="mt-1.5 text-xs text-tx3">可选,最多 4 张,作为图像编辑 / 参考输入。</div>
                 </div>
 
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[11px] text-tx3">部分模型生成可能需要 1–3 分钟,请耐心等待。Cmd/Ctrl + Enter 快速提交。</p>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+                  <p className="text-xs leading-relaxed text-tx3">
+                    部分模型生成需要 1–3 分钟。Cmd / Ctrl + Enter 快速提交。
+                  </p>
                   <Button variant="primary" disabled={!canGenerate} onClick={generate} className="shrink-0">
                     {generating
-                      ? <><Spinner className="h-4 w-4" />生成中 {elapsed.toFixed(1)}s…</>
+                      ? <><Spinner className="h-4 w-4" />生成中 {elapsed.toFixed(1)}s</>
                       : <><Sparkles size={15} />生成图片</>}
                   </Button>
                 </div>
               </div>
             )}
-          </section>
+          </Card>
 
           {/* ---- gallery ---- */}
-          <section className="mt-6">
+          <section className="mt-5">
+            <div className="mb-2.5 flex items-baseline justify-between">
+              <h2 className="eyebrow">作品库</h2>
+              {list.length > 0 && (
+                <span className="text-xs tabular-nums text-tx3">显示 {list.length} / {total}</span>
+              )}
+            </div>
             {!galleryLoaded ? (
               <div className="flex justify-center py-16"><Spinner className="h-5 w-5" /></div>
             ) : list.length === 0 ? (
-              <EmptyState
-                icon={<ImageIcon size={28} />}
-                title="还没有生成过图片"
-                hint="在上方输入提示词,开始你的第一次创作吧。"
-              />
+              <div className="rounded-xl border border-line bg-bg1">
+                <EmptyState
+                  icon={<ImageIcon size={22} />}
+                  title="还没有生成过图片"
+                  hint="在上方输入提示词,开始你的第一次创作。"
+                />
+              </div>
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -284,7 +297,7 @@ export default function Images() {
                       key={img.id}
                       type="button"
                       onClick={() => setLightbox(img)}
-                      className="group relative aspect-square cursor-pointer overflow-hidden rounded-xl border border-line bg-bg1 text-left"
+                      className="group relative aspect-square cursor-pointer overflow-hidden rounded-lg border border-line bg-bg1 text-left shadow-xs transition-shadow hover:shadow-md"
                     >
                       <img
                         loading="lazy"
@@ -292,10 +305,10 @@ export default function Images() {
                         alt={img.prompt}
                         className="h-full w-full object-cover"
                       />
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent p-2.5 pt-8 opacity-0 transition-opacity group-hover:opacity-100">
-                        <p className="truncate text-xs text-white">{img.prompt}</p>
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2.5 pt-10 opacity-0 transition-opacity group-hover:opacity-100">
+                        <p className="line-clamp-2 text-[11px] leading-snug text-white">{img.prompt}</p>
                         {img.model && (
-                          <span className="mt-1 inline-block max-w-full truncate rounded bg-white/15 px-1.5 py-0.5 text-[10px] text-white/90">
+                          <span className="mt-1.5 inline-block max-w-full truncate rounded bg-white/20 px-1.5 py-0.5 font-mono text-[10px] text-white">
                             {img.model}
                           </span>
                         )}
@@ -305,7 +318,7 @@ export default function Images() {
                 </div>
                 {list.length < total && (
                   <div className="mt-5 flex justify-center">
-                    <Button variant="subtle" disabled={loadingMore} onClick={loadMore}>
+                    <Button variant="outline" disabled={loadingMore} onClick={loadMore}>
                       {loadingMore && <Spinner className="h-3.5 w-3.5" />}
                       {loadingMore ? '加载中…' : '加载更多'}
                     </Button>
@@ -324,28 +337,28 @@ export default function Images() {
             <img
               src={`/api/images/${lightbox.id}/file`}
               alt={lightbox.prompt}
-              className="mx-auto max-h-[60vh] rounded-xl object-contain"
+              className="mx-auto max-h-[58vh] rounded-lg border border-line object-contain"
             />
-            <p className="select-text whitespace-pre-wrap text-sm text-tx2">{lightbox.prompt}</p>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-tx3">
-              {lightbox.model && <Badge tone="acc">{lightbox.model}</Badge>}
+            <p className="select-text whitespace-pre-wrap text-[13px] leading-relaxed text-tx2">{lightbox.prompt}</p>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-tx3">
+              {lightbox.model && <Badge mono>{lightbox.model}</Badge>}
               {lightbox.size && <span>尺寸 {lightbox.size}</span>}
               <span>耗时 {fmtDuration(lightbox.durationMs)}</span>
               <span>{fmtTime(lightbox.createdAt)}</span>
               {lightbox.tokens != null && lightbox.tokens > 0 && <span>Tokens {fmtTokens(lightbox.tokens)}</span>}
             </div>
-            <div className="flex justify-end gap-2 border-t border-line pt-4">
+            <ModalActions>
               <a
                 href={`/api/images/${lightbox.id}/file`}
                 download
-                className="inline-flex cursor-pointer select-none items-center justify-center gap-1.5 rounded-lg border border-line bg-bg2 px-3.5 py-2 text-sm font-medium text-tx transition-colors hover:bg-bg3"
+                className="inline-flex h-9 cursor-pointer select-none items-center justify-center gap-1.5 rounded-md border border-line2 bg-bg1 px-3.5 text-[13px] font-medium leading-none text-tx shadow-xs transition-colors hover:bg-bg2"
               >
                 <Download size={14} />下载
               </a>
               <Button variant="danger" onClick={() => deleteImage(lightbox)}>
                 <Trash2 size={14} />删除
               </Button>
-            </div>
+            </ModalActions>
           </div>
         )}
       </Modal>
