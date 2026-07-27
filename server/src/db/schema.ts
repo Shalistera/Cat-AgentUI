@@ -69,6 +69,10 @@ export const chats = sqliteTable('chats', {
 export const messages = sqliteTable('messages', {
   id: text('id').primaryKey(),
   chatId: text('chat_id').notNull().references(() => chats.id, { onDelete: 'cascade' }),
+  // Monotonic per-chat ordering key. createdAt is millisecond-granular and
+  // collides between messages written in the same request, which makes it
+  // unusable for "delete everything after message X".
+  seq: integer('seq').notNull().default(0),
   role: text('role').notNull(), // 'user' | 'assistant'
   parts: text('parts').notNull().default('[]'), // JSON MessagePart[]
   model: text('model'),
@@ -81,7 +85,7 @@ export const messages = sqliteTable('messages', {
   durationMs: integer('duration_ms'),
   ttftMs: integer('ttft_ms'),
   createdAt: integer('created_at').notNull(),
-}, (t) => [index('idx_messages_chat').on(t.chatId, t.createdAt)]);
+}, (t) => [index('idx_messages_chat').on(t.chatId, t.seq)]);
 
 export const usageLog = sqliteTable('usage_log', {
   id: text('id').primaryKey(),
@@ -107,9 +111,9 @@ export const mcpServers = sqliteTable('mcp_servers', {
   transport: text('transport').notNull(), // 'stdio' | 'http' | 'sse'
   command: text('command'),
   args: text('args').notNull().default('[]'), // JSON string[]
-  env: text('env').notNull().default('{}'), // JSON Record<string,string>
+  envEnc: text('env_enc'), // AES-256-GCM encrypted JSON Record<string,string>
   url: text('url'),
-  headers: text('headers').notNull().default('{}'), // JSON
+  headersEnc: text('headers_enc'), // AES-256-GCM encrypted JSON Record<string,string>
   enabled: integer('enabled').notNull().default(1),
   lastStatus: text('last_status'), // 'ok' | 'error' | null(untested)
   lastError: text('last_error'),

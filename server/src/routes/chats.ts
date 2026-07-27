@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { and, asc, eq, gt, gte } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, sql } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
@@ -35,6 +35,35 @@ function parseParts(json: string): MessagePart[] {
   try { const v = JSON.parse(json); return Array.isArray(v) ? v : []; } catch { return []; }
 }
 
+// Next ordering key for a chat. Safe because better-sqlite3 is synchronous and
+// the server runs as a single writer process.
+function nextSeq(chatId: string): number {
+  const row = db.select({ max: sql<number | null>`max(${schema.messages.seq})` })
+    .from(schema.messages).where(eq(schema.messages.chatId, chatId)).get();
+  return (row?.max ?? 0) + 1;
+}
+
+const EMPTY_TOOL_RESULT = '(工具没有返回内容)';
+
+// Every tool_call must be answered by a tool_result or the provider APIs reject
+// the whole history on replay. Interrupted turns (stop button, iteration cap)
+// leave dangling calls behind, so close them out before persisting/replaying.
+function closeDanglingToolCalls(parts: MessagePart[], reason: string): MessagePart[] {
+  const answered = new Set(parts.filter((p) => p.type === 'tool_result').map((p) => p.toolCallId));
+  const unanswered = parts.filter((p) => p.type === 'tool_call' && !answered.has(p.id));
+  if (!unanswered.length) return parts;
+  return [
+    ...parts,
+    ...unanswered.map((p) => ({
+      type: 'tool_result' as const,
+      toolCallId: (p as Extract<MessagePart, { type: 'tool_call' }>).id,
+      name: (p as Extract<MessagePart, { type: 'tool_call' }>).name,
+      result: reason,
+      isError: true,
+    })),
+  ];
+}
+
 function appendText(parts: MessagePart[], type: 'text' | 'reasoning', text: string) {
   const last = parts[parts.length - 1];
   if (last && last.type === type) (last as { text: string }).text += text;
@@ -44,7 +73,8 @@ function appendText(parts: MessagePart[], type: 'text' | 'reasoning', text: stri
 // Convert stored MessagePart[] to adapter parts (resolving image uploads to base64).
 function toAdapterParts(parts: MessagePart[], ownerId: string, includeImages: boolean): AdapterMessagePart[] {
   const out: AdapterMessagePart[] = [];
-  for (const p of parts) {
+  // repair history written before this guard existed
+  for (const p of closeDanglingToolCalls(parts, '(调用未完成)')) {
     if (p.type === 'text' && p.text) out.push({ type: 'text', text: p.text });
     else if (p.type === 'image' && p.uploadId && includeImages) {
       const img = readUploadBase64(p.uploadId, ownerId);
@@ -52,7 +82,12 @@ function toAdapterParts(parts: MessagePart[], ownerId: string, includeImages: bo
     } else if (p.type === 'tool_call') {
       out.push({ type: 'tool_call', id: p.id, name: p.name, args: p.args });
     } else if (p.type === 'tool_result') {
-      out.push({ type: 'tool_result', toolCallId: p.toolCallId, name: p.name, result: p.result, isError: p.isError });
+      // empty strings are rejected by some providers (Anthropic: "text content blocks must be non-empty")
+      out.push({
+        type: 'tool_result', toolCallId: p.toolCallId, name: p.name,
+        result: p.result && p.result.length ? p.result : EMPTY_TOOL_RESULT,
+        isError: p.isError,
+      });
     }
     // reasoning parts are never replayed to providers
   }
@@ -223,7 +258,7 @@ export async function chatRoutes(app: FastifyInstance) {
         .where(and(eq(schema.messages.id, body.regenerateMessageId), eq(schema.messages.chatId, chatId))).get();
       if (!target) return reply.code(404).send({ error: '消息不存在' });
       db.delete(schema.messages)
-        .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.createdAt, target.createdAt))).run();
+        .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.seq, target.seq))).run();
     } else if (body.editMessageId) {
       if (!body.content) return reply.code(400).send({ error: '缺少消息内容' });
       const target = db.select().from(schema.messages)
@@ -232,19 +267,19 @@ export async function chatRoutes(app: FastifyInstance) {
       db.update(schema.messages).set({ parts: JSON.stringify(body.content) })
         .where(eq(schema.messages.id, target.id)).run();
       db.delete(schema.messages)
-        .where(and(eq(schema.messages.chatId, chatId), gt(schema.messages.createdAt, target.createdAt))).run();
+        .where(and(eq(schema.messages.chatId, chatId), gt(schema.messages.seq, target.seq))).run();
       userMessageId = target.id;
     } else {
       if (!body.content) return reply.code(400).send({ error: '缺少消息内容' });
       userMessageId = newId();
       db.insert(schema.messages).values({
-        id: userMessageId, chatId, role: 'user',
+        id: userMessageId, chatId, role: 'user', seq: nextSeq(chatId),
         parts: JSON.stringify(body.content), createdAt: now(),
       }).run();
     }
 
     const history = db.select().from(schema.messages).where(eq(schema.messages.chatId, chatId))
-      .orderBy(asc(schema.messages.createdAt)).all()
+      .orderBy(asc(schema.messages.seq)).all()
       .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0));
     if (!history.length || history[history.length - 1].role !== 'user') {
       return reply.code(400).send({ error: '当前对话状态无法生成回复' });
@@ -267,7 +302,22 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     // --- start streaming ---
+    // Re-check the cap here: the MCP tool fetch above yields, so several requests
+    // can pass the early check before any of them registers.
+    if ((activeStreams.get(user.id) ?? 0) >= 3) {
+      return reply.code(429).send({ error: '并发对话数已达上限,请等待其他回复完成' });
+    }
     activeStreams.set(user.id, (activeStreams.get(user.id) ?? 0) + 1);
+    let slotReleased = false;
+    const releaseSlot = () => {
+      if (slotReleased) return;
+      slotReleased = true;
+      activeStreams.set(user.id, Math.max(0, (activeStreams.get(user.id) ?? 1) - 1));
+    };
+
+    // Everything below is the streaming turn; the outer finally guarantees the
+    // slot is released even if setup throws before the inner try/finally.
+    try {
     const sse = createSse(reply);
     const controller = new AbortController();
     let clientGone = false;
@@ -279,7 +329,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     const assistantId = newId();
     db.insert(schema.messages).values({
-      id: assistantId, chatId, role: 'assistant', parts: '[]',
+      id: assistantId, chatId, role: 'assistant', parts: '[]', seq: nextSeq(chatId),
       model: model.modelId, providerId: provider.id, status: 'streaming', createdAt: now(),
     }).run();
     if (body.modelId && body.modelId !== chat.modelId) {
@@ -358,12 +408,16 @@ export async function chatRoutes(app: FastifyInstance) {
         sse.send('error', { message: errMsg });
       }
     } finally {
-      activeStreams.set(user.id, Math.max(0, (activeStreams.get(user.id) ?? 1) - 1));
+      releaseSlot();
     }
 
+    const finalParts = closeDanglingToolCalls(
+      parts,
+      status === 'stopped' ? '(用户已停止,调用未执行)' : '(调用未完成)',
+    );
     const durationMs = Date.now() - t0;
     db.update(schema.messages).set({
-      parts: JSON.stringify(parts),
+      parts: JSON.stringify(finalParts),
       status, error: errMsg,
       promptTokens: usage.prompt || null,
       completionTokens: usage.completion || null,
@@ -389,7 +443,7 @@ export async function chatRoutes(app: FastifyInstance) {
       try {
         const titleMessages: AdapterMessage[] = [
           ...baseHistory,
-          { role: 'assistant', parts: toAdapterParts(parts, user.id, false) },
+          { role: 'assistant', parts: toAdapterParts(finalParts, user.id, false) },
           { role: 'user', parts: [{ type: 'text', text: TITLE_PROMPT }] },
         ];
         let title = '';
@@ -420,5 +474,8 @@ export async function chatRoutes(app: FastifyInstance) {
 
     sse.send('done', { status });
     sse.end();
+    } finally {
+      releaseSlot();
+    }
   });
 }

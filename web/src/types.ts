@@ -106,10 +106,12 @@ export interface AdminProvider {
   models: AdminModel[];
 }
 
+// env/headers 为敏感信息,后端只返回是否已配置及键名,不返回值。
 export interface AdminMcpServer {
   id: string; name: string; transport: 'stdio' | 'http' | 'sse';
-  command: string | null; args: string[]; env: Record<string, string>;
-  url: string | null; headers: Record<string, string>;
+  command: string | null; args: string[]; url: string | null;
+  hasEnv: boolean; hasHeaders: boolean;
+  envKeys: string[]; headerKeys: string[];
   enabled: boolean; lastStatus: string | null; lastError: string | null;
   toolsCache?: { name: string; description: string }[];
 }

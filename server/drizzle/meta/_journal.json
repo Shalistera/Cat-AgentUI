@@ -8,6 +8,20 @@
       "when": 1785108068030,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785110775789,
+      "tag": "0001_message_seq",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785110946028,
+      "tag": "0002_mcp_secrets",
+      "breakpoints": true
     }
   ]
 }

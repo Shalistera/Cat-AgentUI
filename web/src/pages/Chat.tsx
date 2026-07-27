@@ -75,13 +75,15 @@ export default function Chat() {
 
   // load chat on route change
   useEffect(() => {
+    // A chat we just created and are already streaming into: the route change is
+    // our own navigation, so don't abort the in-flight stream or reload state.
+    if (skipLoadRef.current === routeId) { skipLoadRef.current = null; return; }
     abortRef.current?.abort();
     setStreaming(false);
     if (!routeId) {
       setChat(null); setMessages([]); setMcpSelected([]); setSettings(draftFromChat(null));
       return;
     }
-    if (skipLoadRef.current === routeId) { skipLoadRef.current = null; return; }
     let cancelled = false;
     api.get<{ chat: ChatDetail; messages: Message[] }>(`/api/chats/${routeId}`)
       .then((r) => {
@@ -163,6 +165,7 @@ export default function Chat() {
     // buffered delta application (avoid re-render per token)
     const buf = { text: '', reasoning: '' };
     let flushTimer: ReturnType<typeof setInterval> | null = null;
+    let finished = false;
 
     const applyToAssistant = (fn: (m: Message) => Message) => {
       setMessages((prev) => {
@@ -194,6 +197,8 @@ export default function Chat() {
     flushTimer = setInterval(flush, 80);
 
     const finalize = (status: Message['status']) => {
+      if (finished) return;
+      finished = true;
       if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
       flush();
       applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status }));
@@ -230,8 +235,9 @@ export default function Chat() {
         if (controller.signal.aborted) { finalize('stopped'); return; }
         if (e instanceof ApiError) {
           // request rejected before streaming started — drop placeholder
-          setMessages((prev) => prev.filter((m) => m.id !== 'tmp-a'));
+          finished = true;
           if (flushTimer) clearInterval(flushTimer);
+          setMessages((prev) => prev.filter((m) => m.id !== 'tmp-a'));
           setStreaming(false);
           toast(e.message, 'err');
           return;

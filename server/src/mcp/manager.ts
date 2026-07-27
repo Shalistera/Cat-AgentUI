@@ -6,6 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
+import { decryptSecret } from '../crypto.js';
 import type { ToolDef } from '../types.js';
 
 type ServerRow = typeof schema.mcpServers.$inferSelect;
@@ -41,18 +42,34 @@ function pickEnv(): Record<string, string> {
   return out;
 }
 
+/**
+ * Decrypt an encrypted env/headers blob. A decryption failure (e.g. rotated
+ * SECRET_KEY) must surface as a normal per-server connection error — callers
+ * of buildTransport catch and report it — never crash the process.
+ */
+function decryptRecord(enc: string | null, label: string): Record<string, string> {
+  if (!enc) return {};
+  let plain: string;
+  try {
+    plain = decryptSecret(enc);
+  } catch {
+    throw new Error(`无法解密该服务器的${label}(SECRET_KEY 可能已更换),请在管理后台重新填写并保存`);
+  }
+  return parseJson<Record<string, string>>(plain, {});
+}
+
 function buildTransport(row: ServerRow) {
   if (row.transport === 'stdio') {
     if (!row.command) throw new Error('stdio 服务器缺少启动命令(command)');
     return new StdioClientTransport({
       command: row.command,
       args: parseJson<string[]>(row.args, []),
-      env: { ...pickEnv(), ...parseJson<Record<string, string>>(row.env, {}) },
+      env: { ...pickEnv(), ...decryptRecord(row.envEnc, '环境变量') },
       stderr: 'ignore',
     });
   }
   if (!row.url) throw new Error('远程 MCP 服务器缺少 URL');
-  const headers = parseJson<Record<string, string>>(row.headers, {});
+  const headers = decryptRecord(row.headersEnc, 'Headers');
   const opts = { requestInit: { headers } };
   if (row.transport === 'http') return new StreamableHTTPClientTransport(new URL(row.url), opts);
   if (row.transport === 'sse') return new SSEClientTransport(new URL(row.url), opts);

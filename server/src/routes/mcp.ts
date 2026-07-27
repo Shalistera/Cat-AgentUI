@@ -2,13 +2,31 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
-import { newId } from '../crypto.js';
+import { newId, encryptSecret, decryptSecret } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { invalidateServer, testServer } from '../mcp/manager.js';
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
   try { return JSON.parse(raw) as T; } catch { return fallback; }
+}
+
+// SECURITY: env / headers hold credentials (bearer tokens, API keys). They are
+// stored AES-256-GCM encrypted (like provider API keys) and are write-only:
+// responses expose hasEnv/hasHeaders plus key names — never the values.
+function encryptRecord(rec: Record<string, string>): string | null {
+  return Object.keys(rec).length ? encryptSecret(JSON.stringify(rec)) : null;
+}
+
+/** Key names only (values never leave the server). Decryption failure → []. */
+function secretKeys(enc: string | null): string[] {
+  if (!enc) return [];
+  try {
+    const rec = JSON.parse(decryptSecret(enc)) as Record<string, string>;
+    return Object.keys(rec);
+  } catch {
+    return [];
+  }
 }
 
 const serverBodySchema = z.object({
@@ -54,17 +72,27 @@ export async function mcpRoutes(app: FastifyInstance) {
     });
   });
 
-  // Admin: full rows with JSON fields parsed.
+  // Admin: full config, except secrets — env/headers values are never returned,
+  // only hasEnv/hasHeaders and the key names.
   app.get('/api/admin/mcp', async (req, reply) => {
     requireAdmin(req, reply);
     const rows = db.select().from(schema.mcpServers).all();
     return rows.map((r) => ({
-      ...r,
-      enabled: Boolean(r.enabled),
+      id: r.id,
+      name: r.name,
+      transport: r.transport,
+      command: r.command,
       args: parseJson<string[]>(r.args, []),
-      env: parseJson<Record<string, string>>(r.env, {}),
-      headers: parseJson<Record<string, string>>(r.headers, {}),
+      url: r.url,
+      hasEnv: !!r.envEnc,
+      hasHeaders: !!r.headersEnc,
+      envKeys: secretKeys(r.envEnc),
+      headerKeys: secretKeys(r.headersEnc),
+      enabled: Boolean(r.enabled),
+      lastStatus: r.lastStatus,
+      lastError: r.lastError,
       toolsCache: parseJson<{ name: string; description: string }[]>(r.toolsCache, []),
+      createdAt: r.createdAt,
     }));
   });
 
@@ -83,9 +111,9 @@ export async function mcpRoutes(app: FastifyInstance) {
       transport: d.transport,
       command: d.command ?? null,
       args: JSON.stringify(d.args ?? []),
-      env: JSON.stringify(d.env ?? {}),
+      envEnc: encryptRecord(d.env ?? {}),
       url: d.url ?? null,
-      headers: JSON.stringify(d.headers ?? {}),
+      headersEnc: encryptRecord(d.headers ?? {}),
       enabled: (d.enabled ?? true) ? 1 : 0,
       createdAt: now(),
     }).run();
@@ -113,9 +141,10 @@ export async function mcpRoutes(app: FastifyInstance) {
     if (d.transport !== undefined) patch.transport = d.transport;
     if (d.command !== undefined) patch.command = d.command;
     if (d.args !== undefined) patch.args = JSON.stringify(d.args);
-    if (d.env !== undefined) patch.env = JSON.stringify(d.env);
+    // Secrets: undefined = keep, empty object = clear, otherwise encrypt and replace.
+    if (d.env !== undefined) patch.envEnc = encryptRecord(d.env);
     if (d.url !== undefined) patch.url = d.url;
-    if (d.headers !== undefined) patch.headers = JSON.stringify(d.headers);
+    if (d.headers !== undefined) patch.headersEnc = encryptRecord(d.headers);
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
 
     if (Object.keys(patch).length) {

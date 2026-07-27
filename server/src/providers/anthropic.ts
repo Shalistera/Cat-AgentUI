@@ -59,7 +59,8 @@ function toMessages(messages: AdapterMessage[]): unknown[] {
           results.push({
             type: 'tool_result',
             tool_use_id: p.toolCallId,
-            content: [{ type: 'text', text: p.result ?? '' }],
+            // the API rejects empty text blocks, and tools legitimately return nothing
+            content: [{ type: 'text', text: p.result || '(no output)' }],
             ...(p.isError ? { is_error: true } : {}),
           });
         }

@@ -57,9 +57,11 @@ export async function authPlugin(app: FastifyInstance) {
   app.decorateRequest('user', null);
 
   app.addHook('onRequest', async (req, reply) => {
-    // CSRF: state-changing API calls must carry our custom header (set by the SPA client).
+    // CSRF: state-changing calls must carry our custom header (set by the SPA client).
     // Combined with SameSite=Lax cookies this blocks cross-site request forgery.
-    if (req.url.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    // Enforced on every non-safe method — gating on the raw URL would let a
+    // percent-encoded path (/%61pi/…) slip past while still routing to the handler.
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       if (req.headers['x-csrf'] !== '1') {
         return reply.code(403).send({ error: 'CSRF check failed' });
       }

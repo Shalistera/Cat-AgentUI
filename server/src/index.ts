@@ -21,7 +21,6 @@ async function main() {
     logger: { level: 'warn' },
     bodyLimit: 5 * 1024 * 1024,
     trustProxy: config.trustProxy,
-    disableRequestLogging: true,
   });
 
   await app.register(cookie);

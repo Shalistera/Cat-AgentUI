@@ -5,7 +5,7 @@ import {
   ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose, MoreHorizontal,
 } from 'lucide-react';
 import { useAuth, useChats, useUi } from '../store';
-import { api, fmtTime } from '../api';
+import { api } from '../api';
 import { CatWordmark } from './Logo';
 import { Button, Input, Modal, confirmDialog, toast } from './ui';
 import type { ChatSummary } from '../types';

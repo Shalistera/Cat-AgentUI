@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { db, schema, now, getSetting } from '../db/index.js';
-import { hashPassword, verifyPassword, newId } from '../crypto.js';
+import { hashPassword, verifyPassword, newId, sha256hex } from '../crypto.js';
 import {
   COOKIE_NAME, createSession, destroySession, setSessionCookie,
   clearSessionCookie, requireAuth, rateLimit,
@@ -98,6 +98,12 @@ export async function authRoutes(app: FastifyInstance) {
     }
     db.update(schema.users).set({ passwordHash: hashPassword(body.data.newPassword) })
       .where(eq(schema.users.id, u.id)).run();
+    // Changing the password must invalidate every other session — that is the
+    // whole point of changing it after a device is lost or a cookie leaks.
+    const current = req.cookies?.[COOKIE_NAME];
+    db.delete(schema.sessions).where(current
+      ? and(eq(schema.sessions.userId, u.id), ne(schema.sessions.tokenHash, sha256hex(current)))
+      : eq(schema.sessions.userId, u.id)).run();
     return { ok: true };
   });
 

@@ -22,10 +22,6 @@ function errMsg(e: unknown): string {
 // ---------- key-value editor ----------
 interface KVPair { k: string; v: string }
 
-function objectToPairs(obj: Record<string, string> | null | undefined): KVPair[] {
-  return Object.entries(obj ?? {}).map(([k, v]) => ({ k, v }));
-}
-
 function pairsToObject(pairs: KVPair[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const p of pairs) {
@@ -72,9 +68,10 @@ function McpModal({ server, onClose, onSaved }: {
   const [transport, setTransport] = useState<Transport>(server?.transport ?? 'stdio');
   const [command, setCommand] = useState(server?.command ?? '');
   const [argsText, setArgsText] = useState((server?.args ?? []).join('\n'));
-  const [envPairs, setEnvPairs] = useState<KVPair[]>(objectToPairs(server?.env));
+  // 安全:后端不会返回已保存的 env/headers 值,编辑时编辑器始终从空开始。
+  const [envPairs, setEnvPairs] = useState<KVPair[]>([]);
   const [url, setUrl] = useState(server?.url ?? '');
-  const [headerPairs, setHeaderPairs] = useState<KVPair[]>(objectToPairs(server?.headers));
+  const [headerPairs, setHeaderPairs] = useState<KVPair[]>([]);
   const [enabled, setEnabled] = useState(server?.enabled ?? true);
   const [busy, setBusy] = useState(false);
 
@@ -87,22 +84,19 @@ function McpModal({ server, onClose, onSaved }: {
       name: name.trim(),
       transport,
       enabled,
-      ...(transport === 'stdio'
-        ? {
-            command: command.trim(),
-            args: argsText.split('\n').map((s) => s.trim()).filter(Boolean),
-            env: pairsToObject(envPairs),
-            url: null,
-            headers: {},
-          }
-        : {
-            url: url.trim(),
-            headers: pairsToObject(headerPairs),
-            command: null,
-            args: [],
-            env: {},
-          }),
     };
+    if (transport === 'stdio') {
+      body.command = command.trim();
+      body.args = argsText.split('\n').map((s) => s.trim()).filter(Boolean);
+      // env 为敏感信息:仅在实际填写时提交(整体覆盖);编辑时留空 = 保持原值。
+      const env = pairsToObject(envPairs);
+      if (!isEdit || Object.keys(env).length > 0) body.env = env;
+    } else {
+      body.url = url.trim();
+      body.args = [];
+      const headers = pairsToObject(headerPairs);
+      if (!isEdit || Object.keys(headers).length > 0) body.headers = headers;
+    }
     setBusy(true);
     try {
       if (isEdit) await api.patch(`/api/admin/mcp/${server.id}`, body);
@@ -137,8 +131,13 @@ function McpModal({ server, onClose, onSaved }: {
               <Textarea rows={3} value={argsText} onChange={(e) => setArgsText(e.target.value)}
                 className="font-mono text-xs" placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/data'} />
             </Field>
-            <Field label="环境变量">
-              <KeyValueEditor pairs={envPairs} onChange={setEnvPairs} keyPlaceholder="变量名" valuePlaceholder="值" />
+            <Field label="环境变量" hint={isEdit ? '留空则保持不变;填写后将整体覆盖' : undefined}>
+              <div className="space-y-2">
+                {isEdit && (server.envKeys?.length ?? 0) > 0 && (
+                  <div className="text-[11px] text-tx3">已配置:{server.envKeys.join('、')}(值不回显)</div>
+                )}
+                <KeyValueEditor pairs={envPairs} onChange={setEnvPairs} keyPlaceholder="变量名" valuePlaceholder="值" />
+              </div>
             </Field>
           </>
         ) : (
@@ -146,8 +145,13 @@ function McpModal({ server, onClose, onSaved }: {
             <Field label="URL">
               <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/mcp" />
             </Field>
-            <Field label="Headers">
-              <KeyValueEditor pairs={headerPairs} onChange={setHeaderPairs} keyPlaceholder="Header 名称" valuePlaceholder="Header 值" />
+            <Field label="Headers" hint={isEdit ? '留空则保持不变;填写后将整体覆盖' : undefined}>
+              <div className="space-y-2">
+                {isEdit && (server.headerKeys?.length ?? 0) > 0 && (
+                  <div className="text-[11px] text-tx3">已配置:{server.headerKeys.join('、')}(值不回显)</div>
+                )}
+                <KeyValueEditor pairs={headerPairs} onChange={setHeaderPairs} keyPlaceholder="Header 名称" valuePlaceholder="Header 值" />
+              </div>
             </Field>
           </>
         )}
