@@ -6,7 +6,7 @@ import { useMcp, useModels } from '../store';
 import { uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { toast, Toggle } from './ui';
-import type { ModelInfo, ReasoningEffort } from '../types';
+import type { ModelInfo, ReasoningEffort, ReasoningLevel } from '../types';
 
 function Popover({ trigger, children, open, setOpen, align = 'left', width = 'w-80' }: {
   trigger: ReactNode; children: ReactNode; open: boolean; setOpen(v: boolean): void;
@@ -31,9 +31,9 @@ const toolBtn = 'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border 
 
 // `off` is a real stop rather than an absence — Gemini needs an explicit zero
 // budget to actually stop thinking. Everything above it comes from the model's
-// admin-configured ladder, shown under the vendor's own names.
-const OFF: ReasoningEffort = 'off';
-const effortLabel = (e: ReasoningEffort) => (e === OFF ? '关闭' : e);
+// ladder, where each level carries both the name the vendor receives and the
+// one worth showing a person.
+const OFF_LEVEL: ReasoningLevel = { value: 'off', label: '关闭' };
 
 export interface PendingImage { uploadId: string; previewUrl: string }
 
@@ -113,10 +113,11 @@ export function Composer(props: ComposerProps) {
   const imageMode = !!model?.imageGen;
   const canAttach = model?.vision || imageMode;
 
-  const efforts: ReasoningEffort[] = [OFF, ...(model?.reasoningLevels ?? [])];
+  const efforts: ReasoningLevel[] = [OFF_LEVEL, ...(model?.reasoningLevels ?? [])];
   // A level the current model does not offer falls back to the off stop instead
   // of leaving the slider pointing at nothing.
-  const effortIdx = Math.max(0, efforts.indexOf(props.settings.reasoningEffort || OFF));
+  const effortIdx = Math.max(0, efforts.findIndex((e) => e.value === (props.settings.reasoningEffort || OFF_LEVEL.value)));
+  const effort = efforts[effortIdx];
 
   const modelRow = (m: ModelInfo) => (
     <button key={m.id}
@@ -249,21 +250,27 @@ export function Composer(props: ComposerProps) {
                   <div>
                     <div className="mb-1.5 flex items-baseline justify-between">
                       <span className="text-[11px] font-medium text-tx">推理强度</span>
-                      <span className="font-mono text-[11px] font-medium text-acc">
-                        {effortLabel(efforts[effortIdx])}
+                      <span className="flex items-baseline gap-1.5">
+                        <span className="text-[11px] font-medium text-acc">{effort.label}</span>
+                        {/* the name the provider receives, when it isn't already
+                            what's on screen — `off` never goes anywhere */}
+                        {effort.value !== OFF_LEVEL.value && effort.value !== effort.label && (
+                          <span className="font-mono text-[10px] text-tx3">{effort.value}</span>
+                        )}
                       </span>
                     </div>
                     <input
                       type="range" min={0} max={efforts.length - 1} step={1} value={effortIdx}
                       className="range"
                       aria-label="推理强度"
+                      aria-valuetext={effort.label}
                       onChange={(e) => props.onSettingsChange({
-                        ...props.settings, reasoningEffort: efforts[Number(e.target.value)],
+                        ...props.settings, reasoningEffort: efforts[Number(e.target.value)].value,
                       })}
                     />
                     <div className="mt-0.5 flex justify-between gap-1 text-[10px] text-tx3">
                       {efforts.map((e) => (
-                        <span key={e} className={e === OFF ? '' : 'font-mono'}>{effortLabel(e)}</span>
+                        <span key={e.value} title={e.value}>{e.label}</span>
                       ))}
                     </div>
                   </div>

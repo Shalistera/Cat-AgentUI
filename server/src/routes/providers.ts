@@ -6,6 +6,10 @@ import { db, schema, now } from '../db/index.js';
 import { encryptSecret, newId } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
+import {
+  MAX_LEVELS, defaultLevels, effectiveLevels, normalizeLevels, parseLevels, parseMode,
+} from '../reasoning.js';
+import type { ProviderType } from '../types.js';
 
 type ProviderRow = typeof schema.providers.$inferSelect;
 type ModelRow = typeof schema.models.$inferSelect;
@@ -13,15 +17,10 @@ type ModelRow = typeof schema.models.$inferSelect;
 // Regex to auto-detect image generation models when flags are not explicitly set.
 const IMAGE_MODEL_RE = /gpt-image|dall-e|-image|imagen/i;
 
-/** Levels are stored as JSON; a corrupt value must not take the route down. */
-function parseLevels(raw: string | null | undefined): string[] {
-  try {
-    const v = JSON.parse(raw || '[]');
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
-  } catch { return []; }
-}
-
-function publicModel(m: ModelRow) {
+// The console shows all three ladders at once: what the model offers today,
+// what the admin typed, and what the defaults would give — so switching modes
+// in the editor never lands on an empty list.
+function publicModel(m: ModelRow, type: ProviderType) {
   return {
     id: m.id,
     providerId: m.providerId,
@@ -30,7 +29,12 @@ function publicModel(m: ModelRow) {
     vision: !!m.vision,
     tools: !!m.tools,
     imageGen: !!m.imageGen,
-    reasoningLevels: parseLevels(m.reasoningLevels),
+    reasoning: {
+      mode: parseMode(m.reasoningMode),
+      levels: effectiveLevels(m.reasoningMode, m.reasoningLevels, type, m.modelId),
+      custom: parseLevels(m.reasoningLevels),
+      defaults: defaultLevels(type, m.modelId),
+    },
     enabled: !!m.enabled,
     isDefault: !!m.isDefault,
     sortOrder: m.sortOrder,
@@ -59,7 +63,7 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[]) {
     avatarUrl: p.avatar ? avatarUrl(p.id, p.avatar) : null,
     enabled: !!p.enabled,
     sortOrder: p.sortOrder,
-    ...(modelRows ? { models: modelRows.map(publicModel) } : {}),
+    ...(modelRows ? { models: modelRows.map((m) => publicModel(m, p.type as ProviderType)) } : {}),
   };
 }
 
@@ -136,9 +140,13 @@ const modelPatchSchema = z.object({
   vision: z.boolean().optional(),
   tools: z.boolean().optional(),
   imageGen: z.boolean().optional(),
-  // Blanks are tolerated and stripped below — rejecting them would 400 a whole
-  // list because of one stray comma.
-  reasoningLevels: z.array(z.string().max(32)).max(12).optional(),
+  reasoningMode: z.enum(['auto', 'custom', 'off']).optional(),
+  // Blank rows and duplicates are tolerated and stripped below — rejecting them
+  // would 400 a whole ladder because of one half-typed line.
+  reasoningLevels: z.array(z.object({
+    value: z.string().max(32),
+    label: z.string().max(32).optional(),
+  })).max(MAX_LEVELS * 2).optional(),
   enabled: z.boolean().optional(),
   isDefault: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
@@ -366,12 +374,15 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.tools !== undefined) patch.tools = d.tools ? 1 : 0;
     if (d.imageGen !== undefined) patch.imageGen = d.imageGen ? 1 : 0;
     if (d.reasoningLevels !== undefined) {
-      // Trim, drop blanks, de-duplicate — the admin types this as free text.
-      const seen = new Set<string>();
-      const levels = d.reasoningLevels
-        .map((x) => x.trim())
-        .filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
-      patch.reasoningLevels = JSON.stringify(levels);
+      patch.reasoningLevels = JSON.stringify(normalizeLevels(d.reasoningLevels));
+    }
+    if (d.reasoningMode !== undefined) patch.reasoningMode = d.reasoningMode;
+    // A custom ladder with nothing in it would silently behave as 'off' while
+    // the console claimed otherwise, so say so instead of saving it.
+    const nextMode = d.reasoningMode ?? parseMode(row.reasoningMode);
+    const nextLevels = patch.reasoningLevels ?? row.reasoningLevels;
+    if (nextMode === 'custom' && !parseLevels(nextLevels).length) {
+      return reply.code(400).send({ error: '自定义档位至少需要一个,或改用「默认」/「关闭」' });
     }
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.isDefault !== undefined) patch.isDefault = d.isDefault ? 1 : 0;
@@ -381,7 +392,7 @@ export async function providerRoutes(app: FastifyInstance) {
       db.update(schema.models).set(patch).where(eq(schema.models.id, id)).run();
     }
     const updated = db.select().from(schema.models).where(eq(schema.models.id, id)).get()!;
-    return publicModel(updated);
+    return publicModel(updated, getProvider(updated.providerId)!.type as ProviderType);
   });
 
   app.delete('/api/admin/models/:id', async (req, reply) => {
@@ -405,6 +416,7 @@ export async function providerRoutes(app: FastifyInstance) {
       vision: schema.models.vision,
       tools: schema.models.tools,
       imageGen: schema.models.imageGen,
+      reasoningMode: schema.models.reasoningMode,
       reasoningLevels: schema.models.reasoningLevels,
       isDefault: schema.models.isDefault,
       providerId: schema.providers.id,
@@ -423,7 +435,10 @@ export async function providerRoutes(app: FastifyInstance) {
       vision: !!r.vision,
       tools: !!r.tools,
       imageGen: !!r.imageGen,
-      reasoningLevels: parseLevels(r.reasoningLevels),
+      // Only the resolved ladder — the chat UI has no use for how it was decided.
+      reasoningLevels: effectiveLevels(
+        r.reasoningMode, r.reasoningLevels, r.providerType as ProviderType, r.modelId,
+      ),
       isDefault: !!r.isDefault,
       providerId: r.providerId,
       providerName: r.providerName,

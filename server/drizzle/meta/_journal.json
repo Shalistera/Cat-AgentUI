@@ -43,6 +43,13 @@
       "when": 1785144666383,
       "tag": "0005_model_reasoning_levels",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785154528129,
+      "tag": "0006_reasoning_mode",
+      "breakpoints": true
     }
   ]
 }

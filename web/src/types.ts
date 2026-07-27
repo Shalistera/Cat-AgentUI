@@ -35,8 +35,13 @@ export interface ChatSummary {
   createdAt: number; updatedAt: number;
 }
 
-/** 'off' plus whatever level names the admin configured for the model. */
+/** 'off', or the `value` of one of the model's reasoning levels. */
 export type ReasoningEffort = string;
+
+/** `value` goes to the provider, `label` is what the user reads. */
+export interface ReasoningLevel { value: string; label: string }
+
+export type ReasoningMode = 'auto' | 'custom' | 'off';
 
 export interface ChatDetail extends ChatSummary {
   systemPrompt: string | null;
@@ -52,8 +57,8 @@ export interface ModelInfo {
   providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini';
   /** Content-addressed URL of the provider's custom avatar; null = built-in mark. */
   providerAvatarUrl: string | null;
-  /** Ordered vendor level names, weakest first. Empty = no reasoning control. */
-  reasoningLevels: string[];
+  /** Ordered reasoning levels, weakest first. Empty = no reasoning control. */
+  reasoningLevels: ReasoningLevel[];
 }
 
 export interface McpServerInfo {
@@ -103,7 +108,15 @@ export interface AdminModel {
   id: string; providerId: string; modelId: string; displayName: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; enabled: boolean;
   isDefault: boolean; sortOrder: number;
-  reasoningLevels: string[];
+  reasoning: {
+    mode: ReasoningMode;
+    /** What the model offers right now, under the current mode. */
+    levels: ReasoningLevel[];
+    /** The saved custom ladder, whether or not it is in use. */
+    custom: ReasoningLevel[];
+    /** What 'auto' derives from the model id — empty if we don't recognise it. */
+    defaults: ReasoningLevel[];
+  };
 }
 
 export interface AdminProvider {

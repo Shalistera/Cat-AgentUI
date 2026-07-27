@@ -10,7 +10,10 @@ import { getToolsForServers, callTool } from '../mcp/manager.js';
 import { readUploadBase64 } from './uploads.js';
 import { readImageBase64, saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
-import type { AdapterMessage, AdapterMessagePart, MessagePart, ReasoningRequest, ToolDef } from '../types.js';
+import { OFF, effectiveLevels } from '../reasoning.js';
+import type {
+  AdapterMessage, AdapterMessagePart, MessagePart, ProviderType, ReasoningRequest, ToolDef,
+} from '../types.js';
 
 // ---- helpers ----
 
@@ -116,20 +119,20 @@ function messageDto(m: typeof schema.messages.$inferSelect) {
 
 /**
  * Turn the chat's saved level name into something every vendor can consume.
- * The name is only honoured while it is still on the model's configured ladder,
- * so editing a model's levels can never leave a chat sending a level the
- * provider will reject.
+ * The name is only honoured while it is still on the model's ladder, so editing
+ * a model's levels — or a default ladder changing under it — can never leave a
+ * chat sending a level the provider will reject.
  */
-function resolveReasoning(saved: string | null, levelsJson: string): ReasoningRequest | undefined {
+function resolveReasoning(
+  saved: string | null,
+  model: typeof schema.models.$inferSelect,
+  type: ProviderType,
+): ReasoningRequest | undefined {
   if (!saved) return undefined;
-  let levels: string[] = [];
-  try {
-    const v = JSON.parse(levelsJson || '[]');
-    if (Array.isArray(v)) levels = v.filter((x): x is string => typeof x === 'string');
-  } catch { /* treat as unconfigured */ }
+  const levels = effectiveLevels(model.reasoningMode, model.reasoningLevels, type, model.modelId);
   if (!levels.length) return undefined;
-  if (saved === 'off') return { level: 'off', ratio: 0 };
-  const idx = levels.indexOf(saved);
+  if (saved === OFF) return { level: OFF, ratio: 0 };
+  const idx = levels.findIndex((l) => l.value === saved);
   if (idx < 0) return undefined;
   // Spread across the whole ladder so the weakest level is genuinely cheap.
   // `off` is identified by name, never by a zero ratio.
@@ -489,7 +492,7 @@ export async function chatRoutes(app: FastifyInstance) {
             tools: toolDefs,
             temperature: chat.temperature ?? undefined,
             maxTokens: chat.maxTokens ?? undefined,
-            reasoning: resolveReasoning(chat.reasoningEffort, model.reasoningLevels),
+            reasoning: resolveReasoning(chat.reasoningEffort, model, provider.type as ProviderType),
             signal: controller.signal,
           })) {
             if (ev.type === 'text') {

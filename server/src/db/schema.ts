@@ -50,10 +50,13 @@ export const models = sqliteTable('models', {
   vision: integer('vision').notNull().default(1),
   tools: integer('tools').notNull().default(1),
   imageGen: integer('image_gen').notNull().default(0),
-  // Ordered JSON string[] of vendor level names, weakest first, e.g.
-  // ["minimal","low","medium","high","xhigh"]. Empty = this model has no
-  // reasoning mode, so the control is hidden. Admin-configured rather than
-  // guessed: vendors add levels (gpt-5.6's `max`) faster than we ship.
+  // Where the reasoning ladder comes from: 'auto' derives the vendor's common
+  // tiers from the model id, 'custom' uses reasoningLevels verbatim, 'off' says
+  // the model has no reasoning mode so the control is hidden. See reasoning.ts.
+  reasoningMode: text('reasoning_mode').notNull().default('auto'),
+  // Ordered JSON [{value,label}], weakest first — the name the vendor receives
+  // plus the one the user reads, e.g. [{"value":"xhigh","label":"极高"}].
+  // Only consulted when reasoningMode is 'custom'.
   reasoningLevels: text('reasoning_levels').notNull().default('[]'),
   enabled: integer('enabled').notNull().default(1),
   isDefault: integer('is_default').notNull().default(0),
@@ -69,8 +72,9 @@ export const chats = sqliteTable('chats', {
   systemPrompt: text('system_prompt'),
   temperature: real('temperature'),
   maxTokens: integer('max_tokens'),
-  // 'off' | 'low' | 'medium' | 'high'; null = off. Adapters translate this to
-  // whatever each vendor calls it (effort level vs. thinking token budget).
+  // 'off' or a level `value` from the model's ladder; null = off. Adapters
+  // translate it per vendor (effort name vs. thinking token budget), and a level
+  // no longer on the ladder is dropped rather than sent.
   reasoningEffort: text('reasoning_effort'),
   mcpServerIds: text('mcp_server_ids').notNull().default('[]'), // JSON string[]
   pinned: integer('pinned').notNull().default(0),
