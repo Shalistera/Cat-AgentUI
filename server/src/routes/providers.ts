@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { and, asc, eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
@@ -44,6 +45,9 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[]) {
     vertexLocation: p.vertexLocation,
     hasVertexSa: !!p.vertexSaJsonEnc,
     extraHeaders,
+    // The payload itself is never inlined here — a provider list with several
+    // 128 KB data URIs in it would dwarf the rest of the response.
+    avatarUrl: p.avatar ? avatarUrl(p.id, p.avatar) : null,
     enabled: !!p.enabled,
     sortOrder: p.sortOrder,
     ...(modelRows ? { models: modelRows.map(publicModel) } : {}),
@@ -52,6 +56,29 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[]) {
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// --- provider avatars ---
+
+const AVATAR_MIMES = new Set(['image/svg+xml', 'image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const AVATAR_MAX_BYTES = 128 * 1024;
+
+/** Parse and validate a `data:<mime>;base64,<payload>` avatar. */
+function parseAvatarDataUri(uri: string): { mime: string; buf: Buffer } | null {
+  const m = /^data:([\w.+/-]+);base64,([A-Za-z0-9+/=\s]+)$/.exec(uri);
+  if (!m) return null;
+  const mime = m[1].toLowerCase();
+  if (!AVATAR_MIMES.has(mime)) return null;
+  let buf: Buffer;
+  try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
+  if (buf.length === 0 || buf.length > AVATAR_MAX_BYTES) return null;
+  return { mime, buf };
+}
+
+/** Content-addressed URL, so replacing an avatar busts every cached copy. */
+function avatarUrl(id: string, dataUri: string): string {
+  const tag = createHash('sha256').update(dataUri).digest('hex').slice(0, 12);
+  return `/api/providers/${id}/avatar?v=${tag}`;
 }
 
 // Optional text fields accept null as well as '' — both mean "not set / clear it".
@@ -202,6 +229,50 @@ export async function providerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Custom avatar: `{ avatar: <data URI> }` replaces it, `{ avatar: null }`
+  // clears it and returns the provider to its built-in brand mark.
+  app.put('/api/admin/providers/:id/avatar', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const body = z.object({ avatar: z.string().max(200_000).nullable() }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const row = getProvider(id);
+    if (!row) return reply.code(404).send({ error: 'Provider 不存在' });
+
+    let avatar: string | null = null;
+    if (body.data.avatar) {
+      const parsed = parseAvatarDataUri(body.data.avatar);
+      if (!parsed) {
+        return reply.code(400).send({ error: '头像无效:仅支持 SVG / PNG / JPEG / WebP / GIF,且不超过 128 KB' });
+      }
+      avatar = body.data.avatar;
+    }
+    db.update(schema.providers).set({ avatar }).where(eq(schema.providers.id, id)).run();
+    return publicProvider(getProvider(id)!);
+  });
+
+  // --- any signed-in user: avatar bytes ---
+
+  app.get('/api/providers/:id/avatar', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const row = getProvider(id);
+    if (!row?.avatar) return reply.code(404).send({ error: '未设置头像' });
+    const parsed = parseAvatarDataUri(row.avatar);
+    if (!parsed) return reply.code(404).send({ error: '未设置头像' });
+
+    reply.header('content-type', parsed.mime);
+    // Uploaded SVG can carry scripts, which would run in our origin if the URL
+    // is opened directly. Lock the document down and forbid sniffing so the
+    // response can only ever behave as an image.
+    reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('content-disposition', 'inline');
+    // The URL is content-addressed (?v=<hash>), so this can be immutable.
+    reply.header('cache-control', 'private, max-age=31536000, immutable');
+    return reply.send(parsed.buf);
+  });
+
   app.post('/api/admin/providers/:id/fetch-models', async (req, reply) => {
     requireAdmin(req, reply);
     const { id } = req.params as { id: string };
@@ -318,6 +389,7 @@ export async function providerRoutes(app: FastifyInstance) {
       providerId: schema.providers.id,
       providerName: schema.providers.name,
       providerType: schema.providers.type,
+      providerAvatar: schema.providers.avatar,
     }).from(schema.models)
       .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
       .where(and(eq(schema.models.enabled, 1), eq(schema.providers.enabled, 1)))
@@ -334,6 +406,7 @@ export async function providerRoutes(app: FastifyInstance) {
       providerId: r.providerId,
       providerName: r.providerName,
       providerType: r.providerType,
+      providerAvatarUrl: r.providerAvatar ? avatarUrl(r.providerId, r.providerAvatar) : null,
     }));
   });
 }

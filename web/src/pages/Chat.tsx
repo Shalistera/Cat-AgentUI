@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowDown, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
 import { useAuth, useChats, useMcp, useModels, useUi } from '../store';
-import { Composer, type PendingImage } from '../components/Composer';
+import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
 import { Button, PageHeader, toast } from '../components/ui';
@@ -11,23 +11,23 @@ import type { ChatDetail, Message, MessagePart, ModelInfo } from '../types';
 
 const LAST_MODEL_KEY = 'cat-last-model';
 
-interface ChatSettingsDraft { systemPrompt: string; temperature: string; maxTokens: string }
-
-function draftFromChat(c: ChatDetail | null): ChatSettingsDraft {
+function draftFromChat(c: ChatDetail | null): ComposerSettings {
   return {
     systemPrompt: c?.systemPrompt ?? '',
     temperature: c?.temperature != null ? String(c.temperature) : '',
     maxTokens: c?.maxTokens != null ? String(c.maxTokens) : '',
+    reasoningEffort: c?.reasoningEffort ?? 'off',
   };
 }
 
-function draftToPatch(d: ChatSettingsDraft) {
+function draftToPatch(d: ComposerSettings) {
   const temp = d.temperature.trim() === '' ? null : Number(d.temperature);
   const mt = d.maxTokens.trim() === '' ? null : Math.floor(Number(d.maxTokens));
   return {
     systemPrompt: d.systemPrompt.trim() === '' ? null : d.systemPrompt,
     temperature: temp != null && Number.isFinite(temp) ? Math.min(2, Math.max(0, temp)) : null,
     maxTokens: mt != null && Number.isFinite(mt) && mt > 0 ? mt : null,
+    reasoningEffort: d.reasoningEffort,
   };
 }
 
@@ -47,7 +47,7 @@ export default function Chat() {
   const [streaming, setStreaming] = useState(false);
   const [modelSel, setModelSel] = useState<ModelInfo | null>(null);
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
-  const [settings, setSettings] = useState<ChatSettingsDraft>(draftFromChat(null));
+  const [settings, setSettings] = useState<ComposerSettings>(draftFromChat(null));
   const [stick, setStick] = useState(true);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -115,7 +115,7 @@ export default function Chat() {
     setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
   }, []);
 
-  function persistSettings(next: ChatSettingsDraft, mcp?: string[]) {
+  function persistSettings(next: ComposerSettings, mcp?: string[]) {
     setSettings(next);
     const target = chatRef.current;
     if (!target) return; // applied on chat creation
@@ -144,7 +144,8 @@ export default function Chat() {
     const r = await api.post<{ chat: ChatDetail }>('/api/chats', { modelId: modelSel?.id ?? null });
     let created = r.chat;
     const patch = draftToPatch(settings);
-    if (patch.systemPrompt || patch.temperature != null || patch.maxTokens != null || mcpSelected.length) {
+    if (patch.systemPrompt || patch.temperature != null || patch.maxTokens != null
+      || patch.reasoningEffort !== 'off' || mcpSelected.length) {
       const p = await api.patch<{ chat: ChatDetail }>(`/api/chats/${created.id}`, { ...patch, mcpServerIds: mcpSelected });
       created = p.chat;
     }

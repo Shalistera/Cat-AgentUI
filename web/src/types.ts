@@ -35,10 +35,13 @@ export interface ChatSummary {
   createdAt: number; updatedAt: number;
 }
 
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high';
+
 export interface ChatDetail extends ChatSummary {
   systemPrompt: string | null;
   temperature: number | null;
   maxTokens: number | null;
+  reasoningEffort: ReasoningEffort | null;
   mcpServerIds: string[];
 }
 
@@ -46,6 +49,8 @@ export interface ModelInfo {
   id: string; modelId: string; displayName: string;
   vision: boolean; tools: boolean; imageGen: boolean; isDefault: boolean;
   providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini';
+  /** Content-addressed URL of the provider's custom avatar; null = built-in mark. */
+  providerAvatarUrl: string | null;
 }
 
 export interface McpServerInfo {
@@ -103,6 +108,7 @@ export interface AdminProvider {
   useResponses: boolean; useVertex: boolean;
   vertexProject: string | null; vertexLocation: string | null; hasVertexSa: boolean;
   extraHeaders: Record<string, string>; enabled: boolean; sortOrder: number;
+  avatarUrl: string | null;
   models: AdminModel[];
 }
 

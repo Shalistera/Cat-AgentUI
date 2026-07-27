@@ -60,6 +60,8 @@ export interface AdapterMessage {
   parts: AdapterMessagePart[];
 }
 
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high';
+
 export interface ChatRequest {
   model: string;
   system?: string;
@@ -67,6 +69,7 @@ export interface ChatRequest {
   tools?: ToolDef[];
   temperature?: number;
   maxTokens?: number;
+  reasoningEffort?: ReasoningEffort;
   signal: AbortSignal;
 }
 

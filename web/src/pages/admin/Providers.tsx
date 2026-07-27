@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Download, FlaskConical, Pencil, Plus, Server, Star, Trash2, X } from 'lucide-react';
 import { api } from '../../api';
 import {
   Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select, Spinner, StatusDot,
   Textarea, Toggle, confirmDialog, toast,
 } from '../../components/ui';
+import { ProviderAvatar } from '../../components/ModelAvatar';
 import type { AdminModel, AdminProvider } from '../../types';
 
 type ProviderType = AdminProvider['type'];
@@ -376,6 +377,74 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
 }
 
 // ---------- provider card ----------
+// ---------- provider avatar ----------
+const AVATAR_MIMES = ['image/svg+xml', 'image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const AVATAR_MAX_BYTES = 128 * 1024;
+
+function readAsDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error('读取文件失败'));
+    r.readAsDataURL(file);
+  });
+}
+
+/** Click the tile to replace the mark; the ✕ restores the built-in one. */
+function ProviderAvatarPicker({ provider, reload }: { provider: AdminProvider; reload(): Promise<void> }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save(avatar: string | null) {
+    setBusy(true);
+    try {
+      await api.put(`/api/admin/providers/${provider.id}/avatar`, { avatar });
+      toast(avatar ? '头像已更新' : '已恢复默认头像', 'ok');
+      await reload();
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  async function pick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!AVATAR_MIMES.includes(file.type)) { toast('仅支持 SVG / PNG / JPEG / WebP / GIF', 'err'); return; }
+    if (file.size > AVATAR_MAX_BYTES) { toast('头像不能超过 128 KB', 'err'); return; }
+    try {
+      await save(await readAsDataUri(file));
+    } catch (err) { toast(errMsg(err), 'err'); }
+  }
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        title="点击上传自定义头像"
+        disabled={busy}
+        onClick={() => fileRef.current?.click()}
+        className="cursor-pointer rounded-lg transition-opacity hover:opacity-70 disabled:opacity-40"
+      >
+        {busy
+          ? <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-line2 bg-bg2"><Spinner className="h-3.5 w-3.5" /></span>
+          : <ProviderAvatar name={provider.name} type={provider.type} baseUrl={provider.baseUrl}
+              avatarUrl={provider.avatarUrl} size={32} />}
+      </button>
+      {provider.avatarUrl && !busy && (
+        <button
+          type="button"
+          title="恢复默认头像"
+          onClick={() => save(null)}
+          className="absolute -right-1.5 -top-1.5 flex h-4 w-4 cursor-pointer items-center justify-center rounded-full border border-line bg-bg1 text-tx3 shadow-sm transition-colors hover:border-err/50 hover:text-err"
+        >
+          <X size={9} />
+        </button>
+      )}
+      <input ref={fileRef} type="file" hidden accept={AVATAR_MIMES.join(',')} onChange={pick} />
+    </div>
+  );
+}
+
 function ProviderCard({ provider, reload, onEdit }: {
   provider: AdminProvider; reload(): Promise<void>; onEdit(): void;
 }) {
@@ -446,6 +515,7 @@ function ProviderCard({ provider, reload, onEdit }: {
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-line px-4 py-3">
+        <ProviderAvatarPicker provider={provider} reload={reload} />
         <StatusDot tone={!provider.enabled ? 'idle' : provider.hasKey ? 'ok' : 'warn'} />
         <span className="text-[13px] font-semibold text-tx">{provider.name}</span>
         <Badge>{TYPE_LABELS[provider.type]}</Badge>

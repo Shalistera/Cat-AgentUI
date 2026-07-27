@@ -6,7 +6,7 @@ import {
 import type { Message, MessagePart } from '../types';
 import { fmtDuration, fmtTokens } from '../api';
 import { Markdown } from './Markdown';
-import { CatMark } from './Logo';
+import { ModelAvatar } from './ModelAvatar';
 import { Spinner } from './ui';
 
 const iconBtn = 'flex h-6 w-6 cursor-pointer items-center justify-center rounded text-tx3 transition-colors hover:bg-bg2 hover:text-tx';
@@ -216,7 +216,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
 
   return (
     <div className="group flex gap-3">
-      <div className="mt-0.5 hidden shrink-0 sm:block"><CatMark size={30} /></div>
+      <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={msg.model} size={30} /></div>
       <div className="min-w-0 flex-1">
         {rendered}
         {isStreaming && msg.parts.length === 0 && (

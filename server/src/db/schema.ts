@@ -33,6 +33,10 @@ export const providers = sqliteTable('providers', {
   vertexLocation: text('vertex_location'),
   vertexSaJsonEnc: text('vertex_sa_json_enc'), // encrypted service account JSON
   extraHeaders: text('extra_headers').notNull().default('{}'), // JSON
+  // Optional custom avatar as a data URI. null = fall back to the built-in
+  // brand mark for this provider's type. Stored inline rather than on disk so
+  // it survives a plain db copy and needs no cleanup path.
+  avatar: text('avatar'),
   enabled: integer('enabled').notNull().default(1),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').notNull(),
@@ -60,6 +64,9 @@ export const chats = sqliteTable('chats', {
   systemPrompt: text('system_prompt'),
   temperature: real('temperature'),
   maxTokens: integer('max_tokens'),
+  // 'off' | 'low' | 'medium' | 'high'; null = off. Adapters translate this to
+  // whatever each vendor calls it (effort level vs. thinking token budget).
+  reasoningEffort: text('reasoning_effort'),
   mcpServerIds: text('mcp_server_ids').notNull().default('[]'), // JSON string[]
   pinned: integer('pinned').notNull().default(0),
   createdAt: integer('created_at').notNull(),

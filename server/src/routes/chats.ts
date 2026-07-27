@@ -10,7 +10,7 @@ import { getToolsForServers, callTool } from '../mcp/manager.js';
 import { readUploadBase64 } from './uploads.js';
 import { readImageBase64, saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
-import type { AdapterMessage, AdapterMessagePart, MessagePart, ToolDef } from '../types.js';
+import type { AdapterMessage, AdapterMessagePart, MessagePart, ReasoningEffort, ToolDef } from '../types.js';
 
 // ---- helpers ----
 
@@ -222,7 +222,7 @@ export async function chatRoutes(app: FastifyInstance) {
       createdAt: t, updatedAt: t,
     }).run();
     const c = db.select().from(schema.chats).where(eq(schema.chats.id, id)).get()!;
-    return { chat: { ...chatSummary(c), systemPrompt: c.systemPrompt, temperature: c.temperature, maxTokens: c.maxTokens, mcpServerIds: [] } };
+    return { chat: { ...chatSummary(c), systemPrompt: c.systemPrompt, temperature: c.temperature, maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort, mcpServerIds: [] } };
   });
 
   app.get('/api/chats/:id', async (req, reply) => {
@@ -239,7 +239,7 @@ export async function chatRoutes(app: FastifyInstance) {
       chat: {
         ...chatSummary(c),
         systemPrompt: c.systemPrompt, temperature: c.temperature,
-        maxTokens: c.maxTokens, mcpServerIds,
+        maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort, mcpServerIds,
       },
       messages: msgs.map(messageDto),
     };
@@ -253,6 +253,7 @@ export async function chatRoutes(app: FastifyInstance) {
       systemPrompt: z.string().max(20_000).nullish(),
       temperature: z.number().min(0).max(2).nullish(),
       maxTokens: z.number().int().min(1).max(1_000_000).nullish(),
+      reasoningEffort: z.enum(['off', 'low', 'medium', 'high']).nullish(),
       mcpServerIds: z.array(z.string().max(64)).max(20).optional(),
       pinned: z.boolean().optional(),
       modelId: z.string().max(64).nullish(),
@@ -267,6 +268,7 @@ export async function chatRoutes(app: FastifyInstance) {
     if (d.systemPrompt !== undefined) patch.systemPrompt = d.systemPrompt;
     if (d.temperature !== undefined) patch.temperature = d.temperature;
     if (d.maxTokens !== undefined) patch.maxTokens = d.maxTokens;
+    if (d.reasoningEffort !== undefined) patch.reasoningEffort = d.reasoningEffort;
     if (d.mcpServerIds !== undefined) patch.mcpServerIds = JSON.stringify(d.mcpServerIds);
     if (d.pinned !== undefined) patch.pinned = d.pinned ? 1 : 0;
     if (d.modelId !== undefined) patch.modelId = d.modelId;
@@ -274,7 +276,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const updated = db.select().from(schema.chats).where(eq(schema.chats.id, id)).get()!;
     let mcpServerIds: string[] = [];
     try { mcpServerIds = JSON.parse(updated.mcpServerIds); } catch { /* ignore */ }
-    return { chat: { ...chatSummary(updated), systemPrompt: updated.systemPrompt, temperature: updated.temperature, maxTokens: updated.maxTokens, mcpServerIds } };
+    return { chat: { ...chatSummary(updated), systemPrompt: updated.systemPrompt, temperature: updated.temperature, maxTokens: updated.maxTokens, reasoningEffort: updated.reasoningEffort, mcpServerIds } };
   });
 
   app.delete('/api/chats/:id', async (req, reply) => {
@@ -465,6 +467,7 @@ export async function chatRoutes(app: FastifyInstance) {
             tools: toolDefs,
             temperature: chat.temperature ?? undefined,
             maxTokens: chat.maxTokens ?? undefined,
+            reasoningEffort: (chat.reasoningEffort as ReasoningEffort | null) ?? undefined,
             signal: controller.signal,
           })) {
             if (ev.type === 'text') {

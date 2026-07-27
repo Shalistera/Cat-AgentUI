@@ -125,6 +125,11 @@ function buildChatBody(req: ChatRequest): any {
   const generationConfig: any = {};
   if (req.temperature !== undefined) generationConfig.temperature = req.temperature;
   if (req.maxTokens) generationConfig.maxOutputTokens = req.maxTokens;
+  if (req.reasoningEffort) {
+    // 0 disables thinking outright; -1 hands the budget back to the model.
+    const budget = { off: 0, low: 2048, medium: 8192, high: 24576 }[req.reasoningEffort];
+    generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: budget !== 0 };
+  }
   if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
   if (req.tools?.length) {
     body.tools = [{

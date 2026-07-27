@@ -22,6 +22,20 @@
       "when": 1785110946028,
       "tag": "0002_mcp_secrets",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785143065165,
+      "tag": "0003_provider_avatar",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785143581624,
+      "tag": "0004_reasoning_effort",
+      "breakpoints": true
     }
   ]
 }

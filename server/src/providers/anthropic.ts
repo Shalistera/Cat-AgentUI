@@ -85,15 +85,31 @@ function toTools(tools?: ToolDef[]) {
   return tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
 }
 
+// Anthropic budgets thinking in tokens rather than taking an effort level.
+const THINKING_BUDGET: Record<'low' | 'medium' | 'high', number> = {
+  low: 2048, medium: 8192, high: 24576,
+};
+
 async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): AsyncGenerator<AdapterEvent> {
+  const thinking = req.reasoningEffort && req.reasoningEffort !== 'off'
+    ? THINKING_BUDGET[req.reasoningEffort]
+    : null;
+  // The reply budget has to leave room for the thinking budget on top of the
+  // visible answer, or the request is rejected outright.
+  const maxTokens = thinking
+    ? Math.max(req.maxTokens ?? 8192, thinking + 4096)
+    : req.maxTokens ?? 8192;
+
   const body: Record<string, unknown> = {
     model: req.model,
-    max_tokens: req.maxTokens ?? 8192,
+    max_tokens: maxTokens,
     messages: toMessages(req.messages),
     stream: true,
   };
   if (req.system) body.system = req.system;
-  if (req.temperature !== undefined) body.temperature = req.temperature;
+  // Extended thinking pins temperature to 1; sending both is a 400.
+  if (thinking) body.thinking = { type: 'enabled', budget_tokens: thinking };
+  else if (req.temperature !== undefined) body.temperature = req.temperature;
   const tools = toTools(req.tools);
   if (tools) body.tools = tools;
 

@@ -210,6 +210,52 @@ select:focus-visible {
   }
 }
 
+/* ---------- range slider ----------
+   Native range controls look nothing alike across engines; this pins the track
+   and thumb to the palette so the parameter panel reads as one system. */
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-bg3);
+  border: 1px solid var(--color-line2);
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--color-pri);
+  border: 2px solid var(--color-bg1);
+  box-shadow: var(--shadow-sm);
+  transition: transform .12s ease;
+}
+.range:hover::-webkit-slider-thumb { transform: scale(1.12); }
+.range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-bg3);
+  border: 1px solid var(--color-line2);
+}
+.range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-pri);
+  border: 2px solid var(--color-bg1);
+  box-shadow: var(--shadow-sm);
+}
+.range:disabled { opacity: .4; cursor: not-allowed; }
+
 /* ---------- reusable surface primitives ---------- */
 @utility panel {
   background: var(--color-bg1);
