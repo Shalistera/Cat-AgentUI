@@ -54,30 +54,32 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Optional text fields accept null as well as '' — both mean "not set / clear it".
+// (.optional() alone rejects null, which 400s every form that blanks a field.)
 const providerCreateSchema = z.object({
   name: z.string().min(1).max(64),
   type: z.enum(['openai', 'anthropic', 'gemini']),
-  baseUrl: z.string().max(300).optional(),
-  apiKey: z.string().max(500).optional(),
-  useResponses: z.boolean().optional(),
-  useVertex: z.boolean().optional(),
-  vertexProject: z.string().max(100).optional(),
-  vertexLocation: z.string().max(50).optional(),
-  vertexSaJson: z.string().max(20000).optional(),
-  extraHeaders: z.record(z.string(), z.string()).optional(),
+  baseUrl: z.string().max(300).nullish(),
+  apiKey: z.string().max(500).nullish(),
+  useResponses: z.boolean().nullish(),
+  useVertex: z.boolean().nullish(),
+  vertexProject: z.string().max(100).nullish(),
+  vertexLocation: z.string().max(50).nullish(),
+  vertexSaJson: z.string().max(20000).nullish(),
+  extraHeaders: z.record(z.string(), z.string()).nullish(),
 });
 
 const providerPatchSchema = z.object({
   name: z.string().min(1).max(64).optional(),
   type: z.enum(['openai', 'anthropic', 'gemini']).optional(),
-  baseUrl: z.string().max(300).optional(),
-  apiKey: z.string().max(500).optional(),
-  useResponses: z.boolean().optional(),
-  useVertex: z.boolean().optional(),
-  vertexProject: z.string().max(100).optional(),
-  vertexLocation: z.string().max(50).optional(),
-  vertexSaJson: z.string().max(20000).optional(),
-  extraHeaders: z.record(z.string(), z.string()).optional(),
+  baseUrl: z.string().max(300).nullish(),
+  apiKey: z.string().max(500).nullish(),
+  useResponses: z.boolean().nullish(),
+  useVertex: z.boolean().nullish(),
+  vertexProject: z.string().max(100).nullish(),
+  vertexLocation: z.string().max(50).nullish(),
+  vertexSaJson: z.string().max(20000).nullish(),
+  extraHeaders: z.record(z.string(), z.string()).nullish(),
   enabled: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
 });
@@ -164,11 +166,11 @@ export async function providerRoutes(app: FastifyInstance) {
     const patch: Partial<typeof schema.providers.$inferInsert> = {};
     if (d.name !== undefined) patch.name = d.name;
     if (d.type !== undefined) patch.type = d.type;
-    if (d.baseUrl !== undefined) patch.baseUrl = d.baseUrl === '' ? null : d.baseUrl;
-    // Secrets: undefined = keep, '' = clear, otherwise encrypt and replace.
-    if (d.apiKey !== undefined) patch.apiKeyEnc = d.apiKey === '' ? null : encryptSecret(d.apiKey);
+    if (d.baseUrl !== undefined) patch.baseUrl = d.baseUrl || null;
+    // Secrets: undefined = keep, '' or null = clear, otherwise encrypt and replace.
+    if (d.apiKey !== undefined) patch.apiKeyEnc = d.apiKey ? encryptSecret(d.apiKey) : null;
     if (d.vertexSaJson !== undefined) {
-      if (d.vertexSaJson === '') {
+      if (!d.vertexSaJson) {
         patch.vertexSaJsonEnc = null;
       } else {
         try { JSON.parse(d.vertexSaJson); } catch {
@@ -179,9 +181,9 @@ export async function providerRoutes(app: FastifyInstance) {
     }
     if (d.useResponses !== undefined) patch.useResponses = d.useResponses ? 1 : 0;
     if (d.useVertex !== undefined) patch.useVertex = d.useVertex ? 1 : 0;
-    if (d.vertexProject !== undefined) patch.vertexProject = d.vertexProject === '' ? null : d.vertexProject;
-    if (d.vertexLocation !== undefined) patch.vertexLocation = d.vertexLocation === '' ? null : d.vertexLocation;
-    if (d.extraHeaders !== undefined) patch.extraHeaders = JSON.stringify(d.extraHeaders);
+    if (d.vertexProject !== undefined) patch.vertexProject = d.vertexProject || null;
+    if (d.vertexLocation !== undefined) patch.vertexLocation = d.vertexLocation || null;
+    if (d.extraHeaders !== undefined) patch.extraHeaders = JSON.stringify(d.extraHeaders ?? {});
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.sortOrder !== undefined) patch.sortOrder = d.sortOrder;
 
