@@ -1,8 +1,16 @@
 node_modules/
 dist/
 data/
-.env
-*.log
-.DS_Store
 web/dist/
 server/dist/
+
+# `tsc -b` rewrites this on every build — pure diff noise.
+*.tsbuildinfo
+
+# `.env` alone still left .env.local / .env.production trackable.
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store
