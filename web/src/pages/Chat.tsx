@@ -14,19 +14,15 @@ const LAST_MODEL_KEY = 'cat-last-model';
 function draftFromChat(c: ChatDetail | null): ComposerSettings {
   return {
     systemPrompt: c?.systemPrompt ?? '',
-    temperature: c?.temperature != null ? String(c.temperature) : '',
-    maxTokens: c?.maxTokens != null ? String(c.maxTokens) : '',
     reasoningEffort: c?.reasoningEffort ?? 'off',
   };
 }
 
+// temperature / maxTokens are no longer surfaced, so they are simply left
+// alone here rather than being nulled out from under existing chats.
 function draftToPatch(d: ComposerSettings) {
-  const temp = d.temperature.trim() === '' ? null : Number(d.temperature);
-  const mt = d.maxTokens.trim() === '' ? null : Math.floor(Number(d.maxTokens));
   return {
     systemPrompt: d.systemPrompt.trim() === '' ? null : d.systemPrompt,
-    temperature: temp != null && Number.isFinite(temp) ? Math.min(2, Math.max(0, temp)) : null,
-    maxTokens: mt != null && Number.isFinite(mt) && mt > 0 ? mt : null,
     reasoningEffort: d.reasoningEffort,
   };
 }
@@ -144,8 +140,7 @@ export default function Chat() {
     const r = await api.post<{ chat: ChatDetail }>('/api/chats', { modelId: modelSel?.id ?? null });
     let created = r.chat;
     const patch = draftToPatch(settings);
-    if (patch.systemPrompt || patch.temperature != null || patch.maxTokens != null
-      || patch.reasoningEffort !== 'off' || mcpSelected.length) {
+    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || mcpSelected.length) {
       const p = await api.patch<{ chat: ChatDetail }>(`/api/chats/${created.id}`, { ...patch, mcpServerIds: mcpSelected });
       created = p.chat;
     }

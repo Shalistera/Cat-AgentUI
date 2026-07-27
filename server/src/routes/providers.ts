@@ -13,6 +13,14 @@ type ModelRow = typeof schema.models.$inferSelect;
 // Regex to auto-detect image generation models when flags are not explicitly set.
 const IMAGE_MODEL_RE = /gpt-image|dall-e|-image|imagen/i;
 
+/** Levels are stored as JSON; a corrupt value must not take the route down. */
+function parseLevels(raw: string | null | undefined): string[] {
+  try {
+    const v = JSON.parse(raw || '[]');
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch { return []; }
+}
+
 function publicModel(m: ModelRow) {
   return {
     id: m.id,
@@ -22,6 +30,7 @@ function publicModel(m: ModelRow) {
     vision: !!m.vision,
     tools: !!m.tools,
     imageGen: !!m.imageGen,
+    reasoningLevels: parseLevels(m.reasoningLevels),
     enabled: !!m.enabled,
     isDefault: !!m.isDefault,
     sortOrder: m.sortOrder,
@@ -127,6 +136,9 @@ const modelPatchSchema = z.object({
   vision: z.boolean().optional(),
   tools: z.boolean().optional(),
   imageGen: z.boolean().optional(),
+  // Blanks are tolerated and stripped below — rejecting them would 400 a whole
+  // list because of one stray comma.
+  reasoningLevels: z.array(z.string().max(32)).max(12).optional(),
   enabled: z.boolean().optional(),
   isDefault: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
@@ -353,6 +365,14 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.vision !== undefined) patch.vision = d.vision ? 1 : 0;
     if (d.tools !== undefined) patch.tools = d.tools ? 1 : 0;
     if (d.imageGen !== undefined) patch.imageGen = d.imageGen ? 1 : 0;
+    if (d.reasoningLevels !== undefined) {
+      // Trim, drop blanks, de-duplicate — the admin types this as free text.
+      const seen = new Set<string>();
+      const levels = d.reasoningLevels
+        .map((x) => x.trim())
+        .filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
+      patch.reasoningLevels = JSON.stringify(levels);
+    }
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.isDefault !== undefined) patch.isDefault = d.isDefault ? 1 : 0;
     if (d.sortOrder !== undefined) patch.sortOrder = d.sortOrder;
@@ -385,6 +405,7 @@ export async function providerRoutes(app: FastifyInstance) {
       vision: schema.models.vision,
       tools: schema.models.tools,
       imageGen: schema.models.imageGen,
+      reasoningLevels: schema.models.reasoningLevels,
       isDefault: schema.models.isDefault,
       providerId: schema.providers.id,
       providerName: schema.providers.name,
@@ -402,6 +423,7 @@ export async function providerRoutes(app: FastifyInstance) {
       vision: !!r.vision,
       tools: !!r.tools,
       imageGen: !!r.imageGen,
+      reasoningLevels: parseLevels(r.reasoningLevels),
       isDefault: !!r.isDefault,
       providerId: r.providerId,
       providerName: r.providerName,

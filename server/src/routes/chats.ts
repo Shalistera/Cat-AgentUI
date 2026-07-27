@@ -10,7 +10,7 @@ import { getToolsForServers, callTool } from '../mcp/manager.js';
 import { readUploadBase64 } from './uploads.js';
 import { readImageBase64, saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
-import type { AdapterMessage, AdapterMessagePart, MessagePart, ReasoningEffort, ToolDef } from '../types.js';
+import type { AdapterMessage, AdapterMessagePart, MessagePart, ReasoningRequest, ToolDef } from '../types.js';
 
 // ---- helpers ----
 
@@ -112,6 +112,28 @@ function messageDto(m: typeof schema.messages.$inferSelect) {
     promptTokens: m.promptTokens, completionTokens: m.completionTokens, totalTokens: m.totalTokens,
     durationMs: m.durationMs, ttftMs: m.ttftMs, createdAt: m.createdAt,
   };
+}
+
+/**
+ * Turn the chat's saved level name into something every vendor can consume.
+ * The name is only honoured while it is still on the model's configured ladder,
+ * so editing a model's levels can never leave a chat sending a level the
+ * provider will reject.
+ */
+function resolveReasoning(saved: string | null, levelsJson: string): ReasoningRequest | undefined {
+  if (!saved) return undefined;
+  let levels: string[] = [];
+  try {
+    const v = JSON.parse(levelsJson || '[]');
+    if (Array.isArray(v)) levels = v.filter((x): x is string => typeof x === 'string');
+  } catch { /* treat as unconfigured */ }
+  if (!levels.length) return undefined;
+  if (saved === 'off') return { level: 'off', ratio: 0 };
+  const idx = levels.indexOf(saved);
+  if (idx < 0) return undefined;
+  // Spread across the whole ladder so the weakest level is genuinely cheap.
+  // `off` is identified by name, never by a zero ratio.
+  return { level: saved, ratio: levels.length > 1 ? idx / (levels.length - 1) : 1 };
 }
 
 function getModelWithProvider(modelDbId: string | null) {
@@ -253,7 +275,7 @@ export async function chatRoutes(app: FastifyInstance) {
       systemPrompt: z.string().max(20_000).nullish(),
       temperature: z.number().min(0).max(2).nullish(),
       maxTokens: z.number().int().min(1).max(1_000_000).nullish(),
-      reasoningEffort: z.enum(['off', 'low', 'medium', 'high']).nullish(),
+      reasoningEffort: z.string().max(32).nullish(),
       mcpServerIds: z.array(z.string().max(64)).max(20).optional(),
       pinned: z.boolean().optional(),
       modelId: z.string().max(64).nullish(),
@@ -467,7 +489,7 @@ export async function chatRoutes(app: FastifyInstance) {
             tools: toolDefs,
             temperature: chat.temperature ?? undefined,
             maxTokens: chat.maxTokens ?? undefined,
-            reasoningEffort: (chat.reasoningEffort as ReasoningEffort | null) ?? undefined,
+            reasoning: resolveReasoning(chat.reasoningEffort, model.reasoningLevels),
             signal: controller.signal,
           })) {
             if (ev.type === 'text') {

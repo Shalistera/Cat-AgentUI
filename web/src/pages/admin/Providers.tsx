@@ -294,6 +294,59 @@ function FetchModelsModal({ provider, models, onClose, onDone }: {
   );
 }
 
+// ---------- reasoning levels cell ----------
+/** Free text on purpose: vendors add tiers (gpt-5.6's `max`) faster than we
+    ship, so the admin types the vendor's own names, comma separated. */
+function ReasoningCell({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
+  const levels = model.reasoningLevels ?? [];
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setEditing(false);
+    const next = draft.split(/[,,\s]+/).map((x) => x.trim()).filter(Boolean);
+    if (next.join('\u0000') === levels.join('\u0000')) return;
+    setBusy(true);
+    try {
+      await api.patch(`/api/admin/models/${model.id}`, { reasoningLevels: next });
+      await reload();
+      toast(next.length ? '已更新推理档位' : '已关闭推理强度', 'ok');
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  if (editing) {
+    return (
+      <div className="w-56">
+        <Input
+          autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false); }}
+          className="!h-7 font-mono text-[11px]"
+          placeholder="low, medium, high, xhigh"
+        />
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      title="点击编辑,留空表示该模型不支持推理强度"
+      onClick={() => { setDraft(levels.join(', ')); setEditing(true); }}
+      className="flex max-w-[14rem] cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-left transition-colors hover:bg-bg3 disabled:opacity-40"
+    >
+      {levels.length ? (
+        <span className="truncate font-mono text-[11px] text-tx">{levels.join(' · ')}</span>
+      ) : (
+        <span className="text-[11px] text-tx3">未启用</span>
+      )}
+      <Pencil size={11} className="shrink-0 text-tx3" />
+    </button>
+  );
+}
+
 // ---------- model row ----------
 function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
   const [editingName, setEditingName] = useState(false);
@@ -358,6 +411,7 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
       <td className="px-2 py-2 text-center"><Toggle checked={model.vision} disabled={busy} onChange={(v) => patch({ vision: v })} /></td>
       <td className="px-2 py-2 text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></td>
       <td className="px-2 py-2 text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></td>
+      <td className="px-2 py-2"><ReasoningCell model={model} reload={reload} /></td>
       <td className="px-2 py-2 text-center">
         <button
           className="cursor-pointer rounded p-1 text-tx3 transition-colors hover:text-acc disabled:opacity-40"
@@ -565,6 +619,7 @@ function ProviderCard({ provider, reload, onEdit }: {
                   <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">视觉</th>
                   <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">工具</th>
                   <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">绘图</th>
+                  <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-tx3">推理档位</th>
                   <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">默认</th>
                   <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">启用</th>
                   <th className="py-2 pl-2 text-right text-[11px] font-semibold uppercase tracking-wider text-tx3">删除</th>

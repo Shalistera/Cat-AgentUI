@@ -85,14 +85,15 @@ function toTools(tools?: ToolDef[]) {
   return tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
 }
 
-// Anthropic budgets thinking in tokens rather than taking an effort level.
-const THINKING_BUDGET: Record<'low' | 'medium' | 'high', number> = {
-  low: 2048, medium: 8192, high: 24576,
-};
+// Anthropic budgets thinking in tokens rather than naming effort levels, so the
+// position on the model's ladder is what carries over — that keeps working
+// whatever the admin calls the levels.
+const MIN_THINKING = 2048;
+const MAX_THINKING = 32768;
 
 async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): AsyncGenerator<AdapterEvent> {
-  const thinking = req.reasoningEffort && req.reasoningEffort !== 'off'
-    ? THINKING_BUDGET[req.reasoningEffort]
+  const thinking = req.reasoning && req.reasoning.level !== 'off'
+    ? Math.round(MIN_THINKING + req.reasoning.ratio * (MAX_THINKING - MIN_THINKING))
     : null;
   // The reply budget has to leave room for the thinking budget on top of the
   // visible answer, or the request is rejected outright.

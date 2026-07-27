@@ -156,18 +156,25 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
    instead of hugging it, so it stays visible on filled controls. The outline
    inherits the element's own border-radius — setting a radius here would
    reshape round controls (avatars, the send button) the moment they take
-   focus. */
-:focus-visible {
-  outline: 2px solid var(--color-acc);
-  outline-offset: 2px;
-}
+   focus.
 
-/* Fields already carry a 1px edge; a 2px gap would read as a double ring. */
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  outline-offset: 0;
-  border-color: var(--color-acc);
+   These MUST live in @layer base. Unlayered rules outrank every layered one
+   regardless of specificity, so leaving them at top level made the ring
+   impossible to opt out of — `focus-visible:outline-none` on a control whose
+   container already shows focus was silently ignored. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-acc);
+    outline-offset: 2px;
+  }
+
+  /* Fields already carry a 1px edge; a 2px gap would read as a double ring. */
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline-offset: 0;
+    border-color: var(--color-acc);
+  }
 }
 
 * { scrollbar-width: thin; scrollbar-color: var(--color-line2) transparent; }

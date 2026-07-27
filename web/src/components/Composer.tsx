@@ -29,25 +29,16 @@ function Popover({ trigger, children, open, setOpen, align = 'left', width = 'w-
 
 const toolBtn = 'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-transparent px-2 text-xs font-medium text-tx2 transition-colors hover:border-line hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none';
 
-// Slider stops. `off` is a real position, not an absence — Gemini needs an
-// explicit 0 budget to actually stop thinking.
-const EFFORTS: ReasoningEffort[] = ['off', 'low', 'medium', 'high'];
-const EFFORT_LABELS: Record<ReasoningEffort, string> = {
-  off: '关闭', low: '低', medium: '中', high: '高',
-};
-const EFFORT_HINTS: Record<ReasoningEffort, string> = {
-  off: '不进行额外推理,响应最快',
-  low: '少量推理,兼顾速度',
-  medium: '中等推理深度',
-  high: '深度推理,耗时与消耗最高',
-};
+// `off` is a real stop rather than an absence — Gemini needs an explicit zero
+// budget to actually stop thinking. Everything above it comes from the model's
+// admin-configured ladder, shown under the vendor's own names.
+const OFF: ReasoningEffort = 'off';
+const effortLabel = (e: ReasoningEffort) => (e === OFF ? '关闭' : e);
 
 export interface PendingImage { uploadId: string; previewUrl: string }
 
 export interface ComposerSettings {
   systemPrompt: string;
-  temperature: string;
-  maxTokens: string;
   reasoningEffort: ReasoningEffort;
 }
 
@@ -122,7 +113,10 @@ export function Composer(props: ComposerProps) {
   const imageMode = !!model?.imageGen;
   const canAttach = model?.vision || imageMode;
 
-  const effortIdx = Math.max(0, EFFORTS.indexOf(props.settings.reasoningEffort || 'off'));
+  const efforts: ReasoningEffort[] = [OFF, ...(model?.reasoningLevels ?? [])];
+  // A level the current model does not offer falls back to the off stop instead
+  // of leaving the slider pointing at nothing.
+  const effortIdx = Math.max(0, efforts.indexOf(props.settings.reasoningEffort || OFF));
 
   const modelRow = (m: ModelInfo) => (
     <button key={m.id}
@@ -181,7 +175,7 @@ export function Composer(props: ComposerProps) {
             : imageMode ? '描述你想生成的画面…'
             : '输入消息,Enter 发送,Shift + Enter 换行'}
           disabled={props.disabled}
-          className="max-h-[220px] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-[15px] leading-relaxed text-tx outline-none placeholder:text-tx3"
+          className="max-h-[220px] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-[15px] leading-relaxed text-tx outline-none focus-visible:outline-none placeholder:text-tx3"
           onChange={(e) => setText(e.target.value)}
           onCompositionStart={() => { composingRef.current = true; }}
           onCompositionEnd={() => { composingRef.current = false; }}
@@ -249,47 +243,31 @@ export function Composer(props: ComposerProps) {
             <div className="flex max-h-[min(70vh,34rem)] flex-col">
               {/* parameters first — they apply to whichever model is picked below */}
               <div className="shrink-0 space-y-3.5 p-3">
-                <div>
-                  <div className="mb-1.5 flex items-baseline justify-between">
-                    <span className="text-[11px] font-medium text-tx">推理强度</span>
-                    <span className="text-[11px] font-medium tabular-nums text-acc">
-                      {EFFORT_LABELS[props.settings.reasoningEffort || 'off']}
-                    </span>
-                  </div>
-                  <input
-                    type="range" min={0} max={EFFORTS.length - 1} step={1} value={effortIdx}
-                    className="range"
-                    aria-label="推理强度"
-                    onChange={(e) => props.onSettingsChange({
-                      ...props.settings, reasoningEffort: EFFORTS[Number(e.target.value)],
-                    })}
-                  />
-                  <div className="mt-0.5 flex justify-between text-[10px] text-tx3">
-                    {EFFORTS.map((e) => <span key={e}>{EFFORT_LABELS[e]}</span>)}
-                  </div>
-                  <p className="mt-1 text-[10px] leading-relaxed text-tx3">
-                    {EFFORT_HINTS[props.settings.reasoningEffort || 'off']} · 仅对支持推理的模型生效
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="block">
-                    <div className="mb-1 text-[11px] font-medium text-tx">温度 (0–2)</div>
+                {/* Only offered when the admin has declared levels for this
+                    model — sending an effort a model has no mode for is a 400. */}
+                {efforts.length > 1 && (
+                  <div>
+                    <div className="mb-1.5 flex items-baseline justify-between">
+                      <span className="text-[11px] font-medium text-tx">推理强度</span>
+                      <span className="font-mono text-[11px] font-medium text-acc">
+                        {effortLabel(efforts[effortIdx])}
+                      </span>
+                    </div>
                     <input
-                      value={props.settings.temperature}
-                      onChange={(e) => props.onSettingsChange({ ...props.settings, temperature: e.target.value })}
-                      placeholder="默认" inputMode="decimal" className={popField}
+                      type="range" min={0} max={efforts.length - 1} step={1} value={effortIdx}
+                      className="range"
+                      aria-label="推理强度"
+                      onChange={(e) => props.onSettingsChange({
+                        ...props.settings, reasoningEffort: efforts[Number(e.target.value)],
+                      })}
                     />
-                  </label>
-                  <label className="block">
-                    <div className="mb-1 text-[11px] font-medium text-tx">最大输出 tokens</div>
-                    <input
-                      value={props.settings.maxTokens}
-                      onChange={(e) => props.onSettingsChange({ ...props.settings, maxTokens: e.target.value })}
-                      placeholder="默认" inputMode="numeric" className={popField}
-                    />
-                  </label>
-                </div>
+                    <div className="mt-0.5 flex justify-between gap-1 text-[10px] text-tx3">
+                      {efforts.map((e) => (
+                        <span key={e} className={e === OFF ? '' : 'font-mono'}>{effortLabel(e)}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <label className="block">
                   <div className="mb-1 text-[11px] font-medium text-tx">系统提示词</div>

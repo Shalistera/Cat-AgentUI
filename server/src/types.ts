@@ -60,7 +60,12 @@ export interface AdapterMessage {
   parts: AdapterMessagePart[];
 }
 
-export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high';
+export interface ReasoningRequest {
+  /** Vendor level name, exactly as the admin configured it (e.g. 'xhigh'). */
+  level: string;
+  /** Position on the model's ladder, 0..1 — for vendors that budget in tokens. */
+  ratio: number;
+}
 
 export interface ChatRequest {
   model: string;
@@ -69,7 +74,7 @@ export interface ChatRequest {
   tools?: ToolDef[];
   temperature?: number;
   maxTokens?: number;
-  reasoningEffort?: ReasoningEffort;
+  reasoning?: ReasoningRequest;
   signal: AbortSignal;
 }
 

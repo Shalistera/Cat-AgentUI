@@ -35,7 +35,8 @@ export interface ChatSummary {
   createdAt: number; updatedAt: number;
 }
 
-export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high';
+/** 'off' plus whatever level names the admin configured for the model. */
+export type ReasoningEffort = string;
 
 export interface ChatDetail extends ChatSummary {
   systemPrompt: string | null;
@@ -51,6 +52,8 @@ export interface ModelInfo {
   providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini';
   /** Content-addressed URL of the provider's custom avatar; null = built-in mark. */
   providerAvatarUrl: string | null;
+  /** Ordered vendor level names, weakest first. Empty = no reasoning control. */
+  reasoningLevels: string[];
 }
 
 export interface McpServerInfo {
@@ -100,6 +103,7 @@ export interface AdminModel {
   id: string; providerId: string; modelId: string; displayName: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; enabled: boolean;
   isDefault: boolean; sortOrder: number;
+  reasoningLevels: string[];
 }
 
 export interface AdminProvider {

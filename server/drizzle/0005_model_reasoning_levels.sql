@@ -1,0 +1,1 @@
+ALTER TABLE `models` ADD `reasoning_levels` text DEFAULT '[]' NOT NULL;

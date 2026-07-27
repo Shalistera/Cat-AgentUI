@@ -50,6 +50,11 @@ export const models = sqliteTable('models', {
   vision: integer('vision').notNull().default(1),
   tools: integer('tools').notNull().default(1),
   imageGen: integer('image_gen').notNull().default(0),
+  // Ordered JSON string[] of vendor level names, weakest first, e.g.
+  // ["minimal","low","medium","high","xhigh"]. Empty = this model has no
+  // reasoning mode, so the control is hidden. Admin-configured rather than
+  // guessed: vendors add levels (gpt-5.6's `max`) faster than we ship.
+  reasoningLevels: text('reasoning_levels').notNull().default('[]'),
   enabled: integer('enabled').notNull().default(1),
   isDefault: integer('is_default').notNull().default(0),
   sortOrder: integer('sort_order').notNull().default(0),

@@ -90,10 +90,10 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
     if (isOfficialApi(cfg)) body.max_completion_tokens = req.maxTokens;
     else body.max_tokens = req.maxTokens;
   }
-  // Only sent when the user asked for it: non-reasoning models reject the field.
-  if (req.reasoningEffort && req.reasoningEffort !== 'off') {
-    body.reasoning_effort = req.reasoningEffort;
-  }
+  // Passed through verbatim: the admin configures these using OpenAI's own
+  // vocabulary, so a new tier works without a code change. `off` is our own
+  // sentinel, not a vendor level — it means "omit the field".
+  if (req.reasoning && req.reasoning.level !== 'off') body.reasoning_effort = req.reasoning.level;
   const tools = toChatTools(req.tools);
   if (tools) { body.tools = tools; body.tool_choice = 'auto'; }
 
@@ -198,8 +198,8 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
   if (req.system) body.instructions = req.system;
   if (req.temperature !== undefined) body.temperature = req.temperature;
   if (req.maxTokens) body.max_output_tokens = req.maxTokens;
-  if (req.reasoningEffort && req.reasoningEffort !== 'off') {
-    body.reasoning = { effort: req.reasoningEffort, summary: 'auto' };
+  if (req.reasoning && req.reasoning.level !== 'off') {
+    body.reasoning = { effort: req.reasoning.level, summary: 'auto' };
   }
   if (req.tools?.length) {
     body.tools = req.tools.map((t) => ({
