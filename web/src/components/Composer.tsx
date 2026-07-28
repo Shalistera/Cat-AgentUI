@@ -10,6 +10,7 @@ import {
 import { useMcp, useModels } from '../store';
 import { uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
+import { ReasoningSlider } from './ReasoningSlider';
 import { toast, Toggle } from './ui';
 import type { ModelInfo, ReasoningEffort, ReasoningLevel } from '../types';
 
@@ -77,8 +78,16 @@ const toolBtn = 'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border 
 // ladder, where each level carries both the name the vendor receives and the
 // one worth showing a person.
 const OFF_LEVEL: ReasoningLevel = { value: 'off', label: '关闭' };
-type ModelPanelView = 'models' | 'reasoning' | 'settings';
+type ModelPanelView = 'models' | 'settings';
 type ModelKind = 'all' | 'chat' | 'image';
+
+// The ladder is admin-defined, so the only thing we can say about a rung is
+// where it sits on it — which is also the part a person actually wants to know.
+function effortHint(idx: number, total: number) {
+  if (idx === 0) return '不额外思考，回答最快';
+  if (idx === total - 1) return '思考最久，适合复杂推理';
+  return '边想边答，兼顾速度与深度';
+}
 
 export interface PendingImage { uploadId: string; previewUrl: string }
 
@@ -177,7 +186,7 @@ export function Composer(props: ComposerProps) {
   // of leaving the slider pointing at nothing.
   const effortIdx = Math.max(0, efforts.findIndex((e) => e.value === (props.settings.reasoningEffort || OFF_LEVEL.value)));
   const effort = efforts[effortIdx];
-  const effortProgress = efforts.length > 1 ? (effortIdx / (efforts.length - 1)) * 100 : 0;
+  const thinking = efforts.length > 1 && effort.value !== OFF_LEVEL.value;
 
   function setReasoningEffort(next: ReasoningLevel) {
     props.onSettingsChange({ ...props.settings, reasoningEffort: next.value });
@@ -316,9 +325,13 @@ export function Composer(props: ComposerProps) {
           {/* Model selection stays primary; lower-frequency controls live in
               their own secondary views inside the same anchored popover. */}
           <Popover open={panelOpen} setOpen={setPanelOpen} align="right" width="w-[22rem]" trigger={
-            <button className={`${toolBtn} border-line bg-bg1 pl-1.5`} title="选择模型">
+            <button
+              className={`${toolBtn} border-line bg-bg1 pl-1.5`}
+              title={thinking ? `选择模型 · 思考强度 ${effort.label}` : '选择模型'}
+            >
               {model && <ModelAvatar info={model} size={16} tile={false} />}
               <span className="max-w-[150px] truncate text-tx">{model ? model.displayName : '选择模型'}</span>
+              {thinking && <BrainCircuit size={13} className="shrink-0 text-acc" aria-label={`思考强度 ${effort.label}`} />}
               <ChevronDown size={12} className="text-tx3" />
             </button>
           }>
@@ -336,18 +349,6 @@ export function Composer(props: ComposerProps) {
                         className={`${popField} pl-8`}
                       />
                     </label>
-                    {efforts.length > 1 && (
-                      <button
-                        type="button"
-                        title={`推理强度 · ${effort.label}`}
-                        aria-label={`打开推理强度设置，当前${effort.label}`}
-                        onClick={() => setPanelView('reasoning')}
-                        className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line text-acc transition-colors hover:border-acc/40 hover:bg-acc/10"
-                      >
-                        <BrainCircuit size={15} />
-                        {effort.value !== OFF_LEVEL.value && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accs" />}
-                      </button>
-                    )}
                     <button
                       type="button"
                       title="其他设置"
@@ -397,81 +398,32 @@ export function Composer(props: ComposerProps) {
                       </div>
                     )}
                   </div>
-                </>
-              )}
 
-              {panelView === 'reasoning' && (
-                <>
-                  <div className="flex shrink-0 items-center gap-2 border-b border-line px-2 py-2">
-                    <button
-                      type="button"
-                      title="返回模型列表"
-                      aria-label="返回模型列表"
-                      onClick={() => setPanelView('models')}
-                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg2 hover:text-tx"
-                    >
-                      <ArrowLeft size={15} />
-                    </button>
-                    <BrainCircuit size={15} className="text-acc" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-xs font-semibold text-tx">推理强度</span>
-                      <span className="block truncate text-[10px] text-tx3">{model?.displayName}</span>
-                    </span>
-                  </div>
-
-                  <div className="overflow-y-auto p-3">
-                    <div className="rounded-lg border border-acc/30 bg-acc/10 p-3 shadow-xs">
-                      <div className="flex items-center gap-2.5">
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accs text-accfg shadow-xs">
-                          <BrainCircuit size={15} strokeWidth={2.1} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-xs font-semibold text-tx">思考投入</span>
-                          <span className="block text-[10px] leading-tight text-tx3">控制模型回答前的推理程度</span>
-                        </span>
-                        <span className={`inline-flex max-w-[7.5rem] items-baseline gap-1 rounded-md px-2 py-1 text-[11px] font-semibold shadow-xs ${
-                          effort.value === OFF_LEVEL.value
-                            ? 'border border-line2 bg-bg1 text-tx2'
-                            : 'bg-accs text-accfg'
+                  {/* Thinking effort is a per-message decision, so it sits in
+                      the open — pinned under the list rather than behind a
+                      second click — and stays put while the list scrolls. */}
+                  {efforts.length > 1 && (
+                    <div className={`shrink-0 border-t border-line px-3 pb-2.5 pt-2 transition-colors ${
+                      thinking ? 'bg-acc/6' : 'bg-bg2/60'
+                    }`}>
+                      <div className="flex items-center gap-1.5">
+                        <BrainCircuit size={14} className="shrink-0 text-acc" />
+                        <span className="text-[11px] font-semibold text-tx">思考强度</span>
+                        <span className="flex-1" />
+                        <span className={`max-w-[8rem] truncate rounded-md px-2 py-0.5 text-[10px] font-semibold shadow-xs ${
+                          thinking ? 'bg-accs text-accfg' : 'border border-line2 bg-bg1 text-tx2'
                         }`}>
-                          <span className="truncate">{effort.label}</span>
-                          {effort.value !== OFF_LEVEL.value && effort.value !== effort.label && (
-                            <span className="truncate font-mono text-[9px] opacity-70">{effort.value}</span>
-                          )}
+                          {effort.label}
                         </span>
                       </div>
-                      <input
-                        type="range" min={0} max={efforts.length - 1} step={1} value={effortIdx}
-                        className="range mt-3"
-                        style={{ '--range-progress': `${effortProgress}%` } as CSSProperties}
-                        aria-label="推理强度"
-                        aria-valuetext={effort.label}
-                        onChange={(e) => setReasoningEffort(efforts[Number(e.target.value)])}
+                      <ReasoningSlider
+                        levels={efforts}
+                        index={effortIdx}
+                        onChange={(i) => setReasoningEffort(efforts[i])}
                       />
-                      <div
-                        className="mt-1.5 grid gap-1"
-                        style={{ gridTemplateColumns: `repeat(${efforts.length}, minmax(0, 1fr))` }}
-                      >
-                        {efforts.map((e) => (
-                          <button
-                            key={e.value}
-                            type="button"
-                            title={e.value}
-                            aria-label={`推理强度：${e.label}`}
-                            aria-pressed={e.value === effort.value}
-                            onClick={() => setReasoningEffort(e)}
-                            className={`min-w-0 cursor-pointer truncate rounded px-1 py-1 text-[10px] font-medium transition-[background-color,color,box-shadow] ${
-                              e.value === effort.value
-                                ? 'bg-accs text-accfg shadow-xs'
-                                : 'text-tx3 hover:bg-bg1 hover:text-tx'
-                            }`}
-                          >
-                            {e.label}
-                          </button>
-                        ))}
-                      </div>
+                      <p className="mt-0.5 text-[10px] leading-4 text-tx3">{effortHint(effortIdx, efforts.length)}</p>
                     </div>
-                  </div>
+                  )}
                 </>
               )}
 
