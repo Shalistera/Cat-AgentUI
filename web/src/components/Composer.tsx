@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  ArrowUp, ChevronDown, Loader2, Plus, Square, Wrench, X, Check,
+  useEffect, useLayoutEffect, useRef, useState,
+  type CSSProperties, type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
+import {
+  ArrowLeft, ArrowUp, BrainCircuit, Check, ChevronDown, Image as ImageIcon,
+  Loader2, Plus, Search, Settings2, Square, Wrench, X,
 } from 'lucide-react';
 import { useMcp, useModels } from '../store';
 import { uploadFile } from '../api';
@@ -12,16 +17,54 @@ function Popover({ trigger, children, open, setOpen, align = 'left', width = 'w-
   trigger: ReactNode; children: ReactNode; open: boolean; setOpen(v: boolean): void;
   align?: 'left' | 'right'; width?: string;
 }) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<CSSProperties | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) { setPosition(null); return; }
+
+    function place() {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const edge = 12;
+      const gap = 8;
+      const above = rect.top - edge - gap;
+      const below = window.innerHeight - rect.bottom - edge - gap;
+      const placeAbove = above >= 300 || above >= below;
+      const maxHeight = Math.max(160, Math.min(placeAbove ? above : below, 544));
+      const horizontal = align === 'right'
+        ? { right: Math.max(edge, window.innerWidth - rect.right) }
+        : { left: Math.max(edge, rect.left) };
+
+      setPosition(placeAbove
+        ? { ...horizontal, bottom: window.innerHeight - rect.top + gap, maxHeight }
+        : { ...horizontal, top: rect.bottom + gap, maxHeight });
+    }
+
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [align, open]);
+
   return (
-    <div className="relative">
+    <div ref={anchorRef} className="relative">
       <div onClick={() => setOpen(!open)}>{trigger}</div>
-      {open && (
+      {open && createPortal(
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className={`fade-up absolute bottom-full z-50 mb-2 ${width} overflow-hidden rounded-lg border border-line bg-bg1 shadow-lg ${align === 'left' ? 'left-0' : 'right-0'}`}>
+          <div
+            style={position ?? { visibility: 'hidden' }}
+            className={`fade-up fixed z-50 ${width} max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-line bg-bg1 shadow-lg`}
+          >
             {children}
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );
@@ -34,6 +77,8 @@ const toolBtn = 'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border 
 // ladder, where each level carries both the name the vendor receives and the
 // one worth showing a person.
 const OFF_LEVEL: ReasoningLevel = { value: 'off', label: '关闭' };
+type ModelPanelView = 'models' | 'reasoning' | 'settings';
+type ModelKind = 'all' | 'chat' | 'image';
 
 export interface PendingImage { uploadId: string; previewUrl: string }
 
@@ -62,6 +107,8 @@ export function Composer(props: ComposerProps) {
   const [images, setImages] = useState<PendingImage[]>([]);
   const [uploading, setUploading] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [panelView, setPanelView] = useState<ModelPanelView>('models');
+  const [modelKind, setModelKind] = useState<ModelKind>('all');
   const [mcpOpen, setMcpOpen] = useState(false);
   const [modelQuery, setModelQuery] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -80,6 +127,13 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     if (props.autoFocus) taRef.current?.focus();
   }, [props.autoFocus]);
+
+  useEffect(() => {
+    if (panelOpen) return;
+    setPanelView('models');
+    setModelKind('all');
+    setModelQuery('');
+  }, [panelOpen]);
 
   function send() {
     const t = text.trim();
@@ -105,9 +159,14 @@ export function Composer(props: ComposerProps) {
     }
   }
 
-  const filteredModels = modelQuery.trim()
-    ? models.filter((m) => `${m.displayName} ${m.modelId} ${m.providerName}`.toLowerCase().includes(modelQuery.toLowerCase()))
+  const searchedModels = modelQuery.trim()
+    ? models.filter((m) => `${m.displayName} ${m.modelId} ${m.providerName} ${
+      m.imageGen ? '绘图 生图 image' : '对话 chat'
+    } ${m.vision ? '视觉 vision' : ''} ${m.tools ? '工具 tools' : ''}`.toLowerCase().includes(modelQuery.toLowerCase()))
     : models;
+  const filteredModels = searchedModels.filter((m) => (
+    modelKind === 'all' || (modelKind === 'image' ? m.imageGen : !m.imageGen)
+  ));
   const chatModels = filteredModels.filter((m) => !m.imageGen);
   const imageModels = filteredModels.filter((m) => m.imageGen);
   const imageMode = !!model?.imageGen;
@@ -118,18 +177,39 @@ export function Composer(props: ComposerProps) {
   // of leaving the slider pointing at nothing.
   const effortIdx = Math.max(0, efforts.findIndex((e) => e.value === (props.settings.reasoningEffort || OFF_LEVEL.value)));
   const effort = efforts[effortIdx];
+  const effortProgress = efforts.length > 1 ? (effortIdx / (efforts.length - 1)) * 100 : 0;
+
+  function setReasoningEffort(next: ReasoningLevel) {
+    props.onSettingsChange({ ...props.settings, reasoningEffort: next.value });
+  }
+
+  function modelHint(m: ModelInfo) {
+    const capabilities = [
+      m.imageGen ? '图像生成' : '对话',
+      m.vision ? '视觉理解' : '',
+      m.tools ? '工具调用' : '',
+      m.reasoningLevels.length ? '可调推理强度' : '',
+    ].filter(Boolean).join(' · ');
+    return `${m.displayName}\n模型 ID：${m.modelId}\n服务商：${m.providerName}\n能力：${capabilities}`;
+  }
 
   const modelRow = (m: ModelInfo) => (
     <button key={m.id}
-      className={`flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors hover:bg-bg2 ${m.id === model?.id ? 'bg-bg2' : ''}`}
+      title={modelHint(m)}
+      className={`group flex w-full cursor-pointer items-center gap-2.5 border-b border-line/70 px-3 py-2 text-left text-xs transition-colors last:border-b-0 hover:bg-bg2 ${m.id === model?.id ? 'bg-acc/10' : ''}`}
       onClick={() => { props.onModelChange(m); setModelQuery(''); setPanelOpen(false); }}
     >
       <ModelAvatar info={m} size={24} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-tx">{m.displayName}</span>
-        <span className="block truncate text-[11px] text-tx3">
-          {m.providerName}{m.imageGen ? ' · 生图' : ''}{m.vision ? ' · 视觉' : ''}{m.tools ? ' · 工具' : ''}
+        <span className="block truncate text-[13px] font-semibold text-tx">{m.displayName}</span>
+        <span className="mt-0.5 block truncate text-[10px] text-tx3">
+          {m.providerName} · {m.modelId}
         </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1 text-tx3">
+        {m.imageGen && <ImageIcon size={12} aria-label="图像生成" />}
+        {m.vision && !m.imageGen && <span className="rounded bg-bg3 px-1 py-0.5 text-[9px] font-medium">视觉</span>}
+        {m.tools && !m.imageGen && <Wrench size={11} aria-label="工具调用" />}
       </span>
       {m.id === model?.id && <Check size={14} className="shrink-0 text-acc" />}
     </button>
@@ -233,84 +313,197 @@ export function Composer(props: ComposerProps) {
 
           <div className="flex-1" />
 
-          {/* right: one control for the model and everything that tunes it */}
+          {/* Model selection stays primary; lower-frequency controls live in
+              their own secondary views inside the same anchored popover. */}
           <Popover open={panelOpen} setOpen={setPanelOpen} align="right" width="w-[22rem]" trigger={
-            <button className={`${toolBtn} border-line bg-bg1 pl-1.5`} title="模型与参数">
+            <button className={`${toolBtn} border-line bg-bg1 pl-1.5`} title="选择模型">
               {model && <ModelAvatar info={model} size={16} tile={false} />}
               <span className="max-w-[150px] truncate text-tx">{model ? model.displayName : '选择模型'}</span>
               <ChevronDown size={12} className="text-tx3" />
             </button>
           }>
-            <div className="flex max-h-[min(70vh,34rem)] flex-col">
-              {/* parameters first — they apply to whichever model is picked below */}
-              <div className="shrink-0 space-y-3.5 p-3">
-                {/* Only offered when the admin has declared levels for this
-                    model — sending an effort a model has no mode for is a 400. */}
-                {efforts.length > 1 && (
-                  <div>
-                    <div className="mb-1.5 flex items-baseline justify-between">
-                      <span className="text-[11px] font-medium text-tx">推理强度</span>
-                      <span className="flex items-baseline gap-1.5">
-                        <span className="text-[11px] font-medium text-acc">{effort.label}</span>
-                        {/* the name the provider receives, when it isn't already
-                            what's on screen — `off` never goes anywhere */}
-                        {effort.value !== OFF_LEVEL.value && effort.value !== effort.label && (
-                          <span className="font-mono text-[10px] text-tx3">{effort.value}</span>
-                        )}
-                      </span>
-                    </div>
-                    <input
-                      type="range" min={0} max={efforts.length - 1} step={1} value={effortIdx}
-                      className="range"
-                      aria-label="推理强度"
-                      aria-valuetext={effort.label}
-                      onChange={(e) => props.onSettingsChange({
-                        ...props.settings, reasoningEffort: efforts[Number(e.target.value)].value,
-                      })}
-                    />
-                    <div className="mt-0.5 flex justify-between gap-1 text-[10px] text-tx3">
-                      {efforts.map((e) => (
-                        <span key={e.value} title={e.value}>{e.label}</span>
-                      ))}
+            <div className="flex min-h-0 flex-col" style={{ maxHeight: 'inherit' }}>
+              {panelView === 'models' && (
+                <>
+                  <div className="flex shrink-0 items-center gap-1.5 border-b border-line p-2">
+                    <label className="relative min-w-0 flex-1">
+                      <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tx3" />
+                      <input
+                        value={modelQuery}
+                        onChange={(e) => setModelQuery(e.target.value)}
+                        aria-label="搜索模型"
+                        placeholder="搜索名称、ID 或服务商…"
+                        className={`${popField} pl-8`}
+                      />
+                    </label>
+                    {efforts.length > 1 && (
+                      <button
+                        type="button"
+                        title={`推理强度 · ${effort.label}`}
+                        aria-label={`打开推理强度设置，当前${effort.label}`}
+                        onClick={() => setPanelView('reasoning')}
+                        className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line text-acc transition-colors hover:border-acc/40 hover:bg-acc/10"
+                      >
+                        <BrainCircuit size={15} />
+                        {effort.value !== OFF_LEVEL.value && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accs" />}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      title="其他设置"
+                      aria-label="打开其他设置"
+                      onClick={() => setPanelView('settings')}
+                      className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line text-tx2 transition-colors hover:border-field hover:bg-bg2 hover:text-tx"
+                    >
+                      <Settings2 size={15} />
+                      {props.settings.systemPrompt && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accs" />}
+                    </button>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-1 border-b border-line bg-bg2/45 px-2 py-1.5">
+                    {([
+                      ['all', '全部', searchedModels.length],
+                      ['chat', '对话', searchedModels.filter((m) => !m.imageGen).length],
+                      ['image', '绘图', searchedModels.filter((m) => m.imageGen).length],
+                    ] as const).map(([value, label, count]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={modelKind === value}
+                        onClick={() => setModelKind(value)}
+                        className={`cursor-pointer rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
+                          modelKind === value ? 'bg-bg1 text-tx shadow-xs' : 'text-tx3 hover:text-tx'
+                        }`}
+                      >
+                        {label} <span className="tabular-nums opacity-65">{count}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {chatModels.length > 0 && imageModels.length > 0 && groupHead('对话模型')}
+                    {chatModels.map(modelRow)}
+                    {imageModels.length > 0 && (
+                      <>
+                        {chatModels.length > 0 && groupHead('绘图模型')}
+                        {imageModels.map(modelRow)}
+                      </>
+                    )}
+                    {filteredModels.length === 0 && (
+                      <div className="px-3 py-8 text-center">
+                        <Search size={18} className="mx-auto mb-2 text-tx3" />
+                        <p className="text-xs font-medium text-tx2">没有匹配的模型</p>
+                        <p className="mt-1 text-[10px] text-tx3">换个名称、模型 ID 或服务商试试</p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {panelView === 'reasoning' && (
+                <>
+                  <div className="flex shrink-0 items-center gap-2 border-b border-line px-2 py-2">
+                    <button
+                      type="button"
+                      title="返回模型列表"
+                      aria-label="返回模型列表"
+                      onClick={() => setPanelView('models')}
+                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg2 hover:text-tx"
+                    >
+                      <ArrowLeft size={15} />
+                    </button>
+                    <BrainCircuit size={15} className="text-acc" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs font-semibold text-tx">推理强度</span>
+                      <span className="block truncate text-[10px] text-tx3">{model?.displayName}</span>
+                    </span>
+                  </div>
+
+                  <div className="overflow-y-auto p-3">
+                    <div className="rounded-lg border border-acc/30 bg-acc/10 p-3 shadow-xs">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accs text-accfg shadow-xs">
+                          <BrainCircuit size={15} strokeWidth={2.1} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-xs font-semibold text-tx">思考投入</span>
+                          <span className="block text-[10px] leading-tight text-tx3">控制模型回答前的推理程度</span>
+                        </span>
+                        <span className={`inline-flex max-w-[7.5rem] items-baseline gap-1 rounded-md px-2 py-1 text-[11px] font-semibold shadow-xs ${
+                          effort.value === OFF_LEVEL.value
+                            ? 'border border-line2 bg-bg1 text-tx2'
+                            : 'bg-accs text-accfg'
+                        }`}>
+                          <span className="truncate">{effort.label}</span>
+                          {effort.value !== OFF_LEVEL.value && effort.value !== effort.label && (
+                            <span className="truncate font-mono text-[9px] opacity-70">{effort.value}</span>
+                          )}
+                        </span>
+                      </div>
+                      <input
+                        type="range" min={0} max={efforts.length - 1} step={1} value={effortIdx}
+                        className="range mt-3"
+                        style={{ '--range-progress': `${effortProgress}%` } as CSSProperties}
+                        aria-label="推理强度"
+                        aria-valuetext={effort.label}
+                        onChange={(e) => setReasoningEffort(efforts[Number(e.target.value)])}
+                      />
+                      <div
+                        className="mt-1.5 grid gap-1"
+                        style={{ gridTemplateColumns: `repeat(${efforts.length}, minmax(0, 1fr))` }}
+                      >
+                        {efforts.map((e) => (
+                          <button
+                            key={e.value}
+                            type="button"
+                            title={e.value}
+                            aria-label={`推理强度：${e.label}`}
+                            aria-pressed={e.value === effort.value}
+                            onClick={() => setReasoningEffort(e)}
+                            className={`min-w-0 cursor-pointer truncate rounded px-1 py-1 text-[10px] font-medium transition-[background-color,color,box-shadow] ${
+                              e.value === effort.value
+                                ? 'bg-accs text-accfg shadow-xs'
+                                : 'text-tx3 hover:bg-bg1 hover:text-tx'
+                            }`}
+                          >
+                            {e.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                )}
-
-                <label className="block">
-                  <div className="mb-1 text-[11px] font-medium text-tx">系统提示词</div>
-                  <textarea
-                    rows={3}
-                    value={props.settings.systemPrompt}
-                    onChange={(e) => props.onSettingsChange({ ...props.settings, systemPrompt: e.target.value })}
-                    placeholder="设定 AI 的角色与行为…"
-                    className={`${popField} resize-y leading-relaxed`}
-                  />
-                </label>
-              </div>
-
-              {/* model list */}
-              {groupHead('模型')}
-              {models.length > 8 && (
-                <div className="shrink-0 border-b border-line p-2">
-                  <input
-                    value={modelQuery} onChange={(e) => setModelQuery(e.target.value)}
-                    placeholder="搜索模型…" className={popField}
-                  />
-                </div>
+                </>
               )}
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                {chatModels.map(modelRow)}
-                {imageModels.length > 0 && (
-                  <>
-                    {chatModels.length > 0 && groupHead('绘图模型')}
-                    {imageModels.map(modelRow)}
-                    <p className="border-t border-line px-3 py-2 text-[11px] leading-relaxed text-tx3">
-                      绘图模型会带着当前对话的上下文作图,可直接接着说「换成蓝色」。
-                    </p>
-                  </>
-                )}
-                {filteredModels.length === 0 && <p className="px-3 py-4 text-center text-xs text-tx3">没有可用模型</p>}
-              </div>
+
+              {panelView === 'settings' && (
+                <>
+                  <div className="flex shrink-0 items-center gap-2 border-b border-line px-2 py-2">
+                    <button
+                      type="button"
+                      title="返回模型列表"
+                      aria-label="返回模型列表"
+                      onClick={() => setPanelView('models')}
+                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg2 hover:text-tx"
+                    >
+                      <ArrowLeft size={15} />
+                    </button>
+                    <Settings2 size={15} className="text-tx2" />
+                    <span className="text-xs font-semibold text-tx">其他设置</span>
+                  </div>
+                  <div className="overflow-y-auto p-3">
+                    <label className="block">
+                      <div className="mb-1.5 text-[11px] font-semibold text-tx">系统提示词</div>
+                      <textarea
+                        rows={6}
+                        value={props.settings.systemPrompt}
+                        onChange={(e) => props.onSettingsChange({ ...props.settings, systemPrompt: e.target.value })}
+                        placeholder="设定 AI 的角色与行为…"
+                        className={`${popField} min-h-28 resize-y leading-relaxed`}
+                      />
+                    </label>
+                  </div>
+                </>
+              )}
             </div>
           </Popover>
 
