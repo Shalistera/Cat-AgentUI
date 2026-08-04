@@ -152,7 +152,7 @@ export function Composer(props: ComposerProps) {
     setImages([]);
   }
 
-  async function pickFiles(files: FileList | null) {
+  async function pickFiles(files: FileList | File[] | null) {
     if (!files?.length) return;
     setUploading(true);
     try {
@@ -269,6 +269,12 @@ export function Composer(props: ComposerProps) {
           onChange={(e) => setText(e.target.value)}
           onCompositionStart={() => { composingRef.current = true; }}
           onCompositionEnd={() => { composingRef.current = false; }}
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
+            if (!files.length || !canAttach || images.length >= 4) return;
+            e.preventDefault();
+            void pickFiles(files);
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !composingRef.current) {
               e.preventDefault();

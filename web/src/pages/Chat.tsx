@@ -7,6 +7,7 @@ import { Composer, type ComposerSettings, type PendingImage } from '../component
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
 import { Button, PageHeader, toast } from '../components/ui';
+import { tabAlert } from '../tabAlert';
 import type { ChatDetail, Message, MessagePart, ModelInfo } from '../types';
 
 const LAST_MODEL_KEY = 'cat-last-model';
@@ -201,6 +202,8 @@ export default function Chat() {
       flush();
       applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status }));
       setStreaming(false);
+      // "stopped" is always user-initiated from this tab — no need to flag it.
+      if (status !== 'stopped') tabAlert();
       chatsStore.load().catch(() => { /* ignore */ });
     };
 

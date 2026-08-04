@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useUi, useAuth } from '../store';
 import { api, uploadFile, fmtDuration, fmtTime, fmtTokens } from '../api';
+import { tabAlert } from '../tabAlert';
 import {
   Button, Input, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
   toast, confirmDialog, EmptyState,
@@ -28,6 +29,7 @@ export default function Images() {
   const [n, setN] = useState(1);
   const [refIds, setRefIds] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -74,6 +76,18 @@ export default function Images() {
     }
   }, [quickKey]);
 
+  // Ctrl/Cmd+V anywhere on the page uploads clipboard images as references.
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
+      if (!files.length) return;
+      e.preventDefault();
+      void addFiles(files);
+    }
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  });
+
   useEffect(() => {
     api.get<ImageModel[]>('/api/images/models')
       .then((r) => {
@@ -93,13 +107,12 @@ export default function Images() {
       });
   }, []);
 
-  async function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = '';
-    if (!files.length) return;
+  async function addFiles(files: File[]) {
+    const imgs = files.filter((f) => f.type.startsWith('image/'));
+    if (!imgs.length) return;
     const room = MAX_REFS - refIds.length;
-    if (files.length > room) toast(`参考图最多 ${MAX_REFS} 张`, 'err');
-    const take = files.slice(0, Math.max(0, room));
+    if (imgs.length > room) toast(`参考图最多 ${MAX_REFS} 张`, 'err');
+    const take = imgs.slice(0, Math.max(0, room));
     if (!take.length) return;
     setUploading(true);
     try {
@@ -112,6 +125,12 @@ export default function Images() {
     } finally {
       setUploading(false);
     }
+  }
+
+  function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    void addFiles(files);
   }
 
   async function onReplaceFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -161,8 +180,10 @@ export default function Images() {
       // Prompt and reference images stay put on purpose — iterating on the
       // same inputs is the common case.
       toast(`已生成 ${imgs.length} 张图片`, 'ok');
+      tabAlert();
     } catch (err) {
       toast(err instanceof Error ? err.message : '生成失败', 'err');
+      tabAlert();
     } finally {
       clearInterval(timer);
       setGenerating(false);
@@ -313,14 +334,36 @@ export default function Images() {
 
                 <div>
                   <div className="mb-1.5 text-[13px] font-medium text-tx">参考图</div>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragOver(false);
+                      void addFiles(Array.from(e.dataTransfer?.files ?? []));
+                    }}
+                    onClick={() => {
+                      if (uploading) return;
+                      if (refIds.length >= MAX_REFS) { toast(`参考图最多 ${MAX_REFS} 张`, 'err'); return; }
+                      fileRef.current?.click();
+                    }}
+                    className={`flex min-h-24 cursor-pointer flex-wrap items-center gap-2 rounded-lg border border-dashed p-3 transition-colors ${
+                      dragOver ? 'border-acc bg-acc/5' : 'border-line2 hover:border-tx3'
+                    }`}
+                  >
                     {refIds.map((id) => (
                       <div key={id} className="group/ref relative h-16 w-16 shrink-0">
                         <button
                           type="button"
                           title="点击更换参考图"
                           disabled={uploading}
-                          onClick={() => { replaceTargetRef.current = id; replaceFileRef.current?.click(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            replaceTargetRef.current = id;
+                            replaceFileRef.current?.click();
+                          }}
                           className="block h-16 w-16 cursor-pointer overflow-hidden rounded-md border border-line transition-colors hover:border-line2"
                         >
                           <img
@@ -335,29 +378,46 @@ export default function Images() {
                         <button
                           type="button"
                           title="移除"
-                          onClick={() => setRefIds((prev) => prev.filter((x) => x !== id))}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRefIds((prev) => prev.filter((x) => x !== id));
+                          }}
                           className="absolute -right-1.5 -top-1.5 z-10 flex h-4.5 w-4.5 cursor-pointer items-center justify-center rounded-full border border-line bg-bg1 text-tx2 shadow-sm transition-colors hover:border-err/50 hover:text-err"
                         >
                           <X size={10} />
                         </button>
                       </div>
                     ))}
-                    {refIds.length < MAX_REFS && (
-                      <Button variant="outline" size="sm" disabled={uploading} onClick={() => fileRef.current?.click()}>
-                        {uploading ? <Spinner className="h-3.5 w-3.5" /> : <ImagePlus size={14} />}
-                        {uploading ? '上传中…' : '添加参考图'}
-                      </Button>
+                    {uploading && (
+                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-dashed border-line2">
+                        <Spinner className="h-4 w-4" />
+                      </div>
                     )}
-                    <input
-                      ref={fileRef} type="file" accept="image/*" multiple hidden
-                      onChange={onPickFiles}
-                    />
-                    <input
-                      ref={replaceFileRef} type="file" accept="image/*" hidden
-                      onChange={onReplaceFile}
-                    />
+                    {refIds.length === 0 && !uploading ? (
+                      <div className="flex w-full flex-col items-center gap-1 py-2 text-tx3">
+                        <ImagePlus size={18} />
+                        <span className="text-xs">点击选择,或拖拽 / Ctrl+V 粘贴图片到此处</span>
+                      </div>
+                    ) : refIds.length < MAX_REFS && !uploading ? (
+                      <div
+                        title="添加参考图"
+                        className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-dashed border-line2 text-tx3 transition-colors hover:border-tx3 hover:text-tx"
+                      >
+                        <ImagePlus size={16} />
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="mt-1.5 text-xs text-tx3">可选,最多 {MAX_REFS} 张,作为图像编辑 / 参考输入;点击缩略图可更换。</div>
+                  <input
+                    ref={fileRef} type="file" accept="image/*" multiple hidden
+                    onChange={onPickFiles}
+                  />
+                  <input
+                    ref={replaceFileRef} type="file" accept="image/*" hidden
+                    onChange={onReplaceFile}
+                  />
+                  <div className="mt-1.5 text-xs text-tx3">
+                    可选,最多 {MAX_REFS} 张;支持拖拽、Ctrl+V 粘贴,点击缩略图可更换。
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
