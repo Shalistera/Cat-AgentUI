@@ -1,0 +1,21 @@
+# Cat-AgentUI — append this block to /etc/caddy/Caddyfile, then reload caddy:
+#   sudo tee -a /etc/caddy/Caddyfile < deploy/caddy-ca.totr.dev.caddy
+#   sudo systemctl reload caddy
+# Behind Cloudflare (orange cloud), same setup as h.totr.dev.
+ca.totr.dev {
+	# Same *.totr.dev CF Origin cert as h.totr.dev — covers this name, valid
+	# until 2041, no ACME. Requires CF SSL mode = Full (strict).
+	tls /etc/caddy/certs/h.totr.dev.crt /etc/caddy/certs/h.totr.dev.key
+
+	log {
+		output file /var/log/caddy/ca.totr.dev.log
+		format json
+	}
+
+	# No `encode`: Cloudflare compresses at the edge, and local compression
+	# risks buffering the chat SSE stream. flush_interval -1 disables response
+	# buffering so streaming replies stay live.
+	reverse_proxy 127.0.0.1:3007 {
+		flush_interval -1
+	}
+}

@@ -1,36 +1,45 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PanelLeft, ImagePlus, Sparkles, X, Download, Trash2, Image as ImageIcon,
+  History, Settings2, Plus,
 } from 'lucide-react';
-import { useUi } from '../store';
+import { useUi, useAuth } from '../store';
 import { api, uploadFile, fmtDuration, fmtTime, fmtTokens } from '../api';
 import {
-  Button, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
+  Button, Input, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
   toast, confirmDialog, EmptyState,
 } from '../components/ui';
 import type { ImageModel, ImageRecord } from '../types';
 
 const PAGE_SIZE = 60;
-const OPENAI_SIZES = ['auto', '1024x1024', '1536x1024', '1024x1536'];
-const OPENAI_QUALITIES = ['auto', 'low', 'medium', 'high'];
-const GEMINI_RATIOS = ['auto', '1:1', '16:9', '9:16', '4:3', '3:4'];
+const MAX_REFS = 3;
+const HISTORY_MAX = 10;
+const DEFAULT_QUICK_PROMPTS = ['去背景'];
 
 export default function Images() {
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const setSidebarOpen = useUi((s) => s.setSidebarOpen);
+  const user = useAuth((s) => s.user);
 
   // ---- generation form state ----
   const [models, setModels] = useState<ImageModel[] | null>(null);
   const [modelId, setModelId] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [size, setSize] = useState('auto');
-  const [quality, setQuality] = useState('auto');
   const [n, setN] = useState(1);
   const [refIds, setRefIds] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
+  const replaceFileRef = useRef<HTMLInputElement>(null);
+  const replaceTargetRef = useRef<string | null>(null);
+
+  // ---- quick / history prompts ----
+  const quickKey = `cat-img-quick:${user?.id ?? 'anon'}`;
+  const [quick, setQuick] = useState<string[]>(DEFAULT_QUICK_PROMPTS);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [quickDraft, setQuickDraft] = useState<string[]>([]);
+  const [histOpen, setHistOpen] = useState(false);
 
   // ---- gallery state ----
   const [list, setList] = useState<ImageRecord[]>([]);
@@ -40,6 +49,30 @@ export default function Images() {
   const [lightbox, setLightbox] = useState<ImageRecord | null>(null);
 
   const model = models?.find((m) => m.id === modelId) ?? null;
+
+  // Last 10 distinct prompts, straight from the user's own gallery — survives
+  // reloads and other devices without any extra storage.
+  const history = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const img of list) {
+      const p = img.prompt?.trim();
+      if (!p || seen.has(p)) continue;
+      seen.add(p);
+      out.push(p);
+      if (out.length >= HISTORY_MAX) break;
+    }
+    return out;
+  }, [list]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(quickKey);
+      setQuick(raw !== null ? (JSON.parse(raw) as string[]) : DEFAULT_QUICK_PROMPTS);
+    } catch {
+      setQuick(DEFAULT_QUICK_PROMPTS);
+    }
+  }, [quickKey]);
 
   useEffect(() => {
     api.get<ImageModel[]>('/api/images/models')
@@ -60,31 +93,55 @@ export default function Images() {
       });
   }, []);
 
-  function selectModel(id: string) {
-    setModelId(id);
-    setSize('auto');
-    setQuality('auto');
-  }
-
   async function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     e.target.value = '';
     if (!files.length) return;
-    const room = 4 - refIds.length;
-    if (files.length > room) toast('参考图最多 4 张', 'err');
+    const room = MAX_REFS - refIds.length;
+    if (files.length > room) toast(`参考图最多 ${MAX_REFS} 张`, 'err');
     const take = files.slice(0, Math.max(0, room));
     if (!take.length) return;
     setUploading(true);
     try {
       for (const f of take) {
         const r = await uploadFile(f);
-        setRefIds((prev) => (prev.length >= 4 ? prev : [...prev, r.id]));
+        setRefIds((prev) => (prev.length >= MAX_REFS ? prev : [...prev, r.id]));
       }
     } catch (err) {
       toast(err instanceof Error ? err.message : '上传失败', 'err');
     } finally {
       setUploading(false);
     }
+  }
+
+  async function onReplaceFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    const target = replaceTargetRef.current;
+    replaceTargetRef.current = null;
+    if (!f || !target) return;
+    setUploading(true);
+    try {
+      const r = await uploadFile(f);
+      setRefIds((prev) => prev.map((x) => (x === target ? r.id : x)));
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '上传失败', 'err');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function applyQuickPrompt(text: string) {
+    setPrompt((p) => {
+      const cur = p.trim();
+      if (!cur) return text;
+      return cur.includes(text) ? cur : `${cur},${text}`;
+    });
+  }
+
+  function saveQuick(next: string[]) {
+    setQuick(next);
+    try { localStorage.setItem(quickKey, JSON.stringify(next)); } catch { /* ignore */ }
   }
 
   async function generate() {
@@ -96,14 +153,13 @@ export default function Images() {
     const timer = setInterval(() => setElapsed((Date.now() - start) / 1000), 100);
     try {
       const body: Record<string, unknown> = { modelId: model.id, prompt: p, n };
-      if ((model.providerType === 'openai' || model.providerType === 'gemini') && size !== 'auto') body.size = size;
-      if (model.providerType === 'openai' && quality !== 'auto') body.quality = quality;
       if (refIds.length) body.inputUploadIds = refIds;
       const r = await api.post<{ images: ImageRecord[] }>('/api/images/generate', body);
       const imgs = r.images ?? [];
       setList((prev) => [...imgs, ...prev]);
       setTotal((t) => t + imgs.length);
-      setPrompt('');
+      // Prompt and reference images stay put on purpose — iterating on the
+      // same inputs is the common case.
       toast(`已生成 ${imgs.length} 张图片`, 'ok');
     } catch (err) {
       toast(err instanceof Error ? err.message : '生成失败', 'err');
@@ -171,17 +227,57 @@ export default function Images() {
               />
             ) : (
               <div className="space-y-4">
-                <Field label="模型">
-                  <Select value={modelId} onChange={(e) => selectModel(e.target.value)}>
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {`${m.displayName || m.modelId} · ${m.providerName}`}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <Field label="模型">
+                      <Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                        {models.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {`${m.displayName || m.modelId} · ${m.providerName}`}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+                  <Field label="数量">
+                    <Select value={String(n)} onChange={(e) => setN(Number(e.target.value))}>
+                      {[1, 2, 3, 4].map((i) => <option key={i} value={i}>{i} 张</option>)}
+                    </Select>
+                  </Field>
+                </div>
 
-                <Field label="提示词">
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-[13px] font-medium text-tx">提示词</span>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setHistOpen((v) => !v)}
+                        className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-tx2 transition-colors hover:bg-bg2 hover:text-tx"
+                      >
+                        <History size={13} />历史提示词
+                      </button>
+                      {histOpen && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setHistOpen(false)} />
+                          <div className="absolute right-0 top-full z-20 mt-1 max-h-72 w-80 max-w-[80vw] overflow-y-auto rounded-lg border border-line bg-bg1 py-1 shadow-lg">
+                            {history.length === 0 ? (
+                              <div className="px-3 py-2.5 text-xs text-tx3">还没有历史提示词</div>
+                            ) : history.map((h) => (
+                              <button
+                                key={h}
+                                type="button"
+                                onClick={() => { setPrompt(h); setHistOpen(false); }}
+                                className="block w-full cursor-pointer px-3 py-2 text-left text-xs leading-relaxed text-tx2 transition-colors hover:bg-bg2 hover:text-tx"
+                              >
+                                <span className="line-clamp-2">{h}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
                   <Textarea
                     rows={3}
                     value={prompt}
@@ -192,58 +288,61 @@ export default function Images() {
                       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); generate(); }
                     }}
                   />
-                </Field>
-
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                  {model?.providerType === 'openai' && (
-                    <>
-                      <Field label="尺寸">
-                        <Select value={size} onChange={(e) => setSize(e.target.value)}>
-                          {OPENAI_SIZES.map((s) => <option key={s} value={s}>{s === 'auto' ? '自动' : s}</option>)}
-                        </Select>
-                      </Field>
-                      <Field label="质量">
-                        <Select value={quality} onChange={(e) => setQuality(e.target.value)}>
-                          {OPENAI_QUALITIES.map((q) => <option key={q} value={q}>{q === 'auto' ? '自动' : q}</option>)}
-                        </Select>
-                      </Field>
-                    </>
-                  )}
-                  {model?.providerType === 'gemini' && (
-                    <Field label="宽高比">
-                      <Select value={size} onChange={(e) => setSize(e.target.value)}>
-                        {GEMINI_RATIOS.map((s) => <option key={s} value={s}>{s === 'auto' ? '自动' : s}</option>)}
-                      </Select>
-                    </Field>
-                  )}
-                  <Field label="数量">
-                    <Select value={String(n)} onChange={(e) => setN(Number(e.target.value))}>
-                      {[1, 2, 3, 4].map((i) => <option key={i} value={i}>{i} 张</option>)}
-                    </Select>
-                  </Field>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {quick.map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        title="点击填入提示词"
+                        onClick={() => applyQuickPrompt(q)}
+                        className="cursor-pointer rounded-full border border-line bg-bg1 px-2.5 py-1 text-xs text-tx2 transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      title="管理快捷提示词"
+                      onClick={() => { setQuickDraft(quick.length ? [...quick] : ['']); setQuickOpen(true); }}
+                      className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-line px-2.5 py-1 text-xs text-tx3 transition-colors hover:border-line2 hover:text-tx"
+                    >
+                      <Settings2 size={12} />管理
+                    </button>
+                  </div>
                 </div>
 
                 <div>
                   <div className="mb-1.5 text-[13px] font-medium text-tx">参考图</div>
                   <div className="flex flex-wrap items-center gap-2">
                     {refIds.map((id) => (
-                      <div key={id} className="relative h-16 w-16 shrink-0">
-                        <img
-                          src={`/api/uploads/${id}/file`}
-                          alt="参考图"
-                          className="h-16 w-16 rounded-md border border-line object-cover"
-                        />
+                      <div key={id} className="group/ref relative h-16 w-16 shrink-0">
+                        <button
+                          type="button"
+                          title="点击更换参考图"
+                          disabled={uploading}
+                          onClick={() => { replaceTargetRef.current = id; replaceFileRef.current?.click(); }}
+                          className="block h-16 w-16 cursor-pointer overflow-hidden rounded-md border border-line transition-colors hover:border-line2"
+                        >
+                          <img
+                            src={`/api/uploads/${id}/file`}
+                            alt="参考图"
+                            className="h-full w-full object-cover"
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center rounded-md bg-black/45 text-[10px] text-white opacity-0 transition-opacity group-hover/ref:opacity-100">
+                            更换
+                          </span>
+                        </button>
                         <button
                           type="button"
                           title="移除"
                           onClick={() => setRefIds((prev) => prev.filter((x) => x !== id))}
-                          className="absolute -right-1.5 -top-1.5 flex h-4.5 w-4.5 cursor-pointer items-center justify-center rounded-full border border-line bg-bg1 text-tx2 shadow-sm transition-colors hover:border-err/50 hover:text-err"
+                          className="absolute -right-1.5 -top-1.5 z-10 flex h-4.5 w-4.5 cursor-pointer items-center justify-center rounded-full border border-line bg-bg1 text-tx2 shadow-sm transition-colors hover:border-err/50 hover:text-err"
                         >
                           <X size={10} />
                         </button>
                       </div>
                     ))}
-                    {refIds.length < 4 && (
+                    {refIds.length < MAX_REFS && (
                       <Button variant="outline" size="sm" disabled={uploading} onClick={() => fileRef.current?.click()}>
                         {uploading ? <Spinner className="h-3.5 w-3.5" /> : <ImagePlus size={14} />}
                         {uploading ? '上传中…' : '添加参考图'}
@@ -253,8 +352,12 @@ export default function Images() {
                       ref={fileRef} type="file" accept="image/*" multiple hidden
                       onChange={onPickFiles}
                     />
+                    <input
+                      ref={replaceFileRef} type="file" accept="image/*" hidden
+                      onChange={onReplaceFile}
+                    />
                   </div>
-                  <div className="mt-1.5 text-xs text-tx3">可选,最多 4 张,作为图像编辑 / 参考输入。</div>
+                  <div className="mt-1.5 text-xs text-tx3">可选,最多 {MAX_REFS} 张,作为图像编辑 / 参考输入;点击缩略图可更换。</div>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
@@ -329,6 +432,47 @@ export default function Images() {
           </section>
         </div>
       </div>
+
+      {/* ---- quick prompt manager ---- */}
+      <Modal open={quickOpen} onClose={() => setQuickOpen(false)} title="管理快捷提示词"
+        desc="常用的提示词片段,点击即可填入。">
+        <div className="space-y-2">
+          {quickDraft.map((q, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Input
+                value={q}
+                maxLength={200}
+                placeholder="输入提示词,例如:去背景"
+                onChange={(e) => setQuickDraft((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+              />
+              <Button
+                variant="ghost" size="icon" title="删除"
+                onClick={() => setQuickDraft((prev) => prev.filter((_, j) => j !== i))}
+              >
+                <Trash2 size={14} />
+              </Button>
+            </div>
+          ))}
+          {quickDraft.length === 0 && (
+            <p className="py-1 text-xs text-tx3">暂无快捷提示词,点击下方按钮添加。</p>
+          )}
+          <Button variant="outline" size="sm" onClick={() => setQuickDraft((prev) => [...prev, ''])}>
+            <Plus size={14} />添加一条
+          </Button>
+        </div>
+        <ModalActions>
+          <Button variant="outline" onClick={() => setQuickOpen(false)}>取消</Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              saveQuick(quickDraft.map((x) => x.trim()).filter(Boolean));
+              setQuickOpen(false);
+            }}
+          >
+            保存
+          </Button>
+        </ModalActions>
+      </Modal>
 
       {/* ---- lightbox ---- */}
       <Modal open={!!lightbox} onClose={() => setLightbox(null)} title="图片详情" wide>
