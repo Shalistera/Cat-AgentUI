@@ -1,6 +1,8 @@
-# Cat-AgentUI — append this block to /etc/caddy/Caddyfile, then reload caddy:
+# Cat-AgentUI — append this block to /etc/caddy/Caddyfile, then restart caddy:
 #   sudo tee -a /etc/caddy/Caddyfile < deploy/caddy-ca.totr.dev.caddy
-#   sudo systemctl reload caddy
+#   sudo systemctl restart caddy
+# (`reload` won't work on this host: the Caddyfile sets `admin off`, and
+# reload needs the admin API.)
 # Behind Cloudflare (orange cloud), same setup as h.totr.dev.
 ca.totr.dev {
 	# Same *.totr.dev CF Origin cert as h.totr.dev — covers this name, valid
