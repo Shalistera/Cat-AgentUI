@@ -217,12 +217,36 @@ export const geminiAdapter: ChatAdapter = {
 
   async listModels(cfg) {
     if (cfg.useVertex) {
-      // Vertex has no lightweight public "list models" endpoint, so the list
-      // is canned — but exercise the credentials first so 测试/拉取 actually
-      // validates the service account instead of always "succeeding".
+      // Credentials are validated either way: a bad service account fails at
+      // the token fetch, before any list can "succeed".
       vertexProjectOf(cfg);
       const token = await getVertexAuth(cfg).getAccessToken();
       if (!token) throw new Error('Gemini: 获取 Vertex 访问令牌失败,请检查服务账号 JSON');
+
+      // The publisher catalog only exists under v1beta1 (v1 404s) and caps
+      // pageSize at 100 — larger values silently return an empty page.
+      const origin = (cfg.baseUrl || 'https://aiplatform.googleapis.com').replace(/\/+$/, '');
+      const names: string[] = [];
+      try {
+        let pageToken = '';
+        do {
+          const url = `${origin}/v1beta1/publishers/google/models?pageSize=100${
+            pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+          const res = await fetch(url, { headers: { ...cfg.extraHeaders, authorization: `Bearer ${token}` } });
+          if (!res.ok) throw new Error(`Gemini ${res.status}: ${await readErrorBody(res)}`);
+          const j: any = await res.json();
+          for (const m of j.publisherModels ?? []) {
+            names.push(String(m.name).replace(/^publishers\/google\/models\//, ''));
+          }
+          pageToken = j.nextPageToken || '';
+        } while (pageToken && names.length < 1000);
+      } catch {
+        // Catalog access can be restricted per project — the credentials are
+        // already proven good, so fall back to a starter list rather than
+        // failing the whole fetch.
+      }
+      const usable = names.filter((id) => !/embedding|tts|live/.test(id));
+      if (usable.length) return usable.map((id) => ({ id }));
       return ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash-image']
         .map((id) => ({ id }));
     }
