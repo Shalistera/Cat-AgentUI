@@ -4,7 +4,7 @@ import {
   History, Settings2, Plus,
 } from 'lucide-react';
 import { useUi, useAuth } from '../store';
-import { api, uploadFile, fmtDuration, fmtTime, fmtTokens } from '../api';
+import { api, ApiError, uploadFile, fmtDuration, fmtTime, fmtTokens } from '../api';
 import { tabAlert } from '../tabAlert';
 import {
   Button, Input, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
@@ -31,7 +31,13 @@ export default function Images() {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
   const fileRef = useRef<HTMLInputElement>(null);
   const replaceFileRef = useRef<HTMLInputElement>(null);
   const replaceTargetRef = useRef<string | null>(null);
@@ -163,18 +169,43 @@ export default function Images() {
     try { localStorage.setItem(quickKey, JSON.stringify(next)); } catch { /* ignore */ }
   }
 
+  // Generation is a server-side background job: the POST returns a jobId
+  // immediately and we poll for the result. A single long-lived request would
+  // be cut off by Cloudflare's ~100s limit while slow models are still working.
   async function generate() {
     const p = prompt.trim();
     if (!p || !model || generating) return;
     setGenerating(true);
+    setGenError(null);
     setElapsed(0);
     const start = Date.now();
     const timer = setInterval(() => setElapsed((Date.now() - start) / 1000), 100);
     try {
       const body: Record<string, unknown> = { modelId: model.id, prompt: p, n };
       if (refIds.length) body.inputUploadIds = refIds;
-      const r = await api.post<{ images: ImageRecord[] }>('/api/images/generate', body);
-      const imgs = r.images ?? [];
+      const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
+
+      let imgs: ImageRecord[] = [];
+      let failures = 0;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2500));
+        if (!aliveRef.current) { clearInterval(timer); return; }
+        let st: { status: string; images?: ImageRecord[]; error?: string };
+        try {
+          st = await api.get<typeof st>(`/api/images/jobs/${jobId}`);
+          failures = 0;
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) {
+            throw new Error('任务已丢失(服务器可能重启过)。若上游已出图,刷新页面后作品库中可能仍能看到。');
+          }
+          // Transient network blips shouldn't kill a minutes-long job.
+          if (++failures >= 5) throw err;
+          continue;
+        }
+        if (st.status === 'done') { imgs = st.images ?? []; break; }
+        if (st.status === 'error') throw new Error(st.error || '生成失败');
+      }
+
       setList((prev) => [...imgs, ...prev]);
       setTotal((t) => t + imgs.length);
       // Prompt and reference images stay put on purpose — iterating on the
@@ -182,11 +213,13 @@ export default function Images() {
       toast(`已生成 ${imgs.length} 张图片`, 'ok');
       tabAlert();
     } catch (err) {
-      toast(err instanceof Error ? err.message : '生成失败', 'err');
+      const msg = err instanceof Error ? err.message : '生成失败';
+      setGenError(msg);
+      toast(msg, 'err');
       tabAlert();
     } finally {
       clearInterval(timer);
-      setGenerating(false);
+      if (aliveRef.current) setGenerating(false);
     }
   }
 
@@ -420,9 +453,15 @@ export default function Images() {
                   </div>
                 </div>
 
+                {genError && (
+                  <div className="whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
+                    生成失败:{genError}
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
                   <p className="text-xs leading-relaxed text-tx3">
-                    部分模型生成需要 1–3 分钟。Cmd / Ctrl + Enter 快速提交。
+                    部分模型生成需要几分钟,请耐心等待;期间可切到其他标签页,完成后标签会有提示。Cmd / Ctrl + Enter 快速提交。
                   </p>
                   <Button variant="primary" disabled={!canGenerate} onClick={generate} className="shrink-0">
                     {generating

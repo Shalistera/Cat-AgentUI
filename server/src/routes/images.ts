@@ -21,6 +21,31 @@ const generateSchema = z.object({
   inputUploadIds: z.array(z.string()).max(4).optional(),
 });
 
+// Generation runs as a background job and the client polls for the result.
+// A synchronous response can't work in production: Cloudflare cuts any
+// request the origin hasn't answered within ~100s, and slow image models
+// (multi-reference gpt-image especially) routinely take minutes.
+const GENERATE_TIMEOUT_MS = 600_000;
+const JOB_TTL_MS = 30 * 60 * 1000;
+
+interface ImageJob {
+  id: string;
+  userId: string;
+  createdAt: number;
+  status: 'running' | 'done' | 'error';
+  images?: SavedImage[];
+  error?: string;
+}
+
+const jobs = new Map<string, ImageJob>();
+
+function cleanupJobs() {
+  const cutoff = Date.now() - JOB_TTL_MS;
+  for (const [id, j] of jobs) {
+    if (j.status !== 'running' && j.createdAt < cutoff) jobs.delete(id);
+  }
+}
+
 const MIME_BY_EXT: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -133,44 +158,64 @@ export async function imageRoutes(app: FastifyInstance) {
       }
     }
 
-    const t0 = Date.now();
-    const signal = AbortSignal.timeout(300_000);
-    let generated;
-    try {
-      generated = await adapter.generateImages(toRuntimeConfig(provider), {
-        model: model.modelId, prompt, size, quality, n, signal, inputImages,
-      });
-    } catch (err) {
-      // Adapter errors are already human-readable — pass through as-is.
-      return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) });
+    const userId = req.user!.id;
+    const job: ImageJob = { id: newId(), userId, createdAt: Date.now(), status: 'running' };
+    jobs.set(job.id, job);
+    cleanupJobs();
+
+    void (async () => {
+      const t0 = Date.now();
+      const signal = AbortSignal.timeout(GENERATE_TIMEOUT_MS);
+      try {
+        const generated = await adapter.generateImages!(toRuntimeConfig(provider), {
+          model: model.modelId, prompt, size, quality, n, signal, inputImages,
+        });
+        const durationMs = Date.now() - t0;
+
+        const saved = generated.map((img) => saveGeneratedImage({
+          userId,
+          providerId: provider.id,
+          model: model.modelId,
+          prompt,
+          size: size ?? null,
+          durationMs,
+          img,
+        }));
+
+        const usage = generated[0]?.usage;
+        recordUsage({
+          userId,
+          providerId: provider.id,
+          providerType: provider.type,
+          model: model.modelId,
+          kind: 'image',
+          images: saved.length,
+          promptTokens: usage?.promptTokens,
+          completionTokens: usage?.completionTokens,
+          totalTokens: usage?.totalTokens,
+          durationMs,
+        });
+
+        job.images = saved;
+        job.status = 'done';
+      } catch (err) {
+        // Adapter errors are already human-readable — pass through as-is.
+        job.error = err instanceof Error ? err.message : String(err);
+        job.status = 'error';
+      }
+    })();
+
+    return { jobId: job.id };
+  });
+
+  app.get('/api/images/jobs/:id', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const job = jobs.get(id);
+    if (!job || job.userId !== req.user!.id) {
+      return reply.code(404).send({ error: '任务不存在(服务可能已重启)' });
     }
-    const durationMs = Date.now() - t0;
-
-    const saved = generated.map((img) => saveGeneratedImage({
-      userId: req.user!.id,
-      providerId: provider.id,
-      model: model.modelId,
-      prompt,
-      size: size ?? null,
-      durationMs,
-      img,
-    }));
-
-    const usage = generated[0]?.usage;
-    recordUsage({
-      userId: req.user!.id,
-      providerId: provider.id,
-      providerType: provider.type,
-      model: model.modelId,
-      kind: 'image',
-      images: saved.length,
-      promptTokens: usage?.promptTokens,
-      completionTokens: usage?.completionTokens,
-      totalTokens: usage?.totalTokens,
-      durationMs,
-    });
-
-    return { images: saved };
+    return { status: job.status, images: job.images, error: job.error };
   });
 
   app.get('/api/images', async (req, reply) => {

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { Agent, setGlobalDispatcher } from 'undici';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
@@ -13,6 +14,12 @@ import { adminRoutes } from './routes/admin.js';
 import { imageRoutes } from './routes/images.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { mcpRoutes } from './routes/mcp.js';
+
+// Slow image gateways can sit for many minutes before sending response
+// headers; undici's default 300s headersTimeout would abort those upstream
+// calls no matter what AbortSignal the route passes. Long thinking pauses in
+// reasoning-model streams hit the same wall via bodyTimeout.
+setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000 }));
 
 async function main() {
   runMigrations();
