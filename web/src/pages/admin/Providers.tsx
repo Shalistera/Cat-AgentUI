@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check, ChevronDown, ChevronUp, Download, FlaskConical, Pencil, Plus, Server, Star, Trash2, X,
+  Check, ChevronDown, ChevronUp, Download, FlaskConical, Pencil, Plus, Server, Star, Trash2, Upload, X,
 } from 'lucide-react';
 import { api } from '../../api';
 import {
@@ -90,6 +90,28 @@ function ProviderModal({ provider, onClose, onSaved }: {
   const [hasKey, setHasKey] = useState(provider?.hasKey ?? false);
   const [hasVertexSa, setHasVertexSa] = useState(provider?.hasVertexSa ?? false);
   const [busy, setBusy] = useState(false);
+  const saFileRef = useRef<HTMLInputElement>(null);
+
+  const vertexMode = type === 'gemini' && useVertex;
+
+  function applySaJson(text: string): boolean {
+    try {
+      const j = JSON.parse(text) as { project_id?: unknown };
+      setVertexSaJson(JSON.stringify(j, null, 2));
+      if (j.project_id && !vertexProject.trim()) setVertexProject(String(j.project_id));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function pickSaFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    const ok = applySaJson(await f.text());
+    toast(ok ? '已读取服务账号 JSON' : '文件不是有效的 JSON', ok ? 'ok' : 'err');
+  }
 
   async function submit() {
     if (busy) return;
@@ -105,7 +127,16 @@ function ProviderModal({ provider, onClose, onSaved }: {
       extraHeaders: pairsToObject(headers),
     };
     if (apiKey) body.apiKey = apiKey;
-    if (vertexSaJson) body.vertexSaJson = vertexSaJson;
+    if (vertexSaJson.trim()) {
+      // Validate here, with a message that says what's wrong — the server
+      // would only answer with a generic 400.
+      try {
+        body.vertexSaJson = JSON.stringify(JSON.parse(vertexSaJson));
+      } catch {
+        toast('Service Account JSON 不是有效的 JSON,请检查是否完整复制(或直接上传文件)', 'err');
+        return;
+      }
+    }
     setBusy(true);
     try {
       if (isEdit) await api.patch(`/api/admin/providers/${provider.id}`, body);
@@ -153,18 +184,20 @@ function ProviderModal({ provider, onClose, onSaved }: {
         <Field label="API 地址" hint="留空使用官方地址,可填任意兼容网关">
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={DEFAULT_URLS[type]} />
         </Field>
-        <Field label="API Key">
-          <div className="flex items-center gap-2">
-            <Input
-              type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-              autoComplete="new-password"
-              placeholder={isEdit && hasKey ? '●●●●●●(已保存,留空保持不变)' : 'sk-…'}
-            />
-            {isEdit && hasKey && (
-              <Button variant="outline" size="sm" className="shrink-0 whitespace-nowrap" onClick={clearKey}>清除 Key</Button>
-            )}
-          </div>
-        </Field>
+        {!vertexMode && (
+          <Field label="API Key">
+            <div className="flex items-center gap-2">
+              <Input
+                type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                autoComplete="new-password"
+                placeholder={isEdit && hasKey ? '●●●●●●(已保存,留空保持不变)' : 'sk-…'}
+              />
+              {isEdit && hasKey && (
+                <Button variant="outline" size="sm" className="shrink-0 whitespace-nowrap" onClick={clearKey}>清除 Key</Button>
+              )}
+            </div>
+          </Field>
+        )}
 
         {type === 'openai' && (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg2/50 px-3 py-2.5">
@@ -179,28 +212,37 @@ function ProviderModal({ provider, onClose, onSaved }: {
         {type === 'gemini' && (
           <>
             <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg2/50 px-3 py-2.5">
-              <div className="text-xs font-medium">使用 Vertex AI</div>
+              <div>
+                <div className="text-xs font-medium">使用 Vertex AI</div>
+                <div className="mt-0.5 text-[11px] text-tx3">使用服务账号鉴权,无需 API Key</div>
+              </div>
               <Toggle checked={useVertex} onChange={setUseVertex} />
             </div>
             {useVertex && (
               <div className="space-y-4 rounded-lg border border-line bg-bg2/30 p-3">
-                <Field label="Vertex 项目 ID">
-                  <Input value={vertexProject} onChange={(e) => setVertexProject(e.target.value)} placeholder="my-gcp-project" />
-                </Field>
-                <Field label="Vertex 区域">
-                  <Input value={vertexLocation} onChange={(e) => setVertexLocation(e.target.value)} placeholder="global" />
-                </Field>
-                <Field label="Service Account JSON" hint="Service Account JSON 完整内容">
+                <Field label="Service Account JSON" hint="可直接上传 .json 文件,或粘贴完整内容">
                   <Textarea
-                    rows={4} value={vertexSaJson} onChange={(e) => setVertexSaJson(e.target.value)}
+                    rows={4} value={vertexSaJson}
+                    onChange={(e) => setVertexSaJson(e.target.value)}
+                    onBlur={() => { if (vertexSaJson.trim()) applySaJson(vertexSaJson); }}
                     className="font-mono text-xs"
                     placeholder={isEdit && hasVertexSa ? '●●●●●●(已保存,留空保持不变)' : '{ "type": "service_account", … }'}
                   />
-                  {isEdit && hasVertexSa && (
-                    <div className="mt-1.5">
+                  <div className="mt-1.5 flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => saFileRef.current?.click()}>
+                      <Upload size={13} />上传 JSON 文件
+                    </Button>
+                    {isEdit && hasVertexSa && (
                       <Button variant="outline" size="sm" onClick={clearSaJson}>清除已保存的 JSON</Button>
-                    </div>
-                  )}
+                    )}
+                  </div>
+                  <input ref={saFileRef} type="file" accept=".json,application/json" hidden onChange={pickSaFile} />
+                </Field>
+                <Field label="Vertex 项目 ID" hint="留空自动使用 JSON 中的 project_id">
+                  <Input value={vertexProject} onChange={(e) => setVertexProject(e.target.value)} placeholder="留空自动读取" />
+                </Field>
+                <Field label="Vertex 区域" hint="留空使用 global">
+                  <Input value={vertexLocation} onChange={(e) => setVertexLocation(e.target.value)} placeholder="global" />
                 </Field>
               </div>
             )}
@@ -628,6 +670,10 @@ function ProviderCard({ provider, reload, onEdit }: {
   const [manualId, setManualId] = useState('');
   const [adding, setAdding] = useState(false);
   const models = provider.models ?? [];
+  // Vertex authenticates with a service account, so "no API key" is its
+  // normal, healthy state — judge it by the credential it actually uses.
+  const usesVertex = provider.type === 'gemini' && provider.useVertex;
+  const hasCred = usesVertex ? provider.hasVertexSa : provider.hasKey;
 
   async function setEnabled(v: boolean) {
     try {
@@ -690,13 +736,16 @@ function ProviderCard({ provider, reload, onEdit }: {
     <div className="overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-line px-4 py-3">
         <ProviderAvatarPicker provider={provider} reload={reload} />
-        <StatusDot tone={!provider.enabled ? 'idle' : provider.hasKey ? 'ok' : 'warn'} />
+        <StatusDot tone={!provider.enabled ? 'idle' : hasCred ? 'ok' : 'warn'} />
         <span className="text-[13px] font-semibold text-tx">{provider.name}</span>
         <Badge>{TYPE_LABELS[provider.type]}</Badge>
+        {usesVertex && <Badge>Vertex</Badge>}
         <span className="min-w-0 max-w-[16rem] flex-1 truncate font-mono text-[11px] text-tx3" title={provider.baseUrl || DEFAULT_URLS[provider.type]}>
           {provider.baseUrl || DEFAULT_URLS[provider.type]}
         </span>
-        <Badge tone={provider.hasKey ? 'ok' : 'err'}>{provider.hasKey ? '已配置 Key' : '未配置 Key'}</Badge>
+        <Badge tone={hasCred ? 'ok' : 'err'}>
+          {usesVertex ? (hasCred ? '已配置凭证' : '未配置凭证') : (hasCred ? '已配置 Key' : '未配置 Key')}
+        </Badge>
         <div className="ml-auto flex items-center gap-1.5">
           <Toggle checked={provider.enabled} onChange={setEnabled} />
           <Button variant="outline" size="sm" onClick={test} disabled={testing}>

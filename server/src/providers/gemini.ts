@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { GoogleAuth } from 'google-auth-library';
 import type {
   AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage,
@@ -14,27 +15,45 @@ function studioOrigin(cfg: ProviderRuntimeConfig): string {
   return o;
 }
 
-// Vertex auth clients cached per provider config; the lib refreshes tokens internally.
+// Vertex auth clients cached per provider config; the lib refreshes tokens
+// internally. Keyed by credential content, not just provider id, so uploading
+// a new service account JSON takes effect without a restart.
 const vertexAuth = new Map<string, GoogleAuth>();
 
 function getVertexAuth(cfg: ProviderRuntimeConfig): GoogleAuth {
-  let auth = vertexAuth.get(cfg.id);
+  if (!cfg.vertexSaJson) throw new Error('Gemini: Vertex AI 需要服务账号 JSON');
+  const key = `${cfg.id}:${createHash('sha256').update(cfg.vertexSaJson).digest('hex').slice(0, 16)}`;
+  let auth = vertexAuth.get(key);
   if (!auth) {
-    if (!cfg.vertexSaJson) throw new Error('Gemini: Vertex AI 需要服务账号 JSON');
     auth = new GoogleAuth({
       credentials: JSON.parse(cfg.vertexSaJson),
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
-    vertexAuth.set(cfg.id, auth);
+    vertexAuth.set(key, auth);
   }
   return auth;
+}
+
+// The GCP project: explicit setting wins, otherwise read project_id straight
+// from the service account JSON — that's where it lives anyway, so most
+// setups never need to type it.
+function vertexProjectOf(cfg: ProviderRuntimeConfig): string {
+  const explicit = cfg.vertexProject?.trim();
+  if (explicit) return explicit;
+  if (cfg.vertexSaJson) {
+    try {
+      const pid = JSON.parse(cfg.vertexSaJson).project_id;
+      if (pid) return String(pid);
+    } catch { /* fall through */ }
+  }
+  throw new Error('Gemini: Vertex AI 需要项目 ID(通常包含在服务账号 JSON 的 project_id 字段中)');
 }
 
 // Resolve URL + auth headers for a model verb ('streamGenerateContent?alt=sse' | 'generateContent').
 async function endpoint(cfg: ProviderRuntimeConfig, model: string, verb: string): Promise<{ url: string; headers: Record<string, string> }> {
   const h: Record<string, string> = { ...cfg.extraHeaders, 'content-type': 'application/json' };
   if (cfg.useVertex) {
-    if (!cfg.vertexProject) throw new Error('Gemini: Vertex AI 需要项目 ID');
+    const project = vertexProjectOf(cfg);
     const location = cfg.vertexLocation || 'global';
     const origin = (cfg.baseUrl || (location === 'global'
       ? 'https://aiplatform.googleapis.com'
@@ -42,7 +61,7 @@ async function endpoint(cfg: ProviderRuntimeConfig, model: string, verb: string)
     const token = await getVertexAuth(cfg).getAccessToken();
     h['authorization'] = `Bearer ${token}`;
     return {
-      url: `${origin}/v1/projects/${cfg.vertexProject}/locations/${location}/publishers/google/models/${model}:${verb}`,
+      url: `${origin}/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:${verb}`,
       headers: h,
     };
   }
@@ -198,6 +217,12 @@ export const geminiAdapter: ChatAdapter = {
 
   async listModels(cfg) {
     if (cfg.useVertex) {
+      // Vertex has no lightweight public "list models" endpoint, so the list
+      // is canned — but exercise the credentials first so 测试/拉取 actually
+      // validates the service account instead of always "succeeding".
+      vertexProjectOf(cfg);
+      const token = await getVertexAuth(cfg).getAccessToken();
+      if (!token) throw new Error('Gemini: 获取 Vertex 访问令牌失败,请检查服务账号 JSON');
       return ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash-image']
         .map((id) => ({ id }));
     }
