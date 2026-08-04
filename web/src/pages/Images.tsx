@@ -27,7 +27,9 @@ export default function Images() {
   const [modelId, setModelId] = useState('');
   const [prompt, setPrompt] = useState('');
   const [n, setN] = useState(1);
-  const [refIds, setRefIds] = useState<string[]>([]);
+  // Fixed reference slots: 图1/图2/图3 are stable positions — uploading or
+  // removing one never shifts the others.
+  const [refSlots, setRefSlots] = useState<(string | null)[]>(Array(MAX_REFS).fill(null));
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -43,9 +45,8 @@ export default function Images() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const replaceFileRef = useRef<HTMLInputElement>(null);
-  const replaceTargetRef = useRef<string | null>(null);
+  const slotFileRef = useRef<HTMLInputElement>(null);
+  const slotTargetRef = useRef<number>(0);
 
   // ---- quick / history prompts ----
   const quickKey = `cat-img-quick:${user?.id ?? 'anon'}`;
@@ -118,18 +119,25 @@ export default function Images() {
       });
   }, []);
 
+  // Bulk entry (drag-drop / paste): fill empty slots in order, positions of
+  // already-filled slots untouched.
   async function addFiles(files: File[]) {
     const imgs = files.filter((f) => f.type.startsWith('image/'));
     if (!imgs.length) return;
-    const room = MAX_REFS - refIds.length;
+    const room = refSlots.filter((s) => !s).length;
+    if (!room) { toast(`参考图最多 ${MAX_REFS} 张`, 'err'); return; }
     if (imgs.length > room) toast(`参考图最多 ${MAX_REFS} 张`, 'err');
-    const take = imgs.slice(0, Math.max(0, room));
-    if (!take.length) return;
     setUploading(true);
     try {
-      for (const f of take) {
+      for (const f of imgs.slice(0, room)) {
         const r = await uploadFile(f);
-        setRefIds((prev) => (prev.length >= MAX_REFS ? prev : [...prev, r.id]));
+        setRefSlots((prev) => {
+          const idx = prev.indexOf(null);
+          if (idx < 0) return prev;
+          const next = [...prev];
+          next[idx] = r.id;
+          return next;
+        });
       }
     } catch (err) {
       toast(err instanceof Error ? err.message : '上传失败', 'err');
@@ -138,22 +146,22 @@ export default function Images() {
     }
   }
 
-  function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = '';
-    void addFiles(files);
+  function openSlotPicker(idx: number) {
+    if (uploading) return;
+    slotTargetRef.current = idx;
+    slotFileRef.current?.click();
   }
 
-  async function onReplaceFile(e: React.ChangeEvent<HTMLInputElement>) {
+  // Fill or replace exactly the slot the user clicked.
+  async function onSlotFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     e.target.value = '';
-    const target = replaceTargetRef.current;
-    replaceTargetRef.current = null;
-    if (!f || !target) return;
+    const idx = slotTargetRef.current;
+    if (!f || !f.type.startsWith('image/')) return;
     setUploading(true);
     try {
       const r = await uploadFile(f);
-      setRefIds((prev) => prev.map((x) => (x === target ? r.id : x)));
+      setRefSlots((prev) => prev.map((x, i) => (i === idx ? r.id : x)));
     } catch (err) {
       toast(err instanceof Error ? err.message : '上传失败', 'err');
     } finally {
@@ -277,6 +285,7 @@ export default function Images() {
     let jobId: string;
     try {
       const body: Record<string, unknown> = { modelId: model.id, prompt: p, n };
+      const refIds = refSlots.filter((x): x is string => !!x);
       if (refIds.length) body.inputUploadIds = refIds;
       ({ jobId } = await api.post<{ jobId: string }>('/api/images/generate', body));
     } catch (err) {
@@ -369,7 +378,7 @@ export default function Images() {
                       </Select>
                     </Field>
                   </div>
-                  <Field label="数量">
+                  <Field label="生成数量">
                     <Select value={String(n)} onChange={(e) => setN(Number(e.target.value))}>
                       {[1, 2, 3, 4].map((i) => <option key={i} value={i}>{i} 张</option>)}
                     </Select>
@@ -453,79 +462,63 @@ export default function Images() {
                       setDragOver(false);
                       void addFiles(Array.from(e.dataTransfer?.files ?? []));
                     }}
-                    onClick={() => {
-                      if (uploading) return;
-                      if (refIds.length >= MAX_REFS) { toast(`参考图最多 ${MAX_REFS} 张`, 'err'); return; }
-                      fileRef.current?.click();
-                    }}
-                    className={`flex min-h-24 cursor-pointer flex-wrap items-center gap-2 rounded-lg border border-dashed p-3 transition-colors ${
-                      dragOver ? 'border-acc bg-acc/5' : 'border-line2 hover:border-tx3'
+                    className={`flex flex-wrap items-start gap-3 rounded-lg border border-dashed p-3 transition-colors ${
+                      dragOver ? 'border-acc bg-acc/5' : 'border-line2'
                     }`}
                   >
-                    {refIds.map((id) => (
-                      <div key={id} className="group/ref relative h-16 w-16 shrink-0">
-                        <button
-                          type="button"
-                          title="点击更换参考图"
-                          disabled={uploading}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            replaceTargetRef.current = id;
-                            replaceFileRef.current?.click();
-                          }}
-                          className="block h-16 w-16 cursor-pointer overflow-hidden rounded-md border border-line transition-colors hover:border-line2"
-                        >
-                          <img
-                            src={`/api/uploads/${id}/file`}
-                            alt="参考图"
-                            className="h-full w-full object-cover"
-                          />
-                          <span className="absolute inset-0 flex items-center justify-center rounded-md bg-black/45 text-[10px] text-white opacity-0 transition-opacity group-hover/ref:opacity-100">
-                            更换
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          title="移除"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRefIds((prev) => prev.filter((x) => x !== id));
-                          }}
-                          className="absolute -right-1.5 -top-1.5 z-10 flex h-4.5 w-4.5 cursor-pointer items-center justify-center rounded-full border border-line bg-bg1 text-tx2 shadow-sm transition-colors hover:border-err/50 hover:text-err"
-                        >
-                          <X size={10} />
-                        </button>
+                    {refSlots.map((id, i) => (
+                      <div key={i} className="flex shrink-0 flex-col items-center gap-1">
+                        {id ? (
+                          <div className="group/ref relative h-20 w-20">
+                            <button
+                              type="button"
+                              title={`点击更换图${i + 1}`}
+                              disabled={uploading}
+                              onClick={() => openSlotPicker(i)}
+                              className="block h-20 w-20 cursor-pointer overflow-hidden rounded-md border border-line transition-colors hover:border-line2"
+                            >
+                              <img
+                                src={`/api/uploads/${id}/file`}
+                                alt={`图${i + 1}`}
+                                className="h-full w-full object-cover"
+                              />
+                              <span className="absolute inset-0 flex items-center justify-center rounded-md bg-black/45 text-[10px] text-white opacity-0 transition-opacity group-hover/ref:opacity-100">
+                                更换
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              title="移除"
+                              onClick={() => setRefSlots((prev) => prev.map((x, j) => (j === i ? null : x)))}
+                              className="absolute -right-1.5 -top-1.5 z-10 flex h-4.5 w-4.5 cursor-pointer items-center justify-center rounded-full border border-line bg-bg1 text-tx2 shadow-sm transition-colors hover:border-err/50 hover:text-err"
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            title={`上传图${i + 1}`}
+                            disabled={uploading}
+                            onClick={() => openSlotPicker(i)}
+                            className="flex h-20 w-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line2 text-tx3 transition-colors hover:border-tx3 hover:text-tx disabled:cursor-default disabled:opacity-60"
+                          >
+                            {uploading ? <Spinner className="h-4 w-4" /> : <ImagePlus size={16} />}
+                          </button>
+                        )}
+                        <span className="text-[11px] tabular-nums text-tx3">图{i + 1}</span>
                       </div>
                     ))}
-                    {uploading && (
-                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-dashed border-line2">
-                        <Spinner className="h-4 w-4" />
-                      </div>
-                    )}
-                    {refIds.length === 0 && !uploading ? (
-                      <div className="flex w-full flex-col items-center gap-1 py-2 text-tx3">
-                        <ImagePlus size={18} />
-                        <span className="text-xs">点击选择,或拖拽 / Ctrl+V 粘贴图片到此处</span>
-                      </div>
-                    ) : refIds.length < MAX_REFS && !uploading ? (
-                      <div
-                        title="添加参考图"
-                        className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-dashed border-line2 text-tx3 transition-colors hover:border-tx3 hover:text-tx"
-                      >
-                        <ImagePlus size={16} />
-                      </div>
-                    ) : null}
+                    <div className="flex min-h-20 min-w-32 flex-1 items-center text-xs leading-relaxed text-tx3">
+                      点击任意空位上传,或拖拽 / Ctrl+V 粘贴图片(依次填入空位)。
+                    </div>
                   </div>
                   <input
-                    ref={fileRef} type="file" accept="image/*" multiple hidden
-                    onChange={onPickFiles}
-                  />
-                  <input
-                    ref={replaceFileRef} type="file" accept="image/*" hidden
-                    onChange={onReplaceFile}
+                    ref={slotFileRef} type="file" accept="image/*" hidden
+                    onChange={onSlotFile}
                   />
                   <div className="mt-1.5 text-xs text-tx3">
-                    可选,最多 {MAX_REFS} 张;支持拖拽、Ctrl+V 粘贴,点击缩略图可更换。
+                    可选,最多 {MAX_REFS} 张;槽位固定,图1 / 图2 / 图3 各自独立,点击已上传的图可原位更换。
                   </div>
                 </div>
 
