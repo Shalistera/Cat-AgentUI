@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, sql } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { config } from '../config.js';
@@ -250,7 +250,8 @@ export async function imageRoutes(app: FastifyInstance) {
   app.get('/api/images/:id/file', async (req, reply) => {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };
-    const row = db.select().from(schema.images).where(eq(schema.images.id, id)).get();
+    const row = db.select({ ...getTableColumns(schema.images), rowid: sql<number>`rowid` })
+      .from(schema.images).where(eq(schema.images.id, id)).get();
     if (!row || (row.userId !== req.user!.id && req.user!.role !== 'admin')) {
       return reply.code(404).send({ error: '图片不存在' });
     }
@@ -259,6 +260,10 @@ export async function imageRoutes(app: FastifyInstance) {
     if (!fs.existsSync(filePath)) return reply.code(404).send({ error: '图片不存在' });
     const ext = path.extname(row.filename).slice(1).toLowerCase();
     reply.header('content-type', MIME_BY_EXT[ext] ?? 'application/octet-stream');
+    // A numbered download name — without this, `<a download>` saves as "file".
+    // The rowid is a stable, monotonically assigned sequence number, and a
+    // Content-Disposition filename outranks the anchor's download attribute.
+    reply.header('content-disposition', `inline; filename="cat-image-${row.rowid}.${ext}"`);
     reply.header('cache-control', 'private, max-age=31536000, immutable');
     return reply.send(fs.createReadStream(filePath));
   });

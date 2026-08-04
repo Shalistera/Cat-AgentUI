@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PanelLeft, ImagePlus, Sparkles, X, Download, Trash2, Image as ImageIcon,
-  History, Settings2, Plus,
+  History, Settings2, Plus, ZoomIn,
 } from 'lucide-react';
 import { useUi, useAuth } from '../store';
 import { api, ApiError, uploadFile, fmtDuration, fmtTime, fmtTokens } from '../api';
@@ -61,6 +61,8 @@ export default function Images() {
   const [galleryLoaded, setGalleryLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [lightbox, setLightbox] = useState<ImageRecord | null>(null);
+  // Which reference slot is open in the zoom preview (index into refSlots).
+  const [refPreview, setRefPreview] = useState<number | null>(null);
 
   const model = models?.find((m) => m.id === modelId) ?? null;
 
@@ -340,7 +342,10 @@ export default function Images() {
   const canGenerate = !!prompt.trim() && !!model && !generating && !uploading;
 
   return (
-    <>
+    // display:contents keeps the flex layout identical while giving the whole
+    // page the `imgs-bump` type scale (every text size +1px, see index.css).
+    // Modals portal to <body>, so they carry the class themselves.
+    <div className="contents imgs-bump">
       <PageHeader
         title="绘图工坊"
         subtitle={total > 0 ? `已生成 ${total.toLocaleString()} 张图片` : '文生图与参考图编辑'}
@@ -469,9 +474,8 @@ export default function Images() {
                         <div key={i} className="group/ref relative h-24 overflow-hidden rounded-lg border border-line sm:h-28">
                           <button
                             type="button"
-                            title={`点击更换图${i + 1}`}
-                            disabled={uploading}
-                            onClick={() => openSlotPicker(i)}
+                            title={`放大查看图${i + 1}`}
+                            onClick={() => setRefPreview(i)}
                             className="block h-full w-full cursor-pointer"
                           >
                             <img
@@ -479,8 +483,8 @@ export default function Images() {
                               alt={`图${i + 1}`}
                               className="h-full w-full object-cover"
                             />
-                            <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11px] text-white opacity-0 transition-opacity group-hover/ref:opacity-100">
-                              更换
+                            <span className="absolute inset-0 flex items-center justify-center gap-1 bg-black/45 text-[11px] text-white opacity-0 transition-opacity group-hover/ref:opacity-100">
+                              <ZoomIn size={13} />查看
                             </span>
                           </button>
                           <span className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[10px] leading-none text-white">
@@ -490,9 +494,9 @@ export default function Images() {
                             type="button"
                             title="移除"
                             onClick={() => setRefSlots((prev) => prev.map((x, j) => (j === i ? null : x)))}
-                            className="absolute right-1 top-1 z-10 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-black/55 text-white/90 transition-colors hover:bg-err"
+                            className="absolute right-1 top-1 z-10 flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-black/70 text-white ring-1 ring-white/70 transition-colors hover:bg-err"
                           >
-                            <X size={11} />
+                            <X size={15} />
                           </button>
                         </div>
                       ) : (
@@ -517,7 +521,7 @@ export default function Images() {
                     onChange={onSlotFile}
                   />
                   <div className="mt-1.5 text-xs text-tx3">
-                    可选;支持拖拽或 Ctrl+V 粘贴,点击已上传的图片可原位更换。
+                    可选;支持拖拽或 Ctrl+V 粘贴,点击已上传的图片可放大查看。
                   </div>
                 </div>
 
@@ -600,9 +604,43 @@ export default function Images() {
         </div>
       </div>
 
+      {/* ---- reference image preview ---- */}
+      <Modal
+        open={refPreview !== null} onClose={() => setRefPreview(null)}
+        title={`参考图${(refPreview ?? 0) + 1}`} wide className="imgs-bump"
+      >
+        {refPreview !== null && refSlots[refPreview] && (
+          <div className="space-y-4">
+            <img
+              src={`/api/uploads/${refSlots[refPreview]}/file`}
+              alt={`图${refPreview + 1}`}
+              className="mx-auto max-h-[62vh] rounded-lg border border-line object-contain"
+            />
+            <ModalActions>
+              <Button
+                variant="outline"
+                disabled={uploading}
+                onClick={() => { const i = refPreview; setRefPreview(null); openSlotPicker(i); }}
+              >
+                <ImagePlus size={14} />更换
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  setRefSlots((prev) => prev.map((x, j) => (j === refPreview ? null : x)));
+                  setRefPreview(null);
+                }}
+              >
+                <Trash2 size={14} />移除
+              </Button>
+            </ModalActions>
+          </div>
+        )}
+      </Modal>
+
       {/* ---- quick prompt manager ---- */}
       <Modal open={quickOpen} onClose={() => setQuickOpen(false)} title="管理快捷提示词"
-        desc="常用的提示词片段,点击即可填入。">
+        desc="常用的提示词片段,点击即可填入。" className="imgs-bump">
         <div className="space-y-2">
           {quickDraft.map((q, i) => (
             <div key={i} className="flex items-center gap-2">
@@ -642,7 +680,7 @@ export default function Images() {
       </Modal>
 
       {/* ---- lightbox ---- */}
-      <Modal open={!!lightbox} onClose={() => setLightbox(null)} title="图片详情" wide>
+      <Modal open={!!lightbox} onClose={() => setLightbox(null)} title="图片详情" wide className="imgs-bump">
         {lightbox && (
           <div className="space-y-4">
             <img
@@ -673,6 +711,6 @@ export default function Images() {
           </div>
         )}
       </Modal>
-    </>
+    </div>
   );
 }

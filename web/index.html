@@ -20,6 +20,19 @@
           }
           if (t === 'dark') document.documentElement.classList.add('dark');
         } catch (e) { /* private mode — fall through to the light default */ }
+
+        // iOS Safari auto-zooms the page when a sub-16px input gains focus,
+        // which wrecks the fit-to-viewport layout and can even trigger a page
+        // reload once zoomed. maximum-scale=1 suppresses only that auto-zoom —
+        // since iOS 10 the user's own pinch zoom ignores it, so accessibility
+        // is intact. Applied per-UA because Android *would* honour it for
+        // pinch zoom, which we don't want to take away.
+        var isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent)
+          || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        if (isIOS) {
+          var vp = document.querySelector('meta[name="viewport"]');
+          if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0');
+        }
       })();
     </script>
   </head>

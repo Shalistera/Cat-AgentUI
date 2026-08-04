@@ -238,6 +238,20 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
   color: var(--color-tx3);
 }
 
+/* ---------- 绘图工坊 type bump ----------
+   Every text size on the images workshop runs 1px larger than the app-wide
+   scale (per user request — the page is used mostly on phones). Scoped
+   overrides beat the Tailwind utilities because these rules are unlayered
+   while utilities live in @layer. Tailwind's text-xs/text-sm line-heights are
+   em-relative, so they track the new sizes automatically. */
+.imgs-bump .text-\[10px\] { font-size: 11px; }
+.imgs-bump .text-\[11px\] { font-size: 12px; }
+.imgs-bump .text-xs { font-size: 13px; }
+.imgs-bump .text-\[13px\] { font-size: 14px; }
+.imgs-bump .text-sm { font-size: 15px; }
+.imgs-bump .text-\[15px\] { font-size: 16px; }
+.imgs-bump .eyebrow { font-size: 12px; }
+
 /* ---------- markdown ---------- */
 .md { line-height: 1.75; word-break: break-word; font-size: 15px; }
 .md > *:first-child { margin-top: 0; }

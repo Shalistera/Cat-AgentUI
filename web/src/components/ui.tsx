@@ -219,8 +219,11 @@ export function EmptyState({ icon, title, hint, action }: {
 }
 
 // ---------- Modal ----------
-export function Modal({ open, onClose, title, desc, children, wide }: {
+export function Modal({ open, onClose, title, desc, children, wide, className = '' }: {
   open: boolean; onClose(): void; title: string; desc?: string; children: ReactNode; wide?: boolean;
+  /** Extra classes on the dialog panel — modals portal to <body>, so page-scoped
+      styling (e.g. the workshop's type bump) must ride in explicitly. */
+  className?: string;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -232,7 +235,7 @@ export function Modal({ open, onClose, title, desc, children, wide }: {
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-[var(--color-scrim)] backdrop-blur-[2px]" onClick={onClose} />
-      <div className={`fade-up relative flex max-h-[88vh] w-full flex-col ${wide ? 'max-w-2xl' : 'max-w-md'} overflow-hidden rounded-xl border border-line bg-bg1 shadow-xl`}>
+      <div className={`fade-up relative flex max-h-[88vh] w-full flex-col ${wide ? 'max-w-2xl' : 'max-w-md'} overflow-hidden rounded-xl border border-line bg-bg1 shadow-xl ${className}`}>
         <div className="flex items-start gap-3 border-b border-line px-5 py-4">
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold tracking-tight text-tx">{title}</h2>
