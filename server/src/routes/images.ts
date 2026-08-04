@@ -162,6 +162,7 @@ export async function imageRoutes(app: FastifyInstance) {
     const job: ImageJob = { id: newId(), userId, createdAt: Date.now(), status: 'running' };
     jobs.set(job.id, job);
     cleanupJobs();
+    console.log(`[img] job ${job.id} start model=${model.modelId} n=${n ?? 1} refs=${inputImages?.length ?? 0}`);
 
     void (async () => {
       const t0 = Date.now();
@@ -198,14 +199,28 @@ export async function imageRoutes(app: FastifyInstance) {
 
         job.images = saved;
         job.status = 'done';
+        console.log(`[img] job ${job.id} done in ${(durationMs / 1000).toFixed(1)}s, ${saved.length} image(s)`);
       } catch (err) {
         // Adapter errors are already human-readable — pass through as-is.
         job.error = err instanceof Error ? err.message : String(err);
         job.status = 'error';
+        console.log(`[img] job ${job.id} error after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${job.error}`);
       }
     })();
 
     return { jobId: job.id };
+  });
+
+  // The client's submit response can get lost in transit (proxy hiccup, page
+  // reload) while the job keeps running here — this lets it re-attach.
+  app.get('/api/images/jobs/active', async (req, reply) => {
+    requireAuth(req, reply);
+    let latest: ImageJob | null = null;
+    for (const j of jobs.values()) {
+      if (j.userId !== req.user!.id || j.status !== 'running') continue;
+      if (!latest || j.createdAt > latest.createdAt) latest = j;
+    }
+    return latest ? { jobId: latest.id, createdAt: latest.createdAt } : {};
   });
 
   app.get('/api/images/jobs/:id', async (req, reply) => {

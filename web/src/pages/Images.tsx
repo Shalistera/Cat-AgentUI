@@ -34,9 +34,14 @@ export default function Images() {
   const [genError, setGenError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const aliveRef = useRef(true);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const jobRef = useRef<string | null>(null);
   useEffect(() => {
     aliveRef.current = true;
-    return () => { aliveRef.current = false; };
+    return () => {
+      aliveRef.current = false;
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
   }, []);
   const fileRef = useRef<HTMLInputElement>(null);
   const replaceFileRef = useRef<HTMLInputElement>(null);
@@ -169,58 +174,129 @@ export default function Images() {
     try { localStorage.setItem(quickKey, JSON.stringify(next)); } catch { /* ignore */ }
   }
 
-  // Generation is a server-side background job: the POST returns a jobId
-  // immediately and we poll for the result. A single long-lived request would
-  // be cut off by Cloudflare's ~100s limit while slow models are still working.
+  function startElapsedTimer(startedAt: number) {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setElapsed((Date.now() - startedAt) / 1000);
+    timerRef.current = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 100);
+  }
+
+  // Last-resort recovery: the job result may have landed in the gallery even
+  // when we lost track of the job itself. Returns how many fresh images were
+  // pulled in.
+  async function recoverFromGallery(sinceTs: number): Promise<number> {
+    try {
+      const r = await api.get<{ images: ImageRecord[]; total: number }>(
+        `/api/images?limit=${PAGE_SIZE}&offset=0`,
+      );
+      const fresh = (r.images ?? []).filter((i) => i.createdAt > sinceTs);
+      if (fresh.length) {
+        setList((prev) => {
+          const have = new Set(prev.map((x) => x.id));
+          return [...fresh.filter((f) => !have.has(f.id)), ...prev];
+        });
+        setTotal((t) => Math.max(t, r.total ?? 0));
+      }
+      return fresh.length;
+    } catch {
+      return 0;
+    }
+  }
+
+  // Poll a server-side job to completion. Tolerates any transient poll
+  // failure for up to 12 minutes (the server gives up at 10), and before
+  // surfacing any error it checks the gallery in case the result arrived
+  // despite us losing the job.
+  async function runJob(jobId: string, startedAt: number) {
+    if (jobRef.current === jobId) return;
+    jobRef.current = jobId;
+    setGenerating(true);
+    startElapsedTimer(startedAt);
+    try {
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2500));
+        if (!aliveRef.current) return;
+        let st: { status: string; images?: ImageRecord[]; error?: string };
+        try {
+          st = await api.get<typeof st>(`/api/images/jobs/${jobId}`);
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) throw new Error('任务状态已丢失(服务器可能重启过)');
+          if (Date.now() - startedAt > 12 * 60_000) throw new Error('等待超时,已放弃');
+          continue;
+        }
+        if (st.status === 'error') throw new Error(st.error || '生成失败');
+        if (st.status === 'done') {
+          const imgs = st.images ?? [];
+          setList((prev) => {
+            const have = new Set(prev.map((x) => x.id));
+            return [...imgs.filter((i) => !have.has(i.id)), ...prev];
+          });
+          setTotal((t) => t + imgs.length);
+          // Prompt and reference images stay put on purpose — iterating on
+          // the same inputs is the common case.
+          toast(`已生成 ${imgs.length} 张图片`, 'ok');
+          tabAlert();
+          return;
+        }
+      }
+    } catch (err) {
+      const recovered = await recoverFromGallery(startedAt);
+      if (recovered > 0) {
+        toast(`已生成 ${recovered} 张图片(已从作品库找回)`, 'ok');
+        tabAlert();
+        return;
+      }
+      const msg = err instanceof Error ? err.message : '生成失败';
+      if (aliveRef.current) setGenError(msg);
+      toast(msg, 'err');
+      tabAlert();
+    } finally {
+      jobRef.current = null;
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      if (aliveRef.current) setGenerating(false);
+    }
+  }
+
+  // Re-attach to a still-running job after a reload / tab switch, so closing
+  // the page mid-generation loses nothing.
+  useEffect(() => {
+    api.get<{ jobId?: string; createdAt?: number }>('/api/images/jobs/active')
+      .then((r) => {
+        if (r.jobId) void runJob(r.jobId, r.createdAt ?? Date.now());
+      })
+      .catch(() => { /* ignore */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function generate() {
     const p = prompt.trim();
     if (!p || !model || generating) return;
     setGenerating(true);
     setGenError(null);
-    setElapsed(0);
     const start = Date.now();
-    const timer = setInterval(() => setElapsed((Date.now() - start) / 1000), 100);
+    startElapsedTimer(start);
+    let jobId: string;
     try {
       const body: Record<string, unknown> = { modelId: model.id, prompt: p, n };
       if (refIds.length) body.inputUploadIds = refIds;
-      const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
-
-      let imgs: ImageRecord[] = [];
-      let failures = 0;
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 2500));
-        if (!aliveRef.current) { clearInterval(timer); return; }
-        let st: { status: string; images?: ImageRecord[]; error?: string };
-        try {
-          st = await api.get<typeof st>(`/api/images/jobs/${jobId}`);
-          failures = 0;
-        } catch (err) {
-          if (err instanceof ApiError && err.status === 404) {
-            throw new Error('任务已丢失(服务器可能重启过)。若上游已出图,刷新页面后作品库中可能仍能看到。');
-          }
-          // Transient network blips shouldn't kill a minutes-long job.
-          if (++failures >= 5) throw err;
-          continue;
-        }
-        if (st.status === 'done') { imgs = st.images ?? []; break; }
-        if (st.status === 'error') throw new Error(st.error || '生成失败');
-      }
-
-      setList((prev) => [...imgs, ...prev]);
-      setTotal((t) => t + imgs.length);
-      // Prompt and reference images stay put on purpose — iterating on the
-      // same inputs is the common case.
-      toast(`已生成 ${imgs.length} 张图片`, 'ok');
-      tabAlert();
+      ({ jobId } = await api.post<{ jobId: string }>('/api/images/generate', body));
     } catch (err) {
+      // The submit response can get lost in transit (e.g. a proxy cutting the
+      // connection) while the server accepted the job — ask it before failing.
+      const active = await api.get<{ jobId?: string; createdAt?: number }>('/api/images/jobs/active')
+        .catch(() => null);
+      if (active?.jobId) {
+        void runJob(active.jobId, active.createdAt ?? start);
+        return;
+      }
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+      setGenerating(false);
       const msg = err instanceof Error ? err.message : '生成失败';
       setGenError(msg);
       toast(msg, 'err');
       tabAlert();
-    } finally {
-      clearInterval(timer);
-      if (aliveRef.current) setGenerating(false);
+      return;
     }
+    void runJob(jobId, start);
   }
 
   async function loadMore() {
