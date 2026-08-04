@@ -462,63 +462,62 @@ export default function Images() {
                       setDragOver(false);
                       void addFiles(Array.from(e.dataTransfer?.files ?? []));
                     }}
-                    className={`flex flex-wrap items-start gap-3 rounded-lg border border-dashed p-3 transition-colors ${
-                      dragOver ? 'border-acc bg-acc/5' : 'border-line2'
-                    }`}
+                    className="grid grid-cols-3 gap-2 sm:gap-3"
                   >
                     {refSlots.map((id, i) => (
-                      <div key={i} className="flex shrink-0 flex-col items-center gap-1">
-                        {id ? (
-                          <div className="group/ref relative h-20 w-20">
-                            <button
-                              type="button"
-                              title={`点击更换图${i + 1}`}
-                              disabled={uploading}
-                              onClick={() => openSlotPicker(i)}
-                              className="block h-20 w-20 cursor-pointer overflow-hidden rounded-md border border-line transition-colors hover:border-line2"
-                            >
-                              <img
-                                src={`/api/uploads/${id}/file`}
-                                alt={`图${i + 1}`}
-                                className="h-full w-full object-cover"
-                              />
-                              <span className="absolute inset-0 flex items-center justify-center rounded-md bg-black/45 text-[10px] text-white opacity-0 transition-opacity group-hover/ref:opacity-100">
-                                更换
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              title="移除"
-                              onClick={() => setRefSlots((prev) => prev.map((x, j) => (j === i ? null : x)))}
-                              className="absolute -right-1.5 -top-1.5 z-10 flex h-4.5 w-4.5 cursor-pointer items-center justify-center rounded-full border border-line bg-bg1 text-tx2 shadow-sm transition-colors hover:border-err/50 hover:text-err"
-                            >
-                              <X size={10} />
-                            </button>
-                          </div>
-                        ) : (
+                      id ? (
+                        <div key={i} className="group/ref relative h-24 overflow-hidden rounded-lg border border-line sm:h-28">
                           <button
                             type="button"
-                            title={`上传图${i + 1}`}
+                            title={`点击更换图${i + 1}`}
                             disabled={uploading}
                             onClick={() => openSlotPicker(i)}
-                            className="flex h-20 w-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line2 text-tx3 transition-colors hover:border-tx3 hover:text-tx disabled:cursor-default disabled:opacity-60"
+                            className="block h-full w-full cursor-pointer"
                           >
-                            {uploading ? <Spinner className="h-4 w-4" /> : <ImagePlus size={16} />}
+                            <img
+                              src={`/api/uploads/${id}/file`}
+                              alt={`图${i + 1}`}
+                              className="h-full w-full object-cover"
+                            />
+                            <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11px] text-white opacity-0 transition-opacity group-hover/ref:opacity-100">
+                              更换
+                            </span>
                           </button>
-                        )}
-                        <span className="text-[11px] tabular-nums text-tx3">图{i + 1}</span>
-                      </div>
+                          <span className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                            图{i + 1}
+                          </span>
+                          <button
+                            type="button"
+                            title="移除"
+                            onClick={() => setRefSlots((prev) => prev.map((x, j) => (j === i ? null : x)))}
+                            className="absolute right-1 top-1 z-10 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full bg-black/55 text-white/90 transition-colors hover:bg-err"
+                          >
+                            <X size={11} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          key={i}
+                          type="button"
+                          title={`上传图${i + 1}`}
+                          disabled={uploading}
+                          onClick={() => openSlotPicker(i)}
+                          className={`flex h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed transition-colors sm:h-28 disabled:cursor-default disabled:opacity-60 ${
+                            dragOver ? 'border-acc bg-acc/5 text-acc' : 'border-line2 text-tx3 hover:border-tx3 hover:text-tx'
+                          }`}
+                        >
+                          {uploading ? <Spinner className="h-4 w-4" /> : <ImagePlus size={17} />}
+                          <span className="text-[11px] tabular-nums">图{i + 1}</span>
+                        </button>
+                      )
                     ))}
-                    <div className="flex min-h-20 min-w-32 flex-1 items-center text-xs leading-relaxed text-tx3">
-                      点击任意空位上传,或拖拽 / Ctrl+V 粘贴图片(依次填入空位)。
-                    </div>
                   </div>
                   <input
                     ref={slotFileRef} type="file" accept="image/*" hidden
                     onChange={onSlotFile}
                   />
                   <div className="mt-1.5 text-xs text-tx3">
-                    可选,最多 {MAX_REFS} 张;槽位固定,图1 / 图2 / 图3 各自独立,点击已上传的图可原位更换。
+                    可选;支持拖拽或 Ctrl+V 粘贴,点击已上传的图片可原位更换。
                   </div>
                 </div>
 
