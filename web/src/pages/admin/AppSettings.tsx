@@ -8,8 +8,9 @@ export default function AppSettings() {
   const [loaded, setLoaded] = useState(false);
   const [brand, setBrand] = useState('');
   const [signupEnabled, setSignupEnabled] = useState(true);
-  // Raw text so the field can be emptied while typing; clamped on save.
+  // Raw text so the fields can be emptied while typing; clamped on save.
   const [retentionDays, setRetentionDays] = useState('0');
+  const [chatRetentionDays, setChatRetentionDays] = useState('0');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -17,6 +18,7 @@ export default function AppSettings() {
       .then((r) => {
         setBrand(r.brand); setSignupEnabled(r.signupEnabled);
         setRetentionDays(String(r.imageRetentionDays ?? 0));
+        setChatRetentionDays(String(r.chatImageRetentionDays ?? 0));
         setLoaded(true);
       })
       .catch((e) => toast(e instanceof Error ? e.message : '加载站点设置失败', 'err'));
@@ -28,14 +30,17 @@ export default function AppSettings() {
     if (!name) { toast('站点名称不能为空', 'err'); return; }
     setBusy(true);
     try {
+      const clampDays = (v: string) => Math.min(3650, Math.max(0, Math.round(Number(v)) || 0));
       const r = await api.put<AppSettingsDto>('/api/admin/settings', {
         brand: name,
         signupEnabled,
-        imageRetentionDays: Math.min(3650, Math.max(0, Math.round(Number(retentionDays)) || 0)),
+        imageRetentionDays: clampDays(retentionDays),
+        chatImageRetentionDays: clampDays(chatRetentionDays),
       });
       setBrand(r.brand);
       setSignupEnabled(r.signupEnabled);
       setRetentionDays(String(r.imageRetentionDays ?? 0));
+      setChatRetentionDays(String(r.chatImageRetentionDays ?? 0));
       toast('已保存', 'ok');
       useAuth.getState().refresh().catch(() => { /* ignore */ });
     } catch (e) {
@@ -65,17 +70,30 @@ export default function AppSettings() {
             <Toggle checked={signupEnabled} onChange={setSignupEnabled} />
           </div>
 
-          <Field
-            label="生成图片保留天数"
-            hint="0 = 永久保留。超过期限的生成图片(含对话中作的图)会被每小时的清理任务连文件一起删除,历史对话里对应的图片将无法再显示。"
-          >
-            <Input
-              type="number" min={0} max={3650} step={1} inputMode="numeric"
-              value={retentionDays}
-              onChange={(e) => setRetentionDays(e.target.value)}
-              placeholder="0"
-            />
-          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label="绘图工坊图片保留天数"
+              hint="0 = 永久保留。只影响绘图工坊生成的图片,每小时清理一次,连文件一起删除。"
+            >
+              <Input
+                type="number" min={0} max={3650} step={1} inputMode="numeric"
+                value={retentionDays}
+                onChange={(e) => setRetentionDays(e.target.value)}
+                placeholder="0"
+              />
+            </Field>
+            <Field
+              label="对话图片保留天数"
+              hint="0 = 永久保留(建议)。只影响对话中作的图;过期后历史对话里对应的图片将无法显示。"
+            >
+              <Input
+                type="number" min={0} max={3650} step={1} inputMode="numeric"
+                value={chatRetentionDays}
+                onChange={(e) => setChatRetentionDays(e.target.value)}
+                placeholder="0"
+              />
+            </Field>
+          </div>
 
           <div className="flex justify-end border-t border-line pt-4">
             <Button variant="primary" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存更改'}</Button>

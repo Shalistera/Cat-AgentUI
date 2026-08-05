@@ -1,23 +1,28 @@
-// Periodic cleanup of generated images past the admin-set retention window.
-// Deliberately conservative: a file that fails to unlink (other than already
-// being gone) keeps its DB row so the next sweep retries, and retention 0
-// means keep forever (the default).
+// Periodic cleanup of generated images past the admin-set retention windows.
+// Workshop images and chat-born images are SEPARATE policies: expiring a
+// gallery entry just trims the gallery, expiring a chat image punches a hole
+// in a conversation — so each source has its own knob and 0 (the default)
+// means keep forever. Deliberately conservative: a file that fails to unlink
+// (other than already being gone) keeps its DB row so the next sweep retries.
 import fs from 'node:fs';
 import path from 'node:path';
-import { eq, lt } from 'drizzle-orm';
+import { and, eq, lt } from 'drizzle-orm';
 import { db, schema, getSetting } from './db/index.js';
 import { config } from './config.js';
 
-export const IMAGE_RETENTION_KEY = 'image_retention_days';
+export const IMAGE_RETENTION_KEY = 'image_retention_days'; // 绘图工坊
+export const CHAT_IMAGE_RETENTION_KEY = 'chat_image_retention_days'; // 对话中作图
 
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
-export function sweepExpiredImages(): number {
-  const days = getSetting<number>(IMAGE_RETENTION_KEY, 0);
+function sweepSource(source: 'workshop' | 'chat', settingKey: string): number {
+  const days = getSetting<number>(settingKey, 0);
   if (!days || days <= 0) return 0;
 
   const cutoff = Date.now() - days * 86_400_000;
-  const rows = db.select().from(schema.images).where(lt(schema.images.createdAt, cutoff)).all();
+  const rows = db.select().from(schema.images)
+    .where(and(eq(schema.images.source, source), lt(schema.images.createdAt, cutoff)))
+    .all();
   let removed = 0;
   for (const row of rows) {
     try {
@@ -31,8 +36,13 @@ export function sweepExpiredImages(): number {
     db.delete(schema.images).where(eq(schema.images.id, row.id)).run();
     removed++;
   }
-  if (removed) console.log(`[retention] removed ${removed} image(s) older than ${days}d`);
+  if (removed) console.log(`[retention] removed ${removed} ${source} image(s) older than ${days}d`);
   return removed;
+}
+
+export function sweepExpiredImages(): number {
+  return sweepSource('workshop', IMAGE_RETENTION_KEY)
+    + sweepSource('chat', CHAT_IMAGE_RETENTION_KEY);
 }
 
 export function startRetentionSweeper() {

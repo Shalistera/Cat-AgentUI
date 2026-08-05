@@ -476,7 +476,7 @@ export async function chatRoutes(app: FastifyInstance) {
         for (const g of generated) {
           const saved = saveGeneratedImage({
             userId: user.id, providerId: provider.id, model: model.modelId,
-            prompt: request, size: null, durationMs: elapsed, img: g,
+            prompt: request, size: null, durationMs: elapsed, img: g, source: 'chat',
           });
           const part: MessagePart = { type: 'image', imageId: saved.id, mime: g.mime };
           parts.push(part);

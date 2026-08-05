@@ -177,8 +177,10 @@ export interface AdminMcpServer {
 export interface AppSettings {
   signupEnabled: boolean;
   brand: string;
-  /** Generated-image retention in days; 0 = keep forever. */
+  /** 绘图工坊 image retention in days; 0 = keep forever. */
   imageRetentionDays: number;
+  /** Chat-born image retention in days; 0 = keep forever. Separate policy. */
+  chatImageRetentionDays: number;
 }
 
 // SSE stream handler callbacks

@@ -69,6 +69,8 @@ export interface SavedImage {
 export function saveGeneratedImage(opts: {
   userId: string; providerId: string; model: string; prompt: string;
   size: string | null; durationMs: number; img: GeneratedImage;
+  /** Birthplace decides which retention policy applies — see schema note. */
+  source: 'workshop' | 'chat';
 }): SavedImage {
   const id = newId();
   const filename = `${id}.${extForMime(opts.img.mime)}`;
@@ -79,6 +81,7 @@ export function saveGeneratedImage(opts: {
     userId: opts.userId,
     providerId: opts.providerId,
     model: opts.model,
+    source: opts.source,
     prompt: opts.prompt,
     size: opts.size,
     filename,
@@ -181,6 +184,7 @@ export async function imageRoutes(app: FastifyInstance) {
           size: size ?? null,
           durationMs,
           img,
+          source: 'workshop',
         }));
 
         const usage = generated[0]?.usage;

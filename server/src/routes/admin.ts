@@ -4,7 +4,7 @@ import { and, asc, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
 import { db, schema, now, getSetting, setSetting } from '../db/index.js';
 import { hashPassword, newId } from '../crypto.js';
 import { requireAdmin, requireAuth } from '../auth.js';
-import { IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
+import { CHAT_IMAGE_RETENTION_KEY, IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
 
 const DAY_MS = 86_400_000;
 
@@ -80,7 +80,8 @@ const patchUserSchema = z.object({
 const settingsSchema = z.object({
   signupEnabled: z.boolean().optional(),
   brand: z.string().min(1).max(64).optional(),
-  imageRetentionDays: z.number().int().min(0).max(3650).optional(), // 0 = keep forever
+  imageRetentionDays: z.number().int().min(0).max(3650).optional(), // 工坊图,0 = keep forever
+  chatImageRetentionDays: z.number().int().min(0).max(3650).optional(), // 对话图,0 = keep forever
 });
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -224,6 +225,7 @@ export async function adminRoutes(app: FastifyInstance) {
     signupEnabled: getSetting('signup_enabled', true),
     brand: getSetting('brand', 'Cat-AgentUI'),
     imageRetentionDays: getSetting(IMAGE_RETENTION_KEY, 0),
+    chatImageRetentionDays: getSetting(CHAT_IMAGE_RETENTION_KEY, 0),
   });
 
   app.get('/api/admin/settings', async (req, reply) => {
@@ -237,8 +239,9 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     if (body.data.signupEnabled !== undefined) setSetting('signup_enabled', body.data.signupEnabled);
     if (body.data.brand !== undefined) setSetting('brand', body.data.brand);
-    if (body.data.imageRetentionDays !== undefined) {
-      setSetting(IMAGE_RETENTION_KEY, body.data.imageRetentionDays);
+    if (body.data.imageRetentionDays !== undefined) setSetting(IMAGE_RETENTION_KEY, body.data.imageRetentionDays);
+    if (body.data.chatImageRetentionDays !== undefined) setSetting(CHAT_IMAGE_RETENTION_KEY, body.data.chatImageRetentionDays);
+    if (body.data.imageRetentionDays !== undefined || body.data.chatImageRetentionDays !== undefined) {
       // A shortened window should take effect now, not at the next hourly tick.
       sweepExpiredImages();
     }

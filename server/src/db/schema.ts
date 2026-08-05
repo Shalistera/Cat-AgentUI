@@ -142,6 +142,10 @@ export const images = sqliteTable('images', {
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   providerId: text('provider_id'),
   model: text('model'),
+  // Where the image was born: 'workshop' (绘图工坊) or 'chat' (对话中作图).
+  // The two carry separate retention policies — a chat image disappearing
+  // breaks a conversation, a workshop image expiring just trims the gallery.
+  source: text('source').notNull().default('workshop'),
   prompt: text('prompt').notNull(),
   size: text('size'),
   filename: text('filename').notNull(),
