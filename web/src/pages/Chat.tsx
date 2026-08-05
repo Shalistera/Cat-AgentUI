@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowDown, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
-import { useAuth, useChats, useMcp, useModels, useUi } from '../store';
+import { searchPrefKey, useAuth, useChats, useMcp, useModels, useUi } from '../store';
 import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
@@ -37,6 +37,7 @@ export default function Chat() {
   const modelsLoaded = useModels((s) => s.loaded);
   const loadModels = useModels((s) => s.load);
   const loadMcp = useMcp((s) => s.load);
+  const mcpServers = useMcp((s) => s.servers);
   const chatsStore = useChats();
 
   const [chat, setChat] = useState<ChatDetail | null>(null);
@@ -98,6 +99,16 @@ export default function Chat() {
       });
     return () => { cancelled = true; };
   }, [routeId, nav]);
+
+  // New chats start with 联网搜索 on (when the admin designated a search server)
+  // unless this user switched it off last time. Loaded chats keep their own
+  // saved selection — this only fills the blank pre-chat state.
+  useEffect(() => {
+    if (routeId || chat) return;
+    const search = mcpServers.find((s) => s.isSearch && s.enabled);
+    if (!search || localStorage.getItem(searchPrefKey(user?.id)) === '0') return;
+    setMcpSelected((prev) => (prev.includes(search.id) ? prev : [...prev, search.id]));
+  }, [routeId, chat, mcpServers, user?.id]);
 
   // auto scroll
   useEffect(() => {

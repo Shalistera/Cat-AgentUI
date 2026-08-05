@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
-import { db, schema, now } from '../db/index.js';
+import { db, schema, now, getSetting, setSetting } from '../db/index.js';
 import { newId, encryptSecret, decryptSecret } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { invalidateServer, testServer } from '../mcp/manager.js';
@@ -42,6 +42,15 @@ const serverBodySchema = z.object({
 
 type ServerRow = typeof schema.mcpServers.$inferSelect;
 
+// The admin designates ONE server as the web-search provider. The composer
+// shows it as a dedicated 联网搜索 toggle instead of an entry in the generic
+// tools menu, and chats.ts adds a system hint so the model searches on demand.
+export const SEARCH_SETTING_KEY = 'searchMcpServerId';
+
+export function getSearchServerId(): string | null {
+  return getSetting<string | null>(SEARCH_SETTING_KEY, null);
+}
+
 function getServerRow(id: string): ServerRow | undefined {
   return db.select().from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).get();
 }
@@ -57,6 +66,7 @@ export async function mcpRoutes(app: FastifyInstance) {
   // Regular users: safe listing only — no command/args/env/url/headers leakage.
   app.get('/api/mcp/servers', async (req, reply) => {
     requireAuth(req, reply);
+    const searchId = getSearchServerId();
     const rows = db.select().from(schema.mcpServers).all();
     return rows.map((r) => {
       const tools = parseJson<{ name: string; description: string }[]>(r.toolsCache, []);
@@ -68,6 +78,7 @@ export async function mcpRoutes(app: FastifyInstance) {
         lastStatus: r.lastStatus,
         toolCount: tools.length,
         tools,
+        isSearch: r.id === searchId,
       };
     });
   });
@@ -76,9 +87,11 @@ export async function mcpRoutes(app: FastifyInstance) {
   // only hasEnv/hasHeaders and the key names.
   app.get('/api/admin/mcp', async (req, reply) => {
     requireAdmin(req, reply);
+    const searchId = getSearchServerId();
     const rows = db.select().from(schema.mcpServers).all();
     return rows.map((r) => ({
       id: r.id,
+      isSearch: r.id === searchId,
       name: r.name,
       transport: r.transport,
       command: r.command,
@@ -161,6 +174,20 @@ export async function mcpRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'MCP 服务器不存在' });
     await invalidateServer(id);
     db.delete(schema.mcpServers).where(eq(schema.mcpServers.id, id)).run();
+    if (getSearchServerId() === id) setSetting(SEARCH_SETTING_KEY, null);
+    return { ok: true };
+  });
+
+  // Designate (or clear) the web-search server.
+  app.put('/api/admin/mcp/search', async (req, reply) => {
+    requireAdmin(req, reply);
+    const body = z.object({ serverId: z.string().max(64).nullable() }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const { serverId } = body.data;
+    if (serverId !== null && !getServerRow(serverId)) {
+      return reply.code(404).send({ error: 'MCP 服务器不存在' });
+    }
+    setSetting(SEARCH_SETTING_KEY, serverId);
     return { ok: true };
   });
 

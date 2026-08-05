@@ -12,7 +12,7 @@ export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
-  | { type: 'tool_call'; id: string; name: string; args: string }
+  | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean };
 
 export interface Message {
@@ -65,6 +65,8 @@ export interface McpServerInfo {
   id: string; name: string; transport: 'stdio' | 'http' | 'sse';
   enabled: boolean; lastStatus: 'ok' | 'error' | null; toolCount: number;
   tools: { name: string; description: string }[];
+  /** Admin-designated web-search provider — surfaces as the 联网搜索 toggle. */
+  isSearch: boolean;
 }
 
 export interface ImageModel {
@@ -164,7 +166,7 @@ export interface AdminProvider {
 
 // env/headers 为敏感信息,后端只返回是否已配置及键名,不返回值。
 export interface AdminMcpServer {
-  id: string; name: string; transport: 'stdio' | 'http' | 'sse';
+  id: string; isSearch: boolean; name: string; transport: 'stdio' | 'http' | 'sse';
   command: string | null; args: string[]; url: string | null;
   hasEnv: boolean; hasHeaders: boolean;
   envKeys: string[]; headerKeys: string[];

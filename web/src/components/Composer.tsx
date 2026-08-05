@@ -4,10 +4,10 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowLeft, ArrowUp, Check, ChevronDown, Gauge, Image as ImageIcon,
+  ArrowLeft, ArrowUp, Check, ChevronDown, Gauge, Globe, Image as ImageIcon,
   Loader2, Plus, Search, Settings2, Square, Wrench, X,
 } from 'lucide-react';
-import { useMcp, useModels } from '../store';
+import { searchPrefKey, useAuth, useMcp, useModels } from '../store';
 import { uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, ReasoningSlider } from './ReasoningSlider';
@@ -125,7 +125,23 @@ export function Composer(props: ComposerProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const models = useModels((s) => s.models);
+  const user = useAuth((s) => s.user);
   const mcpServers = useMcp((s) => s.servers).filter((s) => s.enabled);
+  // The search server gets its own toggle; the generic tools menu holds the rest.
+  const searchServer = mcpServers.find((s) => s.isSearch) ?? null;
+  const toolServers = mcpServers.filter((s) => !s.isSearch);
+  const searchOn = !!searchServer && props.mcpSelected.includes(searchServer.id);
+  const toolCount = props.mcpSelected.filter((id) => id !== searchServer?.id).length;
+
+  function toggleSearch() {
+    if (!searchServer) return;
+    const next = searchOn
+      ? props.mcpSelected.filter((x) => x !== searchServer.id)
+      : [...props.mcpSelected, searchServer.id];
+    // Remembered per user so new chats keep the last choice.
+    try { localStorage.setItem(searchPrefKey(user?.id), searchOn ? '0' : '1'); } catch { /* ignore */ }
+    props.onMcpChange(next);
+  }
 
   useEffect(() => {
     const ta = taRef.current;
@@ -298,17 +314,31 @@ export function Composer(props: ComposerProps) {
             <Plus size={15} />
           </button>
 
-          {mcpServers.length > 0 && model?.tools && !imageMode && (
+          {searchServer && model?.tools && !imageMode && (
+            <button
+              aria-pressed={searchOn}
+              className={`${toolBtn} ${searchOn ? 'border-acc/40 bg-acc/10 text-acc hover:border-acc/40 hover:bg-acc/10 hover:text-acc' : ''}`}
+              title={searchOn
+                ? `联网搜索已开启(${searchServer.name}):模型会在需要时自行搜索,点击关闭`
+                : '开启联网搜索:模型将在需要时自行决定是否搜索'}
+              onClick={toggleSearch}
+            >
+              <Globe size={13} />
+              联网
+            </button>
+          )}
+
+          {toolServers.length > 0 && model?.tools && !imageMode && (
             <Popover open={mcpOpen} setOpen={setMcpOpen} trigger={
-              <button className={`${toolBtn} ${props.mcpSelected.length ? 'border-acc/40 bg-acc/10 text-acc hover:border-acc/40 hover:bg-acc/10 hover:text-acc' : ''}`} title="MCP 工具">
+              <button className={`${toolBtn} ${toolCount ? 'border-acc/40 bg-acc/10 text-acc hover:border-acc/40 hover:bg-acc/10 hover:text-acc' : ''}`} title="MCP 工具">
                 <Wrench size={13} />
                 工具
-                {props.mcpSelected.length > 0 && <span className="font-semibold tabular-nums">{props.mcpSelected.length}</span>}
+                {toolCount > 0 && <span className="font-semibold tabular-nums">{toolCount}</span>}
               </button>
             }>
               {groupHead('MCP 工具服务器')}
               <div className="max-h-72 overflow-y-auto">
-                {mcpServers.map((s) => (
+                {toolServers.map((s) => (
                   <div key={s.id} className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-bg2">
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[13px] font-medium text-tx">{s.name}</div>

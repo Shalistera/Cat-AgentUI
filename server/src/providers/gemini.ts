@@ -106,7 +106,12 @@ function toContents(messages: AdapterMessage[]): any[] {
         } else if (p.type === 'tool_call') {
           let args: any = {};
           try { args = JSON.parse(p.args || '{}'); } catch { /* keep {} */ }
-          modelParts.push({ functionCall: { name: p.name, args } });
+          // Gemini 3 refuses replayed functionCalls without their original
+          // thought_signature — echo it exactly as it arrived.
+          modelParts.push({
+            functionCall: { name: p.name, args },
+            ...(p.sig ? { thoughtSignature: p.sig } : {}),
+          });
         }
         // reasoning parts are skipped
       }
@@ -202,6 +207,7 @@ export const geminiAdapter: ChatAdapter = {
             id: `fc_${callCounter++}`,
             name: part.functionCall.name,
             args: JSON.stringify(part.functionCall.args ?? {}),
+            sig: typeof part.thoughtSignature === 'string' ? part.thoughtSignature : undefined,
           };
         }
       }

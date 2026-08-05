@@ -120,6 +120,9 @@ interface McpState {
   load(force?: boolean): Promise<void>;
 }
 
+/** Remembered 联网搜索 toggle preference; '0' = user turned it off. */
+export const searchPrefKey = (userId?: string) => `cat-search-on:${userId ?? 'anon'}`;
+
 export const useMcp = create<McpState>((set, get) => ({
   servers: [],
   loaded: false,

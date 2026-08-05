@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Pencil, Plus, PlugZap, Server, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Globe, Pencil, Plus, PlugZap, Server, Trash2, X } from 'lucide-react';
 import { api } from '../../api';
 import {
   Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select, Spinner, Textarea,
@@ -210,6 +210,14 @@ function ServerCard({ server, reload, onEdit }: {
     }
   }
 
+  async function setSearch(v: boolean) {
+    try {
+      await api.put('/api/admin/mcp/search', { serverId: v ? server.id : null });
+      toast(v ? '已设为联网搜索源,输入框会出现「联网」开关' : '已取消联网搜索源', 'ok');
+      await reload();
+    } catch (e) { toast(errMsg(e), 'err'); }
+  }
+
   async function remove() {
     if (!(await confirmDialog('删除服务器', `确定删除「${server.name}」?`))) return;
     try {
@@ -229,6 +237,15 @@ function ServerCard({ server, reload, onEdit }: {
           {server.lastStatus === 'ok' ? '连接正常' : server.lastStatus === 'error' ? '连接异常' : '未测试'}
         </Badge>
         <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            variant={server.isSearch ? 'primary' : 'ghost'} size="sm"
+            title={server.isSearch
+              ? '当前的联网搜索源,点击取消'
+              : '设为联网搜索源:用户输入框会出现「联网」开关,模型按需调用该服务器搜索'}
+            onClick={() => setSearch(!server.isSearch)}
+          >
+            <Globe size={13} />{server.isSearch ? '搜索源' : '设为搜索源'}
+          </Button>
           <Toggle checked={server.enabled} onChange={setEnabled} />
           <Button variant="outline" size="sm" onClick={test} disabled={testing}>
             {testing ? <Spinner className="h-3.5 w-3.5" /> : <PlugZap size={13} />}测试连接

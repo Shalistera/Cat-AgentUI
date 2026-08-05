@@ -7,6 +7,7 @@ import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { getToolsForServers, callTool } from '../mcp/manager.js';
+import { getSearchServerId } from './mcp.js';
 import { readUploadBase64 } from './uploads.js';
 import { readImageBase64, saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
@@ -87,7 +88,7 @@ function toAdapterParts(parts: MessagePart[], ownerId: string, includeImages: bo
         : null;
       if (img) out.push({ type: 'image', mime: img.mime, dataBase64: img.dataBase64 });
     } else if (p.type === 'tool_call') {
-      out.push({ type: 'tool_call', id: p.id, name: p.name, args: p.args });
+      out.push({ type: 'tool_call', id: p.id, name: p.name, args: p.args, sig: p.sig });
     } else if (p.type === 'tool_result') {
       // empty strings are rejected by some providers (Anthropic: "text content blocks must be non-empty")
       out.push({
@@ -227,6 +228,12 @@ const streamBodySchema = z.object({
 const activeStreams = new Map<string, number>();
 
 const TITLE_PROMPT = '请为上面这段对话生成一个简短的标题(不超过16个字),直接输出标题文本,不要任何引号、句号或解释。';
+
+// Injected when the admin-designated search MCP rides on the request. There is
+// deliberately no "search now" button: like the first-party ChatGPT/Claude/
+// Gemini panels, the tools are simply present and the model decides per
+// question whether calling them is worth it.
+const SEARCH_HINT = '你可以使用联网搜索工具。当问题涉及时效性信息、近期事件、具体数据或你不确定的事实时,先搜索再回答;闲聊、常识或纯创作类请求无需搜索。基于搜索结果回答时,请在文末列出所引用的来源链接。';
 
 export async function chatRoutes(app: FastifyInstance) {
   app.get('/api/chats', async (req, reply) => {
@@ -388,6 +395,13 @@ export async function chatRoutes(app: FastifyInstance) {
       toolErrors = r.errors;
     }
 
+    // When the designated search server actually contributed tools, teach the
+    // model to search on demand instead of on every message.
+    const searchServerId = getSearchServerId();
+    const searchActive = !!toolDefs && !!searchServerId && mcpServerIds.includes(searchServerId);
+    const systemPrompt = [chat.systemPrompt, searchActive ? SEARCH_HINT : null]
+      .filter(Boolean).join('\n\n') || undefined;
+
     // --- start streaming ---
     // Re-check the cap here: the MCP tool fetch above yields, so several requests
     // can pass the early check before any of them registers.
@@ -487,7 +501,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
           for await (const ev of adapter.streamChat(cfg, {
             model: model.modelId,
-            system: chat.systemPrompt || undefined,
+            system: systemPrompt,
             messages,
             tools: toolDefs,
             temperature: chat.temperature ?? undefined,
@@ -504,7 +518,7 @@ export async function chatRoutes(app: FastifyInstance) {
               appendText(parts, 'reasoning', ev.text);
               sse.send('reasoning', { text: ev.text });
             } else if (ev.type === 'tool_call') {
-              parts.push({ type: 'tool_call', id: ev.id, name: ev.name, args: ev.args });
+              parts.push({ type: 'tool_call', id: ev.id, name: ev.name, args: ev.args, sig: ev.sig });
               pendingCalls.push(ev);
               sse.send('tool_call', { id: ev.id, name: ev.name, args: ev.args });
             } else if (ev.type === 'usage') {

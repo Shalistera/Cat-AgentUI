@@ -7,7 +7,9 @@ export type MessagePart =
   | { type: 'reasoning'; text: string }
   // user attachment (uploadId) or model-generated image (imageId → images table)
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
-  | { type: 'tool_call'; id: string; name: string; args: string } // args = JSON string
+  // sig: opaque per-call signature some vendors (Gemini 3 thought_signature)
+  // require to be echoed verbatim when the call is replayed as history.
+  | { type: 'tool_call'; id: string; name: string; args: string; sig?: string } // args = JSON string
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean };
 
 export type Role = 'user' | 'assistant';
@@ -50,6 +52,7 @@ export interface AdapterMessagePart {
   id?: string; // tool_call id
   name?: string;
   args?: string;
+  sig?: string; // vendor thought signature riding on a tool_call
   toolCallId?: string;
   result?: string;
   isError?: boolean;
@@ -81,7 +84,7 @@ export interface ChatRequest {
 export type AdapterEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  | { type: 'tool_call'; id: string; name: string; args: string }
+  | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'usage'; usage: UsageInfo }
   | { type: 'stop'; reason: 'stop' | 'tool_calls' | 'length' | 'other' };
 
