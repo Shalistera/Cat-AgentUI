@@ -7,6 +7,7 @@ import Users from './Users';
 import Providers from './Providers';
 import Mcp from './Mcp';
 import AppSettings from './AppSettings';
+import Import from './Import';
 
 const tabs: { to: string; label: string; end?: boolean }[] = [
   { to: '/admin', label: '总览', end: true },
@@ -14,6 +15,7 @@ const tabs: { to: string; label: string; end?: boolean }[] = [
   { to: '/admin/providers', label: '模型服务' },
   { to: '/admin/mcp', label: 'MCP' },
   { to: '/admin/settings', label: '站点设置' },
+  { to: '/admin/import', label: '数据迁移' },
 ];
 
 export default function Admin() {
@@ -57,6 +59,7 @@ export default function Admin() {
           <Route path="providers" element={<Providers />} />
           <Route path="mcp" element={<Mcp />} />
           <Route path="settings" element={<AppSettings />} />
+          <Route path="import" element={<Import />} />
         </Routes>
       </div>
     </>

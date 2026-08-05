@@ -75,6 +75,11 @@ node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即
 
 ### 从 Open WebUI 迁移
 
+**方式一(推荐):管理后台 → 数据迁移**,上传 webui.db 即可,支持试运行预览、可选填写服务器上的
+Open WebUI data 目录来搬运附件图片。
+
+**方式二:命令行**
+
 ```bash
 # 先停掉 Open WebUI,然后:
 npm run db:import-openwebui -w server -- \

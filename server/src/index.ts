@@ -15,6 +15,7 @@ import { imageRoutes } from './routes/images.js';
 import { pptRoutes } from './routes/ppt.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { mcpRoutes } from './routes/mcp.js';
+import { importRoutes } from './routes/import.js';
 import { startRetentionSweeper } from './retention.js';
 
 // Slow image gateways can sit for many minutes before sending response
@@ -56,6 +57,7 @@ async function main() {
   await app.register(pptRoutes);
   await app.register(uploadRoutes);
   await app.register(mcpRoutes);
+  await app.register(importRoutes);
 
   // static SPA
   const webDist = path.join(repoRoot, 'web', 'dist');
