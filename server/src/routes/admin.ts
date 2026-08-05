@@ -4,6 +4,7 @@ import { and, asc, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
 import { db, schema, now, getSetting, setSetting } from '../db/index.js';
 import { hashPassword, newId } from '../crypto.js';
 import { requireAdmin, requireAuth } from '../auth.js';
+import { IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
 
 const DAY_MS = 86_400_000;
 
@@ -79,6 +80,7 @@ const patchUserSchema = z.object({
 const settingsSchema = z.object({
   signupEnabled: z.boolean().optional(),
   brand: z.string().min(1).max(64).optional(),
+  imageRetentionDays: z.number().int().min(0).max(3650).optional(), // 0 = keep forever
 });
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -218,12 +220,15 @@ export async function adminRoutes(app: FastifyInstance) {
     return { days, byDay, byModel, totals };
   });
 
+  const settingsView = () => ({
+    signupEnabled: getSetting('signup_enabled', true),
+    brand: getSetting('brand', 'Cat-AgentUI'),
+    imageRetentionDays: getSetting(IMAGE_RETENTION_KEY, 0),
+  });
+
   app.get('/api/admin/settings', async (req, reply) => {
     requireAdmin(req, reply);
-    return {
-      signupEnabled: getSetting('signup_enabled', true),
-      brand: getSetting('brand', 'Cat-AgentUI'),
-    };
+    return settingsView();
   });
 
   app.put('/api/admin/settings', async (req, reply) => {
@@ -232,10 +237,12 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     if (body.data.signupEnabled !== undefined) setSetting('signup_enabled', body.data.signupEnabled);
     if (body.data.brand !== undefined) setSetting('brand', body.data.brand);
-    return {
-      signupEnabled: getSetting('signup_enabled', true),
-      brand: getSetting('brand', 'Cat-AgentUI'),
-    };
+    if (body.data.imageRetentionDays !== undefined) {
+      setSetting(IMAGE_RETENTION_KEY, body.data.imageRetentionDays);
+      // A shortened window should take effect now, not at the next hourly tick.
+      sweepExpiredImages();
+    }
+    return settingsView();
   });
 
   app.get('/api/usage/me', async (req, reply) => {

@@ -174,7 +174,12 @@ export interface AdminMcpServer {
   toolsCache?: { name: string; description: string }[];
 }
 
-export interface AppSettings { signupEnabled: boolean; brand: string }
+export interface AppSettings {
+  signupEnabled: boolean;
+  brand: string;
+  /** Generated-image retention in days; 0 = keep forever. */
+  imageRetentionDays: number;
+}
 
 // SSE stream handler callbacks
 export interface StreamHandlers {

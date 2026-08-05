@@ -8,11 +8,17 @@ export default function AppSettings() {
   const [loaded, setLoaded] = useState(false);
   const [brand, setBrand] = useState('');
   const [signupEnabled, setSignupEnabled] = useState(true);
+  // Raw text so the field can be emptied while typing; clamped on save.
+  const [retentionDays, setRetentionDays] = useState('0');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     api.get<AppSettingsDto>('/api/admin/settings')
-      .then((r) => { setBrand(r.brand); setSignupEnabled(r.signupEnabled); setLoaded(true); })
+      .then((r) => {
+        setBrand(r.brand); setSignupEnabled(r.signupEnabled);
+        setRetentionDays(String(r.imageRetentionDays ?? 0));
+        setLoaded(true);
+      })
       .catch((e) => toast(e instanceof Error ? e.message : '加载站点设置失败', 'err'));
   }, []);
 
@@ -22,9 +28,14 @@ export default function AppSettings() {
     if (!name) { toast('站点名称不能为空', 'err'); return; }
     setBusy(true);
     try {
-      const r = await api.put<AppSettingsDto>('/api/admin/settings', { brand: name, signupEnabled });
+      const r = await api.put<AppSettingsDto>('/api/admin/settings', {
+        brand: name,
+        signupEnabled,
+        imageRetentionDays: Math.min(3650, Math.max(0, Math.round(Number(retentionDays)) || 0)),
+      });
       setBrand(r.brand);
       setSignupEnabled(r.signupEnabled);
+      setRetentionDays(String(r.imageRetentionDays ?? 0));
       toast('已保存', 'ok');
       useAuth.getState().refresh().catch(() => { /* ignore */ });
     } catch (e) {
@@ -53,6 +64,18 @@ export default function AppSettings() {
             </div>
             <Toggle checked={signupEnabled} onChange={setSignupEnabled} />
           </div>
+
+          <Field
+            label="生成图片保留天数"
+            hint="0 = 永久保留。超过期限的生成图片(含对话中作的图)会被每小时的清理任务连文件一起删除,历史对话里对应的图片将无法再显示。"
+          >
+            <Input
+              type="number" min={0} max={3650} step={1} inputMode="numeric"
+              value={retentionDays}
+              onChange={(e) => setRetentionDays(e.target.value)}
+              placeholder="0"
+            />
+          </Field>
 
           <div className="flex justify-end border-t border-line pt-4">
             <Button variant="primary" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存更改'}</Button>

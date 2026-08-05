@@ -15,6 +15,7 @@ import { imageRoutes } from './routes/images.js';
 import { pptRoutes } from './routes/ppt.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { mcpRoutes } from './routes/mcp.js';
+import { startRetentionSweeper } from './retention.js';
 
 // Slow image gateways can sit for many minutes before sending response
 // headers; undici's default 300s headersTimeout would abort those upstream
@@ -84,6 +85,7 @@ async function main() {
 
   await app.listen({ port: config.port, host: config.host });
   console.log(`🐈‍⬛ Cat-AgentUI listening on http://${config.host}:${config.port}`);
+  startRetentionSweeper();
 
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     process.on(sig, async () => {
