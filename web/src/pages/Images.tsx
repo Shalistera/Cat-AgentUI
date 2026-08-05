@@ -612,7 +612,7 @@ export default function Images() {
             <img
               src={`/api/uploads/${refSlots[refPreview]}/file`}
               alt={`图${refPreview + 1}`}
-              className="mx-auto max-h-[62vh] rounded-lg border border-line object-contain"
+              className="mx-auto max-h-[62vh] rounded-lg border border-line bg-bg0 object-contain"
             />
             <ModalActions>
               <Button
@@ -684,7 +684,7 @@ export default function Images() {
             <img
               src={`/api/images/${lightbox.id}/file`}
               alt={lightbox.prompt}
-              className="mx-auto max-h-[58vh] rounded-lg border border-line object-contain"
+              className="mx-auto max-h-[58vh] rounded-lg border border-line bg-bg0 object-contain"
             />
             <p className="select-text whitespace-pre-wrap text-[13px] leading-relaxed text-tx2">{lightbox.prompt}</p>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-tx3">

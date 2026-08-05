@@ -324,7 +324,7 @@ export function Composer(props: ComposerProps) {
               onClick={toggleSearch}
             >
               <Globe size={13} />
-              联网
+              <span className="max-sm:hidden">联网</span>
             </button>
           )}
 
@@ -332,7 +332,7 @@ export function Composer(props: ComposerProps) {
             <Popover open={mcpOpen} setOpen={setMcpOpen} trigger={
               <button className={`${toolBtn} ${toolCount ? 'border-acc/40 bg-acc/10 text-acc hover:border-acc/40 hover:bg-acc/10 hover:text-acc' : ''}`} title="MCP 工具">
                 <Wrench size={13} />
-                工具
+                <span className="max-sm:hidden">工具</span>
                 {toolCount > 0 && <span className="font-semibold tabular-nums">{toolCount}</span>}
               </button>
             }>
@@ -368,7 +368,7 @@ export function Composer(props: ComposerProps) {
               title="选择模型"
             >
               {model && <ModelAvatar info={model} size={16} tile={false} />}
-              <span className="max-w-[150px] truncate text-tx">{model ? model.displayName : '选择模型'}</span>
+              <span className="max-w-[150px] truncate text-tx max-sm:max-w-[76px]">{model ? model.displayName : '选择模型'}</span>
               <ChevronDown size={12} className="text-tx3" />
             </button>
           }>
@@ -488,7 +488,7 @@ export function Composer(props: ComposerProps) {
                 } : undefined}
               >
                 <Gauge size={14} className="shrink-0" />
-                <span className="max-w-[4.5rem] truncate">{thinking ? effort.label : '思考强度'}</span>
+                <span className="max-w-[4.5rem] truncate max-sm:hidden">{thinking ? effort.label : '思考强度'}</span>
               </button>
             }>
               <div className="flex items-center gap-1.5 border-b border-line bg-bg2/45 px-3 py-2">

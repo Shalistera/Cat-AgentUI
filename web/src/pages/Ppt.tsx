@@ -567,7 +567,9 @@ export default function Ppt() {
               <span>{fmtTime(preview.createdAt)}</span>
             </div>
 
-            <div className="max-h-[58vh] space-y-4 overflow-y-auto pr-1">
+            {/* Matte behind the white slides — in dark mode a bare white
+                stack on bg1 glares; bg0 reads as a projector wall. */}
+            <div className="max-h-[58vh] space-y-4 overflow-y-auto rounded-xl bg-bg0 p-3">
               {preview.spec.slides.map((s, i) => (
                 <div key={i}>
                   <div className="overflow-hidden rounded-lg border border-line shadow-xs">

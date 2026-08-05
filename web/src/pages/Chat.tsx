@@ -339,6 +339,14 @@ export default function Chat() {
     { icon: <ImageIcon size={15} />, title: '图像理解与生成', desc: '读图分析,或直接在对话中作图' },
   ];
 
+  // Click-to-send starters: the fastest first message a new user can have.
+  const examplePrompts = [
+    '最近一周有哪些值得关注的 AI 进展?',
+    '用通俗的比喻解释一下大语言模型是怎么工作的',
+    '帮我拟一份周报模板:本周进展、遇到的风险、下周计划',
+    '写一个 Python 脚本,把文件夹里的图片按日期批量重命名',
+  ];
+
   return (
     <div className="flex h-full flex-col">
       <PageHeader
@@ -368,6 +376,22 @@ export default function Chat() {
 
             {composer}
 
+            {modelSel && !streaming && (
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {examplePrompts.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    title="点击直接发送"
+                    onClick={() => void send(q, [])}
+                    className="cursor-pointer rounded-lg border border-line bg-bg1 px-3.5 py-2.5 text-left text-[13px] leading-relaxed text-tx2 shadow-xs transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               {capabilities.map((c) => (
                 <div key={c.title} className="rounded-lg border border-line bg-bg0 px-3.5 py-3">
@@ -384,7 +408,9 @@ export default function Chat() {
       ) : (
         <>
           <div ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
-            <div className="mx-auto flex max-w-3xl flex-col gap-7 px-4 py-7 sm:px-6">
+            {/* 44rem ≈ 42 CJK chars/line at 16px — the comfortable ceiling for
+                long-form Chinese; 3xl let lines run past it. */}
+            <div className="mx-auto flex max-w-[44rem] flex-col gap-7 px-4 py-7 sm:px-6">
               {messages.map((m, i) => (
                 <ChatMessage
                   key={m.id}
@@ -408,7 +434,7 @@ export default function Chat() {
                 <ArrowDown size={14} />
               </button>
             )}
-            <div className="mx-auto max-w-3xl">{composer}</div>
+            <div className="mx-auto max-w-[44rem]">{composer}</div>
             <p className="mt-2 text-center text-[11px] text-tx3">内容由 AI 生成,请自行核实关键信息。</p>
           </div>
         </>

@@ -26,10 +26,13 @@
   --color-line2: #cfd5de; /* stronger edges, outline button */
   --color-field: #8e97a6; /* form control edge — ~3:1 on white */
 
-  /* ---- text ---- */
+  /* ---- text ----
+     tx3 sits a comfortable step above the AA floor (~5.2:1): it is the app's
+     smallest, densest text (meta rows, hints) and Chinese glyphs at 11-12px
+     need the extra ink — the old 4.5:1 value drew "看不清" feedback. */
   --color-tx: #14181f;
   --color-tx2: #55606f;
-  --color-tx3: #636d7b;
+  --color-tx3: #5b6573;
 
   /* ---- primary action (ink) ---- */
   --color-pri: #171b22;
@@ -96,7 +99,7 @@ html.dark {
 
   --color-tx: #e7eaf0;
   --color-tx2: #a3acbb;
-  --color-tx3: #828c99;
+  --color-tx3: #8f99a6;
 
   --color-pri: #edeff3;
   --color-pri2: #ffffff;
