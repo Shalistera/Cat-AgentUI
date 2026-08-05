@@ -342,10 +342,8 @@ export default function Images() {
   const canGenerate = !!prompt.trim() && !!model && !generating && !uploading;
 
   return (
-    // display:contents keeps the flex layout identical while giving the whole
-    // page the `imgs-bump` type scale (every text size +1px, see index.css).
-    // Modals portal to <body>, so they carry the class themselves.
-    <div className="contents imgs-bump">
+    // The +1px type bump this page pioneered is now app-wide (see index.css).
+    <div className="contents">
       <PageHeader
         title="绘图工坊"
         subtitle={total > 0 ? `已生成 ${total.toLocaleString()} 张图片` : '文生图与参考图编辑'}
@@ -607,7 +605,7 @@ export default function Images() {
       {/* ---- reference image preview ---- */}
       <Modal
         open={refPreview !== null} onClose={() => setRefPreview(null)}
-        title={`参考图${(refPreview ?? 0) + 1}`} wide className="imgs-bump"
+        title={`参考图${(refPreview ?? 0) + 1}`} wide
       >
         {refPreview !== null && refSlots[refPreview] && (
           <div className="space-y-4">
@@ -640,7 +638,7 @@ export default function Images() {
 
       {/* ---- quick prompt manager ---- */}
       <Modal open={quickOpen} onClose={() => setQuickOpen(false)} title="管理快捷提示词"
-        desc="常用的提示词片段,点击即可填入。" className="imgs-bump">
+        desc="常用的提示词片段,点击即可填入。">
         <div className="space-y-2">
           {quickDraft.map((q, i) => (
             <div key={i} className="flex items-center gap-2">
@@ -680,7 +678,7 @@ export default function Images() {
       </Modal>
 
       {/* ---- lightbox ---- */}
-      <Modal open={!!lightbox} onClose={() => setLightbox(null)} title="图片详情" wide className="imgs-bump">
+      <Modal open={!!lightbox} onClose={() => setLightbox(null)} title="图片详情" wide>
         {lightbox && (
           <div className="space-y-4">
             <img

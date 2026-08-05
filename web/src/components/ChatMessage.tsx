@@ -1,6 +1,6 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useState } from 'react';
 import {
-  BrainCircuit, Check, ChevronDown, ChevronRight, Copy, Clock, Pencil,
+  BrainCircuit, Check, ChevronDown, ChevronRight, Copy, Clock, Globe, Pencil,
   RefreshCw, Wrench, Zap, CircleAlert, Ban,
 } from 'lucide-react';
 import type { Message, MessagePart } from '../types';
@@ -64,39 +64,93 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean 
   );
 }
 
-function ToolBlock({ call, result }: {
-  call: Extract<MessagePart, { type: 'tool_call' }>;
-  result?: Extract<MessagePart, { type: 'tool_result' }>;
+type ToolCallPart = Extract<MessagePart, { type: 'tool_call' }>;
+type ToolResultPart = Extract<MessagePart, { type: 'tool_result' }>;
+
+// 'Brave_____brave_web_search' → 'brave_web_search' (namespace prefix ends
+// with the double underscore the server inserts).
+function toolShortName(name: string): string {
+  const parts = name.split('__');
+  return (parts[parts.length - 1] || name).replace(/^_+/, '');
+}
+
+function isSearchTool(name: string): boolean {
+  return /search|news|query/i.test(toolShortName(name));
+}
+
+function queryOf(call: ToolCallPart): string {
+  try {
+    const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
+    const q = a.query ?? a.q ?? a.keyword ?? a.searchTerm;
+    return typeof q === 'string' ? q : '';
+  } catch { return ''; }
+}
+
+// One compact status line for a whole run of consecutive tool calls. Users see
+// what the model is doing, never how (no raw params/results) — expanding shows
+// one row per call, and error text only when a call actually failed.
+function ToolRun({ calls, results, organizing }: {
+  calls: ToolCallPart[];
+  results: Map<string, ToolResultPart>;
+  /** All calls answered but the model hasn't produced anything after them yet. */
+  organizing: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const prettyArgs = useMemo(() => {
-    try { return JSON.stringify(JSON.parse(call.args || '{}'), null, 2); } catch { return call.args; }
-  }, [call.args]);
+  const pending = calls.filter((c) => !results.has(c.id));
+  const failed = calls.filter((c) => results.get(c.id)?.isError);
+  const searching = calls.some((c) => isSearchTool(c.name));
+  const active = pending.length > 0;
+  const busy = active || organizing;
+  const noun = searching ? '搜索' : '调用工具';
+
+  let label: string;
+  if (active) {
+    const q = queryOf(pending[pending.length - 1]);
+    label = q ? `正在${noun}「${q}」…` : `正在${noun}…`;
+  } else if (organizing) {
+    label = `${noun}完成,正在整理结果…`;
+  } else if (failed.length) {
+    label = `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次,${failed.length} 次失败`;
+  } else {
+    label = calls.length === 1 ? `${noun}完成` : `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次`;
+  }
+
+  const Icon = searching ? Globe : Wrench;
 
   return (
     <Disclosure
       open={open}
       onToggle={() => setOpen(!open)}
-      icon={<Wrench size={13} className={!result ? 'animate-pulse text-acc' : result.isError ? 'text-err' : 'text-ok'} />}
-      label={<span className="truncate font-mono text-[12px] font-medium text-tx">{call.name}</span>}
-      meta={
-        !result ? <span className="flex shrink-0 items-center gap-1.5 text-tx3"><Spinner className="h-3 w-3" />调用中</span>
-        : result.isError ? <span className="shrink-0 text-err">失败</span>
-        : <span className="shrink-0 text-tx3">完成</span>
+      icon={busy
+        ? <Spinner className="h-3.5 w-3.5 shrink-0 text-acc" />
+        : <Icon size={13} className={`shrink-0 ${failed.length ? 'text-err' : 'text-tx3'}`} />}
+      label={
+        <span className={`truncate font-medium ${busy ? 'animate-pulse text-acc' : 'text-tx2'}`}>
+          {label}
+        </span>
       }
     >
-      <div className="space-y-2.5 border-t border-line bg-bg1 px-3.5 py-2.5">
-        <div>
-          <div className="eyebrow mb-1">参数</div>
-          <pre className="max-h-40 overflow-auto rounded-md border border-line bg-bg2 p-2 font-mono text-[11px] leading-relaxed text-tx2">{prettyArgs}</pre>
-        </div>
-        {result && (
-          <div>
-            <div className="eyebrow mb-1">结果</div>
-            <pre className={`max-h-64 overflow-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[11px] leading-relaxed ${
-              result.isError ? 'border-err/30 bg-err/8 text-err' : 'border-line bg-bg2 text-tx2'}`}>{result.result}</pre>
-          </div>
-        )}
+      <div className="divide-y divide-line/70 border-t border-line bg-bg1">
+        {calls.map((c) => {
+          const r = results.get(c.id);
+          const q = queryOf(c);
+          return (
+            <div key={c.id} className="px-3.5 py-2 text-xs">
+              <div className="flex items-center gap-2">
+                {!r ? <Spinner className="h-3 w-3 shrink-0" />
+                  : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
+                  : <Check size={13} className="shrink-0 text-ok" />}
+                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : toolShortName(c.name)}</span>
+                {q && <span className="truncate text-tx3">「{q}」</span>}
+              </div>
+              {r?.isError && (
+                <div className="mt-1.5 whitespace-pre-wrap break-words rounded-md border border-err/30 bg-err/8 px-2 py-1.5 text-[11px] leading-relaxed text-err">
+                  {r.result.slice(0, 500)}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </Disclosure>
   );
@@ -174,14 +228,16 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
     );
   }
 
-  // assistant — render parts in order, pairing tool_call/result
+  // assistant — render parts in order, folding each run of consecutive tool
+  // activity into a single status line
   const rendered: React.ReactNode[] = [];
-  const resultsByCallId = new Map<string, Extract<MessagePart, { type: 'tool_result' }>>();
+  const resultsByCallId = new Map<string, ToolResultPart>();
   for (const p of msg.parts) if (p.type === 'tool_result') resultsByCallId.set(p.toolCallId, p);
   let lastTextIdx = -1;
   msg.parts.forEach((p, i) => { if (p.type === 'text') lastTextIdx = i; });
 
-  msg.parts.forEach((p, i) => {
+  for (let i = 0; i < msg.parts.length; i++) {
+    const p = msg.parts[i];
     if (p.type === 'reasoning') {
       const isLast = i === msg.parts.length - 1;
       rendered.push(<ReasoningBlock key={i} text={p.text} streaming={isStreaming && isLast} />);
@@ -192,8 +248,27 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           <Markdown text={p.text} />
         </div>,
       );
-    } else if (p.type === 'tool_call') {
-      rendered.push(<ToolBlock key={i} call={p} result={resultsByCallId.get(p.id)} />);
+    } else if (p.type === 'tool_call' || p.type === 'tool_result') {
+      const start = i;
+      const calls: ToolCallPart[] = [];
+      let end = i;
+      while (end < msg.parts.length) {
+        const tp = msg.parts[end];
+        if (tp.type !== 'tool_call' && tp.type !== 'tool_result') break;
+        if (tp.type === 'tool_call') calls.push(tp);
+        end++;
+      }
+      i = end - 1;
+      if (calls.length) {
+        // "Organizing": every call answered, nothing after the run yet, still
+        // streaming — the model is reading results, tell the user so.
+        const trailing = end === msg.parts.length;
+        const allDone = calls.every((c) => resultsByCallId.has(c.id));
+        rendered.push(
+          <ToolRun key={start} calls={calls} results={resultsByCallId}
+            organizing={isStreaming && trailing && allDone} />,
+        );
+      }
     } else if (p.type === 'image') {
       const src = partSrc(p);
       if (src) {
@@ -206,7 +281,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         );
       }
     }
-  });
+  }
 
   const plain = partsToPlainText(msg.parts);
   const hasStats = msg.durationMs != null || msg.totalTokens != null;
@@ -221,7 +296,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         {rendered}
         {isStreaming && msg.parts.length === 0 && (
           <div className="flex items-center gap-2 py-1 text-[13px] text-tx3">
-            <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在连接模型…'}
+            <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在思考…'}
           </div>
         )}
         {msg.status === 'error' && msg.error && (

@@ -140,7 +140,7 @@ body {
   background: var(--color-bg0);
   color: var(--color-tx);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 15px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -231,29 +231,29 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
 
 /* Section eyebrow: small, spaced, uppercase — the standard admin-console cue. */
 @utility eyebrow {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-tx3);
 }
 
-/* ---------- 绘图工坊 type bump ----------
-   Every text size on the images workshop runs 1px larger than the app-wide
-   scale (per user request — the page is used mostly on phones). Scoped
-   overrides beat the Tailwind utilities because these rules are unlayered
-   while utilities live in @layer. Tailwind's text-xs/text-sm line-heights are
-   em-relative, so they track the new sizes automatically. */
-.imgs-bump .text-\[10px\] { font-size: 11px; }
-.imgs-bump .text-\[11px\] { font-size: 12px; }
-.imgs-bump .text-xs { font-size: 13px; }
-.imgs-bump .text-\[13px\] { font-size: 14px; }
-.imgs-bump .text-sm { font-size: 15px; }
-.imgs-bump .text-\[15px\] { font-size: 16px; }
-.imgs-bump .eyebrow { font-size: 12px; }
+/* ---------- app-wide type bump ----------
+   The whole app runs 1px larger than the classes say (Chinese glyphs carry
+   more detail per em than Latin, and the stock scale read too small — user
+   feedback). Started as a scoped bump on the images workshop, now global.
+   Unlayered overrides beat the Tailwind utilities, which live in @layer;
+   text-xs/text-sm line-heights are em-relative so they track automatically. */
+.text-\[9px\] { font-size: 10px; }
+.text-\[10px\] { font-size: 11px; }
+.text-\[11px\] { font-size: 12px; }
+.text-xs { font-size: 13px; }
+.text-\[13px\] { font-size: 14px; }
+.text-sm { font-size: 15px; }
+.text-\[15px\] { font-size: 16px; }
 
 /* ---------- markdown ---------- */
-.md { line-height: 1.75; word-break: break-word; font-size: 15px; }
+.md { line-height: 1.75; word-break: break-word; font-size: 16px; }
 .md > *:first-child { margin-top: 0; }
 .md > *:last-child { margin-bottom: 0; }
 .md h1, .md h2, .md h3, .md h4 { font-weight: 650; margin: 1.5em 0 .6em; line-height: 1.35; letter-spacing: -0.012em; }
@@ -317,7 +317,7 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
   color: var(--color-tx3);
   font-family: var(--font-mono);
 }
-.md .codeblock pre { padding: .9rem 1rem; overflow-x: auto; font-family: var(--font-mono); font-size: 13px; line-height: 1.65; }
+.md .codeblock pre { padding: .9rem 1rem; overflow-x: auto; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65; }
 /* KaTeX lays out with absolute struts; inheriting the prose line-height (1.75)
    collapses fraction numerators onto their denominators. */
 .md .katex { line-height: normal; }
