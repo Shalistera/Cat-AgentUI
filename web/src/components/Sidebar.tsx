@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon,
+  MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon, Presentation,
   ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose, MoreHorizontal,
 } from 'lucide-react';
 import { useAuth, useChats, useUi } from '../store';
@@ -181,6 +181,9 @@ export function Sidebar() {
         <nav className="space-y-0.5">
           <NavLink to="/images" className={navClass}>
             <ImageIcon size={15} />绘图工坊
+          </NavLink>
+          <NavLink to="/ppt" className={navClass}>
+            <Presentation size={15} />PPT 工坊
           </NavLink>
           {user?.role === 'admin' && (
             <NavLink to="/admin" className={navClass}>

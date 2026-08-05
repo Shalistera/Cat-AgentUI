@@ -7,6 +7,7 @@ import { Sidebar } from './components/Sidebar';
 import Login from './pages/Login';
 import Chat from './pages/Chat';
 import Images from './pages/Images';
+import Ppt from './pages/Ppt';
 import Settings from './pages/Settings';
 import Admin from './pages/admin/Admin';
 
@@ -61,6 +62,7 @@ export default function App() {
           <Route path="/" element={<Chat />} />
           <Route path="/chat/:id" element={<Chat />} />
           <Route path="/images" element={<Images />} />
+          <Route path="/ppt" element={<Ppt />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/admin/*" element={<AdminGate />} />
         </Route>

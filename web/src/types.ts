@@ -77,6 +77,39 @@ export interface ImageRecord {
   durationMs: number | null; createdAt: number; tokens?: number | null;
 }
 
+// ---- PPT 工坊 ----
+
+export interface PptModel {
+  id: string; modelId: string; displayName: string | null;
+  providerName: string; providerType: string;
+}
+
+export interface DeckPoint { text: string; sub?: string[] }
+
+export type DeckSlide =
+  | { layout: 'cover'; title: string; subtitle?: string; notes?: string }
+  | { layout: 'section'; title: string; subtitle?: string; notes?: string }
+  | { layout: 'bullets'; title: string; points: DeckPoint[]; notes?: string }
+  | { layout: 'twoCol'; title: string; columns: { heading: string; points: string[] }[]; notes?: string }
+  | { layout: 'table'; title: string; headers: string[]; rows: string[][]; notes?: string }
+  | { layout: 'quote'; quote: string; author?: string; notes?: string }
+  | { layout: 'end'; title: string; subtitle?: string; notes?: string };
+
+export interface DeckSpec {
+  title: string;
+  subtitle?: string;
+  /** 6-digit hex without '#'. */
+  accent?: string;
+  slides: DeckSlide[];
+}
+
+export interface DeckSummary {
+  id: string; title: string; topic: string; model: string | null;
+  slideCount: number; totalTokens: number | null; durationMs: number | null; createdAt: number;
+}
+
+export interface DeckDetail extends DeckSummary { spec: DeckSpec }
+
 export interface UsageTotals {
   promptTokens: number; completionTokens: number; totalTokens: number;
   images: number; requests: number; activeUsers?: number;

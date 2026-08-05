@@ -149,6 +149,23 @@ export const images = sqliteTable('images', {
   createdAt: integer('created_at').notNull(),
 }, (t) => [index('idx_images_user').on(t.userId, t.createdAt)]);
 
+// Generated slide decks. The deck itself is a JSON spec (DeckSpec) — the .pptx
+// file is assembled from it on every download rather than stored, so the only
+// disk cost per deck is a few KB of JSON in this row.
+export const decks = sqliteTable('decks', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  providerId: text('provider_id'),
+  model: text('model'),
+  topic: text('topic').notNull(),
+  title: text('title').notNull().default(''),
+  spec: text('spec').notNull(), // JSON DeckSpec
+  slideCount: integer('slide_count').notNull().default(0),
+  totalTokens: integer('total_tokens'),
+  durationMs: integer('duration_ms'),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [index('idx_decks_user').on(t.userId, t.createdAt)]);
+
 export const uploads = sqliteTable('uploads', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

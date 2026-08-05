@@ -12,6 +12,7 @@ import { chatRoutes } from './routes/chats.js';
 import { providerRoutes } from './routes/providers.js';
 import { adminRoutes } from './routes/admin.js';
 import { imageRoutes } from './routes/images.js';
+import { pptRoutes } from './routes/ppt.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { mcpRoutes } from './routes/mcp.js';
 
@@ -51,6 +52,7 @@ async function main() {
   await app.register(providerRoutes);
   await app.register(adminRoutes);
   await app.register(imageRoutes);
+  await app.register(pptRoutes);
   await app.register(uploadRoutes);
   await app.register(mcpRoutes);
 
