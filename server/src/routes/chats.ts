@@ -263,8 +263,10 @@ export async function chatRoutes(app: FastifyInstance) {
     const c = db.select().from(schema.chats)
       .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
     if (!c) return reply.code(404).send({ error: '对话不存在' });
+    // seq is the ordering key (createdAt collides at ms/s granularity — see
+    // schema); createdAt only breaks ties for pre-seq rows that are all 0.
     const msgs = db.select().from(schema.messages).where(eq(schema.messages.chatId, id))
-      .orderBy(asc(schema.messages.createdAt)).all();
+      .orderBy(asc(schema.messages.seq), asc(schema.messages.createdAt)).all();
     let mcpServerIds: string[] = [];
     try { mcpServerIds = JSON.parse(c.mcpServerIds); } catch { /* ignore */ }
     return {

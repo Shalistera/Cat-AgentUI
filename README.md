@@ -73,6 +73,22 @@ node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即
 - 备份:直接备份 `data/` 目录 + `.env`(密钥用 `SECRET_KEY` 加密,两者需成对保存)
 - 导出:`npm run db:export -w server` 生成全量 JSON,便于日后迁移到 PostgreSQL 等
 
+### 从 Open WebUI 迁移
+
+```bash
+# 先停掉 Open WebUI,然后:
+npm run db:import-openwebui -w server -- \
+  --db /path/to/open-webui/data/webui.db \
+  --data-dir /path/to/open-webui/data     # 可选,用于搬运聊天附件与生成图片
+```
+
+- **用户**:登录名 = 原邮箱(小写),显示名、角色(admin/user)、停用状态照搬;
+  **原密码直接可用**——bcrypt/argon2 哈希原样迁入,首次登录成功后自动升级为本站 scrypt 格式
+- **聊天记录**:迁入每个会话的当前分支(与 Open WebUI 界面所见一致),推理过程
+  (`<details type="reasoning">` 或 0.11+ 结构化 output)、工具调用、附件图片都会解析为本站消息格式
+- OAuth/LDAP 登录且无本地密码的账号会迁入但暂不可登录,报告中会列出,管理员在后台重置密码即可
+- 支持 `--dry-run`(只看报告不写入)、`--skip-archived`(跳过归档会话);重复执行安全(已存在的用户/会话自动跳过)
+
 ## 🏗️ 架构
 
 ```

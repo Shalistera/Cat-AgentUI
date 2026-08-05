@@ -115,8 +115,9 @@ export default function Login() {
 
           <form onSubmit={submit} className="mt-7 space-y-4">
             <Field label="用户名" required>
+              {/* 登录态放宽到 64:从 Open WebUI 迁移的账号以邮箱为用户名,可能超过注册上限 32 */}
               <Input value={username} onChange={(e) => setUsername(e.target.value)}
-                autoFocus autoComplete="username" maxLength={32} required />
+                autoFocus autoComplete="username" maxLength={mode === 'login' ? 64 : 32} required />
             </Field>
             <Field label="密码" hint={mode === 'register' ? '至少 8 位字符' : undefined} required>
               <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)}

@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { and, eq, ne } from 'drizzle-orm';
 import { db, schema, now, getSetting } from '../db/index.js';
-import { hashPassword, verifyPassword, newId, sha256hex } from '../crypto.js';
+import { hashPassword, verifyPassword, needsRehash, newId, sha256hex } from '../crypto.js';
 import {
   COOKIE_NAME, createSession, destroySession, setSessionCookie,
   clearSessionCookie, requireAuth, rateLimit,
@@ -66,11 +66,22 @@ export async function authRoutes(app: FastifyInstance) {
     if (!rateLimit(`login:${req.ip}`, 20, 600_000) || !rateLimit(`login:u:${username}`, 10, 600_000)) {
       return reply.code(429).send({ error: '尝试过于频繁,请稍后再试' });
     }
-    const u = db.select().from(schema.users).where(eq(schema.users.username, username)).get();
-    if (!u || !verifyPassword(password, u.passwordHash)) {
+    let u = db.select().from(schema.users).where(eq(schema.users.username, username)).get();
+    // Migrated Open WebUI accounts use their (lowercased) email as username, and
+    // Open WebUI treated login email as case-insensitive — honor that here.
+    if (!u && username.includes('@')) {
+      u = db.select().from(schema.users).where(eq(schema.users.username, username.toLowerCase())).get();
+    }
+    if (!u || !(await verifyPassword(password, u.passwordHash))) {
       return reply.code(401).send({ error: '用户名或密码错误' });
     }
     if (u.disabled) return reply.code(403).send({ error: '账号已被停用' });
+    // Migrated accounts (Open WebUI bcrypt/argon2) upgrade to native scrypt on
+    // first login — the only moment we hold the plaintext.
+    if (needsRehash(u.passwordHash)) {
+      db.update(schema.users).set({ passwordHash: hashPassword(password) })
+        .where(eq(schema.users.id, u.id)).run();
+    }
     const token = createSession(u.id, req);
     setSessionCookie(reply, token);
     return { user: publicUser(u) };
@@ -93,7 +104,7 @@ export async function authRoutes(app: FastifyInstance) {
     const body = z.object({ oldPassword: z.string(), newPassword: z.string().min(8).max(128) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '新密码至少8位' });
     const u = db.select().from(schema.users).where(eq(schema.users.id, req.user!.id)).get()!;
-    if (!verifyPassword(body.data.oldPassword, u.passwordHash)) {
+    if (!(await verifyPassword(body.data.oldPassword, u.passwordHash))) {
       return reply.code(401).send({ error: '原密码错误' });
     }
     db.update(schema.users).set({ passwordHash: hashPassword(body.data.newPassword) })

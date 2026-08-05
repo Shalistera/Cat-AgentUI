@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
-    "db:export": "tsx scripts/export-data.ts"
+    "db:export": "tsx scripts/export-data.ts",
+    "db:import-openwebui": "tsx scripts/migrate-openwebui.ts"
   },
   "dependencies": {
     "@brave/brave-search-mcp-server": "^2.1.0",
@@ -16,10 +17,12 @@
     "@fastify/multipart": "^10.1.0",
     "@fastify/static": "^10.1.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.10.0",
     "google-auth-library": "^10.9.1",
+    "hash-wasm": "^4.12.0",
     "pptxgenjs": "^4.0.1",
     "undici": "^7.10.0",
     "zod": "^4.4.3"
