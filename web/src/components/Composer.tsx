@@ -4,13 +4,13 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowLeft, ArrowUp, BrainCircuit, Check, ChevronDown, Image as ImageIcon,
+  ArrowLeft, ArrowUp, Check, ChevronDown, Gauge, Image as ImageIcon,
   Loader2, Plus, Search, Settings2, Square, Wrench, X,
 } from 'lucide-react';
 import { useMcp, useModels } from '../store';
 import { uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
-import { ReasoningSlider } from './ReasoningSlider';
+import { rampAt, ReasoningSlider } from './ReasoningSlider';
 import { toast, Toggle } from './ui';
 import type { ModelInfo, ReasoningEffort, ReasoningLevel } from '../types';
 
@@ -119,6 +119,7 @@ export function Composer(props: ComposerProps) {
   const [panelView, setPanelView] = useState<ModelPanelView>('models');
   const [modelKind, setModelKind] = useState<ModelKind>('all');
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [effortOpen, setEffortOpen] = useState(false);
   const [modelQuery, setModelQuery] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -187,6 +188,7 @@ export function Composer(props: ComposerProps) {
   const effortIdx = Math.max(0, efforts.findIndex((e) => e.value === (props.settings.reasoningEffort || OFF_LEVEL.value)));
   const effort = efforts[effortIdx];
   const thinking = efforts.length > 1 && effort.value !== OFF_LEVEL.value;
+  const effortTint = rampAt(efforts.length > 1 ? effortIdx / (efforts.length - 1) : 0);
 
   function setReasoningEffort(next: ReasoningLevel) {
     props.onSettingsChange({ ...props.settings, reasoningEffort: next.value });
@@ -333,11 +335,10 @@ export function Composer(props: ComposerProps) {
           <Popover open={panelOpen} setOpen={setPanelOpen} align="right" width="w-[22rem]" trigger={
             <button
               className={`${toolBtn} border-line bg-bg1 pl-1.5`}
-              title={thinking ? `选择模型 · 思考强度 ${effort.label}` : '选择模型'}
+              title="选择模型"
             >
               {model && <ModelAvatar info={model} size={16} tile={false} />}
               <span className="max-w-[150px] truncate text-tx">{model ? model.displayName : '选择模型'}</span>
-              {thinking && <BrainCircuit size={13} className="shrink-0 text-acc" aria-label={`思考强度 ${effort.label}`} />}
               <ChevronDown size={12} className="text-tx3" />
             </button>
           }>
@@ -405,31 +406,6 @@ export function Composer(props: ComposerProps) {
                     )}
                   </div>
 
-                  {/* Thinking effort is a per-message decision, so it sits in
-                      the open — pinned under the list rather than behind a
-                      second click — and stays put while the list scrolls. */}
-                  {efforts.length > 1 && (
-                    <div className={`shrink-0 border-t border-line px-3 pb-2.5 pt-2 transition-colors ${
-                      thinking ? 'bg-acc/6' : 'bg-bg2/60'
-                    }`}>
-                      <div className="flex items-center gap-1.5">
-                        <BrainCircuit size={14} className="shrink-0 text-acc" />
-                        <span className="text-[11px] font-semibold text-tx">思考强度</span>
-                        <span className="flex-1" />
-                        <span className={`max-w-[8rem] truncate rounded-md px-2 py-0.5 text-[10px] font-semibold shadow-xs ${
-                          thinking ? 'bg-accs text-accfg' : 'border border-line2 bg-bg1 text-tx2'
-                        }`}>
-                          {effort.label}
-                        </span>
-                      </div>
-                      <ReasoningSlider
-                        levels={efforts}
-                        index={effortIdx}
-                        onChange={(i) => setReasoningEffort(efforts[i])}
-                      />
-                      <p className="mt-0.5 text-[10px] leading-4 text-tx3">{effortHint(effortIdx, efforts.length)}</p>
-                    </div>
-                  )}
                 </>
               )}
 
@@ -464,6 +440,50 @@ export function Composer(props: ComposerProps) {
               )}
             </div>
           </Popover>
+
+          {/* Thinking effort lives beside the model button, not buried inside
+              its panel: picking a model closes the panel, so anything pinned in
+              there was invisible by the time you'd want it. `key` remounts the
+              button on model switch, replaying the fade so the control
+              announces itself exactly when a thinking-capable model arrives. */}
+          {efforts.length > 1 && (
+            <Popover key={model?.id} open={effortOpen} setOpen={setEffortOpen} align="right" width="w-80" trigger={
+              <button
+                className={`${toolBtn} fade-up border-line bg-bg1`}
+                title={`思考强度：${effort.label}`}
+                style={thinking ? {
+                  color: `rgb(${effortTint})`,
+                  borderColor: `rgb(${effortTint} / 0.45)`,
+                  background: `rgb(${effortTint} / 0.09)`,
+                } : undefined}
+              >
+                <Gauge size={14} className="shrink-0" />
+                <span className="max-w-[4.5rem] truncate">{thinking ? effort.label : '思考强度'}</span>
+              </button>
+            }>
+              <div className="flex items-center gap-1.5 border-b border-line bg-bg2/45 px-3 py-2">
+                <Gauge size={14} className="shrink-0" style={{ color: `rgb(${effortTint})` }} />
+                <span className="text-xs font-semibold text-tx">思考强度</span>
+                <span className="flex-1" />
+                <span
+                  className={`max-w-[8rem] truncate rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                    thinking ? 'text-white shadow-xs' : 'border border-line2 bg-bg1 text-tx2'
+                  }`}
+                  style={thinking ? { background: `rgb(${effortTint})` } : undefined}
+                >
+                  {effort.label}
+                </span>
+              </div>
+              <div className="px-3 pb-2.5 pt-2">
+                <ReasoningSlider
+                  levels={efforts}
+                  index={effortIdx}
+                  onChange={(i) => setReasoningEffort(efforts[i])}
+                />
+                <p className="mt-1 text-[10px] leading-4 text-tx3">{effortHint(effortIdx, efforts.length)}</p>
+              </div>
+            </Popover>
+          )}
 
           {streaming ? (
             <button
