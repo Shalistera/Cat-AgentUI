@@ -60,6 +60,10 @@ console.log(`附件: 复制 ${report.files.copied},内联解码 ${report.files.i
 if (report.files.missing.length && !args.dataDir) {
   console.log('  提示: 传入 --data-dir /path/to/open-webui/data 可搬运附件文件');
 }
+if (report.errors.length) {
+  console.log(`  ⚠ 部分会话处理失败已跳过(修正后重跑即可续传):`);
+  for (const e of report.errors) console.log(`    - ${e}`);
+}
 
 if (args.dryRun) {
   console.log('\n(dry-run,未写入任何数据)');

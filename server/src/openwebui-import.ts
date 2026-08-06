@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { eq } from 'drizzle-orm';
 import { db, schema, now } from './db/index.js';
 import { config } from './config.js';
 import type { MessagePart } from './types.js';
@@ -31,6 +32,8 @@ export interface OwuiImportReport {
   chats: { migrated: number; skipped: number; existing: number };
   messages: { migrated: number };
   files: { copied: number; inlined: number; missing: string[]; nonImage: string[] };
+  /** First few per-chat failures (chat skipped, run continued). */
+  errors: string[];
   dryRun: boolean;
 }
 
@@ -177,8 +180,6 @@ const EXT_BY_MIME: Record<string, string> = {
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif',
 };
 
-interface PendingUpload { uploadId: string; filename: string; mime: string; size: number; data: Buffer; origName: string | null }
-
 // ---------- main ----------
 
 export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
@@ -204,6 +205,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
       chats: { migrated: 0, skipped: 0, existing: 0 },
       messages: { migrated: 0 },
       files: { copied: 0, inlined: 0, missing: [], nonImage: [] },
+      errors: [],
       dryRun,
     };
 
@@ -370,13 +372,8 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
     `).all() as OwuiUser[];
 
     const chatWhere = skipArchived ? 'WHERE archived IS NOT 1' : '';
-    const chatsRows = src.prepare(`
-      SELECT id, user_id, title, chat, created_at, updated_at, archived, pinned
-      FROM chat ${chatWhere} ORDER BY created_at
-    `).all() as OwuiChat[];
-
     report.sourceUsers = users.length;
-    report.sourceChats = chatsRows.length;
+    report.sourceChats = (src.prepare(`SELECT count(*) c FROM chat ${chatWhere}`).get() as { c: number }).c;
 
     // -- users --
     const userIdMap = new Map<string, string>();
@@ -436,7 +433,19 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
       report.users.migrated++;
     }
 
-    // -- chats + messages --
+    // -- write users first (small, one transaction) --
+    if (!dryRun && pendingUsers.length) {
+      db.transaction((tx) => {
+        for (const u of pendingUsers) tx.insert(schema.users).values(u).run();
+      });
+    }
+
+    // -- chats + messages, streamed one chat at a time --
+    // Real-world webui.db files run into the gigabytes (inline base64 images in
+    // chat JSON), so the chat table is cursored with iterate() and each chat is
+    // committed in its own small transaction: memory stays bounded by the
+    // largest single chat, and an interrupted run resumes by simply re-running
+    // (already-imported chats are skipped by id).
     const existingChatIds = new Set(db.select({ id: schema.chats.id }).from(schema.chats).all().map((c) => c.id));
     // Ownership must survive re-runs: without it a second pass would treat every
     // upload migrated last time as foreign and duplicate the file under a new id.
@@ -445,12 +454,19 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
       uploadOwner.set(u.id, u.userId);
     }
     const existingUploadIds = new Set(uploadOwner.keys());
+    const seenMsgIds = new Set<string>(); // this-run message ids
+    const msgIdTaken = (id: string): boolean =>
+      !!db.select({ id: schema.messages.id }).from(schema.messages).where(eq(schema.messages.id, id)).get();
 
-    const pendingChats: (typeof schema.chats.$inferInsert)[] = [];
-    const pendingMessages: (typeof schema.messages.$inferInsert)[] = [];
-    const pendingUploads: PendingUpload[] = [];
+    const uploadsDir = path.join(config.dataDir, 'uploads');
+    if (!dryRun) fs.mkdirSync(uploadsDir, { recursive: true });
 
-    for (const c of chatsRows) {
+    const chatIter = src.prepare(`
+      SELECT id, user_id, title, chat, created_at, updated_at, archived, pinned
+      FROM chat ${chatWhere} ORDER BY created_at
+    `).iterate() as IterableIterator<OwuiChat>;
+
+    for (const c of chatIter) {
       const catUserId = userIdMap.get(c.user_id);
       if (!catUserId) { report.chats.skipped++; continue; }
       if (existingChatIds.has(c.id)) { report.chats.existing++; continue; }
@@ -461,9 +477,9 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
       const branch = extractBranch(chatJson);
       const chatCreated = toMs(c.created_at, now());
       const chatUpdated = toMs(c.updated_at, chatCreated);
-
       const params = (chatJson.params ?? {}) as Record<string, unknown>;
-      pendingChats.push({
+
+      const chatRow: typeof schema.chats.$inferInsert = {
         id: c.id,
         userId: catUserId,
         title: (c.title ?? '').slice(0, 300) || '(无标题)',
@@ -476,145 +492,140 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
         pinned: c.pinned ? 1 : 0,
         createdAt: chatCreated,
         updatedAt: chatUpdated,
-      });
-      existingChatIds.add(c.id);
-      report.chats.migrated++;
+      };
 
-      let seq = 0;
-      let lastTs = chatCreated; // fallback for messages without a timestamp
-      for (const m of branch) {
-        const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : null;
-        if (!role) continue; // system entries live in params.system already
+      const msgRows: (typeof schema.messages.$inferInsert)[] = [];
+      const uploadRows: (typeof schema.uploads.$inferInsert)[] = [];
+      const writtenFiles: string[] = [];
+      const addedUploadIds: string[] = [];
+      const added = { messages: 0, copied: 0, inlined: 0 };
 
-        const parts: MessagePart[] = [];
+      try {
+        let seq = 0;
+        let lastTs = chatCreated; // fallback for messages without a timestamp
+        for (const m of branch) {
+          const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : null;
+          if (!role) continue; // system entries live in params.system already
 
-        // attachments (user uploads / generated images) go first, like our UI does
-        for (const f of Array.isArray(m.files) ? m.files : []) {
-          const resolved = resolveFile(f);
-          if (!resolved) {
-            if (f.name || f.file?.filename) pushText(parts, 'text', `(附件: ${f.name ?? f.file?.filename})\n`);
-            continue;
-          }
-          if (!EXT_BY_MIME[resolved.mime]) {
-            // 只支持图片附件;文档类附件降级为文字说明
-            report.files.nonImage.push(resolved.origName ?? resolved.mime);
-            pushText(parts, 'text', `(附件: ${resolved.origName ?? '文件'},未随迁移导入)\n`);
-            continue;
-          }
-          let uploadId = f.id ?? f.file?.id ?? crypto.randomUUID();
-          if (existingUploadIds.has(uploadId) && uploadOwner.get(uploadId) !== catUserId) {
-            uploadId = crypto.randomUUID();
-          }
-          if (!existingUploadIds.has(uploadId)) {
-            pendingUploads.push({
-              uploadId,
-              filename: `${uploadId}.${EXT_BY_MIME[resolved.mime]}`,
-              mime: resolved.mime,
-              size: resolved.data.length,
-              data: resolved.data,
-              origName: resolved.origName,
-            });
-            existingUploadIds.add(uploadId);
-            uploadOwner.set(uploadId, catUserId);
-            report.files[f.url?.startsWith('data:') ? 'inlined' : 'copied']++;
-          }
-          parts.push({ type: 'image', uploadId, mime: resolved.mime });
-        }
+          const parts: MessagePart[] = [];
 
-        // body
-        let handled = false;
-        if (role === 'assistant' && Array.isArray(m.output) && m.output.length) {
-          handled = outputToParts(m.output, parts);
-          // 0.11 dual-writes plain text into content as well — only fall back to
-          // content when output produced no message text (older partial writes)
-        }
-        if (!handled) {
-          const content = m.content;
-          if (typeof content === 'string' && content.length) {
-            contentStringToParts(content, parts);
-          } else if (Array.isArray(content)) {
-            // multi-modal user content: [{type:'text',text}, {type:'image_url',...}]
-            for (const p of content) {
-              if (p && typeof p === 'object' && p.type === 'text' && typeof p.text === 'string') {
-                pushText(parts, 'text', p.text);
+          // attachments (user uploads / generated images) go first, like our UI does.
+          // File bytes are written to disk immediately and never accumulated.
+          for (const f of Array.isArray(m.files) ? m.files : []) {
+            const resolved = resolveFile(f);
+            if (!resolved) {
+              if (f.name || f.file?.filename) pushText(parts, 'text', `(附件: ${f.name ?? f.file?.filename})\n`);
+              continue;
+            }
+            if (!EXT_BY_MIME[resolved.mime]) {
+              // 只支持图片附件;文档类附件降级为文字说明
+              report.files.nonImage.push(resolved.origName ?? resolved.mime);
+              pushText(parts, 'text', `(附件: ${resolved.origName ?? '文件'},未随迁移导入)\n`);
+              continue;
+            }
+            let uploadId = f.id ?? f.file?.id ?? crypto.randomUUID();
+            if (existingUploadIds.has(uploadId) && uploadOwner.get(uploadId) !== catUserId) {
+              uploadId = crypto.randomUUID();
+            }
+            if (!existingUploadIds.has(uploadId)) {
+              const filename = `${uploadId}.${EXT_BY_MIME[resolved.mime]}`;
+              if (!dryRun) {
+                fs.writeFileSync(path.join(uploadsDir, filename), resolved.data);
+                writtenFiles.push(filename);
+              }
+              uploadRows.push({
+                id: uploadId,
+                userId: catUserId,
+                filename,
+                origName: resolved.origName,
+                mime: resolved.mime,
+                size: resolved.data.length,
+                createdAt: now(),
+              });
+              existingUploadIds.add(uploadId);
+              uploadOwner.set(uploadId, catUserId);
+              addedUploadIds.push(uploadId);
+              added[f.url?.startsWith('data:') ? 'inlined' : 'copied']++;
+            }
+            parts.push({ type: 'image', uploadId, mime: resolved.mime });
+          }
+
+          // body
+          let handled = false;
+          if (role === 'assistant' && Array.isArray(m.output) && m.output.length) {
+            handled = outputToParts(m.output, parts);
+            // 0.11 dual-writes plain text into content as well — only fall back to
+            // content when output produced no message text (older partial writes)
+          }
+          if (!handled) {
+            const content = m.content;
+            if (typeof content === 'string' && content.length) {
+              contentStringToParts(content, parts);
+            } else if (Array.isArray(content)) {
+              // multi-modal user content: [{type:'text',text}, {type:'image_url',...}]
+              for (const p of content) {
+                if (p && typeof p === 'object' && p.type === 'text' && typeof p.text === 'string') {
+                  pushText(parts, 'text', p.text);
+                }
               }
             }
           }
+
+          if (!parts.length) continue;
+
+          const usage = (m.usage ?? m.info ?? {}) as Record<string, unknown>;
+          const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null);
+          const promptTokens = num(usage.prompt_tokens) ?? num(usage.input_tokens);
+          const completionTokens = num(usage.completion_tokens) ?? num(usage.output_tokens);
+
+          seq += 1;
+          let mid = typeof m.id === 'string' && m.id ? m.id : crypto.randomUUID();
+          if (seenMsgIds.has(mid) || msgIdTaken(mid)) mid = crypto.randomUUID();
+          seenMsgIds.add(mid);
+          msgRows.push({
+            id: mid,
+            chatId: c.id,
+            seq,
+            role,
+            parts: JSON.stringify(parts),
+            model: typeof m.model === 'string' ? m.model : null,
+            providerId: null,
+            status: 'done',
+            error: null,
+            promptTokens,
+            completionTokens,
+            totalTokens: num(usage.total_tokens) ?? (promptTokens != null && completionTokens != null ? promptTokens + completionTokens : null),
+            durationMs: null,
+            ttftMs: null,
+            createdAt: lastTs = toMs(m.timestamp ?? null, lastTs),
+          });
+          added.messages++;
         }
 
-        if (!parts.length) continue;
-
-        const usage = (m.usage ?? m.info ?? {}) as Record<string, unknown>;
-        const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null);
-        const promptTokens = num(usage.prompt_tokens) ?? num(usage.input_tokens);
-        const completionTokens = num(usage.completion_tokens) ?? num(usage.output_tokens);
-
-        seq += 1;
-        pendingMessages.push({
-          id: typeof m.id === 'string' && m.id ? m.id : crypto.randomUUID(),
-          chatId: c.id,
-          seq,
-          role,
-          parts: JSON.stringify(parts),
-          model: typeof m.model === 'string' ? m.model : null,
-          providerId: null,
-          status: 'done',
-          error: null,
-          promptTokens,
-          completionTokens,
-          totalTokens: num(usage.total_tokens) ?? (promptTokens != null && completionTokens != null ? promptTokens + completionTokens : null),
-          durationMs: null,
-          ttftMs: null,
-          createdAt: lastTs = toMs(m.timestamp ?? null, lastTs),
-        });
-        report.messages.migrated++;
-      }
-    }
-
-    // message ids must be globally unique; regenerate colliding ones
-    {
-      const existingMsgIds = new Set(db.select({ id: schema.messages.id }).from(schema.messages).all().map((m) => m.id));
-      const seen = new Set<string>();
-      for (const m of pendingMessages) {
-        if (existingMsgIds.has(m.id) || seen.has(m.id)) m.id = crypto.randomUUID();
-        seen.add(m.id);
-      }
-    }
-
-    if (dryRun) return report;
-
-    // -- write --
-    const uploadsDir = path.join(config.dataDir, 'uploads');
-    fs.mkdirSync(uploadsDir, { recursive: true });
-
-    // Files land on disk before the DB transaction: a failed run leaves harmless
-    // orphan files, never DB rows pointing at files that were never written — and
-    // on failure the files written this run are removed again below.
-    try {
-      for (const f of pendingUploads) {
-        fs.writeFileSync(path.join(uploadsDir, f.filename), f.data);
-      }
-      db.transaction((tx) => {
-        for (const u of pendingUsers) tx.insert(schema.users).values(u).run();
-        for (const c of pendingChats) tx.insert(schema.chats).values(c).run();
-        for (const m of pendingMessages) tx.insert(schema.messages).values(m).run();
-        for (const f of pendingUploads) {
-          tx.insert(schema.uploads).values({
-            id: f.uploadId,
-            userId: uploadOwner.get(f.uploadId)!,
-            filename: f.filename,
-            origName: f.origName,
-            mime: f.mime,
-            size: f.size,
-            createdAt: now(),
-          }).run();
+        if (!dryRun) {
+          db.transaction((tx) => {
+            tx.insert(schema.chats).values(chatRow).run();
+            for (const m of msgRows) tx.insert(schema.messages).values(m).run();
+            for (const u of uploadRows) tx.insert(schema.uploads).values(u).run();
+          });
         }
-      });
-    } catch (err) {
-      for (const f of pendingUploads) {
-        try { fs.unlinkSync(path.join(uploadsDir, f.filename)); } catch { /* ignore */ }
+        existingChatIds.add(c.id);
+        report.chats.migrated++;
+        report.messages.migrated += added.messages;
+        report.files.copied += added.copied;
+        report.files.inlined += added.inlined;
+      } catch (err) {
+        // One bad chat must not sink a multi-gigabyte run: clean up this chat's
+        // files, roll its uploads back out of the dedupe maps, and keep going.
+        for (const fn of writtenFiles) {
+          try { fs.unlinkSync(path.join(uploadsDir, fn)); } catch { /* ignore */ }
+        }
+        for (const id of addedUploadIds) { existingUploadIds.delete(id); uploadOwner.delete(id); }
+        report.chats.skipped++;
+        if (report.errors.length < 5) {
+          report.errors.push(`会话 ${c.id.slice(0, 8)}「${(c.title ?? '').slice(0, 30)}」: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-      throw new Error(`写入失败,事务已整体回滚,本轮没有任何数据落库: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     return report;

@@ -10,6 +10,7 @@ interface OwuiReport {
   chats: { migrated: number; skipped: number; existing: number };
   messages: { migrated: number };
   files: { copied: number; inlined: number; missing: string[]; nonImage: string[] };
+  errors: string[];
   dryRun: boolean;
 }
 
@@ -160,6 +161,18 @@ export default function Import() {
                   <div className="font-medium text-tx">以下账号在 Open WebUI 中使用 OAuth/LDAP 登录、无本地密码,已迁入但暂不可登录 — 请在「用户」页为其重置密码</div>
                   <ul className="mt-1 list-inside list-disc">
                     {report.users.noPassword.map((n) => <li key={n} className="font-mono text-xs">{n}</li>)}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {report.errors.length > 0 && (
+              <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/5 px-3.5 py-3 text-[13px] text-tx2">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
+                <div>
+                  <div className="font-medium text-tx">以下会话处理失败已跳过(修正后重新导入即可续传)</div>
+                  <ul className="mt-1 list-inside list-disc">
+                    {report.errors.map((n) => <li key={n} className="text-xs">{n}</li>)}
                   </ul>
                 </div>
               </div>

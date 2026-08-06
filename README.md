@@ -87,8 +87,20 @@ npm run db:import-openwebui -w server -- \
   --data-dir /path/to/open-webui/data     # 可选,用于搬运聊天附件与生成图片
 ```
 
+**大库(GB 级)建议:** 内嵌图片多的 webui.db 动辄数 GB,别走浏览器上传——先在源机器压瘦再拷到
+本机跑命令行:
+
+```bash
+sqlite3 webui.db "PRAGMA wal_checkpoint(TRUNCATE)"       # 把 WAL 合并进主文件
+sqlite3 webui.db "VACUUM INTO 'webui-compact.db'"        # 去掉空闲页,通常显著变小
+rsync webui-compact.db your-server:/tmp/                 # 附件目录(data/uploads 等)也一并拷
+```
+
+导入按会话逐个提交、内存占用与库大小无关;中途中断或个别会话解析失败都不影响其余,重跑即续传。
+
 - **用户**:登录名 = 原邮箱(小写),显示名、角色(admin/user)、停用状态照搬;
-  **原密码直接可用**——bcrypt/argon2 哈希原样迁入,首次登录成功后自动升级为本站 scrypt 格式
+  **原密码直接可用**——bcrypt/argon2 哈希原样迁入,首次登录成功后自动升级为本站 scrypt 格式。
+  不需要 Open WebUI 的 `WEBUI_SECRET_KEY`(它只签 JWT 会话,不参与密码哈希)
 - **聊天记录**:迁入每个会话的当前分支(与 Open WebUI 界面所见一致),推理过程
   (`<details type="reasoning">` 或 0.11+ 结构化 output)、工具调用、附件图片都会解析为本站消息格式
 - OAuth/LDAP 登录且无本地密码的账号会迁入但暂不可登录,报告中会列出,管理员在后台重置密码即可
