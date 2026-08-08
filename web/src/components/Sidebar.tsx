@@ -9,6 +9,7 @@ import { api } from '../api';
 import { CatWordmark } from './Logo';
 import { Button, Input, Modal, ModalActions, confirmDialog, toast } from './ui';
 import type { ChatSummary } from '../types';
+import { appVersionLabel, appVersionTitle } from '../version';
 
 function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
   const nav = useNavigate();
@@ -210,6 +211,9 @@ export function Sidebar() {
               <LogOut size={14} />
             </Button>
           </div>
+        </div>
+        <div className="mt-2 text-center font-mono text-[10px] text-tx3" title={appVersionTitle}>
+          {appVersionLabel}
         </div>
       </div>
     </aside>

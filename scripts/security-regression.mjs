@@ -158,7 +158,8 @@ async function run() {
 
   const mcp = await jsonReq('POST', '/api/admin/mcp', {
     name: 'mock-tools', transport: 'stdio', command: process.execPath,
-    args: [path.join(root, 'scripts', 'mock-mcp.mjs')], enabled: true, allowedUserIds: [],
+    args: [path.join(root, 'scripts', 'mock-mcp.mjs')], enabled: true,
+    accessMode: 'restricted', allowedUserIds: [],
   }, adminCookie);
   assert(mcp.status === 200, 'create MCP');
 
@@ -194,6 +195,21 @@ async function run() {
   assert(revokedTurn.status === 200
     && !revokedTurn.text.includes('event: tool_result')
     && revokedTurn.text.includes('event: notice'), 'revocation enforced on existing chat');
+
+  await jsonReq('PATCH', `/api/admin/mcp/${mcp.json.id}`, {
+    accessMode: 'shared',
+  }, adminCookie);
+  listed = await jsonReq('GET', '/api/mcp/servers', undefined, userCookie);
+  assert(listed.json.some((item) => item.id === mcp.json.id), 'shared MCP visible to regular user');
+  const sharedChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  const sharedChatId = sharedChat.json.chat.id;
+  const sharedBound = await jsonReq('PATCH', `/api/chats/${sharedChatId}`, {
+    mcpServerIds: [mcp.json.id],
+  }, userCookie);
+  assert(sharedBound.status === 200, 'shared MCP bind');
+  const sharedTurn = await stream(sharedChatId, [{ type: 'text', text: 'use_tool shared' }], textModel.id, userCookie);
+  assert(sharedTurn.status === 200 && sharedTurn.text.includes('event: tool_result'), 'shared MCP tool call');
+  await jsonReq('DELETE', `/api/chats/${sharedChatId}`, undefined, userCookie);
 
   const pngSig = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0, 0, 0, 0, 0]);
   const small = await upload(pngSig, userCookie);
@@ -253,6 +269,7 @@ async function run() {
   return {
     mcpAcl: 'pass',
     mcpRevocation: 'pass',
+    mcpSharedAccess: 'pass',
     attachmentDedupe: 'pass',
     attachmentBudget: 'pass',
     attachmentCleanup: 'pass',

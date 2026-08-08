@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, or } from 'drizzle-orm';
 import { db, now, schema } from '../db/index.js';
 
 export interface McpAccessUser {
@@ -8,15 +8,19 @@ export interface McpAccessUser {
 
 type ServerRow = typeof schema.mcpServers.$inferSelect;
 
-/** Admins see every server; regular users see only explicitly granted ones. */
+/** Admins see every server; regular users see shared and explicitly granted ones. */
 export function accessibleMcpServers(user: McpAccessUser): ServerRow[] {
   if (user.role === 'admin') {
     return db.select().from(schema.mcpServers).orderBy(asc(schema.mcpServers.createdAt)).all();
   }
   return db.select({ server: schema.mcpServers })
     .from(schema.mcpServers)
-    .innerJoin(schema.mcpServerAccess, and(
+    .leftJoin(schema.mcpServerAccess, and(
       eq(schema.mcpServerAccess.serverId, schema.mcpServers.id),
+      eq(schema.mcpServerAccess.userId, user.id),
+    ))
+    .where(or(
+      eq(schema.mcpServers.accessMode, 'shared'),
       eq(schema.mcpServerAccess.userId, user.id),
     ))
     .orderBy(asc(schema.mcpServers.createdAt)).all()
@@ -25,13 +29,17 @@ export function accessibleMcpServers(user: McpAccessUser): ServerRow[] {
 
 /** Re-check a capability at the point of use, including enabled state. */
 export function canUseMcpServer(user: McpAccessUser, serverId: string): boolean {
-  const server = db.select({ enabled: schema.mcpServers.enabled })
+  const server = db.select({
+    enabled: schema.mcpServers.enabled,
+    accessMode: schema.mcpServers.accessMode,
+  })
     .from(schema.mcpServers).where(eq(schema.mcpServers.id, serverId)).get();
   if (!server?.enabled) return false;
   const account = db.select({ role: schema.users.role, disabled: schema.users.disabled })
     .from(schema.users).where(eq(schema.users.id, user.id)).get();
   if (!account || account.disabled) return false;
   if (account.role === 'admin') return true;
+  if (server.accessMode === 'shared') return true;
   return !!db.select({ userId: schema.mcpServerAccess.userId })
     .from(schema.mcpServerAccess)
     .where(and(

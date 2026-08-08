@@ -131,15 +131,16 @@ export const mcpServers = sqliteTable('mcp_servers', {
   url: text('url'),
   headersEnc: text('headers_enc'), // AES-256-GCM encrypted JSON Record<string,string>
   enabled: integer('enabled').notNull().default(1),
+  accessMode: text('access_mode').notNull().default('shared'), // 'shared' | 'restricted'
   lastStatus: text('last_status'), // 'ok' | 'error' | null(untested)
   lastError: text('last_error'),
   toolsCache: text('tools_cache').notNull().default('[]'), // JSON cached tool list
   createdAt: integer('created_at').notNull(),
 });
 
-// MCP servers are privileged capabilities. Admins can use every server;
-// ordinary users need an explicit row here before the server is visible or
-// callable. The composite primary key also makes grant replacement idempotent.
+// Shared MCP servers are available to every active account. Restricted servers
+// require an explicit ordinary-user grant; admins always retain implicit access.
+// The composite primary key also makes grant replacement idempotent.
 export const mcpServerAccess = sqliteTable('mcp_server_access', {
   serverId: text('server_id').notNull().references(() => mcpServers.id, { onDelete: 'cascade' }),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

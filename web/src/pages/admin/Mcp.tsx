@@ -8,6 +8,7 @@ import {
 import type { AdminMcpServer, AdminUser } from '../../types';
 
 type Transport = AdminMcpServer['transport'];
+type AccessMode = AdminMcpServer['accessMode'];
 
 const TRANSPORT_LABELS: Record<Transport, string> = {
   stdio: 'Stdio(本地命令)',
@@ -73,6 +74,7 @@ function McpModal({ server, users, onClose, onSaved }: {
   const [url, setUrl] = useState(server?.url ?? '');
   const [headerPairs, setHeaderPairs] = useState<KVPair[]>([]);
   const [enabled, setEnabled] = useState(server?.enabled ?? true);
+  const [accessMode, setAccessMode] = useState<AccessMode>(server?.accessMode ?? 'shared');
   const [allowedUserIds, setAllowedUserIds] = useState<string[]>(server?.allowedUserIds ?? []);
   const [busy, setBusy] = useState(false);
 
@@ -85,6 +87,7 @@ function McpModal({ server, users, onClose, onSaved }: {
       name: name.trim(),
       transport,
       enabled,
+      accessMode,
       allowedUserIds,
     };
     if (transport === 'stdio') {
@@ -166,27 +169,36 @@ function McpModal({ server, users, onClose, onSaved }: {
           <Toggle checked={enabled} onChange={setEnabled} />
         </div>
 
-        <Field label="普通用户权限" hint="管理员始终可用;普通用户只有勾选后才能看到和调用该服务器">
-          <div className="max-h-48 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-bg0">
-            {users.length === 0 ? (
-              <div className="px-3 py-3 text-xs text-tx3">暂无普通用户</div>
-            ) : users.map((u) => (
-              <div key={u.id} className="flex items-center gap-3 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-medium text-tx">{u.displayName || u.username}</div>
-                  {u.displayName && <div className="truncate text-[11px] text-tx3">@{u.username}</div>}
-                </div>
-                {u.disabled && <Badge tone="err">已停用</Badge>}
-                <Toggle
-                  checked={allowedUserIds.includes(u.id)}
-                  onChange={(checked) => setAllowedUserIds(checked
-                    ? [...allowedUserIds, u.id]
-                    : allowedUserIds.filter((id) => id !== u.id))}
-                />
-              </div>
-            ))}
-          </div>
+        <Field label="访问范围" hint="搜索等基础工具建议共享;文件、命令和内部系统建议限制用户">
+          <Select value={accessMode} onChange={(e) => setAccessMode(e.target.value as AccessMode)}>
+            <option value="shared">所有登录用户</option>
+            <option value="restricted">仅指定普通用户</option>
+          </Select>
         </Field>
+
+        {accessMode === 'restricted' && (
+          <Field label="指定普通用户" hint="管理员始终可用;只有勾选用户才能看到和调用该服务器">
+            <div className="max-h-48 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-bg0">
+              {users.length === 0 ? (
+                <div className="px-3 py-3 text-xs text-tx3">暂无普通用户</div>
+              ) : users.map((u) => (
+                <div key={u.id} className="flex items-center gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-medium text-tx">{u.displayName || u.username}</div>
+                    {u.displayName && <div className="truncate text-[11px] text-tx3">@{u.username}</div>}
+                  </div>
+                  {u.disabled && <Badge tone="err">已停用</Badge>}
+                  <Toggle
+                    checked={allowedUserIds.includes(u.id)}
+                    onChange={(checked) => setAllowedUserIds(checked
+                      ? [...allowedUserIds, u.id]
+                      : allowedUserIds.filter((id) => id !== u.id))}
+                  />
+                </div>
+              ))}
+            </div>
+          </Field>
+        )}
 
         <ModalActions>
           <Button variant="outline" onClick={onClose}>取消</Button>
@@ -252,8 +264,8 @@ function ServerCard({ server, reload, onEdit }: {
         <Badge tone={server.lastStatus === 'ok' ? 'ok' : server.lastStatus === 'error' ? 'err' : 'default'}>
           {server.lastStatus === 'ok' ? '连接正常' : server.lastStatus === 'error' ? '连接异常' : '未测试'}
         </Badge>
-        <Badge tone={server.allowedUserIds.length ? 'acc' : 'default'}>
-          普通用户 {server.allowedUserIds.length}
+        <Badge tone={server.accessMode === 'shared' ? 'acc' : 'default'}>
+          {server.accessMode === 'shared' ? '全员共享' : `指定用户 ${server.allowedUserIds.length}`}
         </Badge>
         <div className="ml-auto flex items-center gap-1.5">
           <Toggle checked={server.enabled} onChange={setEnabled} />
@@ -333,7 +345,7 @@ export default function Mcp() {
         <div className="min-w-0">
           <h1 className="text-base font-semibold tracking-tight text-tx">MCP 服务器</h1>
           <p className="mt-0.5 text-xs leading-relaxed text-tx3">
-            为对话提供外部工具能力,在输入框的「工具」菜单中按对话启用。
+            搜索等基础工具可设为全员共享;敏感工具可限制到指定用户。
           </p>
         </div>
         <Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true); }}>

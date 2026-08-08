@@ -57,6 +57,13 @@
       "when": 1786153219589,
       "tag": "0007_mcp_acl_storage_quotas",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786155272846,
+      "tag": "0008_mcp_access_modes",
+      "breakpoints": true
     }
   ]
 }
