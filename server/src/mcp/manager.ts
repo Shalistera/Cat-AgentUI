@@ -8,16 +8,30 @@ import { eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { decryptSecret } from '../crypto.js';
 import type { ToolDef } from '../types.js';
+import { canUseMcpServer, type McpAccessUser } from './access.js';
 
 type ServerRow = typeof schema.mcpServers.$inferSelect;
 
 const CONNECT_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 60_000;
+const LIST_TIMEOUT_MS = 15_000;
+const MAX_TOOLS_PER_TURN = 128;
+const MAX_TOOL_DEFINITION_CHARS = 512_000;
+const MAX_TOOL_ARGS_CHARS = 64_000;
+const MAX_TOOL_RESULT_CHARS = 100_000;
 
-// serverId -> live connection
-const connections = new Map<string, { client: Client; connectedAt: number }>();
-// namespacedToolName -> route (rebuilt per-server on every listing)
-const toolRoutes = new Map<string, { serverId: string; originalName: string }>();
+// Connection scope is per user. Some MCP servers keep session state inside the
+// transport/client; sharing one client between authorized users could leak that
+// state even when ACL checks are otherwise correct.
+const connections = new Map<string, { serverId: string; client: Client; connectedAt: number }>();
+// Coalesce concurrent first-use attempts so a burst cannot spawn one stdio
+// child (or remote connection) per request before the cache is populated.
+const connecting = new Map<string, { serverId: string; promise: Promise<Client> }>();
+
+interface ToolRoute { serverId: string; originalName: string }
+export interface McpCapabilities {
+  readonly routes: ReadonlyMap<string, ToolRoute>;
+}
 
 function sanitize(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -86,6 +100,10 @@ function closeAllConnections() {
   connections.clear();
 }
 
+function connectionKey(serverId: string, scopeId: string): string {
+  return `${serverId}\u0000${scopeId}`;
+}
+
 function registerExitHook() {
   if (exitHookRegistered) return;
   exitHookRegistered = true;
@@ -123,37 +141,61 @@ function getServerRow(serverId: string): ServerRow | undefined {
 }
 
 /** Get a live cached client for a server, (re)connecting when needed. */
-async function getClient(serverId: string): Promise<Client> {
-  const cached = connections.get(serverId);
+async function getClient(serverId: string, scopeId: string): Promise<Client> {
+  const key = connectionKey(serverId, scopeId);
+  const cached = connections.get(key);
   if (cached) return cached.client;
+
+  const pending = connecting.get(key);
+  if (pending) return pending.promise;
 
   const row = getServerRow(serverId);
   if (!row) throw new Error('MCP 服务器不存在');
 
-  const client = await connectClient(row);
-  registerExitHook();
-  // Auto-drop from cache when the underlying transport closes or errors,
-  // so the next use reconnects.
-  const drop = () => {
-    const cur = connections.get(serverId);
-    if (cur && cur.client === client) connections.delete(serverId);
-  };
-  client.onclose = drop;
-  client.onerror = () => drop();
-  connections.set(serverId, { client, connectedAt: now() });
-  return client;
+  const promise = (async () => {
+    const client = await connectClient(row);
+    registerExitHook();
+    // Auto-drop from cache when the underlying transport closes or errors,
+    // so the next use reconnects.
+    const drop = () => {
+      const cur = connections.get(key);
+      if (cur && cur.client === client) connections.delete(key);
+    };
+    client.onclose = drop;
+    client.onerror = () => drop();
+    connections.set(key, { serverId, client, connectedAt: now() });
+    return client;
+  })();
+  connecting.set(key, { serverId, promise });
+  try {
+    return await promise;
+  } finally {
+    if (connecting.get(key)?.promise === promise) connecting.delete(key);
+  }
 }
 
-async function dropConnection(serverId: string): Promise<void> {
-  const cached = connections.get(serverId);
+async function dropConnections(serverId: string): Promise<void> {
+  const matches = [...connections.entries()].filter(([, value]) => value.serverId === serverId);
+  for (const [key] of matches) connections.delete(key);
+  await Promise.all(matches.map(async ([, value]) => {
+    try { await value.client.close(); } catch { /* ignore */ }
+  }));
+}
+
+async function dropScopedConnection(serverId: string, scopeId: string): Promise<void> {
+  const key = connectionKey(serverId, scopeId);
+  const cached = connections.get(key);
   if (!cached) return;
-  connections.delete(serverId);
+  connections.delete(key);
   try { await cached.client.close(); } catch { /* ignore */ }
 }
 
-function namespacedToolName(serverName: string, serverId: string, toolName: string): string {
+function namespacedToolName(
+  serverName: string, serverId: string, toolName: string,
+  routes: ReadonlyMap<string, ToolRoute>,
+): string {
   let nsName = `${sanitize(serverName).slice(0, 24)}__${sanitize(toolName)}`.slice(0, 64);
-  const existing = toolRoutes.get(nsName);
+  const existing = routes.get(nsName);
   if (existing && existing.serverId !== serverId) {
     // Two servers collide on the sanitized name — disambiguate with a short id suffix.
     const suffix = `_${sanitize(serverId).slice(0, 6)}`;
@@ -167,27 +209,35 @@ function namespacedToolName(serverName: string, serverId: string, toolName: stri
  * server. Connection/listing failures are collected into `errors` instead of
  * throwing.
  */
-export async function getToolsForServers(serverIds: string[]): Promise<{
+export async function getToolsForServers(serverIds: string[], user: McpAccessUser): Promise<{
   tools: ToolDef[];
   errors: { serverId: string; name: string; error: string }[];
+  capabilities: McpCapabilities;
 }> {
   const tools: ToolDef[] = [];
   const errors: { serverId: string; name: string; error: string }[] = [];
+  const routes = new Map<string, ToolRoute>();
 
-  for (const serverId of serverIds) {
+  for (const serverId of new Set(serverIds)) {
     const row = getServerRow(serverId);
-    if (!row || !row.enabled) continue;
+    if (!row || !canUseMcpServer(user, serverId)) continue;
+    const toolStart = tools.length;
     try {
-      const client = await getClient(serverId);
-      const listed = await client.listTools();
-
-      // Rebuild this server's routing entries from the fresh listing.
-      for (const [key, route] of toolRoutes) {
-        if (route.serverId === serverId) toolRoutes.delete(key);
+      const client = await getClient(serverId, user.id);
+      const listed = await client.listTools(undefined, { timeout: LIST_TIMEOUT_MS });
+      if (listed.tools.length > MAX_TOOLS_PER_TURN) {
+        throw new Error(`工具数量超过 ${MAX_TOOLS_PER_TURN} 个限制`);
       }
+
+      let definitionChars = 0;
       for (const tool of listed.tools) {
-        const nsName = namespacedToolName(row.name, serverId, tool.name);
-        toolRoutes.set(nsName, { serverId, originalName: tool.name });
+        definitionChars += tool.name.length + (tool.description?.length ?? 0)
+          + JSON.stringify(tool.inputSchema ?? {}).length;
+        if (definitionChars > MAX_TOOL_DEFINITION_CHARS) {
+          throw new Error('工具定义总大小超过限制');
+        }
+        const nsName = namespacedToolName(row.name, serverId, tool.name, routes);
+        routes.set(nsName, { serverId, originalName: tool.name });
         tools.push({
           name: nsName,
           description: tool.description ?? '',
@@ -195,23 +245,35 @@ export async function getToolsForServers(serverIds: string[]): Promise<{
         });
       }
     } catch (err) {
+      tools.length = toolStart;
+      for (const [name, route] of routes) {
+        if (route.serverId === serverId) routes.delete(name);
+      }
       errors.push({ serverId, name: row.name, error: errMsg(err) });
       // The connection is likely dead — drop it so the next attempt reconnects.
-      await dropConnection(serverId);
+      await dropScopedConnection(serverId, user.id);
     }
   }
-  return { tools, errors };
+  return { tools, errors, capabilities: { routes } };
 }
 
 /** Invoke a namespaced tool. Never throws — errors come back as isError results. */
 export async function callTool(
   namespacedName: string,
   argsJson: string,
+  capabilities: McpCapabilities,
+  user: McpAccessUser,
   opts?: { timeoutMs?: number },
 ): Promise<{ result: string; isError: boolean }> {
-  const route = toolRoutes.get(namespacedName);
+  const route = capabilities.routes.get(namespacedName);
   if (!route) {
     return { result: `未找到工具「${namespacedName}」,对应的 MCP 服务器可能已断开、被禁用或已删除`, isError: true };
+  }
+  if (!canUseMcpServer(user, route.serverId)) {
+    return { result: '当前账号已无权使用该 MCP 服务器,或服务器已被禁用', isError: true };
+  }
+  if (argsJson.length > MAX_TOOL_ARGS_CHARS) {
+    return { result: '工具参数超过大小限制', isError: true };
   }
 
   let args: Record<string, unknown> = {};
@@ -223,7 +285,7 @@ export async function callTool(
   } catch { /* fall back to {} */ }
 
   try {
-    const client = await getClient(route.serverId);
+    const client = await getClient(route.serverId, user.id);
     const res = (await client.callTool(
       { name: route.originalName, arguments: args },
       undefined,
@@ -231,11 +293,17 @@ export async function callTool(
     )) as any;
 
     const blocks: string[] = [];
+    let resultChars = 0;
     const content = Array.isArray(res?.content) ? res.content : [];
     for (const block of content) {
       switch (block?.type) {
         case 'text':
-          blocks.push(String(block.text ?? ''));
+          {
+            const text = String(block.text ?? '');
+            const remaining = Math.max(0, MAX_TOOL_RESULT_CHARS - resultChars);
+            blocks.push(text.slice(0, remaining));
+            resultChars += Math.min(text.length, remaining);
+          }
           break;
         case 'image':
           blocks.push(`[image ${block.mimeType ?? 'unknown'}]`);
@@ -252,8 +320,11 @@ export async function callTool(
         default:
           blocks.push(`[${String(block?.type ?? 'unknown')}]`);
       }
+      if (resultChars >= MAX_TOOL_RESULT_CHARS) break;
     }
-    return { result: blocks.join('\n'), isError: Boolean(res?.isError) };
+    let result = blocks.join('\n');
+    if (result.length >= MAX_TOOL_RESULT_CHARS) result += '\n…(结果已截断)';
+    return { result, isError: Boolean(res?.isError) };
   } catch (err) {
     return { result: errMsg(err), isError: true };
   }
@@ -268,14 +339,19 @@ export async function testServer(serverId: string): Promise<{
   tools?: { name: string; description: string }[];
   error?: string;
 }> {
-  await dropConnection(serverId);
+  await dropConnections(serverId);
   const row = getServerRow(serverId);
   if (!row) return { ok: false, error: 'MCP 服务器不存在' };
 
   try {
-    const client = await getClient(serverId);
-    const listed = await client.listTools();
-    const tools = listed.tools.map((t) => ({ name: t.name, description: t.description ?? '' }));
+    const client = await getClient(serverId, '__admin_test__');
+    const listed = await client.listTools(undefined, { timeout: LIST_TIMEOUT_MS });
+    if (listed.tools.length > MAX_TOOLS_PER_TURN) {
+      throw new Error(`工具数量超过 ${MAX_TOOLS_PER_TURN} 个限制`);
+    }
+    const tools = listed.tools.map((t) => ({
+      name: t.name.slice(0, 256), description: (t.description ?? '').slice(0, 4000),
+    }));
     db.update(schema.mcpServers)
       .set({ lastStatus: 'ok', lastError: null, toolsCache: JSON.stringify(tools) })
       .where(eq(schema.mcpServers.id, serverId)).run();
@@ -285,12 +361,16 @@ export async function testServer(serverId: string): Promise<{
     db.update(schema.mcpServers)
       .set({ lastStatus: 'error', lastError: error })
       .where(eq(schema.mcpServers.id, serverId)).run();
-    await dropConnection(serverId);
+    await dropConnections(serverId);
     return { ok: false, error };
   }
 }
 
 /** Close & drop any cached connection for a server (call after config edits/delete). */
 export async function invalidateServer(serverId: string): Promise<void> {
-  await dropConnection(serverId);
+  const pending = [...connecting.values()].filter((item) => item.serverId === serverId);
+  for (const item of pending) {
+    try { await item.promise; } catch { /* connection already failed */ }
+  }
+  await dropConnections(serverId);
 }

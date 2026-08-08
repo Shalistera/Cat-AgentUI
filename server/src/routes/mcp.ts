@@ -5,6 +5,9 @@ import { db, schema, now } from '../db/index.js';
 import { newId, encryptSecret, decryptSecret } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { invalidateServer, testServer } from '../mcp/manager.js';
+import {
+  accessibleMcpServers, accessUserIds, replaceMcpAccess,
+} from '../mcp/access.js';
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
@@ -38,6 +41,7 @@ const serverBodySchema = z.object({
   url: z.url().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().optional(),
+  allowedUserIds: z.array(z.string().max(64)).max(500).optional(),
 });
 
 type ServerRow = typeof schema.mcpServers.$inferSelect;
@@ -57,7 +61,7 @@ export async function mcpRoutes(app: FastifyInstance) {
   // Regular users: safe listing only — no command/args/env/url/headers leakage.
   app.get('/api/mcp/servers', async (req, reply) => {
     requireAuth(req, reply);
-    const rows = db.select().from(schema.mcpServers).all();
+    const rows = accessibleMcpServers(req.user!);
     return rows.map((r) => {
       const tools = parseJson<{ name: string; description: string }[]>(r.toolsCache, []);
       return {
@@ -92,6 +96,7 @@ export async function mcpRoutes(app: FastifyInstance) {
       lastStatus: r.lastStatus,
       lastError: r.lastError,
       toolsCache: parseJson<{ name: string; description: string }[]>(r.toolsCache, []),
+      allowedUserIds: accessUserIds(r.id),
       createdAt: r.createdAt,
     }));
   });
@@ -117,6 +122,7 @@ export async function mcpRoutes(app: FastifyInstance) {
       enabled: (d.enabled ?? true) ? 1 : 0,
       createdAt: now(),
     }).run();
+    replaceMcpAccess(id, d.allowedUserIds ?? []);
     return { id };
   });
 
@@ -150,6 +156,7 @@ export async function mcpRoutes(app: FastifyInstance) {
     if (Object.keys(patch).length) {
       db.update(schema.mcpServers).set(patch).where(eq(schema.mcpServers.id, id)).run();
     }
+    if (d.allowedUserIds !== undefined) replaceMcpAccess(id, d.allowedUserIds);
     await invalidateServer(id);
     return { ok: true };
   });

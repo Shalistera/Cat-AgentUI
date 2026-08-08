@@ -4,6 +4,7 @@ import { and, asc, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
 import { db, schema, now, getSetting, setSetting } from '../db/index.js';
 import { hashPassword, newId } from '../crypto.js';
 import { requireAdmin, requireAuth } from '../auth.js';
+import { unlinkStoredFiles } from '../storage.js';
 
 const DAY_MS = 86_400_000;
 
@@ -114,7 +115,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const id = newId();
     db.insert(schema.users).values({
       id, username,
-      passwordHash: hashPassword(password),
+      passwordHash: await hashPassword(password),
       role: role ?? 'user',
       createdAt: now(),
     }).run();
@@ -147,7 +148,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const patch: Record<string, unknown> = {};
     if (data.role !== undefined) patch.role = data.role;
     if (data.disabled !== undefined) patch.disabled = data.disabled ? 1 : 0;
-    if (data.password !== undefined) patch.passwordHash = hashPassword(data.password);
+    if (data.password !== undefined) patch.passwordHash = await hashPassword(data.password);
     if (data.displayName !== undefined) patch.displayName = data.displayName;
 
     if (Object.keys(patch).length) {
@@ -170,8 +171,21 @@ export async function adminRoutes(app: FastifyInstance) {
     if (target.role === 'admin' && !target.disabled && countEnabledAdmins() <= 1) {
       return reply.code(400).send({ error: '不能移除最后一位管理员' });
     }
-    // FK cascades clean sessions/chats/images/uploads; usageLog kept for historical stats.
+    const uploadFiles = db.select({ filename: schema.uploads.filename }).from(schema.uploads)
+      .where(eq(schema.uploads.userId, id)).all();
+    const imageFiles = db.select({ filename: schema.images.filename }).from(schema.images)
+      .where(eq(schema.images.userId, id)).all();
+    // FK cascades clean sessions/chats/images/uploads; usageLog is kept for
+    // historical stats. Physical media is removed after the committed delete.
     db.delete(schema.users).where(eq(schema.users.id, id)).run();
+    try {
+      await Promise.all([
+        unlinkStoredFiles(uploadFiles, 'uploads'),
+        unlinkStoredFiles(imageFiles, 'images'),
+      ]);
+    } catch (err) {
+      req.log.warn({ err }, 'failed to remove some deleted-user media files');
+    }
     return { ok: true };
   });
 

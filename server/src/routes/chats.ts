@@ -1,19 +1,27 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { and, asc, eq, gt, gte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, lt, lte, sql } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
-import { getToolsForServers, callTool } from '../mcp/manager.js';
-import { readUploadBase64 } from './uploads.js';
-import { readImageBase64, saveGeneratedImage } from './images.js';
+import { getToolsForServers, callTool, type McpCapabilities } from '../mcp/manager.js';
+import { validateMcpSelection } from '../mcp/access.js';
+import { saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import type {
   AdapterMessage, AdapterMessagePart, MessagePart, ProviderType, ReasoningRequest, ToolDef,
 } from '../types.js';
+import {
+  tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
+} from '../admission.js';
+import {
+  getOwnedImageMedia, getOwnedUploadMedia, quotaErrorMessage, readMediaBase64,
+  cleanupUnreferencedUploads, tryReserveStorage, uploadIdsFromPartsJson,
+  type OwnedMedia, type StorageReservation,
+} from '../storage.js';
 
 // ---- helpers ----
 
@@ -74,31 +82,170 @@ function appendText(parts: MessagePart[], type: 'text' | 'reasoning', text: stri
   else parts.push({ type, text } as MessagePart);
 }
 
-// Convert stored MessagePart[] to adapter parts (resolving image uploads to base64).
-function toAdapterParts(parts: MessagePart[], ownerId: string, includeImages: boolean): AdapterMessagePart[] {
+// Convert non-image parts. Images are resolved only by buildBoundedHistory,
+// after their aggregate raw-byte budget has been checked.
+function toAdapterPartNoImage(p: MessagePart): AdapterMessagePart | null {
+  if (p.type === 'text' && p.text) return { type: 'text', text: p.text };
+  if (p.type === 'tool_call') return { type: 'tool_call', id: p.id, name: p.name, args: p.args };
+  if (p.type === 'tool_result') {
+    return {
+      type: 'tool_result', toolCallId: p.toolCallId, name: p.name,
+      result: p.result && p.result.length ? p.result : EMPTY_TOOL_RESULT,
+      isError: p.isError,
+    };
+  }
+  return null;
+}
+
+function toAdapterPartsNoImages(parts: MessagePart[]): AdapterMessagePart[] {
   const out: AdapterMessagePart[] = [];
   // repair history written before this guard existed
   for (const p of closeDanglingToolCalls(parts, '(调用未完成)')) {
-    if (p.type === 'text' && p.text) out.push({ type: 'text', text: p.text });
-    else if (p.type === 'image' && includeImages) {
-      // uploadId = user attachment, imageId = an image a model generated earlier
-      const img = p.uploadId ? readUploadBase64(p.uploadId, ownerId)
-        : p.imageId ? readImageBase64(p.imageId, ownerId)
-        : null;
-      if (img) out.push({ type: 'image', mime: img.mime, dataBase64: img.dataBase64 });
-    } else if (p.type === 'tool_call') {
-      out.push({ type: 'tool_call', id: p.id, name: p.name, args: p.args });
-    } else if (p.type === 'tool_result') {
-      // empty strings are rejected by some providers (Anthropic: "text content blocks must be non-empty")
-      out.push({
-        type: 'tool_result', toolCallId: p.toolCallId, name: p.name,
-        result: p.result && p.result.length ? p.result : EMPTY_TOOL_RESULT,
-        isError: p.isError,
-      });
-    }
+    const converted = toAdapterPartNoImage(p);
+    if (converted) out.push(converted);
     // reasoning parts are never replayed to providers
   }
   return out;
+}
+
+class InputBudgetError extends Error {
+  constructor(message: string, readonly statusCode = 413) { super(message); }
+}
+
+async function normalizeIncomingParts(parts: MessagePart[], ownerId: string): Promise<MessagePart[]> {
+  const out: MessagePart[] = [];
+  const seenUploads = new Set<string>();
+  let textChars = 0;
+  let imageBytes = 0;
+
+  for (const part of parts) {
+    if (part.type === 'text') {
+      textChars += part.text.length;
+      if (textChars > config.maxMessageTextChars) {
+        throw new InputBudgetError(`消息文字超过 ${config.maxMessageTextChars.toLocaleString()} 字符限制`);
+      }
+      out.push(part);
+      continue;
+    }
+    if (part.type !== 'image' || !part.uploadId || seenUploads.has(part.uploadId)) continue;
+    seenUploads.add(part.uploadId);
+    if (seenUploads.size > config.maxAttachmentsPerMessage) {
+      throw new InputBudgetError(`每条消息最多添加 ${config.maxAttachmentsPerMessage} 张图片`);
+    }
+    const media = await getOwnedUploadMedia(part.uploadId, ownerId);
+    if (!media) throw new InputBudgetError('附件不存在或不属于当前账号', 400);
+    imageBytes += media.size;
+    if (imageBytes > config.maxMessageAttachmentBytes) {
+      throw new InputBudgetError('本条消息的附件总大小超过限制');
+    }
+    out.push({ type: 'image', uploadId: part.uploadId });
+  }
+  if (!out.length) throw new InputBudgetError('消息内容不能为空', 400);
+  return out;
+}
+
+type PlannedPart = AdapterMessagePart | { type: 'pending_image'; media: OwnedMedia };
+
+function adapterTextCost(part: MessagePart): number {
+  if (part.type === 'text') return part.text.length;
+  if (part.type === 'tool_call') return part.id.length + part.name.length + part.args.length;
+  if (part.type === 'tool_result') return part.toolCallId.length + part.name.length + part.result.length;
+  return 0;
+}
+
+/**
+ * Build a newest-first bounded replay window, then resolve only the images that
+ * fit. Duplicate media references are omitted across the whole context.
+ */
+async function buildBoundedHistory(
+  rows: { role: string; parts: string }[], ownerId: string, includeImages: boolean,
+): Promise<{ messages: AdapterMessage[]; mediaLease: AdmissionLease }> {
+  const chosen: { role: 'user' | 'assistant'; parts: PlannedPart[] }[] = [];
+  const seenMedia = new Set<string>();
+  const mediaCache = new Map<string, Promise<OwnedMedia | null>>();
+  let textChars = 0;
+  let imageBytes = 0;
+  let imageCount = 0;
+
+  const getMedia = (part: Extract<MessagePart, { type: 'image' }>) => {
+    const key = part.uploadId ? `u:${part.uploadId}` : part.imageId ? `i:${part.imageId}` : '';
+    if (!key) return { key, media: Promise.resolve(null) };
+    let media = mediaCache.get(key);
+    if (!media) {
+      media = part.uploadId
+        ? getOwnedUploadMedia(part.uploadId, ownerId)
+        : getOwnedImageMedia(part.imageId!, ownerId);
+      mediaCache.set(key, media);
+    }
+    return { key, media };
+  };
+
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    const stored = closeDanglingToolCalls(parseParts(row.parts), '(调用未完成)');
+    const planned: PlannedPart[] = [];
+    const localMediaKeys: string[] = [];
+    let rowText = 0;
+    let rowImageBytes = 0;
+    let rowImageCount = 0;
+
+    for (const part of stored) {
+      if (part.type === 'reasoning') continue;
+      if (part.type === 'image') {
+        if (!includeImages) continue;
+        const ref = getMedia(part);
+        if (!ref.key || seenMedia.has(ref.key) || localMediaKeys.includes(ref.key)) continue;
+        const media = await ref.media;
+        if (!media) continue;
+        planned.push({ type: 'pending_image', media });
+        localMediaKeys.push(ref.key);
+        rowImageBytes += media.size;
+        rowImageCount++;
+        continue;
+      }
+      rowText += adapterTextCost(part);
+      const converted = toAdapterPartNoImage(part);
+      if (converted) planned.push(converted);
+    }
+
+    if (!planned.length) continue;
+    const over = textChars + rowText > config.maxContextTextChars
+      || imageBytes + rowImageBytes > config.maxContextImageBytes
+      || imageCount + rowImageCount > config.maxContextImages;
+    if (over) {
+      if (!chosen.length) throw new InputBudgetError('当前消息超过模型上下文预算,请缩短文字或减少图片');
+      break;
+    }
+    chosen.unshift({ role: row.role as 'user' | 'assistant', parts: planned });
+    textChars += rowText;
+    imageBytes += rowImageBytes;
+    imageCount += rowImageCount;
+    for (const key of localMediaKeys) seenMedia.add(key);
+  }
+
+  while (chosen.length && chosen[0].role !== 'user') chosen.shift();
+  const mediaLease = tryReserveContextImageBytes(ownerId, imageBytes);
+  if (!mediaLease) {
+    throw new InputBudgetError('当前图片上下文总量繁忙,请等待其他图片对话完成后重试', 429);
+  }
+  const out: AdapterMessage[] = [];
+  try {
+    for (const message of chosen) {
+      const parts: AdapterMessagePart[] = [];
+      for (const part of message.parts) {
+        if (part.type === 'pending_image') {
+          parts.push({ type: 'image', ...(await readMediaBase64(part.media, config.maxContextImageBytes)) });
+        } else {
+          parts.push(part);
+        }
+      }
+      if (parts.length) out.push({ role: message.role, parts });
+    }
+    return { messages: out, mediaLease };
+  } catch (err) {
+    mediaLease.release();
+    throw err;
+  }
 }
 
 function chatSummary(c: typeof schema.chats.$inferSelect) {
@@ -212,8 +359,8 @@ function buildImageTurn(history: AdapterMessage[]) {
 }
 
 const partSchema = z.union([
-  z.object({ type: z.literal('text'), text: z.string().min(1).max(200_000) }),
-  z.object({ type: z.literal('image'), uploadId: z.string().max(64) }),
+  z.object({ type: z.literal('text'), text: z.string().min(1).max(config.maxMessageTextChars) }),
+  z.object({ type: z.literal('image'), uploadId: z.string().min(1).max(64) }),
 ]);
 
 const streamBodySchema = z.object({
@@ -222,9 +369,6 @@ const streamBodySchema = z.object({
   regenerateMessageId: z.string().max(64).optional(),
   editMessageId: z.string().max(64).optional(),
 });
-
-// per-user concurrent stream cap
-const activeStreams = new Map<string, number>();
 
 const TITLE_PROMPT = '请为上面这段对话生成一个简短的标题(不超过16个字),直接输出标题文本,不要任何引号、句号或解释。';
 
@@ -258,8 +402,9 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!c) return reply.code(404).send({ error: '对话不存在' });
     const msgs = db.select().from(schema.messages).where(eq(schema.messages.chatId, id))
       .orderBy(asc(schema.messages.createdAt)).all();
-    let mcpServerIds: string[] = [];
-    try { mcpServerIds = JSON.parse(c.mcpServerIds); } catch { /* ignore */ }
+    let savedMcpServerIds: string[] = [];
+    try { savedMcpServerIds = JSON.parse(c.mcpServerIds); } catch { /* ignore */ }
+    const mcpServerIds = validateMcpSelection(req.user!, savedMcpServerIds).allowed;
     return {
       chat: {
         ...chatSummary(c),
@@ -277,7 +422,7 @@ export async function chatRoutes(app: FastifyInstance) {
       title: z.string().max(120).optional(),
       systemPrompt: z.string().max(20_000).nullish(),
       temperature: z.number().min(0).max(2).nullish(),
-      maxTokens: z.number().int().min(1).max(1_000_000).nullish(),
+      maxTokens: z.number().int().min(1).max(config.maxModelOutputTokens).nullish(),
       reasoningEffort: z.string().max(32).nullish(),
       mcpServerIds: z.array(z.string().max(64)).max(20).optional(),
       pinned: z.boolean().optional(),
@@ -294,13 +439,20 @@ export async function chatRoutes(app: FastifyInstance) {
     if (d.temperature !== undefined) patch.temperature = d.temperature;
     if (d.maxTokens !== undefined) patch.maxTokens = d.maxTokens;
     if (d.reasoningEffort !== undefined) patch.reasoningEffort = d.reasoningEffort;
-    if (d.mcpServerIds !== undefined) patch.mcpServerIds = JSON.stringify(d.mcpServerIds);
+    if (d.mcpServerIds !== undefined) {
+      const access = validateMcpSelection(req.user!, d.mcpServerIds);
+      if (access.denied.length) {
+        return reply.code(403).send({ error: '所选 MCP 服务器不存在、已禁用或未授权' });
+      }
+      patch.mcpServerIds = JSON.stringify(access.allowed);
+    }
     if (d.pinned !== undefined) patch.pinned = d.pinned ? 1 : 0;
     if (d.modelId !== undefined) patch.modelId = d.modelId;
     db.update(schema.chats).set(patch).where(eq(schema.chats.id, id)).run();
     const updated = db.select().from(schema.chats).where(eq(schema.chats.id, id)).get()!;
-    let mcpServerIds: string[] = [];
-    try { mcpServerIds = JSON.parse(updated.mcpServerIds); } catch { /* ignore */ }
+    let savedMcpServerIds: string[] = [];
+    try { savedMcpServerIds = JSON.parse(updated.mcpServerIds); } catch { /* ignore */ }
+    const mcpServerIds = validateMcpSelection(req.user!, savedMcpServerIds).allowed;
     return { chat: { ...chatSummary(updated), systemPrompt: updated.systemPrompt, temperature: updated.temperature, maxTokens: updated.maxTokens, reasoningEffort: updated.reasoningEffort, mcpServerIds } };
   });
 
@@ -310,7 +462,11 @@ export async function chatRoutes(app: FastifyInstance) {
     const c = db.select().from(schema.chats)
       .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
     if (!c) return reply.code(404).send({ error: '对话不存在' });
+    const uploadIds = db.select({ parts: schema.messages.parts }).from(schema.messages)
+      .where(eq(schema.messages.chatId, id)).all()
+      .flatMap((m) => uploadIdsFromPartsJson(m.parts));
     db.delete(schema.chats).where(eq(schema.chats.id, id)).run();
+    await cleanupUnreferencedUploads(req.user!.id, uploadIds);
     return { ok: true };
   });
 
@@ -327,84 +483,139 @@ export async function chatRoutes(app: FastifyInstance) {
       .where(and(eq(schema.chats.id, chatId), eq(schema.chats.userId, user.id))).get();
     if (!chat) return reply.code(404).send({ error: '对话不存在' });
 
-    if ((activeStreams.get(user.id) ?? 0) >= 3) {
-      return reply.code(429).send({ error: '并发对话数已达上限,请等待其他回复完成' });
-    }
-
     // resolve model
     const picked = getModelWithProvider(body.modelId ?? chat.modelId) ?? getDefaultModel();
     if (!picked) return reply.code(400).send({ error: '没有可用的模型,请联系管理员配置' });
     const { model, provider } = picked;
 
-    // --- prepare message history mutations ---
+    const chatLease = tryAcquireChatTurn(user.id, chatId);
+    if (!chatLease) {
+      return reply.code(429).send({ error: '对话并发数已达上限,请等待其他回复完成' });
+    }
+    let imageLease: AdmissionLease | null = null;
+    let imageReservation: StorageReservation | null = null;
+    let contextMediaLease: AdmissionLease | null = null;
+
+    // From admission through MCP discovery and provider I/O, every exit path
+    // releases all process-local leases/reservations.
+    try {
+    if (model.imageGen) {
+      imageLease = tryAcquireImageJob(user.id);
+      if (!imageLease) {
+        return reply.code(429).send({ error: '图片生成并发数已达上限,请等待当前任务完成' });
+      }
+      const reserved = tryReserveStorage(user.id, 'image', config.maxGeneratedImageBytes);
+      if (!reserved.ok) {
+        return reply.code(413).send({ error: quotaErrorMessage('image', reserved.reason) });
+      }
+      imageReservation = reserved.reservation;
+    }
+
+    let normalizedContent: MessagePart[] | undefined;
+    if (body.content && !body.regenerateMessageId) {
+      try {
+        normalizedContent = await normalizeIncomingParts(body.content as MessagePart[], user.id);
+      } catch (err) {
+        if (err instanceof InputBudgetError) {
+          return reply.code(err.statusCode).send({ error: err.message });
+        }
+        throw err;
+      }
+    }
+
+    // --- plan the mutation and context before touching saved history ---
     let userMessageId: string | null = null;
+    let removedUploadIds: string[] = [];
+    let history: { role: string; parts: string }[];
+    let applyHistoryMutation: () => void;
     if (body.regenerateMessageId) {
       const target = db.select().from(schema.messages)
         .where(and(eq(schema.messages.id, body.regenerateMessageId), eq(schema.messages.chatId, chatId))).get();
       if (!target) return reply.code(404).send({ error: '消息不存在' });
-      db.delete(schema.messages)
-        .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.seq, target.seq))).run();
+      removedUploadIds = db.select({ parts: schema.messages.parts }).from(schema.messages)
+        .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.seq, target.seq))).all()
+        .flatMap((m) => uploadIdsFromPartsJson(m.parts));
+      history = db.select().from(schema.messages)
+        .where(and(eq(schema.messages.chatId, chatId), lt(schema.messages.seq, target.seq)))
+        .orderBy(desc(schema.messages.seq)).limit(config.maxContextMessages).all().reverse()
+        .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0));
+      applyHistoryMutation = () => {
+        db.delete(schema.messages)
+          .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.seq, target.seq))).run();
+      };
     } else if (body.editMessageId) {
-      if (!body.content) return reply.code(400).send({ error: '缺少消息内容' });
+      if (!normalizedContent) return reply.code(400).send({ error: '缺少消息内容' });
       const target = db.select().from(schema.messages)
         .where(and(eq(schema.messages.id, body.editMessageId), eq(schema.messages.chatId, chatId))).get();
       if (!target || target.role !== 'user') return reply.code(404).send({ error: '消息不存在' });
-      db.update(schema.messages).set({ parts: JSON.stringify(body.content) })
-        .where(eq(schema.messages.id, target.id)).run();
-      db.delete(schema.messages)
-        .where(and(eq(schema.messages.chatId, chatId), gt(schema.messages.seq, target.seq))).run();
+      const normalizedJson = JSON.stringify(normalizedContent);
+      removedUploadIds = db.select({ parts: schema.messages.parts }).from(schema.messages)
+        .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.seq, target.seq))).all()
+        .flatMap((m) => uploadIdsFromPartsJson(m.parts));
+      history = db.select().from(schema.messages)
+        .where(and(eq(schema.messages.chatId, chatId), lte(schema.messages.seq, target.seq)))
+        .orderBy(desc(schema.messages.seq)).limit(config.maxContextMessages).all().reverse()
+        .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0))
+        .map((m) => m.id === target.id ? { ...m, parts: normalizedJson } : m);
+      applyHistoryMutation = () => {
+        db.update(schema.messages).set({ parts: normalizedJson })
+          .where(eq(schema.messages.id, target.id)).run();
+        db.delete(schema.messages)
+          .where(and(eq(schema.messages.chatId, chatId), gt(schema.messages.seq, target.seq))).run();
+      };
       userMessageId = target.id;
     } else {
-      if (!body.content) return reply.code(400).send({ error: '缺少消息内容' });
+      if (!normalizedContent) return reply.code(400).send({ error: '缺少消息内容' });
       userMessageId = newId();
-      db.insert(schema.messages).values({
-        id: userMessageId, chatId, role: 'user', seq: nextSeq(chatId),
-        parts: JSON.stringify(body.content), createdAt: now(),
-      }).run();
+      const seq = nextSeq(chatId);
+      const createdAt = now();
+      const normalizedJson = JSON.stringify(normalizedContent);
+      history = db.select().from(schema.messages).where(eq(schema.messages.chatId, chatId))
+        .orderBy(desc(schema.messages.seq)).limit(config.maxContextMessages - 1).all().reverse()
+        .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0));
+      history.push({ role: 'user', parts: normalizedJson });
+      applyHistoryMutation = () => {
+        db.insert(schema.messages).values({
+          id: userMessageId!, chatId, role: 'user', seq, parts: normalizedJson, createdAt,
+        }).run();
+      };
     }
-
-    const history = db.select().from(schema.messages).where(eq(schema.messages.chatId, chatId))
-      .orderBy(asc(schema.messages.seq)).all()
-      .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0));
     if (!history.length || history[history.length - 1].role !== 'user') {
       return reply.code(400).send({ error: '当前对话状态无法生成回复' });
     }
 
     // Image models are fed pictures too — that's the whole point of "edit this one".
     const withImages = !!model.vision || !!model.imageGen;
-    const baseHistory: AdapterMessage[] = history.map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      parts: toAdapterParts(parseParts(m.parts), user.id, withImages),
-    })).filter((m) => m.parts.length > 0);
+    let baseHistory: AdapterMessage[];
+    try {
+      const bounded = await buildBoundedHistory(history, user.id, withImages);
+      baseHistory = bounded.messages;
+      contextMediaLease = bounded.mediaLease;
+    } catch (err) {
+      if (err instanceof InputBudgetError) {
+        return reply.code(err.statusCode).send({ error: err.message });
+      }
+      throw err;
+    }
+    applyHistoryMutation();
+    if (removedUploadIds.length) await cleanupUnreferencedUploads(user.id, removedUploadIds);
 
     // MCP tools
-    let mcpServerIds: string[] = [];
-    try { mcpServerIds = JSON.parse(chat.mcpServerIds); } catch { /* ignore */ }
+    let savedMcpServerIds: string[] = [];
+    try { savedMcpServerIds = JSON.parse(chat.mcpServerIds); } catch { /* ignore */ }
+    const mcpAccess = validateMcpSelection(user, savedMcpServerIds);
+    const mcpServerIds = mcpAccess.allowed;
     let toolDefs: ToolDef[] | undefined;
     let toolErrors: { serverId: string; name: string; error: string }[] = [];
+    let toolCapabilities: McpCapabilities = { routes: new Map() };
     if (model.tools && !model.imageGen && mcpServerIds.length) {
-      const r = await getToolsForServers(mcpServerIds);
+      const r = await getToolsForServers(mcpServerIds, user);
       toolDefs = r.tools.length ? r.tools : undefined;
       toolErrors = r.errors;
+      toolCapabilities = r.capabilities;
     }
 
     // --- start streaming ---
-    // Re-check the cap here: the MCP tool fetch above yields, so several requests
-    // can pass the early check before any of them registers.
-    if ((activeStreams.get(user.id) ?? 0) >= 3) {
-      return reply.code(429).send({ error: '并发对话数已达上限,请等待其他回复完成' });
-    }
-    activeStreams.set(user.id, (activeStreams.get(user.id) ?? 0) + 1);
-    let slotReleased = false;
-    const releaseSlot = () => {
-      if (slotReleased) return;
-      slotReleased = true;
-      activeStreams.set(user.id, Math.max(0, (activeStreams.get(user.id) ?? 1) - 1));
-    };
-
-    // Everything below is the streaming turn; the outer finally guarantees the
-    // slot is released even if setup throws before the inner try/finally.
-    try {
     const sse = createSse(reply);
     const controller = new AbortController();
     let clientGone = false;
@@ -424,6 +635,9 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     sse.send('meta', { messageId: assistantId, userMessageId, model: model.modelId });
+    if (mcpAccess.denied.length) {
+      sse.send('notice', { message: '部分 MCP 服务器已被禁用或撤销授权,本次不会调用' });
+    }
     for (const te of toolErrors) sse.send('notice', { message: `MCP 服务器「${te.name}」连接失败: ${te.error}` });
 
     const cfg = toRuntimeConfig(provider);
@@ -459,8 +673,9 @@ export async function chatRoutes(app: FastifyInstance) {
           throw e;
         }
         const elapsed = Date.now() - t0;
+        if (generated.length !== 1) throw new Error('Provider 返回的图片数量异常');
         for (const g of generated) {
-          const saved = saveGeneratedImage({
+          const saved = await saveGeneratedImage({
             userId: user.id, providerId: provider.id, model: model.modelId,
             prompt: request, size: null, durationMs: elapsed, img: g,
           });
@@ -481,7 +696,7 @@ export async function chatRoutes(app: FastifyInstance) {
         for (;;) {
           iterations++;
           const messages = [...baseHistory];
-          if (parts.length) messages.push({ role: 'assistant', parts: toAdapterParts(parts, user.id, false) });
+          if (parts.length) messages.push({ role: 'assistant', parts: toAdapterPartsNoImages(parts) });
           const pendingCalls: { id: string; name: string; args: string }[] = [];
           let stopReason = 'stop';
 
@@ -491,7 +706,9 @@ export async function chatRoutes(app: FastifyInstance) {
             messages,
             tools: toolDefs,
             temperature: chat.temperature ?? undefined,
-            maxTokens: chat.maxTokens ?? undefined,
+            maxTokens: chat.maxTokens
+              ? Math.min(chat.maxTokens, config.maxModelOutputTokens)
+              : undefined,
             reasoning: resolveReasoning(chat.reasoningEffort, model, provider.type as ProviderType),
             signal: controller.signal,
           })) {
@@ -518,8 +735,13 @@ export async function chatRoutes(app: FastifyInstance) {
 
           if (stopReason === 'tool_calls' && pendingCalls.length && iterations < config.maxToolIterations) {
             for (const call of pendingCalls) {
-              const { result, isError } = await callTool(call.name, call.args, { timeoutMs: 120_000 });
-              const trimmed = result.length > 100_000 ? `${result.slice(0, 100_000)}\n…(结果已截断)` : result;
+              const { result, isError } = await callTool(
+                call.name, call.args, toolCapabilities, user, { timeoutMs: 120_000 },
+              );
+              const resultLimit = Math.min(100_000, Math.floor(config.maxContextTextChars / 4));
+              const trimmed = result.length > resultLimit
+                ? `${result.slice(0, resultLimit)}\n…(结果已截断)`
+                : result;
               const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: trimmed, isError };
               parts.push(part);
               sse.send('tool_result', part);
@@ -537,8 +759,6 @@ export async function chatRoutes(app: FastifyInstance) {
         errMsg = e instanceof Error ? e.message : String(e);
         sse.send('error', { message: errMsg });
       }
-    } finally {
-      releaseSlot();
     }
 
     const finalParts = closeDanglingToolCalls(
@@ -575,13 +795,13 @@ export async function chatRoutes(app: FastifyInstance) {
       try {
         // text-only replay: the title never needs the pictures, and non-vision
         // title models would choke on them
-        const titleMessages: AdapterMessage[] = history.map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          parts: toAdapterParts(parseParts(m.parts), user.id, false),
+        const titleMessages: AdapterMessage[] = baseHistory.map((m) => ({
+          role: m.role,
+          parts: m.parts.filter((p) => p.type !== 'image'),
         })).filter((m) => m.parts.length > 0);
         while (titleMessages.length && titleMessages[0].role !== 'user') titleMessages.shift();
         titleMessages.push(
-          { role: 'assistant', parts: toAdapterParts(finalParts, user.id, false) },
+          { role: 'assistant', parts: toAdapterPartsNoImages(finalParts) },
           { role: 'user', parts: [{ type: 'text', text: TITLE_PROMPT }] },
         );
         let title = '';
@@ -614,7 +834,10 @@ export async function chatRoutes(app: FastifyInstance) {
     sse.send('done', { status });
     sse.end();
     } finally {
-      releaseSlot();
+      contextMediaLease?.release();
+      imageReservation?.release();
+      imageLease?.release();
+      chatLease.release();
     }
   });
 }

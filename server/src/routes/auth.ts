@@ -48,7 +48,7 @@ export async function authRoutes(app: FastifyInstance) {
     const id = newId();
     db.insert(schema.users).values({
       id, username,
-      passwordHash: hashPassword(password),
+      passwordHash: await hashPassword(password),
       role: anyUser ? 'user' : 'admin', // first user becomes admin
       createdAt: now(),
     }).run();
@@ -67,7 +67,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(429).send({ error: '尝试过于频繁,请稍后再试' });
     }
     const u = db.select().from(schema.users).where(eq(schema.users.username, username)).get();
-    if (!u || !verifyPassword(password, u.passwordHash)) {
+    if (!u || !await verifyPassword(password, u.passwordHash)) {
       return reply.code(401).send({ error: '用户名或密码错误' });
     }
     if (u.disabled) return reply.code(403).send({ error: '账号已被停用' });
@@ -90,13 +90,20 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post('/api/auth/password', async (req, reply) => {
     requireAuth(req, reply);
-    const body = z.object({ oldPassword: z.string(), newPassword: z.string().min(8).max(128) }).safeParse(req.body);
+    if (!rateLimit(`password:u:${req.user!.id}`, 5, 600_000)
+      || !rateLimit(`password:ip:${req.ip}`, 20, 600_000)) {
+      return reply.code(429).send({ error: '尝试过于频繁,请稍后再试' });
+    }
+    const body = z.object({
+      oldPassword: z.string().min(1).max(128),
+      newPassword: z.string().min(8).max(128),
+    }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '新密码至少8位' });
     const u = db.select().from(schema.users).where(eq(schema.users.id, req.user!.id)).get()!;
-    if (!verifyPassword(body.data.oldPassword, u.passwordHash)) {
+    if (!await verifyPassword(body.data.oldPassword, u.passwordHash)) {
       return reply.code(401).send({ error: '原密码错误' });
     }
-    db.update(schema.users).set({ passwordHash: hashPassword(body.data.newPassword) })
+    db.update(schema.users).set({ passwordHash: await hashPassword(body.data.newPassword) })
       .where(eq(schema.users.id, u.id)).run();
     // Changing the password must invalidate every other session — that is the
     // whole point of changing it after a device is lost or a cookie leaks.

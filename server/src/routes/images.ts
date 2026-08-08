@@ -9,8 +9,12 @@ import { config } from '../config.js';
 import { requireAuth } from '../auth.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
-import { readUploadBase64 } from './uploads.js';
 import type { GeneratedImage } from '../types.js';
+import { tryAcquireImageJob } from '../admission.js';
+import {
+  decodeGeneratedImage, extForMime, getOwnedUploadMedia,
+  MIME_BY_EXT, quotaErrorMessage, readMediaBase64, tryReserveStorage,
+} from '../storage.js';
 
 const generateSchema = z.object({
   modelId: z.string(),
@@ -18,21 +22,8 @@ const generateSchema = z.object({
   size: z.string().max(20).optional(),
   quality: z.string().max(20).optional(),
   n: z.number().int().min(1).max(4).optional(),
-  inputUploadIds: z.array(z.string()).max(4).optional(),
+  inputUploadIds: z.array(z.string().min(1).max(64)).max(config.maxAttachmentsPerMessage).optional(),
 });
-
-const MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-};
-
-function extForMime(mime: string): string {
-  if (mime === 'image/jpeg') return 'jpg';
-  if (mime === 'image/webp') return 'webp';
-  return 'png';
-}
 
 export interface SavedImage {
   id: string; model: string; prompt: string; size: string | null;
@@ -41,42 +32,46 @@ export interface SavedImage {
 
 // Write a generated image to disk + the gallery. Shared by the images page and
 // by image-model turns inside a chat, so both end up in the same gallery.
-export function saveGeneratedImage(opts: {
+export async function saveGeneratedImage(opts: {
   userId: string; providerId: string; model: string; prompt: string;
   size: string | null; durationMs: number; img: GeneratedImage;
-}): SavedImage {
+}): Promise<SavedImage> {
+  const decoded = decodeGeneratedImage(opts.img.dataBase64, opts.img.mime);
   const id = newId();
-  const filename = `${id}.${extForMime(opts.img.mime)}`;
-  fs.writeFileSync(path.join(config.dataDir, 'images', filename), Buffer.from(opts.img.dataBase64, 'base64'));
+  const filename = `${id}.${extForMime(decoded.mime)}`;
+  const filePath = path.join(config.dataDir, 'images', filename);
+  await fs.promises.writeFile(filePath, decoded.buffer, { flag: 'wx' });
   const createdAt = now();
-  db.insert(schema.images).values({
-    id,
-    userId: opts.userId,
-    providerId: opts.providerId,
-    model: opts.model,
-    prompt: opts.prompt,
-    size: opts.size,
-    filename,
-    durationMs: opts.durationMs,
-    createdAt,
-  }).run();
+  try {
+    db.insert(schema.images).values({
+      id,
+      userId: opts.userId,
+      providerId: opts.providerId,
+      model: opts.model,
+      prompt: opts.prompt,
+      size: opts.size,
+      filename,
+      byteSize: decoded.buffer.length,
+      durationMs: opts.durationMs,
+      createdAt,
+    }).run();
+  } catch (err) {
+    try { await fs.promises.unlink(filePath); } catch { /* best effort */ }
+    throw err;
+  }
   return {
     id, model: opts.model, prompt: opts.prompt, size: opts.size,
     durationMs: opts.durationMs, createdAt, tokens: opts.img.usage?.totalTokens ?? null,
   };
 }
 
-// Read a generated image back as base64 so it can be replayed as conversation
-// context. Ownership is enforced; filename comes from the DB row, never input.
-export function readImageBase64(imageId: string, userId: string): { mime: string; dataBase64: string } | null {
-  const row = db.select().from(schema.images).where(eq(schema.images.id, imageId)).get();
-  if (!row || row.userId !== userId) return null;
-  try {
-    const buf = fs.readFileSync(path.join(config.dataDir, 'images', row.filename));
-    const ext = path.extname(row.filename).slice(1).toLowerCase();
-    return { mime: MIME_BY_EXT[ext] ?? 'image/png', dataBase64: buf.toString('base64') };
-  } catch {
-    return null;
+async function rollbackSavedImages(saved: SavedImage[]): Promise<void> {
+  for (const item of saved) {
+    const row = db.select().from(schema.images).where(eq(schema.images.id, item.id)).get();
+    if (!row) continue;
+    db.delete(schema.images).where(eq(schema.images.id, item.id)).run();
+    try { await fs.promises.unlink(path.join(config.dataDir, 'images', row.filename)); }
+    catch { /* best effort: leaves an unreferenced file, never a broken DB row */ }
   }
 }
 
@@ -123,54 +118,95 @@ export async function imageRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: '该 Provider 不支持图像生成' });
     }
 
-    let inputImages: { mime: string; dataBase64: string }[] | undefined;
-    if (inputUploadIds && inputUploadIds.length > 0) {
-      inputImages = [];
-      for (const uploadId of inputUploadIds) {
-        const img = readUploadBase64(uploadId, req.user!.id);
-        if (!img) return reply.code(400).send({ error: '输入图片不存在' });
-        inputImages.push(img);
-      }
+    const imageLease = tryAcquireImageJob(req.user!.id);
+    if (!imageLease) {
+      return reply.code(429).send({ error: '图片生成并发数已达上限,请等待当前任务完成' });
+    }
+    const requestedN = n ?? 1;
+    const reserved = tryReserveStorage(
+      req.user!.id, 'image', requestedN * config.maxGeneratedImageBytes,
+    );
+    if (!reserved.ok) {
+      imageLease.release();
+      return reply.code(413).send({ error: quotaErrorMessage('image', reserved.reason) });
     }
 
-    const t0 = Date.now();
-    const signal = AbortSignal.timeout(300_000);
-    let generated;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new DOMException('图片生成超时', 'TimeoutError')), 300_000);
+    const abort = () => controller.abort();
+    req.raw.once('aborted', abort);
     try {
-      generated = await adapter.generateImages(toRuntimeConfig(provider), {
-        model: model.modelId, prompt, size, quality, n, signal, inputImages,
+      let inputImages: { mime: string; dataBase64: string }[] | undefined;
+      const uniqueUploadIds = [...new Set(inputUploadIds ?? [])];
+      if (uniqueUploadIds.length > 0) {
+        inputImages = [];
+        let inputBytes = 0;
+        for (const uploadId of uniqueUploadIds) {
+          const media = await getOwnedUploadMedia(uploadId, req.user!.id);
+          if (!media) return reply.code(400).send({ error: '输入图片不存在' });
+          inputBytes += media.size;
+          if (inputBytes > config.maxMessageAttachmentBytes) {
+            return reply.code(413).send({ error: '输入图片总大小超过限制' });
+          }
+          inputImages.push(await readMediaBase64(media, config.maxMessageAttachmentBytes));
+        }
+      }
+
+      const t0 = Date.now();
+      let generated: GeneratedImage[];
+      try {
+        generated = await adapter.generateImages(toRuntimeConfig(provider), {
+          model: model.modelId, prompt, size, quality, n: requestedN,
+          signal: controller.signal, inputImages,
+        });
+      } catch (err) {
+        // Adapter errors are already human-readable — pass through as-is.
+        return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+      const durationMs = Date.now() - t0;
+      if (!generated.length || generated.length > requestedN) {
+        return reply.code(502).send({ error: 'Provider 返回的图片数量异常' });
+      }
+
+      const saved: SavedImage[] = [];
+      try {
+        for (const img of generated) {
+          saved.push(await saveGeneratedImage({
+            userId: req.user!.id,
+            providerId: provider.id,
+            model: model.modelId,
+            prompt,
+            size: size ?? null,
+            durationMs,
+            img,
+          }));
+        }
+      } catch (err) {
+        await rollbackSavedImages(saved);
+        return reply.code(502).send({ error: err instanceof Error ? err.message : '图片保存失败' });
+      }
+
+      const usage = generated[0]?.usage;
+      recordUsage({
+        userId: req.user!.id,
+        providerId: provider.id,
+        providerType: provider.type,
+        model: model.modelId,
+        kind: 'image',
+        images: saved.length,
+        promptTokens: usage?.promptTokens,
+        completionTokens: usage?.completionTokens,
+        totalTokens: usage?.totalTokens,
+        durationMs,
       });
-    } catch (err) {
-      // Adapter errors are already human-readable — pass through as-is.
-      return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) });
+
+      return { images: saved };
+    } finally {
+      clearTimeout(timeout);
+      req.raw.off('aborted', abort);
+      reserved.reservation.release();
+      imageLease.release();
     }
-    const durationMs = Date.now() - t0;
-
-    const saved = generated.map((img) => saveGeneratedImage({
-      userId: req.user!.id,
-      providerId: provider.id,
-      model: model.modelId,
-      prompt,
-      size: size ?? null,
-      durationMs,
-      img,
-    }));
-
-    const usage = generated[0]?.usage;
-    recordUsage({
-      userId: req.user!.id,
-      providerId: provider.id,
-      providerType: provider.type,
-      model: model.modelId,
-      kind: 'image',
-      images: saved.length,
-      promptTokens: usage?.promptTokens,
-      completionTokens: usage?.completionTokens,
-      totalTokens: usage?.totalTokens,
-      durationMs,
-    });
-
-    return { images: saved };
   });
 
   app.get('/api/images', async (req, reply) => {
@@ -199,6 +235,7 @@ export async function imageRoutes(app: FastifyInstance) {
     if (!fs.existsSync(filePath)) return reply.code(404).send({ error: '图片不存在' });
     const ext = path.extname(row.filename).slice(1).toLowerCase();
     reply.header('content-type', MIME_BY_EXT[ext] ?? 'application/octet-stream');
+    reply.header('x-content-type-options', 'nosniff');
     reply.header('cache-control', 'private, max-age=31536000, immutable');
     return reply.send(fs.createReadStream(filePath));
   });

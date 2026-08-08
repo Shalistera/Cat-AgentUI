@@ -13,9 +13,12 @@ import { adminRoutes } from './routes/admin.js';
 import { imageRoutes } from './routes/images.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { mcpRoutes } from './routes/mcp.js';
+import { reconcileStorageMetadata } from './storage.js';
+import { PasswordQueueFullError } from './crypto.js';
 
 async function main() {
   runMigrations();
+  await reconcileStorageMetadata();
 
   const app = Fastify({
     logger: { level: 'warn' },
@@ -32,6 +35,7 @@ async function main() {
     if (reply.sent) return;
     if (err.message === 'unauthorized') return reply.code(401).send({ error: '请先登录' });
     if (err.message === 'forbidden') return reply.code(403).send({ error: '需要管理员权限' });
+    if (err instanceof PasswordQueueFullError) return reply.code(503).send({ error: err.message });
     req.log.error(err);
     reply.code(err.statusCode && err.statusCode >= 400 ? err.statusCode : 500)
       .send({ error: err.statusCode === 413 ? '请求体过大' : '服务器内部错误' });

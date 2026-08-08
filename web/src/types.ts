@@ -135,6 +135,7 @@ export interface AdminMcpServer {
   command: string | null; args: string[]; url: string | null;
   hasEnv: boolean; hasHeaders: boolean;
   envKeys: string[]; headerKeys: string[];
+  allowedUserIds: string[];
   enabled: boolean; lastStatus: string | null; lastError: string | null;
   toolsCache?: { name: string; description: string }[];
 }

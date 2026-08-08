@@ -2,7 +2,8 @@ import type {
   AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage,
   ImageGenRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
-import { sseMessages, readErrorBody } from './sse.js';
+import { sseMessages, readBodyLimited, readErrorBody, readJsonLimited } from './sse.js';
+import { config } from '../config.js';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
 
@@ -260,7 +261,7 @@ export const openaiAdapter: ChatAdapter = {
   async listModels(cfg) {
     const res = await fetch(`${base(cfg)}/models`, { headers: headers(cfg, false) });
     if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await readErrorBody(res)}`);
-    const j: any = await res.json();
+    const j: any = await readJsonLimited(res, 5 * 1024 * 1024);
     const list = Array.isArray(j?.data) ? j.data : [];
     return list.map((m: any) => ({ id: String(m.id) })).sort((a: any, b: any) => a.id.localeCompare(b.id));
   },
@@ -298,7 +299,8 @@ export const openaiAdapter: ChatAdapter = {
       });
     }
     if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await readErrorBody(res)}`);
-    const j: any = await res.json();
+    const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * (req.n || 1) * 4 / 3) + 1024 * 1024;
+    const j: any = await readJsonLimited(res, maxJsonBytes);
     const usage = j?.usage
       ? { promptTokens: j.usage.input_tokens, completionTokens: j.usage.output_tokens, totalTokens: j.usage.total_tokens }
       : undefined;
@@ -307,7 +309,8 @@ export const openaiAdapter: ChatAdapter = {
       if (d.b64_json) out.push({ mime: 'image/png', dataBase64: d.b64_json, usage });
       else if (d.url) {
         const imgRes = await fetch(d.url, { signal: req.signal });
-        const buf = Buffer.from(await imgRes.arrayBuffer());
+        if (!imgRes.ok) throw new Error(`图片下载失败 (${imgRes.status})`);
+        const buf = await readBodyLimited(imgRes, config.maxGeneratedImageBytes);
         out.push({ mime: imgRes.headers.get('content-type') || 'image/png', dataBase64: buf.toString('base64'), usage });
       }
     }

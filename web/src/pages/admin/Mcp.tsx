@@ -5,7 +5,7 @@ import {
   Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select, Spinner, Textarea,
   StatusDot, Toggle, confirmDialog, toast,
 } from '../../components/ui';
-import type { AdminMcpServer } from '../../types';
+import type { AdminMcpServer, AdminUser } from '../../types';
 
 type Transport = AdminMcpServer['transport'];
 
@@ -60,8 +60,8 @@ function KeyValueEditor({ pairs, onChange, keyPlaceholder = 'Key', valuePlacehol
 }
 
 // ---------- create / edit modal ----------
-function McpModal({ server, onClose, onSaved }: {
-  server: AdminMcpServer | null; onClose(): void; onSaved(): Promise<void>;
+function McpModal({ server, users, onClose, onSaved }: {
+  server: AdminMcpServer | null; users: AdminUser[]; onClose(): void; onSaved(): Promise<void>;
 }) {
   const isEdit = server !== null;
   const [name, setName] = useState(server?.name ?? '');
@@ -73,6 +73,7 @@ function McpModal({ server, onClose, onSaved }: {
   const [url, setUrl] = useState(server?.url ?? '');
   const [headerPairs, setHeaderPairs] = useState<KVPair[]>([]);
   const [enabled, setEnabled] = useState(server?.enabled ?? true);
+  const [allowedUserIds, setAllowedUserIds] = useState<string[]>(server?.allowedUserIds ?? []);
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -84,6 +85,7 @@ function McpModal({ server, onClose, onSaved }: {
       name: name.trim(),
       transport,
       enabled,
+      allowedUserIds,
     };
     if (transport === 'stdio') {
       body.command = command.trim();
@@ -164,6 +166,28 @@ function McpModal({ server, onClose, onSaved }: {
           <Toggle checked={enabled} onChange={setEnabled} />
         </div>
 
+        <Field label="普通用户权限" hint="管理员始终可用;普通用户只有勾选后才能看到和调用该服务器">
+          <div className="max-h-48 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-bg0">
+            {users.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-tx3">暂无普通用户</div>
+            ) : users.map((u) => (
+              <div key={u.id} className="flex items-center gap-3 px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium text-tx">{u.displayName || u.username}</div>
+                  {u.displayName && <div className="truncate text-[11px] text-tx3">@{u.username}</div>}
+                </div>
+                {u.disabled && <Badge tone="err">已停用</Badge>}
+                <Toggle
+                  checked={allowedUserIds.includes(u.id)}
+                  onChange={(checked) => setAllowedUserIds(checked
+                    ? [...allowedUserIds, u.id]
+                    : allowedUserIds.filter((id) => id !== u.id))}
+                />
+              </div>
+            ))}
+          </div>
+        </Field>
+
         <ModalActions>
           <Button variant="outline" onClick={onClose}>取消</Button>
           <Button variant="primary" disabled={busy} onClick={submit}>
@@ -228,6 +252,9 @@ function ServerCard({ server, reload, onEdit }: {
         <Badge tone={server.lastStatus === 'ok' ? 'ok' : server.lastStatus === 'error' ? 'err' : 'default'}>
           {server.lastStatus === 'ok' ? '连接正常' : server.lastStatus === 'error' ? '连接异常' : '未测试'}
         </Badge>
+        <Badge tone={server.allowedUserIds.length ? 'acc' : 'default'}>
+          普通用户 {server.allowedUserIds.length}
+        </Badge>
         <div className="ml-auto flex items-center gap-1.5">
           <Toggle checked={server.enabled} onChange={setEnabled} />
           <Button variant="outline" size="sm" onClick={test} disabled={testing}>
@@ -278,14 +305,19 @@ function ServerCard({ server, reload, onEdit }: {
 // ---------- page ----------
 export default function Mcp() {
   const [servers, setServers] = useState<AdminMcpServer[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<AdminMcpServer | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get<AdminMcpServer[] | { servers?: AdminMcpServer[] }>('/api/admin/mcp');
+      const [r, allUsers] = await Promise.all([
+        api.get<AdminMcpServer[] | { servers?: AdminMcpServer[] }>('/api/admin/mcp'),
+        api.get<AdminUser[]>('/api/admin/users'),
+      ]);
       setServers(Array.isArray(r) ? r : r.servers ?? []);
+      setUsers(allUsers.filter((u) => u.role === 'user'));
     } catch (e) {
       toast(errMsg(e), 'err');
     } finally {
@@ -337,6 +369,7 @@ export default function Mcp() {
         <McpModal
           key={editing?.id ?? 'new'}
           server={editing}
+          users={users}
           onClose={() => setFormOpen(false)}
           onSaved={load}
         />
