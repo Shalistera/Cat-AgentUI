@@ -17,6 +17,8 @@ import { uploadRoutes } from './routes/uploads.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { importRoutes } from './routes/import.js';
 import { startRetentionSweeper } from './retention.js';
+import { reconcileStorageMetadata } from './storage.js';
+import { PasswordQueueFullError } from './crypto.js';
 
 // Slow image gateways can sit for many minutes before sending response
 // headers; undici's default 300s headersTimeout would abort those upstream
@@ -26,6 +28,7 @@ setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000 })
 
 async function main() {
   runMigrations();
+  await reconcileStorageMetadata();
 
   const app = Fastify({
     logger: { level: 'warn' },
@@ -42,6 +45,7 @@ async function main() {
     if (reply.sent) return;
     if (err.message === 'unauthorized') return reply.code(401).send({ error: '请先登录' });
     if (err.message === 'forbidden') return reply.code(403).send({ error: '需要管理员权限' });
+    if (err instanceof PasswordQueueFullError) return reply.code(503).send({ error: err.message });
     req.log.error(err);
     reply.code(err.statusCode && err.statusCode >= 400 ? err.statusCode : 500)
       .send({ error: err.statusCode === 413 ? '请求体过大' : '服务器内部错误' });

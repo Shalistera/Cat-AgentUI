@@ -9,8 +9,12 @@ import { config } from '../config.js';
 import { requireAuth } from '../auth.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
-import { readUploadBase64 } from './uploads.js';
 import type { GeneratedImage } from '../types.js';
+import { tryAcquireImageJob } from '../admission.js';
+import {
+  decodeGeneratedImage, extForMime, getOwnedUploadMedia,
+  MIME_BY_EXT, quotaErrorMessage, readMediaBase64, tryReserveStorage,
+} from '../storage.js';
 
 const generateSchema = z.object({
   modelId: z.string(),
@@ -18,7 +22,7 @@ const generateSchema = z.object({
   size: z.string().max(20).optional(),
   quality: z.string().max(20).optional(),
   n: z.number().int().min(1).max(4).optional(),
-  inputUploadIds: z.array(z.string()).max(4).optional(),
+  inputUploadIds: z.array(z.string().min(1).max(64)).max(config.maxAttachmentsPerMessage).optional(),
 });
 
 // Generation runs as a background job and the client polls for the result.
@@ -45,20 +49,6 @@ function cleanupJobs() {
     if (j.status !== 'running' && j.createdAt < cutoff) jobs.delete(id);
   }
 }
-
-const MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-};
-
-function extForMime(mime: string): string {
-  if (mime === 'image/jpeg') return 'jpg';
-  if (mime === 'image/webp') return 'webp';
-  return 'png';
-}
-
 export interface SavedImage {
   id: string; model: string; prompt: string; size: string | null;
   durationMs: number; createdAt: number; tokens: number | null;
@@ -66,45 +56,49 @@ export interface SavedImage {
 
 // Write a generated image to disk + the gallery. Shared by the images page and
 // by image-model turns inside a chat, so both end up in the same gallery.
-export function saveGeneratedImage(opts: {
+export async function saveGeneratedImage(opts: {
   userId: string; providerId: string; model: string; prompt: string;
   size: string | null; durationMs: number; img: GeneratedImage;
   /** Birthplace decides which retention policy applies — see schema note. */
   source: 'workshop' | 'chat';
-}): SavedImage {
+}): Promise<SavedImage> {
+  const decoded = decodeGeneratedImage(opts.img.dataBase64, opts.img.mime);
   const id = newId();
-  const filename = `${id}.${extForMime(opts.img.mime)}`;
-  fs.writeFileSync(path.join(config.dataDir, 'images', filename), Buffer.from(opts.img.dataBase64, 'base64'));
+  const filename = `${id}.${extForMime(decoded.mime)}`;
+  const filePath = path.join(config.dataDir, 'images', filename);
+  await fs.promises.writeFile(filePath, decoded.buffer, { flag: 'wx' });
   const createdAt = now();
-  db.insert(schema.images).values({
-    id,
-    userId: opts.userId,
-    providerId: opts.providerId,
-    model: opts.model,
-    source: opts.source,
-    prompt: opts.prompt,
-    size: opts.size,
-    filename,
-    durationMs: opts.durationMs,
-    createdAt,
-  }).run();
+  try {
+    db.insert(schema.images).values({
+      id,
+      userId: opts.userId,
+      providerId: opts.providerId,
+      model: opts.model,
+      source: opts.source,
+      prompt: opts.prompt,
+      size: opts.size,
+      filename,
+      byteSize: decoded.buffer.length,
+      durationMs: opts.durationMs,
+      createdAt,
+    }).run();
+  } catch (err) {
+    try { await fs.promises.unlink(filePath); } catch { /* best effort */ }
+    throw err;
+  }
   return {
     id, model: opts.model, prompt: opts.prompt, size: opts.size,
     durationMs: opts.durationMs, createdAt, tokens: opts.img.usage?.totalTokens ?? null,
   };
 }
 
-// Read a generated image back as base64 so it can be replayed as conversation
-// context. Ownership is enforced; filename comes from the DB row, never input.
-export function readImageBase64(imageId: string, userId: string): { mime: string; dataBase64: string } | null {
-  const row = db.select().from(schema.images).where(eq(schema.images.id, imageId)).get();
-  if (!row || row.userId !== userId) return null;
-  try {
-    const buf = fs.readFileSync(path.join(config.dataDir, 'images', row.filename));
-    const ext = path.extname(row.filename).slice(1).toLowerCase();
-    return { mime: MIME_BY_EXT[ext] ?? 'image/png', dataBase64: buf.toString('base64') };
-  } catch {
-    return null;
+async function rollbackSavedImages(saved: SavedImage[]): Promise<void> {
+  for (const item of saved) {
+    const row = db.select().from(schema.images).where(eq(schema.images.id, item.id)).get();
+    if (!row) continue;
+    db.delete(schema.images).where(eq(schema.images.id, item.id)).run();
+    try { await fs.promises.unlink(path.join(config.dataDir, 'images', row.filename)); }
+    catch { /* best effort: leaves an unreferenced file, never a broken DB row */ }
   }
 }
 
@@ -151,68 +145,107 @@ export async function imageRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: '该 Provider 不支持图像生成' });
     }
 
-    let inputImages: { mime: string; dataBase64: string }[] | undefined;
-    if (inputUploadIds && inputUploadIds.length > 0) {
-      inputImages = [];
-      for (const uploadId of inputUploadIds) {
-        const img = readUploadBase64(uploadId, req.user!.id);
-        if (!img) return reply.code(400).send({ error: '输入图片不存在' });
-        inputImages.push(img);
-      }
+    const imageLease = tryAcquireImageJob(req.user!.id);
+    if (!imageLease) {
+      return reply.code(429).send({ error: '图片生成并发数已达上限,请等待当前任务完成' });
+    }
+    const requestedN = n ?? 1;
+    const reserved = tryReserveStorage(
+      req.user!.id, 'image', requestedN * config.maxGeneratedImageBytes,
+    );
+    if (!reserved.ok) {
+      imageLease.release();
+      return reply.code(413).send({ error: quotaErrorMessage('image', reserved.reason) });
     }
 
-    const userId = req.user!.id;
-    const job: ImageJob = { id: newId(), userId, createdAt: Date.now(), status: 'running' };
-    jobs.set(job.id, job);
-    cleanupJobs();
-    console.log(`[img] job ${job.id} start model=${model.modelId} n=${n ?? 1} refs=${inputImages?.length ?? 0}`);
-
-    void (async () => {
-      const t0 = Date.now();
-      const signal = AbortSignal.timeout(GENERATE_TIMEOUT_MS);
-      try {
-        const generated = await adapter.generateImages!(toRuntimeConfig(provider), {
-          model: model.modelId, prompt, size, quality, n, signal, inputImages,
-        });
-        const durationMs = Date.now() - t0;
-
-        const saved = generated.map((img) => saveGeneratedImage({
-          userId,
-          providerId: provider.id,
-          model: model.modelId,
-          prompt,
-          size: size ?? null,
-          durationMs,
-          img,
-          source: 'workshop',
-        }));
-
-        const usage = generated[0]?.usage;
-        recordUsage({
-          userId,
-          providerId: provider.id,
-          providerType: provider.type,
-          model: model.modelId,
-          kind: 'image',
-          images: saved.length,
-          promptTokens: usage?.promptTokens,
-          completionTokens: usage?.completionTokens,
-          totalTokens: usage?.totalTokens,
-          durationMs,
-        });
-
-        job.images = saved;
-        job.status = 'done';
-        console.log(`[img] job ${job.id} done in ${(durationMs / 1000).toFixed(1)}s, ${saved.length} image(s)`);
-      } catch (err) {
-        // Adapter errors are already human-readable — pass through as-is.
-        job.error = err instanceof Error ? err.message : String(err);
-        job.status = 'error';
-        console.log(`[img] job ${job.id} error after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${job.error}`);
+    const reservation = reserved.reservation;
+    let handedOff = false;
+    try {
+      let inputImages: { mime: string; dataBase64: string }[] | undefined;
+      const uniqueUploadIds = [...new Set(inputUploadIds ?? [])];
+      if (uniqueUploadIds.length > 0) {
+        inputImages = [];
+        let inputBytes = 0;
+        for (const uploadId of uniqueUploadIds) {
+          const media = await getOwnedUploadMedia(uploadId, req.user!.id);
+          if (!media) return reply.code(400).send({ error: '输入图片不存在' });
+          inputBytes += media.size;
+          if (inputBytes > config.maxMessageAttachmentBytes) {
+            return reply.code(413).send({ error: '输入图片总大小超过限制' });
+          }
+          inputImages.push(await readMediaBase64(media, config.maxMessageAttachmentBytes));
+        }
       }
-    })();
 
-    return { jobId: job.id };
+      const userId = req.user!.id;
+      const job: ImageJob = { id: newId(), userId, createdAt: Date.now(), status: 'running' };
+      jobs.set(job.id, job);
+      cleanupJobs();
+      handedOff = true;
+      console.log(`[img] job ${job.id} start model=${model.modelId} n=${requestedN} refs=${inputImages?.length ?? 0}`);
+
+      void (async () => {
+        const t0 = Date.now();
+        const saved: SavedImage[] = [];
+        try {
+          const generated = await adapter.generateImages!(toRuntimeConfig(provider), {
+            model: model.modelId, prompt, size, quality, n: requestedN,
+            signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS), inputImages,
+          });
+          const durationMs = Date.now() - t0;
+          if (!generated.length || generated.length > requestedN) {
+            throw new Error('Provider 返回的图片数量异常');
+          }
+          for (const img of generated) {
+            saved.push(await saveGeneratedImage({
+              userId,
+              providerId: provider.id,
+              model: model.modelId,
+              prompt,
+              size: size ?? null,
+              durationMs,
+              img,
+              source: 'workshop',
+            }));
+          }
+
+          const usage = generated[0]?.usage;
+          recordUsage({
+            userId,
+            providerId: provider.id,
+            providerType: provider.type,
+            model: model.modelId,
+            kind: 'image',
+            images: saved.length,
+            promptTokens: usage?.promptTokens,
+            completionTokens: usage?.completionTokens,
+            totalTokens: usage?.totalTokens,
+            durationMs,
+          });
+
+          job.images = saved;
+          job.status = 'done';
+          console.log(`[img] job ${job.id} done in ${(durationMs / 1000).toFixed(1)}s, ${saved.length} image(s)`);
+        } catch (err) {
+          if (saved.length) await rollbackSavedImages(saved);
+          job.error = err instanceof Error && err.name === 'TimeoutError'
+            ? '图片生成超时(超过 10 分钟)'
+            : err instanceof Error ? err.message : String(err);
+          job.status = 'error';
+          console.log(`[img] job ${job.id} error after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${job.error}`);
+        } finally {
+          reservation.release();
+          imageLease.release();
+        }
+      })();
+
+      return { jobId: job.id };
+    } finally {
+      if (!handedOff) {
+        reservation.release();
+        imageLease.release();
+      }
+    }
   });
 
   // The client's submit response can get lost in transit (proxy hiccup, page
@@ -268,6 +301,7 @@ export async function imageRoutes(app: FastifyInstance) {
     // The rowid is a stable, monotonically assigned sequence number, and a
     // Content-Disposition filename outranks the anchor's download attribute.
     reply.header('content-disposition', `inline; filename="cat-image-${row.rowid}.${ext}"`);
+    reply.header('x-content-type-options', 'nosniff');
     reply.header('cache-control', 'private, max-age=31536000, immutable');
     return reply.send(fs.createReadStream(filePath));
   });

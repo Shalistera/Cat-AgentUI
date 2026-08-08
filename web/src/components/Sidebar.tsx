@@ -9,6 +9,7 @@ import { api } from '../api';
 import { CatWordmark } from './Logo';
 import { Button, Input, Modal, ModalActions, confirmDialog, toast } from './ui';
 import type { ChatSummary } from '../types';
+import { appVersionLabel, appVersionTitle } from '../version';
 
 function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
   const nav = useNavigate();
@@ -132,8 +133,12 @@ export function Sidebar() {
 
       {/* brand */}
       <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line px-3">
-        <button className="min-w-0 cursor-pointer" onClick={() => nav('/')} title="回到首页">
-          <CatWordmark size={30} label={bootstrap?.brand || 'Cat AgentUI'} />
+        <button className="min-w-0 cursor-pointer" onClick={() => nav('/')} title={appVersionTitle}>
+          <CatWordmark
+            size={30}
+            label={bootstrap?.brand || 'Cat AgentUI'}
+            tagline={appVersionLabel}
+          />
         </button>
         <Button variant="ghost" size="iconSm" title="收起侧栏" onClick={() => setSidebarOpen(false)}>
           <PanelLeftClose size={15} />

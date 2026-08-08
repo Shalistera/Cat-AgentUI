@@ -89,13 +89,33 @@ http.createServer(async (req, res) => {
       ? lastMsg.content
       : (lastMsg?.content ?? []).map((p) => p.text ?? '').join(' ');
     const hasToolResult = body.messages?.some((m) => m.role === 'tool');
+    const wantsStall = /stall_provider/.test(lastText ?? '');
+    const wantsSlowStream = /slow_stream/.test(lastText ?? '');
+    const wantsLongOutput = /long_output/.test(lastText ?? '');
+    const wantsLimitCheck = /check_output_limit/.test(lastText ?? '');
     const wantsTool = body.tools?.length && /use_tool/.test(lastText ?? '') && !hasToolResult;
 
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
     const base = { id: 'chatcmpl-mock', object: 'chat.completion.chunk', model: body.model };
 
-    if (wantsTool) {
+    if (wantsStall) {
+      await sleep(1500);
+      send({ ...base, choices: [{ index: 0, delta: { content: 'late' }, finish_reason: null }] });
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    } else if (wantsSlowStream) {
+      for (let i = 0; i < 6; i++) {
+        await sleep(700);
+        send({ ...base, choices: [{ index: 0, delta: { content: `tick-${i}` }, finish_reason: null }] });
+      }
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    } else if (wantsLongOutput) {
+      send({ ...base, choices: [{ index: 0, delta: { content: 'x'.repeat(1500) }, finish_reason: null }] });
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    } else if (wantsLimitCheck) {
+      send({ ...base, choices: [{ index: 0, delta: { content: `max_tokens:${body.max_tokens}` }, finish_reason: null }] });
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    } else if (wantsTool) {
       send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_mock1', type: 'function', function: { name: body.tools[0].function.name, arguments: '' } }] }, finish_reason: null }] });
       send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"query":"cat"}' } }] }, finish_reason: null }] });
       send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } });

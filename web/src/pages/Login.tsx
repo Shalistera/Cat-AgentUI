@@ -6,6 +6,7 @@ import { useAuth } from '../store';
 import { CatLogo, CatMark } from '../components/Logo';
 import { Button, Input, Field, toast } from '../components/ui';
 import type { User } from '../types';
+import { appVersionLabel, appVersionTitle } from '../version';
 
 const highlights = [
   { icon: <Boxes size={15} />, title: '统一接入多家模型服务', desc: 'OpenAI、Gemini 等服务商在同一控制台内集中管理。' },
@@ -94,7 +95,10 @@ export default function Login() {
           </ul>
         </div>
 
-        <p className="relative text-[11px] text-brandfg/55">自托管部署 · 数据留在你自己的服务器</p>
+        <div className="relative flex items-center justify-between gap-4 text-[11px] text-brandfg/55">
+          <span>自托管部署 · 数据留在你自己的服务器</span>
+          <span className="font-mono" title={appVersionTitle}>{appVersionLabel}</span>
+        </div>
       </aside>
 
       {/* Form panel */}
@@ -145,6 +149,9 @@ export default function Login() {
               </p>
             )}
           </form>
+          <p className="mt-8 text-center font-mono text-[11px] font-medium text-tx3" title={appVersionTitle}>
+            {appVersionLabel}
+          </p>
         </div>
       </div>
     </div>

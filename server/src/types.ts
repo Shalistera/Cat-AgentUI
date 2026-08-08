@@ -77,6 +77,7 @@ export interface ChatRequest {
   tools?: ToolDef[];
   temperature?: number;
   maxTokens?: number;
+  hardMaxTokens?: number;
   reasoning?: ReasoningRequest;
   signal: AbortSignal;
 }

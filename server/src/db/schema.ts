@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, index, primaryKey } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -131,11 +131,24 @@ export const mcpServers = sqliteTable('mcp_servers', {
   url: text('url'),
   headersEnc: text('headers_enc'), // AES-256-GCM encrypted JSON Record<string,string>
   enabled: integer('enabled').notNull().default(1),
+  accessMode: text('access_mode').notNull().default('shared'), // 'shared' | 'restricted'
   lastStatus: text('last_status'), // 'ok' | 'error' | null(untested)
   lastError: text('last_error'),
   toolsCache: text('tools_cache').notNull().default('[]'), // JSON cached tool list
   createdAt: integer('created_at').notNull(),
 });
+
+// Shared MCP servers are available to every active account. Restricted servers
+// require an explicit ordinary-user grant; admins always retain implicit access.
+// The composite primary key also makes grant replacement idempotent.
+export const mcpServerAccess = sqliteTable('mcp_server_access', {
+  serverId: text('server_id').notNull().references(() => mcpServers.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.serverId, t.userId] }),
+  index('idx_mcp_access_user').on(t.userId),
+]);
 
 export const images = sqliteTable('images', {
   id: text('id').primaryKey(),
@@ -149,6 +162,7 @@ export const images = sqliteTable('images', {
   prompt: text('prompt').notNull(),
   size: text('size'),
   filename: text('filename').notNull(),
+  byteSize: integer('byte_size').notNull().default(0),
   durationMs: integer('duration_ms'),
   createdAt: integer('created_at').notNull(),
 }, (t) => [index('idx_images_user').on(t.userId, t.createdAt)]);

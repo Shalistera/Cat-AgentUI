@@ -4,7 +4,8 @@ import type {
   AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage,
   ImageGenRequest, ProviderRuntimeConfig, UsageInfo,
 } from '../types.js';
-import { sseMessages, readErrorBody } from './sse.js';
+import { sseMessages, readErrorBody, readJsonLimited } from './sse.js';
+import { config } from '../config.js';
 
 const DEFAULT_STUDIO_BASE = 'https://generativelanguage.googleapis.com';
 
@@ -298,7 +299,8 @@ export const geminiAdapter: ChatAdapter = {
         method: 'POST', headers, body: JSON.stringify(body), signal: req.signal,
       });
       if (!res.ok) throw new Error(`Gemini ${res.status}: ${await readErrorBody(res)}`);
-      const j: any = await res.json();
+      const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * 4 / 3) + 1024 * 1024;
+      const j: any = await readJsonLimited(res, maxJsonBytes);
       const usage = j?.usageMetadata ? toUsage(j.usageMetadata) : undefined;
       for (const part of j?.candidates?.[0]?.content?.parts ?? []) {
         if (part.inlineData?.data) {

@@ -8,7 +8,7 @@ import {
   Loader2, Plus, Search, Settings2, Square, Wrench, X,
 } from 'lucide-react';
 import { searchPrefKey, useAuth, useMcp, useModels } from '../store';
-import { uploadFile } from '../api';
+import { api, uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, ReasoningSlider } from './ReasoningSlider';
 import { toast, Toggle } from './ui';
@@ -185,6 +185,13 @@ export function Composer(props: ComposerProps) {
     }
   }
 
+  function removePendingImage(img: PendingImage) {
+    setImages((prev) => prev.filter((x) => x.uploadId !== img.uploadId));
+    api.del(`/api/uploads/${img.uploadId}`).catch((e) => {
+      toast(e instanceof Error ? e.message : '清理附件失败', 'err');
+    });
+  }
+
   const searchedModels = modelQuery.trim()
     ? models.filter((m) => `${m.displayName} ${m.modelId} ${m.providerName} ${
       m.imageGen ? '绘图 生图 image' : '对话 chat'
@@ -261,7 +268,7 @@ export function Composer(props: ComposerProps) {
                 <button
                   title="移除图片"
                   className="absolute -right-1.5 -top-1.5 cursor-pointer rounded-full border border-line bg-bg1 p-0.5 text-tx2 opacity-0 shadow-sm transition-opacity hover:text-err group-hover:opacity-100"
-                  onClick={() => setImages(images.filter((x) => x.uploadId !== img.uploadId))}
+                  onClick={() => removePendingImage(img)}
                 >
                   <X size={11} />
                 </button>

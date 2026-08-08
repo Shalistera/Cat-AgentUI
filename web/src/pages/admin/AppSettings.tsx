@@ -7,7 +7,7 @@ import type { AppSettings as AppSettingsDto } from '../../types';
 export default function AppSettings() {
   const [loaded, setLoaded] = useState(false);
   const [brand, setBrand] = useState('');
-  const [signupEnabled, setSignupEnabled] = useState(true);
+  const [signupEnabled, setSignupEnabled] = useState(false);
   // Raw text so the fields can be emptied while typing; clamped on save.
   const [retentionDays, setRetentionDays] = useState('0');
   const [chatRetentionDays, setChatRetentionDays] = useState('0');

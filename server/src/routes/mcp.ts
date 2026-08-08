@@ -5,6 +5,9 @@ import { db, schema, now, getSetting, setSetting } from '../db/index.js';
 import { newId, encryptSecret, decryptSecret } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { invalidateServer, testServer } from '../mcp/manager.js';
+import {
+  accessibleMcpServers, accessUserIds, replaceMcpAccess,
+} from '../mcp/access.js';
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
@@ -38,6 +41,8 @@ const serverBodySchema = z.object({
   url: z.url().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().optional(),
+  accessMode: z.enum(['shared', 'restricted']).optional(),
+  allowedUserIds: z.array(z.string().max(64)).max(500).optional(),
 });
 
 type ServerRow = typeof schema.mcpServers.$inferSelect;
@@ -67,7 +72,7 @@ export async function mcpRoutes(app: FastifyInstance) {
   app.get('/api/mcp/servers', async (req, reply) => {
     requireAuth(req, reply);
     const searchId = getSearchServerId();
-    const rows = db.select().from(schema.mcpServers).all();
+    const rows = accessibleMcpServers(req.user!);
     return rows.map((r) => {
       const tools = parseJson<{ name: string; description: string }[]>(r.toolsCache, []);
       return {
@@ -102,9 +107,11 @@ export async function mcpRoutes(app: FastifyInstance) {
       envKeys: secretKeys(r.envEnc),
       headerKeys: secretKeys(r.headersEnc),
       enabled: Boolean(r.enabled),
+      accessMode: r.accessMode,
       lastStatus: r.lastStatus,
       lastError: r.lastError,
       toolsCache: parseJson<{ name: string; description: string }[]>(r.toolsCache, []),
+      allowedUserIds: accessUserIds(r.id),
       createdAt: r.createdAt,
     }));
   });
@@ -128,8 +135,10 @@ export async function mcpRoutes(app: FastifyInstance) {
       url: d.url ?? null,
       headersEnc: encryptRecord(d.headers ?? {}),
       enabled: (d.enabled ?? true) ? 1 : 0,
+      accessMode: d.accessMode ?? 'shared',
       createdAt: now(),
     }).run();
+    replaceMcpAccess(id, d.allowedUserIds ?? []);
     return { id };
   });
 
@@ -159,10 +168,12 @@ export async function mcpRoutes(app: FastifyInstance) {
     if (d.url !== undefined) patch.url = d.url;
     if (d.headers !== undefined) patch.headersEnc = encryptRecord(d.headers);
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
+    if (d.accessMode !== undefined) patch.accessMode = d.accessMode;
 
     if (Object.keys(patch).length) {
       db.update(schema.mcpServers).set(patch).where(eq(schema.mcpServers.id, id)).run();
     }
+    if (d.allowedUserIds !== undefined) replaceMcpAccess(id, d.allowedUserIds);
     await invalidateServer(id);
     return { ok: true };
   });
