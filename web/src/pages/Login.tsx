@@ -148,7 +148,7 @@ export default function Login() {
               </p>
             )}
           </form>
-          <p className="mt-8 text-center font-mono text-[10px] text-tx3 lg:hidden" title={appVersionTitle}>
+          <p className="mt-8 text-center font-mono text-[11px] font-medium text-tx3" title={appVersionTitle}>
             {appVersionLabel}
           </p>
         </div>

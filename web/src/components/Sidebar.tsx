@@ -133,8 +133,12 @@ export function Sidebar() {
 
       {/* brand */}
       <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line px-3">
-        <button className="min-w-0 cursor-pointer" onClick={() => nav('/')} title="回到首页">
-          <CatWordmark size={30} label={bootstrap?.brand || 'Cat AgentUI'} />
+        <button className="min-w-0 cursor-pointer" onClick={() => nav('/')} title={appVersionTitle}>
+          <CatWordmark
+            size={30}
+            label={bootstrap?.brand || 'Cat AgentUI'}
+            tagline={appVersionLabel}
+          />
         </button>
         <Button variant="ghost" size="iconSm" title="收起侧栏" onClick={() => setSidebarOpen(false)}>
           <PanelLeftClose size={15} />
@@ -211,9 +215,6 @@ export function Sidebar() {
               <LogOut size={14} />
             </Button>
           </div>
-        </div>
-        <div className="mt-2 text-center font-mono text-[10px] text-tx3" title={appVersionTitle}>
-          {appVersionLabel}
         </div>
       </div>
     </aside>
