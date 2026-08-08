@@ -83,6 +83,11 @@ async function run() {
       MAX_USER_IMAGE_MB: '40',
       MAX_TOTAL_STORAGE_MB: '100',
       MAX_MESSAGE_ATTACHMENT_MB: '10',
+      DEFAULT_MODEL_OUTPUT_TOKENS: '256',
+      MAX_MODEL_OUTPUT_TOKENS: '1024',
+      MAX_TURN_OUTPUT_CHARS: '1000',
+      CHAT_TURN_TIMEOUT_SECONDS: '3',
+      CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS: '1',
       PASSWORD_CONCURRENCY: '1',
       PASSWORD_QUEUE_MAX: '2',
     },
@@ -132,6 +137,13 @@ async function run() {
   });
   assert(adminReg.status === 200 && adminReg.json.user.role === 'admin', 'admin registration');
   const adminCookie = adminReg.cookie;
+  const bootstrapAfterSetup = await jsonReq('GET', '/api/auth/bootstrap');
+  assert(bootstrapAfterSetup.status === 200 && bootstrapAfterSetup.json.signupEnabled === false,
+    'registration defaults closed after setup');
+  const blockedRegistration = await jsonReq('POST', '/api/auth/register', {
+    username: 'unexpected', password: 'password-123',
+  });
+  assert(blockedRegistration.status === 403, 'public registration blocked by default');
 
   const createdUser = await jsonReq('POST', '/api/admin/users', {
     username: 'alice', password: 'password-123', role: 'user',
@@ -168,6 +180,42 @@ async function run() {
   });
   assert(login.status === 200, 'user login');
   const userCookie = login.cookie;
+
+  const limitChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  const limitTurn = await stream(limitChat.json.chat.id, [
+    { type: 'text', text: 'check_output_limit' },
+  ], textModel.id, userCookie);
+  assert(limitTurn.status === 200 && limitTurn.text.includes('max_tokens:256'),
+    'default model output token limit sent');
+  await jsonReq('DELETE', `/api/chats/${limitChat.json.chat.id}`, undefined, userCookie);
+
+  const longChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  const longTurn = await stream(longChat.json.chat.id, [
+    { type: 'text', text: 'long_output' },
+  ], textModel.id, userCookie);
+  assert(longTurn.status === 200 && longTurn.text.includes('event: error')
+    && longTurn.text.includes('1000'), 'turn output character budget');
+  await jsonReq('DELETE', `/api/chats/${longChat.json.chat.id}`, undefined, userCookie);
+
+  const idleChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  const idleStarted = performance.now();
+  const idleTurn = await stream(idleChat.json.chat.id, [
+    { type: 'text', text: 'stall_provider' },
+  ], textModel.id, userCookie);
+  const idleMs = performance.now() - idleStarted;
+  assert(idleTurn.status === 200 && idleTurn.text.includes('event: error')
+    && idleTurn.text.includes('没有返回数据') && idleMs < 2500, 'provider idle timeout');
+  await jsonReq('DELETE', `/api/chats/${idleChat.json.chat.id}`, undefined, userCookie);
+
+  const timeoutChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  const timeoutStarted = performance.now();
+  const timeoutTurn = await stream(timeoutChat.json.chat.id, [
+    { type: 'text', text: 'slow_stream' },
+  ], textModel.id, userCookie);
+  const timeoutMs = performance.now() - timeoutStarted;
+  assert(timeoutTurn.status === 200 && timeoutTurn.text.includes('event: error')
+    && timeoutTurn.text.includes('总时限') && timeoutMs < 4500, 'chat turn total timeout');
+  await jsonReq('DELETE', `/api/chats/${timeoutChat.json.chat.id}`, undefined, userCookie);
 
   let listed = await jsonReq('GET', '/api/mcp/servers', undefined, userCookie);
   assert(listed.status === 200 && listed.json.length === 0, 'MCP hidden before grant');
@@ -270,6 +318,11 @@ async function run() {
     mcpAcl: 'pass',
     mcpRevocation: 'pass',
     mcpSharedAccess: 'pass',
+    registrationDefaultClosed: 'pass',
+    defaultOutputTokenLimit: 'pass',
+    turnOutputBudget: 'pass',
+    providerIdleTimeout: 'pass',
+    chatTurnTimeout: 'pass',
     attachmentDedupe: 'pass',
     attachmentBudget: 'pass',
     attachmentCleanup: 'pass',

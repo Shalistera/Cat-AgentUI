@@ -92,14 +92,19 @@ const MIN_THINKING = 2048;
 const MAX_THINKING = 32768;
 
 async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): AsyncGenerator<AdapterEvent> {
-  const thinking = req.reasoning && req.reasoning.level !== 'off'
+  const desiredThinking = req.reasoning && req.reasoning.level !== 'off'
     ? Math.round(MIN_THINKING + req.reasoning.ratio * (MAX_THINKING - MIN_THINKING))
+    : null;
+  const maxThinkingWithinHardCap = (req.hardMaxTokens ?? Number.POSITIVE_INFINITY) - 4096;
+  const thinking = desiredThinking && maxThinkingWithinHardCap >= MIN_THINKING
+    ? Math.min(desiredThinking, maxThinkingWithinHardCap)
     : null;
   // The reply budget has to leave room for the thinking budget on top of the
   // visible answer, or the request is rejected outright.
-  const maxTokens = thinking
+  const requestedMaxTokens = thinking
     ? Math.max(req.maxTokens ?? 8192, thinking + 4096)
     : req.maxTokens ?? 8192;
+  const maxTokens = Math.min(requestedMaxTokens, req.hardMaxTokens ?? requestedMaxTokens);
 
   const body: Record<string, unknown> = {
     model: req.model,

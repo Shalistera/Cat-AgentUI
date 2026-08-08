@@ -649,6 +649,37 @@ export async function chatRoutes(app: FastifyInstance) {
     let status: 'done' | 'error' | 'stopped' = 'done';
     let errMsg: string | null = null;
     let imageCount = 0;
+    let outputChars = 0;
+    let textTimeoutError: string | null = null;
+    let textTurnTimer: ReturnType<typeof setTimeout> | null = null;
+    let providerIdleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const consumeOutput = (chars: number) => {
+      outputChars += Math.max(0, chars);
+      if (outputChars > config.maxTurnOutputChars) {
+        throw new Error(`单次回复超过 ${config.maxTurnOutputChars} 字符限制`);
+      }
+    };
+    const abortTextForTimeout = (message: string) => {
+      if (controller.signal.aborted) return;
+      textTimeoutError = message;
+      controller.abort(new DOMException(message, 'TimeoutError'));
+    };
+    const clearProviderIdleTimer = () => {
+      if (providerIdleTimer) clearTimeout(providerIdleTimer);
+      providerIdleTimer = null;
+    };
+    const resetProviderIdleTimer = () => {
+      clearProviderIdleTimer();
+      providerIdleTimer = setTimeout(() => abortTextForTimeout(
+        `Provider 连续 ${Math.ceil(config.chatProviderIdleTimeoutMs / 1000)} 秒没有返回数据`,
+      ), config.chatProviderIdleTimeoutMs);
+    };
+    const clearTextTimers = () => {
+      if (textTurnTimer) clearTimeout(textTurnTimer);
+      textTurnTimer = null;
+      clearProviderIdleTimer();
+    };
 
     try {
       if (model.imageGen) {
@@ -682,7 +713,11 @@ export async function chatRoutes(app: FastifyInstance) {
           const part: MessagePart = { type: 'image', imageId: saved.id, mime: g.mime };
           parts.push(part);
           sse.send('image', part);
-          if (g.text) { appendText(parts, 'text', g.text); sse.send('delta', { text: g.text }); }
+          if (g.text) {
+            consumeOutput(g.text.length);
+            appendText(parts, 'text', g.text);
+            sse.send('delta', { text: g.text });
+          }
         }
         // one response can carry several images with the same usage object — count it once
         const u = generated[0]?.usage;
@@ -692,6 +727,9 @@ export async function chatRoutes(app: FastifyInstance) {
         imageCount = generated.length;
       } else {
         // ---- normal text turn ----
+        textTurnTimer = setTimeout(() => abortTextForTimeout(
+          `对话生成超过 ${Math.ceil(config.chatTurnTimeoutMs / 1000)} 秒总时限`,
+        ), config.chatTurnTimeoutMs);
         let iterations = 0;
         for (;;) {
           iterations++;
@@ -700,48 +738,63 @@ export async function chatRoutes(app: FastifyInstance) {
           const pendingCalls: { id: string; name: string; args: string }[] = [];
           let stopReason = 'stop';
 
-          for await (const ev of adapter.streamChat(cfg, {
-            model: model.modelId,
-            system: chat.systemPrompt || undefined,
-            messages,
-            tools: toolDefs,
-            temperature: chat.temperature ?? undefined,
-            maxTokens: chat.maxTokens
-              ? Math.min(chat.maxTokens, config.maxModelOutputTokens)
-              : undefined,
-            reasoning: resolveReasoning(chat.reasoningEffort, model, provider.type as ProviderType),
-            signal: controller.signal,
-          })) {
-            if (ev.type === 'text') {
-              if (ttft === null) ttft = Date.now() - t0;
-              appendText(parts, 'text', ev.text);
-              sse.send('delta', { text: ev.text });
-            } else if (ev.type === 'reasoning') {
-              if (ttft === null) ttft = Date.now() - t0;
-              appendText(parts, 'reasoning', ev.text);
-              sse.send('reasoning', { text: ev.text });
-            } else if (ev.type === 'tool_call') {
-              parts.push({ type: 'tool_call', id: ev.id, name: ev.name, args: ev.args });
-              pendingCalls.push(ev);
-              sse.send('tool_call', { id: ev.id, name: ev.name, args: ev.args });
-            } else if (ev.type === 'usage') {
-              usage.prompt += ev.usage.promptTokens ?? 0;
-              usage.completion += ev.usage.completionTokens ?? 0;
-              usage.total += ev.usage.totalTokens ?? ((ev.usage.promptTokens ?? 0) + (ev.usage.completionTokens ?? 0));
-            } else if (ev.type === 'stop') {
-              stopReason = ev.reason;
+          resetProviderIdleTimer();
+          try {
+            for await (const ev of adapter.streamChat(cfg, {
+              model: model.modelId,
+              system: chat.systemPrompt || undefined,
+              messages,
+              tools: toolDefs,
+              temperature: chat.temperature ?? undefined,
+              maxTokens: Math.min(chat.maxTokens ?? config.defaultModelOutputTokens, config.maxModelOutputTokens),
+              hardMaxTokens: config.maxModelOutputTokens,
+              reasoning: resolveReasoning(chat.reasoningEffort, model, provider.type as ProviderType),
+              signal: controller.signal,
+            })) {
+              resetProviderIdleTimer();
+              if (ev.type === 'text') {
+                if (ttft === null) ttft = Date.now() - t0;
+                consumeOutput(ev.text.length);
+                appendText(parts, 'text', ev.text);
+                sse.send('delta', { text: ev.text });
+              } else if (ev.type === 'reasoning') {
+                if (ttft === null) ttft = Date.now() - t0;
+                consumeOutput(ev.text.length);
+                appendText(parts, 'reasoning', ev.text);
+                sse.send('reasoning', { text: ev.text });
+              } else if (ev.type === 'tool_call') {
+                consumeOutput(ev.id.length + ev.name.length + ev.args.length);
+                parts.push({ type: 'tool_call', id: ev.id, name: ev.name, args: ev.args });
+                pendingCalls.push(ev);
+                sse.send('tool_call', { id: ev.id, name: ev.name, args: ev.args });
+              } else if (ev.type === 'usage') {
+                usage.prompt += ev.usage.promptTokens ?? 0;
+                usage.completion += ev.usage.completionTokens ?? 0;
+                usage.total += ev.usage.totalTokens ?? ((ev.usage.promptTokens ?? 0) + (ev.usage.completionTokens ?? 0));
+              } else if (ev.type === 'stop') {
+                stopReason = ev.reason;
+              }
             }
+          } finally {
+            clearProviderIdleTimer();
           }
 
           if (stopReason === 'tool_calls' && pendingCalls.length && iterations < config.maxToolIterations) {
             for (const call of pendingCalls) {
+              const remainingTurnMs = config.chatTurnTimeoutMs - (Date.now() - t0);
+              if (remainingTurnMs <= 0) {
+                abortTextForTimeout(`对话生成超过 ${Math.ceil(config.chatTurnTimeoutMs / 1000)} 秒总时限`);
+                throw new Error(textTimeoutError ?? '对话生成超时');
+              }
               const { result, isError } = await callTool(
-                call.name, call.args, toolCapabilities, user, { timeoutMs: 120_000 },
+                call.name, call.args, toolCapabilities, user,
+                { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },
               );
               const resultLimit = Math.min(100_000, Math.floor(config.maxContextTextChars / 4));
               const trimmed = result.length > resultLimit
                 ? `${result.slice(0, resultLimit)}\n…(结果已截断)`
                 : result;
+              consumeOutput(call.name.length + trimmed.length);
               const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: trimmed, isError };
               parts.push(part);
               sse.send('tool_result', part);
@@ -752,7 +805,13 @@ export async function chatRoutes(app: FastifyInstance) {
         }
       }
     } catch (e) {
-      if (controller.signal.aborted || clientGone) {
+      if (clientGone) {
+        status = 'stopped';
+      } else if (textTimeoutError) {
+        status = 'error';
+        errMsg = textTimeoutError;
+        sse.send('error', { message: errMsg });
+      } else if (controller.signal.aborted) {
         status = 'stopped';
       } else {
         status = 'error';
@@ -760,6 +819,7 @@ export async function chatRoutes(app: FastifyInstance) {
         sse.send('error', { message: errMsg });
       }
     }
+    clearTextTimers();
 
     const finalParts = closeDanglingToolCalls(
       parts,

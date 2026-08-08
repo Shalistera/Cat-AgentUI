@@ -35,7 +35,7 @@ npm run build          # 构建前端 + 后端
 npm start              # 监听 0.0.0.0:3000
 ```
 
-打开 `http://localhost:3000`,注册第一个账号(自动成为管理员),然后进入 **管理后台 → 模型服务** 添加 Provider、拉取模型即可开聊。
+打开 `http://localhost:3000`,注册第一个账号(自动成为管理员),然后进入 **管理后台 → 模型服务** 添加 Provider、拉取模型即可开聊。初始化完成后公开注册默认关闭,后续账号由管理员创建;需要时可在站点设置中手动开放。
 
 ### 使用 pm2 常驻(推荐)
 
@@ -67,7 +67,11 @@ npx pm2 save
 | `MAX_CONTEXT_IMAGES` | 模型上下文图片数量预算 | `6` |
 | `MAX_CONTEXT_IMAGE_MB_PER_USER` | 单用户同时驻留的上下文图片字节预算 | `48` |
 | `MAX_CONTEXT_IMAGE_MB_GLOBAL` | 全站同时驻留的上下文图片字节预算 | `96` |
+| `DEFAULT_MODEL_OUTPUT_TOKENS` | 未单独设置时发送给模型的输出 token 上限 | `8192` |
 | `MAX_MODEL_OUTPUT_TOKENS` | 单次模型输出 token 硬上限 | `65536` |
+| `MAX_TURN_OUTPUT_CHARS` | 单轮回复累计字符硬上限(含思考和工具结果) | `500000` |
+| `CHAT_TURN_TIMEOUT_SECONDS` | 普通文本对话单轮总超时 | `900` |
+| `CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS` | Provider 流连续无事件的空闲超时 | `120` |
 | `MAX_USER_UPLOAD_MB` | 单用户附件存储配额 | `512` |
 | `MAX_USER_IMAGE_MB` | 单用户生成图片存储配额 | `1024` |
 | `MAX_TOTAL_STORAGE_MB` | 全站附件与生成图片总配额 | `10240` |

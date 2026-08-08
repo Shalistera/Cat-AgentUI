@@ -235,7 +235,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get('/api/admin/settings', async (req, reply) => {
     requireAdmin(req, reply);
     return {
-      signupEnabled: getSetting('signup_enabled', true),
+      signupEnabled: getSetting('signup_enabled', false),
       brand: getSetting('brand', 'Cat-AgentUI'),
     };
   });
@@ -247,7 +247,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (body.data.signupEnabled !== undefined) setSetting('signup_enabled', body.data.signupEnabled);
     if (body.data.brand !== undefined) setSetting('brand', body.data.brand);
     return {
-      signupEnabled: getSetting('signup_enabled', true),
+      signupEnabled: getSetting('signup_enabled', false),
       brand: getSetting('brand', 'Cat-AgentUI'),
     };
   });

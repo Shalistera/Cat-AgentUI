@@ -33,6 +33,8 @@ function intEnv(key: string, def: number, min: number, max: number): number {
 }
 
 const MIB = 1024 * 1024;
+const maxModelOutputTokens = intEnv('MAX_MODEL_OUTPUT_TOKENS', 65_536, 1_000, 1_000_000);
+const defaultModelOutputTokens = intEnv('DEFAULT_MODEL_OUTPUT_TOKENS', 8_192, 256, maxModelOutputTokens);
 
 // Auto-generate a secret key on first run and persist it.
 let secretKey = env('SECRET_KEY');
@@ -60,7 +62,11 @@ export const config = {
   maxContextImages: intEnv('MAX_CONTEXT_IMAGES', 6, 1, 20),
   maxContextImageBytesPerUser: intEnv('MAX_CONTEXT_IMAGE_MB_PER_USER', 48, 1, 500) * MIB,
   maxContextImageBytesGlobal: intEnv('MAX_CONTEXT_IMAGE_MB_GLOBAL', 96, 1, 2_000) * MIB,
-  maxModelOutputTokens: intEnv('MAX_MODEL_OUTPUT_TOKENS', 65_536, 1_000, 1_000_000),
+  defaultModelOutputTokens,
+  maxModelOutputTokens,
+  maxTurnOutputChars: intEnv('MAX_TURN_OUTPUT_CHARS', 500_000, 1_000, 5_000_000),
+  chatTurnTimeoutMs: intEnv('CHAT_TURN_TIMEOUT_SECONDS', 900, 1, 3_600) * 1000,
+  chatProviderIdleTimeoutMs: intEnv('CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS', 120, 1, 600) * 1000,
 
   // Persistent-storage quotas.
   maxUserUploadBytes: intEnv('MAX_USER_UPLOAD_MB', 512, 1, 100_000) * MIB,

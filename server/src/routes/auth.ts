@@ -24,7 +24,7 @@ export async function authRoutes(app: FastifyInstance) {
     const anyUser = db.select({ id: schema.users.id }).from(schema.users).limit(1).get();
     return {
       needsSetup: !anyUser,
-      signupEnabled: getSetting('signup_enabled', true),
+      signupEnabled: getSetting('signup_enabled', false),
       brand: getSetting('brand', 'Cat-AgentUI'),
     };
   });
@@ -38,7 +38,7 @@ export async function authRoutes(app: FastifyInstance) {
     const { username, password } = body.data;
 
     const anyUser = db.select({ id: schema.users.id }).from(schema.users).limit(1).get();
-    if (anyUser && !getSetting('signup_enabled', true)) {
+    if (anyUser && !getSetting('signup_enabled', false)) {
       return reply.code(403).send({ error: '注册已关闭,请联系管理员' });
     }
     const existing = db.select({ id: schema.users.id }).from(schema.users)
