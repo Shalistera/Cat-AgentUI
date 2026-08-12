@@ -5,10 +5,15 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-agentui-security-'));
+const viteFsProbe = path.join(root, 'data', `vite-fs-probe-${process.pid}-${Date.now()}.txt`);
+const webRequire = createRequire(path.join(root, 'web', 'package.json'));
+const viteCli = path.join(path.dirname(webRequire.resolve('vite/package.json')), 'bin', 'vite.js');
+const katexFonts = path.join(path.dirname(webRequire.resolve('katex/package.json')), 'dist', 'fonts');
 const children = [];
 
 function assert(ok, message) {
@@ -63,13 +68,79 @@ async function waitForHealth(base, child) {
   throw new Error(`test server did not become ready: ${lastError}`);
 }
 
+async function waitForUrl(url, child) {
+  let lastError = '';
+  for (let i = 0; i < 100; i++) {
+    if (child.exitCode !== null) {
+      throw new Error(`test server exited early (${child.exitCode}): ${lastError}`);
+    }
+    try {
+      const res = await fetch(url);
+      if (res.ok) return;
+      lastError = `HTTP ${res.status}`;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`test server did not become ready: ${lastError}`);
+}
+
+function viteFsUrl(base, filePath) {
+  const normalized = filePath.split(path.sep).join('/').replace(/^\/+/, '');
+  return `${base}/@fs/${encodeURI(normalized)}`;
+}
+
 function cookieOf(res) {
   return (res.headers.get('set-cookie') || '').split(';')[0];
 }
 
 async function run() {
-  const [appPort, mockPort] = await Promise.all([freePort(), freePort()]);
+  const [appPort, mockPort, vitePort] = await Promise.all([freePort(), freePort(), freePort()]);
   const base = `http://127.0.0.1:${appPort}`;
+  const viteBase = `http://127.0.0.1:${vitePort}`;
+
+  fs.mkdirSync(path.dirname(viteFsProbe), { recursive: true });
+  fs.writeFileSync(viteFsProbe, 'Vite filesystem isolation probe\n', { flag: 'wx' });
+
+  const vite = start(process.execPath, [
+    viteCli,
+    '--host', '127.0.0.1', '--port', String(vitePort), '--strictPort',
+  ], {
+    cwd: path.join(root, 'web'),
+    env: { ...process.env, DEV_PROXY_HOST: '' },
+  });
+  let viteLogs = '';
+  vite.stderr.on('data', (chunk) => { viteLogs += chunk.toString(); });
+  vite.stdout.on('data', (chunk) => { viteLogs += chunk.toString(); });
+  await waitForUrl(`${viteBase}/`, vite).catch((err) => {
+    throw new Error(`${err instanceof Error ? err.message : String(err)}\n${viteLogs}`);
+  });
+
+  const allowedViteFiles = [
+    path.join(root, 'web', 'src', 'main.tsx'),
+    path.join(root, 'web', 'src', 'index.css'),
+    path.join(katexFonts, 'KaTeX_Main-Regular.woff2'),
+  ];
+  for (const filePath of allowedViteFiles) {
+    const res = await fetch(viteFsUrl(viteBase, filePath));
+    assert(res.status === 200, `Vite should serve ${filePath} (${res.status})`);
+  }
+
+  const deniedViteFiles = [
+    viteFsProbe,
+    path.join(root, 'package.json'),
+    path.join(root, 'server', 'src', 'index.ts'),
+    path.join(root, 'node_modules', 'katex', 'LICENSE'),
+  ];
+  const workspaceServerPath = path.join(
+    root, 'node_modules', '@cat-agentui', 'server', 'src', 'index.ts',
+  );
+  if (fs.existsSync(workspaceServerPath)) deniedViteFiles.push(workspaceServerPath);
+  for (const filePath of deniedViteFiles) {
+    const res = await fetch(viteFsUrl(viteBase, filePath));
+    assert(res.status === 403, `Vite exposed ${filePath} (${res.status})`);
+  }
 
   const mock = start(process.execPath, ['scripts/mock-openai.mjs', String(mockPort)]);
   const app = start(process.execPath, ['server/dist/index.js'], {
@@ -315,6 +386,7 @@ async function run() {
   assert(health.ok && healthMs < 200, `password queue blocked event loop (${healthMs.toFixed(1)}ms)`);
 
   return {
+    viteFsIsolation: 'pass',
     mcpAcl: 'pass',
     mcpRevocation: 'pass',
     mcpSharedAccess: 'pass',
@@ -338,6 +410,7 @@ try {
   console.log(JSON.stringify(result, null, 2));
 } finally {
   await stopChildren();
+  fs.rmSync(viteFsProbe, { force: true });
   const expectedPrefix = path.join(os.tmpdir(), 'cat-agentui-security-');
   if (dataDir.startsWith(expectedPrefix)) fs.rmSync(dataDir, { recursive: true, force: true });
 }

@@ -5,7 +5,9 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+const webRoot = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+const katexFonts = fileURLToPath(new URL('../node_modules/katex/dist/fonts', import.meta.url));
 const packageInfo = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ) as { version: string };
@@ -46,6 +48,13 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
+    // Vite otherwise detects the npm workspace root and exposes every readable
+    // file below it through /@fs (including data/cat-agentui.db). Keep the dev
+    // server inside web/; resolved dependencies are admitted individually by
+    // Vite's module graph. KaTeX's CSS refers to its font files directly, so
+    // admit only that asset directory rather than the symlink-bearing root
+    // node_modules directory (or the repository as a whole).
+    fs: { strict: true, allow: [webRoot, katexFonts] },
     proxy: {
       '/api': { target: 'http://127.0.0.1:3000' },
     },
