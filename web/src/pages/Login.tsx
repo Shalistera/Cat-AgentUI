@@ -69,7 +69,8 @@ export default function Login() {
         />
         <div className="relative flex items-center gap-3">
           {/* Light tile: the mark is a black cat, so it needs a pale field to
-              read against the ink panel. */}
+              read against the ink panel. The eye is amber darkened from the
+              default --logo-eye (#d9a441), which lacks contrast on this tile. */}
           <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brandfg">
             <CatLogo size={26} eye="#c98f24" />
           </span>
@@ -117,30 +118,34 @@ export default function Login() {
               : mode === 'login' ? '请输入你的账号信息以继续。' : '填写下列信息完成注册。'}
           </p>
 
-          <form onSubmit={submit} className="mt-7 space-y-4">
-            <Field label="用户名" required>
-              {/* 登录态放宽到 64:从 Open WebUI 迁移的账号以邮箱为用户名,可能超过注册上限 32 */}
-              <Input value={username} onChange={(e) => setUsername(e.target.value)}
-                autoFocus autoComplete="username" maxLength={mode === 'login' ? 64 : 32} required />
-            </Field>
-            <Field label="密码" hint={mode === 'register' ? '至少 8 位字符' : undefined} required>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'} maxLength={128} required />
-            </Field>
-            {mode === 'register' && (
-              <Field label="确认密码" required>
-                <Input type="password" value={password2} onChange={(e) => setPassword2(e.target.value)}
-                  autoComplete="new-password" maxLength={128} required />
+          <form onSubmit={submit} className="mt-7">
+            {/* Fields keep their own rhythm container — the submit button needs
+                a larger offset, and a margin utility on a space-y sibling loses
+                without !important. */}
+            <div className="space-y-4">
+              <Field label="用户名" required>
+                {/* 登录态放宽到 64:从 Open WebUI 迁移的账号以邮箱为用户名,可能超过注册上限 32 */}
+                <Input value={username} onChange={(e) => setUsername(e.target.value)} disabled={busy}
+                  autoFocus autoComplete="username" maxLength={mode === 'login' ? 64 : 32} required />
               </Field>
-            )}
+              <Field label="密码" hint={mode === 'register' ? '至少 8 位字符' : undefined} required>
+                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy}
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'} maxLength={128} required />
+              </Field>
+              {mode === 'register' && (
+                <Field label="确认密码" required>
+                  <Input type="password" value={password2} onChange={(e) => setPassword2(e.target.value)} disabled={busy}
+                    autoComplete="new-password" maxLength={128} required />
+                </Field>
+              )}
+            </div>
 
-            <Button variant="primary" size="lg" className="!mt-6 w-full" disabled={busy}
-              onClick={(e) => submit(e as unknown as React.FormEvent)}>
+            <Button type="submit" variant="primary" size="lg" className="mt-6 w-full" disabled={busy}>
               {busy ? '请稍候…' : bootstrap?.needsSetup ? '创建管理员账号' : mode === 'login' ? '登录' : '注册'}
             </Button>
 
             {canRegister && !bootstrap?.needsSetup && (
-              <p className="pt-1 text-center text-[13px] text-tx2">
+              <p className="mt-4 pt-1 text-center text-[13px] text-tx2">
                 {mode === 'login' ? '还没有账号?' : '已有账号?'}
                 <button type="button" className="ml-1 cursor-pointer font-medium text-acc hover:underline"
                   onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>

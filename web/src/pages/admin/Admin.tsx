@@ -52,7 +52,7 @@ export default function Admin() {
         ))}
       </nav>
 
-      <div className="flex-1 overflow-y-auto bg-bg0">
+      <div className="fade-up flex-1 overflow-y-auto bg-bg0">
         <Routes>
           <Route index element={<Dashboard />} />
           <Route path="users" element={<Users />} />

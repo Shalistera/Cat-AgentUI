@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api, fmtTokens } from '../../api';
-import { Spinner, Card, Stat, SegmentedControl, toast } from '../../components/ui';
-import type { AdminUsage, UsageByDay } from '../../types';
+import { Spinner, Card, Stat, SegmentedControl, Td, Th, toast } from '../../components/ui';
+import { TokensBarChart } from '../../components/TokensBarChart';
+import type { AdminUsage } from '../../types';
 
 const DAY_OPTIONS = [7, 30, 90] as const;
 
@@ -11,96 +12,10 @@ const KIND_LABELS: Record<string, string> = {
   title: '标题生成',
 };
 
-/** Last n calendar days (local time, today inclusive) as YYYY-MM-DD keys. */
-function lastDays(n: number): string[] {
-  const out: string[] = [];
-  const now = new Date();
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
-  }
-  return out;
+/** One empty-table placeholder, one voice — every card says it the same way. */
+function TableEmpty() {
+  return <p className="py-6 text-center text-xs text-tx3">暂无数据</p>;
 }
-
-/** Round a maximum up to a clean axis number (1/2/2.5/5 × 10^k). */
-function niceCeil(v: number): number {
-  if (v <= 0) return 10;
-  const pow = 10 ** Math.floor(Math.log10(v));
-  for (const s of [1, 2, 2.5, 5, 10]) {
-    if (s * pow >= v) return s * pow;
-  }
-  return 10 * pow;
-}
-
-function DailyChart({ byDay, days }: { byDay: UsageByDay[]; days: number }) {
-  const map = new Map(byDay.map((d) => [d.day, d]));
-  const series = lastDays(days).map((day) => {
-    const d = map.get(day);
-    return { day, totalTokens: d?.totalTokens ?? 0, requests: d?.requests ?? 0 };
-  });
-
-  // viewBox geometry — responsive via w-full
-  const W = 800; const H = 200;
-  const padL = 44; const padR = 8; const padT = 10; const padB = 22;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-
-  const max = niceCeil(Math.max(...series.map((d) => d.totalTokens)));
-  const slot = plotW / series.length;
-  const barW = Math.max(1.5, Math.min(24, slot - 2)); // thin marks, ≥2px surface gap
-  const ticks = [0.25, 0.5, 0.75, 1].map((f) => f * max);
-  const labelStep = Math.max(1, Math.round(days / 6)); // sparse x labels
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full" role="img" aria-label="每日 Token 用量柱状图">
-      {/* recessive hairline gridlines + clean y ticks */}
-      {ticks.map((t) => {
-        const y = padT + plotH - (t / max) * plotH;
-        return (
-          <g key={t}>
-            <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="var(--color-line)" strokeWidth="1" />
-            <text x={padL - 6} y={y + 3} textAnchor="end" fontSize="10" fill="var(--color-tx3)">
-              {fmtTokens(t) === '—' ? '0' : fmtTokens(t)}
-            </text>
-          </g>
-        );
-      })}
-      {/* baseline */}
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke="var(--color-line)" strokeWidth="1" />
-
-      {series.map((d, i) => {
-        const h = (d.totalTokens / max) * plotH;
-        const x = padL + i * slot + (slot - barW) / 2;
-        const y = padT + plotH - h;
-        const r = Math.min(4, barW / 2, h); // rounded data-end, square at baseline
-        return (
-          <g key={d.day} className="group/bar">
-            <title>{`${d.day} · ${d.totalTokens.toLocaleString()} tokens · ${d.requests} 次请求`}</title>
-            {/* full-slot invisible hit target */}
-            <rect x={padL + i * slot} y={padT} width={slot} height={plotH} fill="transparent" />
-            {h > 0 && (
-              <path
-                d={`M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + barW - r} Q${x + barW},${y} ${x + barW},${y + r} V${y + h} Z`}
-                fill="var(--color-acc)"
-                className="opacity-85 transition-opacity group-hover/bar:opacity-100"
-              />
-            )}
-            {i % labelStep === 0 && (
-              <text x={padL + i * slot + slot / 2} y={H - 6} textAnchor="middle" fontSize="10" fill="var(--color-tx3)">
-                {d.day.slice(5).replace('-', '/')}
-              </text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-const th = 'border-b border-line py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-tx3';
-// `group-last` clears the rule on the final row only — `last` would strip it
-// from the last cell of every row instead.
-const td = 'border-b border-line py-2 text-tx2 group-last:border-0';
 
 export default function Dashboard() {
   const [days, setDays] = useState<number>(30);
@@ -118,7 +33,7 @@ export default function Dashboard() {
   }, [days]);
 
   if (!usage) {
-    return <div className="flex justify-center py-24"><Spinner className="h-6 w-6" /></div>;
+    return <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>;
   }
 
   const { totals, byDay, byUser, byModel, byKind } = usage;
@@ -148,30 +63,30 @@ export default function Dashboard() {
         </div>
 
         <Card title="每日用量" desc={`最近 ${days} 天,按日聚合`}>
-          <DailyChart byDay={byDay} days={days} />
+          <TokensBarChart byDay={byDay} days={days} />
         </Card>
 
         <Card title="用户用量排行">
           {byUser.length === 0 ? (
-            <p className="py-6 text-center text-xs text-tx3">暂无数据</p>
+            <TableEmpty />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr>
-                    <th className={th}>用户</th>
-                    <th className={`${th} text-right`}>Tokens</th>
-                    <th className={`${th} text-right`}>请求</th>
-                    <th className={`${th} text-right`}>图片</th>
+                    <Th>用户</Th>
+                    <Th className="text-right">Tokens</Th>
+                    <Th className="text-right">请求</Th>
+                    <Th className="text-right">图片</Th>
                   </tr>
                 </thead>
                 <tbody>
                   {byUser.map((u) => (
                     <tr key={u.userId} className="group transition-colors hover:bg-bg2/60">
-                      <td className={`${td} font-medium text-tx`}>{u.username}</td>
-                      <td className={`${td} text-right tabular-nums`}>{fmtTokens(u.totalTokens)}</td>
-                      <td className={`${td} text-right tabular-nums`}>{u.requests.toLocaleString()}</td>
-                      <td className={`${td} text-right tabular-nums`}>{u.images.toLocaleString()}</td>
+                      <Td className="font-medium text-tx">{u.username}</Td>
+                      <Td className="text-right tabular-nums">{fmtTokens(u.totalTokens)}</Td>
+                      <Td className="text-right tabular-nums">{u.requests.toLocaleString()}</Td>
+                      <Td className="text-right tabular-nums">{u.images.toLocaleString()}</Td>
                     </tr>
                   ))}
                 </tbody>
@@ -183,24 +98,24 @@ export default function Dashboard() {
         <div className="grid gap-5 lg:grid-cols-2">
           <Card title="模型分布">
             {byModel.length === 0 ? (
-              <p className="py-6 text-center text-xs text-tx3">暂无数据</p>
+              <TableEmpty />
             ) : (
               <table className="w-full text-xs">
                 <thead>
                   <tr>
-                    <th className={th}>模型</th>
-                    <th className={`${th} text-right`}>Tokens</th>
-                    <th className={`${th} text-right`}>次数</th>
+                    <Th>模型</Th>
+                    <Th className="text-right">Tokens</Th>
+                    <Th className="text-right">次数</Th>
                   </tr>
                 </thead>
                 <tbody>
                   {byModel.map((m) => (
                     <tr key={m.model} className="group transition-colors hover:bg-bg2/60">
-                      <td className={td}>
+                      <Td>
                         <div className="max-w-[200px] truncate font-mono text-tx" title={m.model}>{m.model}</div>
-                      </td>
-                      <td className={`${td} text-right tabular-nums`}>{fmtTokens(m.totalTokens)}</td>
-                      <td className={`${td} text-right tabular-nums`}>{m.requests.toLocaleString()}</td>
+                      </Td>
+                      <Td className="text-right tabular-nums">{fmtTokens(m.totalTokens)}</Td>
+                      <Td className="text-right tabular-nums">{m.requests.toLocaleString()}</Td>
                     </tr>
                   ))}
                 </tbody>
@@ -210,24 +125,24 @@ export default function Dashboard() {
 
           <Card title="类型分布">
             {byKind.length === 0 ? (
-              <p className="py-6 text-center text-xs text-tx3">暂无数据</p>
+              <TableEmpty />
             ) : (
               <table className="w-full text-xs">
                 <thead>
                   <tr>
-                    <th className={th}>类型</th>
-                    <th className={`${th} text-right`}>Tokens</th>
-                    <th className={`${th} text-right`}>次数</th>
-                    <th className={`${th} text-right`}>图片</th>
+                    <Th>类型</Th>
+                    <Th className="text-right">Tokens</Th>
+                    <Th className="text-right">次数</Th>
+                    <Th className="text-right">图片</Th>
                   </tr>
                 </thead>
                 <tbody>
                   {byKind.map((k) => (
                     <tr key={k.kind} className="group transition-colors hover:bg-bg2/60">
-                      <td className={`${td} text-tx`}>{KIND_LABELS[k.kind] ?? k.kind}</td>
-                      <td className={`${td} text-right tabular-nums`}>{fmtTokens(k.totalTokens)}</td>
-                      <td className={`${td} text-right tabular-nums`}>{k.requests.toLocaleString()}</td>
-                      <td className={`${td} text-right tabular-nums`}>{k.images.toLocaleString()}</td>
+                      <Td className="text-tx">{KIND_LABELS[k.kind] ?? k.kind}</Td>
+                      <Td className="text-right tabular-nums">{fmtTokens(k.totalTokens)}</Td>
+                      <Td className="text-right tabular-nums">{k.requests.toLocaleString()}</Td>
+                      <Td className="text-right tabular-nums">{k.images.toLocaleString()}</Td>
                     </tr>
                   ))}
                 </tbody>

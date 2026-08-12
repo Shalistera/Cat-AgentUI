@@ -1,5 +1,9 @@
 import { create } from 'zustand';
-import { useEffect, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type TextareaHTMLAttributes, type SelectHTMLAttributes } from 'react';
+import {
+  useEffect, useLayoutEffect, useRef, useState,
+  type CSSProperties, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes,
+  type TextareaHTMLAttributes, type SelectHTMLAttributes, type ThHTMLAttributes, type TdHTMLAttributes,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { X, CircleCheck, CircleAlert, Info } from 'lucide-react';
 
@@ -14,10 +18,10 @@ import { X, CircleCheck, CircleAlert, Info } from 'lucide-react';
    ------------------------------------------------------------------------ */
 
 // ---------- Button ----------
-type BtnVariant = 'primary' | 'accent' | 'outline' | 'subtle' | 'ghost' | 'danger' | 'dangerSolid';
-type BtnSize = 'xs' | 'sm' | 'md' | 'lg' | 'icon' | 'iconSm';
+type BtnVariant = 'primary' | 'accent' | 'outline' | 'subtle' | 'ghost' | 'danger' | 'dangerSolid' | 'dangerGhost';
+type BtnSize = 'xs' | 'sm' | 'md' | 'lg' | 'icon' | 'iconSm' | 'iconXs';
 
-const btnBase = 'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md font-medium leading-none whitespace-nowrap transition-[background-color,border-color,color,box-shadow,opacity] duration-150 disabled:opacity-40 disabled:pointer-events-none select-none cursor-pointer';
+const btnBase = 'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md font-medium leading-none whitespace-nowrap transition-[background-color,border-color,color,box-shadow,opacity,filter] duration-150 disabled:opacity-40 disabled:pointer-events-none select-none cursor-pointer';
 
 const btnVariants: Record<BtnVariant, string> = {
   primary: 'bg-pri text-prifg shadow-xs hover:bg-pri2',
@@ -25,8 +29,10 @@ const btnVariants: Record<BtnVariant, string> = {
   outline: 'bg-bg1 text-tx border border-line2 shadow-xs hover:bg-bg2 hover:border-field',
   subtle: 'bg-bg2 text-tx border border-transparent hover:bg-bg3',
   ghost: 'text-tx2 hover:bg-bg2 hover:text-tx',
-  danger: 'bg-bg1 text-err border border-err/35 shadow-xs hover:bg-err/8 hover:border-err/60',
-  dangerSolid: 'bg-err text-white shadow-xs hover:brightness-110',
+  danger: 'bg-bg1 text-err border border-err/35 shadow-xs hover:bg-err/10 hover:border-err/60',
+  dangerSolid: 'bg-errs text-errfg shadow-xs hover:brightness-110',
+  // Quiet until hovered — for destructive row actions that shouldn't shout.
+  dangerGhost: 'text-tx2 hover:bg-err/10 hover:text-err',
 };
 
 const btnSizes: Record<BtnSize, string> = {
@@ -36,31 +42,40 @@ const btnSizes: Record<BtnSize, string> = {
   lg: 'h-10 px-5 text-sm',
   icon: 'h-8 w-8',
   iconSm: 'h-7 w-7',
+  iconXs: 'h-6 w-6',
 };
+
+/** Button classes for non-<button> elements (<a>, router <Link>) — the ONLY
+    sanctioned way to make a link look like a button; hand-copied class strings
+    drift. */
+export function btnClass(variant: BtnVariant = 'outline', size: BtnSize = 'md', extra = ''): string {
+  return `${btnBase} ${btnVariants[variant]} ${btnSizes[size]} ${extra}`.trim();
+}
 
 export function Button({ variant = 'outline', size = 'md', className = '', ...props }:
   ButtonHTMLAttributes<HTMLButtonElement> & { variant?: BtnVariant; size?: BtnSize }) {
-  return <button type="button" className={`${btnBase} ${btnVariants[variant]} ${btnSizes[size]} ${className}`} {...props} />;
+  return <button type="button" className={btnClass(variant, size, className)} {...props} />;
 }
 
 // ---------- form controls ----------
 // A visible 1px edge on every field (not a fill-only affordance) is what makes
 // an admin console read as trustworthy — and --color-field clears 3:1 non-text
 // contrast against both canvases.
-const fieldBase = 'w-full rounded-md bg-bg1 border border-field px-3 text-sm text-tx placeholder:text-tx3 transition-colors hover:border-tx3 disabled:cursor-not-allowed disabled:bg-bg2 disabled:text-tx2 disabled:hover:border-field';
+const fieldBase = 'w-full rounded-md bg-bg1 border border-field px-3 text-tx placeholder:text-tx3 transition-colors hover:border-tx3 disabled:cursor-not-allowed disabled:bg-bg2 disabled:text-tx2 disabled:hover:border-field';
 
-export function Input({ className = '', ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={`${fieldBase} h-9 ${className}`} {...props} />;
+export function Input({ className = '', uiSize = 'md', ...props }:
+  InputHTMLAttributes<HTMLInputElement> & { uiSize?: 'sm' | 'md' }) {
+  return <input className={`${fieldBase} ${uiSize === 'sm' ? 'h-8 text-[13px]' : 'h-9 text-sm'} ${className}`} {...props} />;
 }
 
 export function Textarea({ className = '', ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={`${fieldBase} resize-y py-2 leading-relaxed ${className}`} {...props} />;
+  return <textarea className={`${fieldBase} resize-y py-2 text-sm leading-relaxed ${className}`} {...props} />;
 }
 
 export function Select({ className = '', children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <div className="relative">
-      <select className={`${fieldBase} h-9 cursor-pointer appearance-none pr-8 ${className}`} {...props}>{children}</select>
+      <select className={`${fieldBase} h-9 cursor-pointer appearance-none pr-8 text-sm ${className}`} {...props}>{children}</select>
       <svg className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-tx3"
         viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
         <path d="m6 9 6 6 6-6" />
@@ -115,7 +130,7 @@ export function Badge({ children, tone = 'default', mono }: { children: ReactNod
     solid: 'bg-pri text-prifg border-transparent',
   };
   return (
-    <span className={`inline-flex max-w-full items-center gap-1 truncate rounded border px-1.5 py-0.5 text-[11px] font-medium leading-4 ${tones[tone]} ${mono ? 'font-mono' : ''}`}>
+    <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-sm border px-1.5 py-0.5 text-[11px] font-medium leading-4 ${tones[tone]} ${mono ? 'font-mono' : ''}`}>
       {children}
     </span>
   );
@@ -127,9 +142,12 @@ export function StatusDot({ tone }: { tone: 'ok' | 'err' | 'warn' | 'idle' }) {
   return <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${c}`} />;
 }
 
+/** Inherits currentColor so it stays legible inside filled buttons (prifg on
+    primary, errfg on dangerSolid). Standalone loading wrappers should set
+    `text-tx3` themselves. */
 export function Spinner({ className = 'h-4 w-4' }: { className?: string }) {
   return (
-    <svg className={`animate-spin text-tx3 ${className}`} viewBox="0 0 24 24" fill="none" aria-hidden>
+    <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" aria-hidden>
       <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" />
       <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v2.5A5.5 5.5 0 006.5 12H4z" />
     </svg>
@@ -153,8 +171,10 @@ export function PageHeader({ title, subtitle, left, children }: {
   );
 }
 
-export function Card({ title, desc, actions, children, className = '', bodyClassName = '' }: {
+export function Card({ title, desc, actions, children, flush, className = '', bodyClassName = '' }: {
   title?: string; desc?: string; actions?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string;
+  /** Body without padding — for full-bleed content (tables, image grids). */
+  flush?: boolean;
 }) {
   return (
     <section className={`overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs ${className}`}>
@@ -167,7 +187,7 @@ export function Card({ title, desc, actions, children, className = '', bodyClass
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </div>
       )}
-      <div className={`px-5 py-4 ${bodyClassName}`}>{children}</div>
+      <div className={`${flush ? '' : 'px-5 py-4'} ${bodyClassName}`}>{children}</div>
     </section>
   );
 }
@@ -187,6 +207,33 @@ export function SegmentedControl<T extends string | number>({ value, options, on
       ))}
     </div>
   );
+}
+
+/** Label + description + switch in a quiet recessed row — the one way every
+    settings surface phrases a boolean. */
+export function ToggleRow({ label, desc, checked, onChange, disabled }: {
+  label: string; desc?: string; checked: boolean; onChange(v: boolean): void; disabled?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg bg-bg0 px-3.5 py-3">
+      <div className="min-w-0">
+        <div className="text-[13px] font-medium text-tx">{label}</div>
+        {desc && <div className="mt-0.5 text-xs leading-relaxed text-tx3">{desc}</div>}
+      </div>
+      <Toggle checked={checked} onChange={onChange} disabled={disabled} />
+    </div>
+  );
+}
+
+// The one data-table cell treatment (Users' variant won: tinted header reads
+// as a header even when the table scrolls). Rows must set `group` so the
+// last-row border clears via `group-last`.
+export function Th({ className = '', ...props }: ThHTMLAttributes<HTMLTableCellElement>) {
+  return <th className={`border-b border-line bg-bg2/50 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-tx3 ${className}`} {...props} />;
+}
+
+export function Td({ className = '', ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
+  return <td className={`border-b border-line px-3 py-2.5 text-tx2 group-last:border-0 ${className}`} {...props} />;
 }
 
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -218,6 +265,67 @@ export function EmptyState({ icon, title, hint, action }: {
   );
 }
 
+// ---------- Popover ----------
+/** Anchored floating panel (portal + viewport-aware flip). Shared by the
+    composer's pickers and any menu that hangs off a trigger — one panel style,
+    one placement algorithm. */
+export function Popover({ trigger, children, open, setOpen, align = 'left', width = 'w-80' }: {
+  trigger: ReactNode; children: ReactNode; open: boolean; setOpen(v: boolean): void;
+  align?: 'left' | 'right'; width?: string;
+}) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<CSSProperties | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) { setPosition(null); return; }
+
+    function place() {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const edge = 12;
+      const gap = 8;
+      const above = rect.top - edge - gap;
+      const below = window.innerHeight - rect.bottom - edge - gap;
+      const placeAbove = above >= 300 || above >= below;
+      const maxHeight = Math.max(160, Math.min(placeAbove ? above : below, 544));
+      const horizontal = align === 'right'
+        ? { right: Math.max(edge, window.innerWidth - rect.right) }
+        : { left: Math.max(edge, rect.left) };
+
+      setPosition(placeAbove
+        ? { ...horizontal, bottom: window.innerHeight - rect.top + gap, maxHeight }
+        : { ...horizontal, top: rect.bottom + gap, maxHeight });
+    }
+
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [align, open]);
+
+  return (
+    <div ref={anchorRef} className="relative">
+      <div onClick={() => setOpen(!open)}>{trigger}</div>
+      {open && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            style={position ?? { visibility: 'hidden' }}
+            className={`fade-up fixed z-50 ${width} max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-line bg-bg1 shadow-lg`}
+          >
+            {children}
+          </div>
+        </>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 // ---------- Modal ----------
 export function Modal({ open, onClose, title, desc, children, wide, className = '' }: {
   open: boolean; onClose(): void; title: string; desc?: string; children: ReactNode; wide?: boolean;
@@ -234,7 +342,7 @@ export function Modal({ open, onClose, title, desc, children, wide, className = 
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-[var(--color-scrim)] backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-scrim backdrop-blur-[2px]" onClick={onClose} />
       <div className={`fade-up relative flex max-h-[88vh] w-full flex-col ${wide ? 'max-w-2xl' : 'max-w-md'} overflow-hidden rounded-xl border border-line bg-bg1 shadow-xl ${className}`}>
         <div className="flex items-start gap-3 border-b border-line px-5 py-4">
           <div className="min-w-0 flex-1">

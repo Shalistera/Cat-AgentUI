@@ -1,21 +1,46 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   PanelLeft, ImagePlus, Sparkles, X, Download, Trash2, Image as ImageIcon,
-  History, Settings2, Plus, ZoomIn,
+  History, Settings2, Plus, ZoomIn, ArrowRight,
 } from 'lucide-react';
 import { useUi, useAuth } from '../store';
-import { api, ApiError, uploadFile, fmtDuration, fmtTime, fmtTokens } from '../api';
+import { api, ApiError, uploadFile } from '../api';
 import { tabAlert } from '../tabAlert';
 import {
-  Button, Input, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
-  toast, confirmDialog, EmptyState,
+  Button, Input, Textarea, Select, Field, Modal, ModalActions, Spinner, Card, PageHeader,
+  toast, EmptyState, btnClass,
 } from '../components/ui';
+import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGallery';
 import type { ImageModel, ImageRecord } from '../types';
 
-const PAGE_SIZE = 60;
+const PAGE_SIZE = 24;
 const MAX_REFS = 3;
+// Older images shown beside the featured one; the rest live in /images/gallery.
+const GALLERY_PREVIEW = 6;
 const HISTORY_MAX = 10;
-const DEFAULT_QUICK_PROMPTS = ['去背景'];
+// Quick prompts are titled templates: the chip shows the short title, clicking
+// inserts the (possibly very long) prompt body.
+type QuickPrompt = { title: string; prompt: string };
+const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: '去背景', prompt: '去背景' }];
+
+// Accepts both the current {title, prompt} shape and the legacy plain-string
+// entries (which double as their own title).
+function normalizeQuick(raw: unknown): QuickPrompt[] {
+  if (!Array.isArray(raw)) return DEFAULT_QUICK_PROMPTS;
+  const out: QuickPrompt[] = [];
+  for (const x of raw) {
+    if (typeof x === 'string') {
+      if (x.trim()) out.push({ title: x, prompt: x });
+    } else if (x && typeof x === 'object') {
+      const { title, prompt } = x as Record<string, unknown>;
+      if (typeof prompt === 'string' && prompt.trim()) {
+        out.push({ title: typeof title === 'string' && title.trim() ? title : prompt, prompt });
+      }
+    }
+  }
+  return out;
+}
 
 export default function Images() {
   const sidebarOpen = useUi((s) => s.sidebarOpen);
@@ -50,16 +75,15 @@ export default function Images() {
 
   // ---- quick / history prompts ----
   const quickKey = `cat-img-quick:${user?.id ?? 'anon'}`;
-  const [quick, setQuick] = useState<string[]>(DEFAULT_QUICK_PROMPTS);
+  const [quick, setQuick] = useState<QuickPrompt[]>(DEFAULT_QUICK_PROMPTS);
   const [quickOpen, setQuickOpen] = useState(false);
-  const [quickDraft, setQuickDraft] = useState<string[]>([]);
+  const [quickDraft, setQuickDraft] = useState<QuickPrompt[]>([]);
   const [histOpen, setHistOpen] = useState(false);
 
   // ---- gallery state ----
   const [list, setList] = useState<ImageRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [galleryLoaded, setGalleryLoaded] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [lightbox, setLightbox] = useState<ImageRecord | null>(null);
   // Which reference slot is open in the zoom preview (index into refSlots).
   const [refPreview, setRefPreview] = useState<number | null>(null);
@@ -84,7 +108,7 @@ export default function Images() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(quickKey);
-      setQuick(raw !== null ? (JSON.parse(raw) as string[]) : DEFAULT_QUICK_PROMPTS);
+      setQuick(raw !== null ? normalizeQuick(JSON.parse(raw)) : DEFAULT_QUICK_PROMPTS);
     } catch {
       setQuick(DEFAULT_QUICK_PROMPTS);
     }
@@ -179,7 +203,7 @@ export default function Images() {
     });
   }
 
-  function saveQuick(next: string[]) {
+  function saveQuick(next: QuickPrompt[]) {
     setQuick(next);
     try { localStorage.setItem(quickKey, JSON.stringify(next)); } catch { /* ignore */ }
   }
@@ -310,35 +334,6 @@ export default function Images() {
     void runJob(jobId, start);
   }
 
-  async function loadMore() {
-    if (loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const r = await api.get<{ images: ImageRecord[]; total: number }>(
-        `/api/images?limit=${PAGE_SIZE}&offset=${list.length}`,
-      );
-      setList((prev) => [...prev, ...(r.images ?? [])]);
-      setTotal(r.total ?? total);
-    } catch (err) {
-      toast(err instanceof Error ? err.message : '加载失败', 'err');
-    } finally {
-      setLoadingMore(false);
-    }
-  }
-
-  async function deleteImage(img: ImageRecord) {
-    if (!(await confirmDialog('删除图片', '确定删除这张图片?此操作不可恢复。'))) return;
-    try {
-      await api.del(`/api/images/${img.id}`);
-      setList((prev) => prev.filter((x) => x.id !== img.id));
-      setTotal((t) => Math.max(0, t - 1));
-      setLightbox(null);
-      toast('已删除', 'ok');
-    } catch (err) {
-      toast(err instanceof Error ? err.message : '删除失败', 'err');
-    }
-  }
-
   const canGenerate = !!prompt.trim() && !!model && !generating && !uploading;
 
   return (
@@ -358,9 +353,9 @@ export default function Images() {
         <div className="mx-auto max-w-5xl p-6">
           {/* ---- generation form ---- */}
           <Card title="新建生成" desc="描述目标画面,可附参考图作为编辑输入。" className="fade-up"
-            bodyClassName={models === null || models.length === 0 ? '!p-0' : ''}>
+            flush={models === null || models.length === 0}>
             {models === null ? (
-              <div className="flex justify-center py-10"><Spinner className="h-5 w-5" /></div>
+              <div className="flex justify-center py-10 text-tx3"><Spinner className="h-5 w-5" /></div>
             ) : models.length === 0 ? (
               <EmptyState
                 icon={<ImageIcon size={22} />}
@@ -431,21 +426,24 @@ export default function Images() {
                     }}
                   />
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    {quick.map((q) => (
+                    {quick.map((q, i) => (
                       <button
-                        key={q}
+                        key={`${q.title}-${i}`}
                         type="button"
-                        title="点击填入提示词"
-                        onClick={() => applyQuickPrompt(q)}
-                        className="cursor-pointer rounded-full border border-line bg-bg1 px-2.5 py-1 text-xs text-tx2 transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
+                        title={q.prompt}
+                        onClick={() => applyQuickPrompt(q.prompt)}
+                        className="max-w-[200px] cursor-pointer truncate rounded-full border border-line bg-bg1 px-2.5 py-1 text-xs text-tx2 transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
                       >
-                        {q}
+                        {q.title}
                       </button>
                     ))}
                     <button
                       type="button"
                       title="管理快捷提示词"
-                      onClick={() => { setQuickDraft(quick.length ? [...quick] : ['']); setQuickOpen(true); }}
+                      onClick={() => {
+                        setQuickDraft(quick.length ? quick.map((q) => ({ ...q })) : [{ title: '', prompt: '' }]);
+                        setQuickOpen(true);
+                      }}
                       className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-line px-2.5 py-1 text-xs text-tx3 transition-colors hover:border-line2 hover:text-tx"
                     >
                       <Settings2 size={12} />管理
@@ -485,16 +483,16 @@ export default function Images() {
                               <ZoomIn size={13} />查看
                             </span>
                           </button>
-                          <span className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                          <span className="pointer-events-none absolute left-1.5 top-1.5 rounded-sm bg-black/55 px-1.5 py-0.5 text-[10px] leading-none text-white">
                             图{i + 1}
                           </span>
                           <button
                             type="button"
                             title="移除"
                             onClick={() => setRefSlots((prev) => prev.map((x, j) => (j === i ? null : x)))}
-                            className="absolute right-1 top-1 z-10 flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-black/70 text-white ring-1 ring-white/70 transition-colors hover:bg-err"
+                            className="absolute right-1 top-1 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-full bg-black/70 text-white ring-1 ring-white/70 transition-colors hover:bg-errs"
                           >
-                            <X size={15} />
+                            <X size={14} />
                           </button>
                         </div>
                       ) : (
@@ -547,12 +545,17 @@ export default function Images() {
           <section className="mt-5">
             <div className="mb-2.5 flex items-baseline justify-between">
               <h2 className="eyebrow">作品库</h2>
-              {list.length > 0 && (
-                <span className="text-xs tabular-nums text-tx3">显示 {list.length} / {total}</span>
+              {total > 0 && (
+                <Link
+                  to="/images/gallery"
+                  className="inline-flex cursor-pointer items-center gap-1 text-xs tabular-nums text-tx2 transition-colors hover:text-tx"
+                >
+                  作品集 · 共 {total.toLocaleString()} 张<ArrowRight size={12} />
+                </Link>
               )}
             </div>
             {!galleryLoaded ? (
-              <div className="flex justify-center py-16"><Spinner className="h-5 w-5" /></div>
+              <div className="flex justify-center py-16 text-tx3"><Spinner className="h-5 w-5" /></div>
             ) : list.length === 0 ? (
               <div className="rounded-xl border border-line bg-bg1">
                 <EmptyState
@@ -563,37 +566,58 @@ export default function Images() {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                  {list.map((img) => (
-                    <button
-                      key={img.id}
-                      type="button"
-                      onClick={() => setLightbox(img)}
-                      className="group relative aspect-square cursor-pointer overflow-hidden rounded-lg border border-line bg-bg1 text-left shadow-xs transition-shadow hover:shadow-md"
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                  {/* Newest image gets the spotlight: oversized, with its own
+                      download affordances (corner pill + full-width bar). */}
+                  <div>
+                    <div className="group relative overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs transition-shadow hover:shadow-md">
+                      <button
+                        type="button"
+                        onClick={() => setLightbox(list[0])}
+                        className="block aspect-square w-full cursor-pointer text-left"
+                      >
+                        <img
+                          src={`/api/images/${list[0].id}/file`}
+                          alt={list[0].prompt}
+                          className="h-full w-full object-cover"
+                        />
+                        <TileOverlay featured prompt={list[0].prompt} model={list[0].model} />
+                      </button>
+                      <a
+                        href={`/api/images/${list[0].id}/file`}
+                        download
+                        title="下载图片"
+                        className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/70 transition-colors hover:bg-black/85"
+                      >
+                        <Download size={16} />
+                      </a>
+                    </div>
+                    <a
+                      href={`/api/images/${list[0].id}/file`}
+                      download
+                      className={btnClass('outline', 'lg', 'mt-3 w-full')}
                     >
-                      <img
-                        loading="lazy"
-                        src={`/api/images/${img.id}/file`}
-                        alt={img.prompt}
-                        className="h-full w-full object-cover"
-                      />
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2.5 pt-10 opacity-0 transition-opacity group-hover:opacity-100">
-                        <p className="line-clamp-2 text-[11px] leading-snug text-white">{img.prompt}</p>
-                        {img.model && (
-                          <span className="mt-1.5 inline-block max-w-full truncate rounded bg-white/20 px-1.5 py-0.5 font-mono text-[10px] text-white">
-                            {img.model}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  ))}
+                      <Download size={16} />下载图片
+                    </a>
+                  </div>
+                  {/* Older images: a capped preview grid — the full archive
+                      lives on the 作品集 page. */}
+                  {list.length > 1 && (
+                    <div className="grid grid-cols-2 content-start gap-3 sm:grid-cols-3 lg:grid-cols-2">
+                      {list.slice(1, 1 + GALLERY_PREVIEW).map((img) => (
+                        <ImageTile key={img.id} img={img} onClick={() => setLightbox(img)} />
+                      ))}
+                    </div>
+                  )}
                 </div>
-                {list.length < total && (
+                {total > 1 + GALLERY_PREVIEW && (
                   <div className="mt-5 flex justify-center">
-                    <Button variant="outline" disabled={loadingMore} onClick={loadMore}>
-                      {loadingMore && <Spinner className="h-3.5 w-3.5" />}
-                      {loadingMore ? '加载中…' : '加载更多'}
-                    </Button>
+                    <Link
+                      to="/images/gallery"
+                      className={btnClass('outline', 'sm')}
+                    >
+                      查看全部 {total.toLocaleString()} 张作品<ArrowRight size={14} />
+                    </Link>
                   </div>
                 )}
               </>
@@ -638,28 +662,37 @@ export default function Images() {
 
       {/* ---- quick prompt manager ---- */}
       <Modal open={quickOpen} onClose={() => setQuickOpen(false)} title="管理快捷提示词"
-        desc="常用的提示词片段,点击即可填入。">
-        <div className="space-y-2">
+        desc="常用的提示词模板,页面上显示标题,点击填入完整提示词。">
+        <div className="space-y-2.5">
           {quickDraft.map((q, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <Input
-                value={q}
-                maxLength={200}
-                placeholder="输入提示词,例如:去背景"
-                onChange={(e) => setQuickDraft((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+            <div key={i} className="space-y-1.5 rounded-lg border border-line p-2.5">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={q.title}
+                  maxLength={30}
+                  placeholder="标题,例如:去背景"
+                  onChange={(e) => setQuickDraft((prev) => prev.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))}
+                />
+                <Button
+                  variant="ghost" size="icon" title="删除"
+                  onClick={() => setQuickDraft((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+              <Textarea
+                rows={2}
+                value={q.prompt}
+                maxLength={2000}
+                placeholder="提示词内容,可以很长…"
+                onChange={(e) => setQuickDraft((prev) => prev.map((x, j) => (j === i ? { ...x, prompt: e.target.value } : x)))}
               />
-              <Button
-                variant="ghost" size="icon" title="删除"
-                onClick={() => setQuickDraft((prev) => prev.filter((_, j) => j !== i))}
-              >
-                <Trash2 size={14} />
-              </Button>
             </div>
           ))}
           {quickDraft.length === 0 && (
             <p className="py-1 text-xs text-tx3">暂无快捷提示词,点击下方按钮添加。</p>
           )}
-          <Button variant="outline" size="sm" onClick={() => setQuickDraft((prev) => [...prev, ''])}>
+          <Button variant="outline" size="sm" onClick={() => setQuickDraft((prev) => [...prev, { title: '', prompt: '' }])}>
             <Plus size={14} />添加一条
           </Button>
         </div>
@@ -668,7 +701,12 @@ export default function Images() {
           <Button
             variant="primary"
             onClick={() => {
-              saveQuick(quickDraft.map((x) => x.trim()).filter(Boolean));
+              saveQuick(
+                quickDraft
+                  .map((x) => ({ title: x.title.trim(), prompt: x.prompt.trim() }))
+                  .filter((x) => x.prompt)
+                  .map((x) => ({ title: x.title || x.prompt, prompt: x.prompt })),
+              );
               setQuickOpen(false);
             }}
           >
@@ -678,37 +716,15 @@ export default function Images() {
       </Modal>
 
       {/* ---- lightbox ---- */}
-      <Modal open={!!lightbox} onClose={() => setLightbox(null)} title="图片详情" wide>
-        {lightbox && (
-          <div className="space-y-4">
-            <img
-              src={`/api/images/${lightbox.id}/file`}
-              alt={lightbox.prompt}
-              className="mx-auto max-h-[58vh] rounded-lg border border-line bg-bg0 object-contain"
-            />
-            <p className="select-text whitespace-pre-wrap text-[13px] leading-relaxed text-tx2">{lightbox.prompt}</p>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-tx3">
-              {lightbox.model && <Badge mono>{lightbox.model}</Badge>}
-              {lightbox.size && <span>尺寸 {lightbox.size}</span>}
-              <span>耗时 {fmtDuration(lightbox.durationMs)}</span>
-              <span>{fmtTime(lightbox.createdAt)}</span>
-              {lightbox.tokens != null && lightbox.tokens > 0 && <span>Tokens {fmtTokens(lightbox.tokens)}</span>}
-            </div>
-            <ModalActions>
-              <a
-                href={`/api/images/${lightbox.id}/file`}
-                download
-                className="inline-flex h-9 cursor-pointer select-none items-center justify-center gap-1.5 rounded-md border border-line2 bg-bg1 px-3.5 text-[13px] font-medium leading-none text-tx shadow-xs transition-colors hover:bg-bg2"
-              >
-                <Download size={14} />下载
-              </a>
-              <Button variant="danger" onClick={() => deleteImage(lightbox)}>
-                <Trash2 size={14} />删除
-              </Button>
-            </ModalActions>
-          </div>
-        )}
-      </Modal>
+      <ImageLightbox
+        image={lightbox}
+        onClose={() => setLightbox(null)}
+        onDeleted={(img) => {
+          setList((prev) => prev.filter((x) => x.id !== img.id));
+          setTotal((t) => Math.max(0, t - 1));
+          setLightbox(null);
+        }}
+      />
     </div>
   );
 }

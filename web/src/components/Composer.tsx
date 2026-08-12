@@ -1,75 +1,14 @@
-import {
-  useEffect, useLayoutEffect, useRef, useState,
-  type CSSProperties, type ReactNode,
-} from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, ArrowUp, Check, ChevronDown, Gauge, Globe, Image as ImageIcon,
   Loader2, Plus, Search, Settings2, Square, Wrench, X,
 } from 'lucide-react';
-import { searchPrefKey, useAuth, useMcp, useModels } from '../store';
+import { searchPrefKey, useAuth, useMcp, useModels, useUi } from '../store';
 import { api, uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
-import { rampAt, ReasoningSlider } from './ReasoningSlider';
-import { toast, Toggle } from './ui';
+import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
+import { Button, Field, Popover, toast, Toggle } from './ui';
 import type { ModelInfo, ReasoningEffort, ReasoningLevel } from '../types';
-
-function Popover({ trigger, children, open, setOpen, align = 'left', width = 'w-80' }: {
-  trigger: ReactNode; children: ReactNode; open: boolean; setOpen(v: boolean): void;
-  align?: 'left' | 'right'; width?: string;
-}) {
-  const anchorRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<CSSProperties | null>(null);
-
-  useLayoutEffect(() => {
-    if (!open) { setPosition(null); return; }
-
-    function place() {
-      const anchor = anchorRef.current;
-      if (!anchor) return;
-      const rect = anchor.getBoundingClientRect();
-      const edge = 12;
-      const gap = 8;
-      const above = rect.top - edge - gap;
-      const below = window.innerHeight - rect.bottom - edge - gap;
-      const placeAbove = above >= 300 || above >= below;
-      const maxHeight = Math.max(160, Math.min(placeAbove ? above : below, 544));
-      const horizontal = align === 'right'
-        ? { right: Math.max(edge, window.innerWidth - rect.right) }
-        : { left: Math.max(edge, rect.left) };
-
-      setPosition(placeAbove
-        ? { ...horizontal, bottom: window.innerHeight - rect.top + gap, maxHeight }
-        : { ...horizontal, top: rect.bottom + gap, maxHeight });
-    }
-
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
-    };
-  }, [align, open]);
-
-  return (
-    <div ref={anchorRef} className="relative">
-      <div onClick={() => setOpen(!open)}>{trigger}</div>
-      {open && createPortal(
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div
-            style={position ?? { visibility: 'hidden' }}
-            className={`fade-up fixed z-50 ${width} max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-line bg-bg1 shadow-lg`}
-          >
-            {children}
-          </div>
-        </>,
-        document.body,
-      )}
-    </div>
-  );
-}
 
 const toolBtn = 'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-transparent px-2 text-xs font-medium text-tx2 transition-colors hover:border-line hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none';
 
@@ -126,6 +65,7 @@ export function Composer(props: ComposerProps) {
   const composingRef = useRef(false);
   const models = useModels((s) => s.models);
   const user = useAuth((s) => s.user);
+  const dark = useUi((s) => s.theme) === 'dark';
   const mcpServers = useMcp((s) => s.servers).filter((s) => s.enabled);
   // The search server gets its own toggle; the generic tools menu holds the rest.
   const searchServer = mcpServers.find((s) => s.isSearch) ?? null;
@@ -211,7 +151,11 @@ export function Composer(props: ComposerProps) {
   const effortIdx = Math.max(0, efforts.findIndex((e) => e.value === (props.settings.reasoningEffort || OFF_LEVEL.value)));
   const effort = efforts[effortIdx];
   const thinking = efforts.length > 1 && effort.value !== OFF_LEVEL.value;
-  const effortTint = rampAt(efforts.length > 1 ? effortIdx / (efforts.length - 1) : 0);
+  const effortRatio = efforts.length > 1 ? effortIdx / (efforts.length - 1) : 0;
+  // Solid rail for grounds that carry white text; text rail for tinted
+  // text/borders sitting on the page surface (lifted on dark).
+  const effortTint = rampAt(effortRatio);
+  const effortText = rampTextAt(effortRatio, dark);
 
   function setReasoningEffort(next: ReasoningLevel) {
     props.onSettingsChange({ ...props.settings, reasoningEffort: next.value });
@@ -236,13 +180,13 @@ export function Composer(props: ComposerProps) {
       <ModelAvatar info={m} size={24} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-semibold text-tx">{m.displayName}</span>
-        <span className="mt-0.5 block truncate text-[10px] text-tx3">
+        <span className="mt-0.5 block truncate text-[11px] text-tx3">
           {m.providerName} · {m.modelId}
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-1 text-tx3">
         {m.imageGen && <ImageIcon size={12} aria-label="图像生成" />}
-        {m.vision && !m.imageGen && <span className="rounded bg-bg3 px-1 py-0.5 text-[9px] font-medium">视觉</span>}
+        {m.vision && !m.imageGen && <span className="rounded-sm bg-bg3 px-1 py-0.5 text-[9px] font-medium">视觉</span>}
         {m.tools && !m.imageGen && <Wrench size={11} aria-label="工具调用" />}
       </span>
       {m.id === model?.id && <Check size={14} className="shrink-0 text-acc" />}
@@ -267,7 +211,7 @@ export function Composer(props: ComposerProps) {
                 <img src={img.previewUrl} alt="" className="h-16 w-16 rounded-md border border-line object-cover" />
                 <button
                   title="移除图片"
-                  className="absolute -right-1.5 -top-1.5 cursor-pointer rounded-full border border-line bg-bg1 p-0.5 text-tx2 opacity-0 shadow-sm transition-opacity hover:text-err group-hover:opacity-100"
+                  className="absolute -right-1.5 -top-1.5 cursor-pointer rounded-full border border-line bg-bg1 p-0.5 text-tx2 opacity-0 shadow-sm transition-opacity hover:text-err group-focus-within:opacity-100 group-hover:opacity-100"
                   onClick={() => removePendingImage(img)}
                 >
                   <X size={11} />
@@ -398,7 +342,7 @@ export function Composer(props: ComposerProps) {
                       title="其他设置"
                       aria-label="打开其他设置"
                       onClick={() => setPanelView('settings')}
-                      className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line text-tx2 transition-colors hover:border-field hover:bg-bg2 hover:text-tx"
+                      className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 text-tx2 transition-colors hover:border-field hover:bg-bg2 hover:text-tx"
                     >
                       <Settings2 size={15} />
                       {props.settings.systemPrompt && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accs" />}
@@ -416,7 +360,7 @@ export function Composer(props: ComposerProps) {
                         type="button"
                         aria-pressed={modelKind === value}
                         onClick={() => setModelKind(value)}
-                        className={`cursor-pointer rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
+                        className={`cursor-pointer rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                           modelKind === value ? 'bg-bg1 text-tx shadow-xs' : 'text-tx3 hover:text-tx'
                         }`}
                       >
@@ -438,7 +382,7 @@ export function Composer(props: ComposerProps) {
                       <div className="px-3 py-8 text-center">
                         <Search size={18} className="mx-auto mb-2 text-tx3" />
                         <p className="text-xs font-medium text-tx2">没有匹配的模型</p>
-                        <p className="mt-1 text-[10px] text-tx3">换个名称、模型 ID 或服务商试试</p>
+                        <p className="mt-1 text-[11px] text-tx3">换个名称、模型 ID 或服务商试试</p>
                       </div>
                     )}
                   </div>
@@ -449,21 +393,15 @@ export function Composer(props: ComposerProps) {
               {panelView === 'settings' && (
                 <>
                   <div className="flex shrink-0 items-center gap-2 border-b border-line px-2 py-2">
-                    <button
-                      type="button"
-                      title="返回模型列表"
-                      aria-label="返回模型列表"
-                      onClick={() => setPanelView('models')}
-                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg2 hover:text-tx"
-                    >
+                    <Button variant="ghost" size="iconSm" title="返回模型列表" aria-label="返回模型列表"
+                      onClick={() => setPanelView('models')}>
                       <ArrowLeft size={15} />
-                    </button>
+                    </Button>
                     <Settings2 size={15} className="text-tx2" />
                     <span className="text-xs font-semibold text-tx">其他设置</span>
                   </div>
                   <div className="overflow-y-auto p-3">
-                    <label className="block">
-                      <div className="mb-1.5 text-[11px] font-semibold text-tx">系统提示词</div>
+                    <Field label="系统提示词">
                       <textarea
                         rows={6}
                         value={props.settings.systemPrompt}
@@ -471,7 +409,7 @@ export function Composer(props: ComposerProps) {
                         placeholder="设定 AI 的角色与行为…"
                         className={`${popField} min-h-28 resize-y leading-relaxed`}
                       />
-                    </label>
+                    </Field>
                   </div>
                 </>
               )}
@@ -489,9 +427,9 @@ export function Composer(props: ComposerProps) {
                 className={`${toolBtn} fade-up border-line bg-bg1`}
                 title={`思考强度：${effort.label}`}
                 style={thinking ? {
-                  color: `rgb(${effortTint})`,
-                  borderColor: `rgb(${effortTint} / 0.45)`,
-                  background: `rgb(${effortTint} / 0.09)`,
+                  color: `rgb(${effortText})`,
+                  borderColor: `rgb(${effortText} / 0.45)`,
+                  background: `rgb(${effortText} / 0.09)`,
                 } : undefined}
               >
                 <Gauge size={14} className="shrink-0" />
@@ -499,11 +437,11 @@ export function Composer(props: ComposerProps) {
               </button>
             }>
               <div className="flex items-center gap-1.5 border-b border-line bg-bg2/45 px-3 py-2">
-                <Gauge size={14} className="shrink-0" style={{ color: `rgb(${effortTint})` }} />
+                <Gauge size={14} className="shrink-0" style={{ color: `rgb(${effortText})` }} />
                 <span className="text-xs font-semibold text-tx">思考强度</span>
                 <span className="flex-1" />
                 <span
-                  className={`max-w-[8rem] truncate rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                  className={`max-w-[8rem] truncate rounded-md px-2 py-0.5 text-[11px] font-semibold ${
                     thinking ? 'text-white shadow-xs' : 'border border-line2 bg-bg1 text-tx2'
                   }`}
                   style={thinking ? { background: `rgb(${effortTint})` } : undefined}
@@ -517,7 +455,7 @@ export function Composer(props: ComposerProps) {
                   index={effortIdx}
                   onChange={(i) => setReasoningEffort(efforts[i])}
                 />
-                <p className="mt-1 text-[10px] leading-4 text-tx3">{effortHint(effortIdx, efforts.length)}</p>
+                <p className="mt-1 text-[11px] leading-4 text-tx3">{effortHint(effortIdx, efforts.length)}</p>
               </div>
             </Popover>
           )}
@@ -534,7 +472,7 @@ export function Composer(props: ComposerProps) {
             <button
               title="发送消息"
               disabled={(!text.trim() && images.length === 0) || props.disabled}
-              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md bg-pri text-prifg shadow-xs transition-colors hover:bg-pri2 disabled:opacity-30 disabled:pointer-events-none"
+              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md bg-pri text-prifg shadow-xs transition-colors hover:bg-pri2 disabled:opacity-40 disabled:pointer-events-none"
               onClick={send}
             >
               <ArrowUp size={16} strokeWidth={2.5} />

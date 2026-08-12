@@ -62,6 +62,13 @@
   --color-warn: #96650a;
   --color-info: #0b6bb5;
 
+  /* ---- filled danger controls ----
+     Mirrors acc/accs: `err` is the readable-on-surface value and brightens on
+     dark, where white text on it stops clearing AA. `errs` stays a deep
+     saturated red in both themes so solid danger buttons keep white text. */
+  --color-errs: #c42b2b;
+  --color-errfg: #ffffff;
+
   /* ---- typography ---- */
   --font-sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
@@ -119,6 +126,9 @@ html.dark {
   --color-err: #ff6b6b;
   --color-warn: #e0a343;
   --color-info: #69b7f0;
+
+  --color-errs: #c93636;
+  --color-errfg: #ffffff;
 
   --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.4);

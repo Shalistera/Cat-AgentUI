@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { FileUp, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { ApiError, onUnauthorized } from '../../api';
-import { Button, Card, Field, Input, Toggle, toast } from '../../components/ui';
+import { Button, Card, Field, Input, Spinner, Stat, ToggleRow, toast } from '../../components/ui';
 
 interface OwuiReport {
   sourceUsers: number;
@@ -54,7 +54,12 @@ export default function Import() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
+    <div className="mx-auto max-w-3xl space-y-5 p-6">
+      <div>
+        <h1 className="text-base font-semibold tracking-tight text-tx">数据导入</h1>
+        <p className="mt-0.5 text-xs text-tx3">从 Open WebUI 迁入用户与聊天记录,可重复执行安全续传</p>
+      </div>
+
       <Card
         title="从 Open WebUI 迁移"
         desc="上传 webui.db 一键迁入用户与聊天记录。迁入的用户用原来的邮箱 + 原密码即可登录,首次登录后密码自动升级为本站格式。可放心重复执行:已迁过的用户、会话、附件会自动跳过。"
@@ -72,7 +77,7 @@ export default function Import() {
             <button
               type="button"
               onClick={() => fileRef.current?.click()}
-              className="flex w-full items-center gap-3 rounded-lg border border-dashed border-line2 bg-bg0 px-3.5 py-3 text-left transition-colors hover:border-pri/50 hover:bg-bg1"
+              className="flex w-full items-center gap-3 rounded-lg border border-dashed border-line2 bg-bg0 px-3.5 py-3 text-left transition-colors hover:border-field hover:bg-bg1"
             >
               <FileUp size={18} className="shrink-0 text-tx3" />
               {file ? (
@@ -95,20 +100,17 @@ export default function Import() {
             />
           </Field>
 
-          <div className="flex items-center justify-between gap-4 rounded-lg border border-line bg-bg0 px-3.5 py-3">
-            <div>
-              <div className="text-[13px] font-medium text-tx">跳过已归档会话</div>
-              <div className="mt-0.5 text-xs text-tx3">默认全部迁入;之后想补迁归档,再跑一次即可</div>
-            </div>
-            <Toggle checked={skipArchived} onChange={setSkipArchived} />
-          </div>
+          <ToggleRow
+            label="跳过已归档会话" desc="默认全部迁入;之后想补迁归档,再跑一次即可"
+            checked={skipArchived} onChange={setSkipArchived}
+          />
 
           <div className="flex items-center justify-end gap-3 border-t border-line pt-4">
-            <Button variant="ghost" disabled={!file || !!busy} onClick={() => run(true)}>
-              {busy === 'dry' ? '试运行中…' : '试运行(不写入)'}
+            <Button variant="outline" disabled={!file || !!busy} onClick={() => run(true)}>
+              {busy === 'dry' && <Spinner className="h-3.5 w-3.5" />}试运行(不写入)
             </Button>
             <Button variant="primary" disabled={!file || !!busy} onClick={() => run(false)}>
-              {busy === 'run' ? '导入中…' : '开始导入'}
+              {busy === 'run' && <Spinner className="h-3.5 w-3.5" />}开始导入
             </Button>
           </div>
         </div>
@@ -127,11 +129,7 @@ export default function Import() {
                 { label: '消息', value: report.messages.migrated, extra: '' },
                 { label: '附件', value: report.files.copied + report.files.inlined, extra: report.files.missing.length ? `缺失 ${report.files.missing.length}` : '' },
               ].map((s) => (
-                <div key={s.label} className="rounded-lg border border-line bg-bg0 px-3.5 py-3">
-                  <div className="text-xs text-tx3">{s.label}</div>
-                  <div className="mt-1 text-xl font-semibold tabular-nums text-tx">{s.value}</div>
-                  {s.extra && <div className="mt-0.5 text-xs text-tx3">{s.extra}</div>}
-                </div>
+                <Stat key={s.label} label={s.label} value={String(s.value)} hint={s.extra || undefined} />
               ))}
             </div>
 
@@ -143,7 +141,7 @@ export default function Import() {
             )}
 
             {report.users.renamed.length > 0 && (
-              <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/5 px-3.5 py-3 text-[13px] text-tx2">
+              <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-3 text-[13px] text-tx2">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
                 <div>
                   <div className="font-medium text-tx">以下账号无邮箱且用户名与他人冲突,已改名(不合并,避免聊天记录错归)</div>
@@ -155,7 +153,7 @@ export default function Import() {
             )}
 
             {report.users.noPassword.length > 0 && (
-              <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/5 px-3.5 py-3 text-[13px] text-tx2">
+              <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-3 text-[13px] text-tx2">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
                 <div>
                   <div className="font-medium text-tx">以下账号在 Open WebUI 中使用 OAuth/LDAP 登录、无本地密码,已迁入但暂不可登录 — 请在「用户」页为其重置密码</div>
@@ -167,7 +165,7 @@ export default function Import() {
             )}
 
             {report.errors.length > 0 && (
-              <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/5 px-3.5 py-3 text-[13px] text-tx2">
+              <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-3 text-[13px] text-tx2">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
                 <div>
                   <div className="font-medium text-tx">以下会话处理失败已跳过(修正后重新导入即可续传)</div>

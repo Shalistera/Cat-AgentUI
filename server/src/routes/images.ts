@@ -321,4 +321,27 @@ export async function imageRoutes(app: FastifyInstance) {
     db.delete(schema.images).where(eq(schema.images.id, id)).run();
     return { ok: true };
   });
+
+  // Batch delete for the gallery's manage mode. Silently skips ids that don't
+  // exist or belong to someone else — the caller learns the real count.
+  app.post('/api/images/batch-delete', async (req, reply) => {
+    requireAuth(req, reply);
+    const { ids } = (req.body ?? {}) as { ids?: unknown };
+    if (!Array.isArray(ids) || ids.length === 0 || ids.some((x) => typeof x !== 'string')) {
+      return reply.code(400).send({ error: '参数错误' });
+    }
+    let deleted = 0;
+    for (const id of (ids as string[]).slice(0, 500)) {
+      const row = db.select().from(schema.images).where(eq(schema.images.id, id)).get();
+      if (!row || (row.userId !== req.user!.id && req.user!.role !== 'admin')) continue;
+      try {
+        fs.unlinkSync(path.join(config.dataDir, 'images', row.filename));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
+      db.delete(schema.images).where(eq(schema.images.id, id)).run();
+      deleted++;
+    }
+    return { ok: true, deleted };
+  });
 }

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Globe, Pencil, Plus, PlugZap, Server, Trash2, X } from 'lucide-react';
-import { api } from '../../api';
+import { ChevronDown, ChevronRight, Globe, Pencil, Plus, PlugZap, Server, Trash2 } from 'lucide-react';
+import { api, errMsg } from '../../api';
 import {
   Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select, Spinner, Textarea,
-  StatusDot, Toggle, confirmDialog, toast,
+  StatusDot, Toggle, ToggleRow, confirmDialog, toast,
 } from '../../components/ui';
+import { KeyValueEditor, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
 import type { AdminMcpServer, AdminUser } from '../../types';
 
 type Transport = AdminMcpServer['transport'];
@@ -15,50 +16,6 @@ const TRANSPORT_LABELS: Record<Transport, string> = {
   http: 'Streamable HTTP',
   sse: 'SSE',
 };
-
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : '操作失败';
-}
-
-// ---------- key-value editor ----------
-interface KVPair { k: string; v: string }
-
-function pairsToObject(pairs: KVPair[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const p of pairs) {
-    const k = p.k.trim();
-    if (k) out[k] = p.v;
-  }
-  return out;
-}
-
-function KeyValueEditor({ pairs, onChange, keyPlaceholder = 'Key', valuePlaceholder = 'Value' }: {
-  pairs: KVPair[]; onChange(pairs: KVPair[]): void; keyPlaceholder?: string; valuePlaceholder?: string;
-}) {
-  return (
-    <div className="space-y-2">
-      {pairs.map((p, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <Input
-            placeholder={keyPlaceholder} value={p.k}
-            onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))}
-          />
-          <Input
-            placeholder={valuePlaceholder} value={p.v}
-            onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))}
-          />
-          <Button variant="ghost" size="icon" title="删除此行" className="shrink-0"
-            onClick={() => onChange(pairs.filter((_, j) => j !== i))}>
-            <X size={14} />
-          </Button>
-        </div>
-      ))}
-      <Button variant="outline" size="sm" onClick={() => onChange([...pairs, { k: '', v: '' }])}>
-        <Plus size={13} />添加一行
-      </Button>
-    </div>
-  );
-}
 
 // ---------- create / edit modal ----------
 function McpModal({ server, users, onClose, onSaved }: {
@@ -161,13 +118,10 @@ function McpModal({ server, users, onClose, onSaved }: {
           </>
         )}
 
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg0 px-3.5 py-3">
-          <div>
-            <div className="text-[13px] font-medium text-tx">启用该服务器</div>
-            <div className="mt-0.5 text-xs text-tx3">禁用后不会出现在对话的工具菜单里</div>
-          </div>
-          <Toggle checked={enabled} onChange={setEnabled} />
-        </div>
+        <ToggleRow
+          label="启用该服务器" desc="禁用后不会出现在对话的工具菜单里"
+          checked={enabled} onChange={setEnabled}
+        />
 
         <Field label="访问范围" hint="搜索等基础工具建议共享;文件、命令和内部系统建议限制用户">
           <Select value={accessMode} onChange={(e) => setAccessMode(e.target.value as AccessMode)}>
@@ -216,6 +170,7 @@ function ServerCard({ server, reload, onEdit }: {
   server: AdminMcpServer; reload(): Promise<void>; onEdit(): void;
 }) {
   const [testing, setTesting] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const tools = server.toolsCache ?? [];
 
@@ -224,11 +179,14 @@ function ServerCard({ server, reload, onEdit }: {
     : server.url ?? '';
 
   async function setEnabled(v: boolean) {
+    if (toggling) return;
+    setToggling(true);
     try {
       await api.patch(`/api/admin/mcp/${server.id}`, { enabled: v });
       toast(v ? '已启用' : '已禁用', 'ok');
       await reload();
     } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setToggling(false); }
   }
 
   async function test() {
@@ -285,12 +243,12 @@ function ServerCard({ server, reload, onEdit }: {
           >
             <Globe size={13} />{server.isSearch ? '搜索源' : '设为搜索源'}
           </Button>
-          <Toggle checked={server.enabled} onChange={setEnabled} />
+          <Toggle checked={server.enabled} disabled={toggling} onChange={setEnabled} />
           <Button variant="outline" size="sm" onClick={test} disabled={testing}>
             {testing ? <Spinner className="h-3.5 w-3.5" /> : <PlugZap size={13} />}测试连接
           </Button>
           <Button variant="ghost" size="iconSm" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
-          <Button variant="ghost" size="iconSm" className="hover:!bg-err/10 hover:!text-err" title="删除" onClick={remove}>
+          <Button variant="dangerGhost" size="iconSm" title="删除" onClick={remove}>
             <Trash2 size={14} />
           </Button>
         </div>
@@ -302,7 +260,7 @@ function ServerCard({ server, reload, onEdit }: {
         </div>
       )}
       {server.lastError && (
-        <div className="rounded-md border border-err/30 bg-err/8 px-2.5 py-1.5 text-xs leading-relaxed text-err">
+        <div className="rounded-md border border-err/30 bg-err/10 px-2.5 py-1.5 text-xs leading-relaxed text-err">
           {server.lastError}
         </div>
       )}
@@ -357,7 +315,7 @@ export default function Mcp() {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-6">
+    <div className="mx-auto max-w-5xl space-y-5 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-base font-semibold tracking-tight text-tx">MCP 服务器</h1>
@@ -371,7 +329,7 @@ export default function Mcp() {
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-16"><Spinner className="h-6 w-6" /></div>
+        <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>
       ) : servers.length === 0 ? (
         <div className="rounded-xl border border-line bg-bg1 shadow-xs">
           <EmptyState

@@ -7,9 +7,9 @@ import type { Message, MessagePart } from '../types';
 import { fmtDuration, fmtTokens } from '../api';
 import { Markdown } from './Markdown';
 import { ModelAvatar } from './ModelAvatar';
-import { Spinner } from './ui';
+import { Button, Spinner } from './ui';
 
-const iconBtn = 'flex h-6 w-6 cursor-pointer items-center justify-center rounded text-tx3 transition-colors hover:bg-bg2 hover:text-tx';
+const iconBtn = 'flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm text-tx3 transition-colors hover:bg-bg2 hover:text-tx';
 
 function CopyBtn({ text, size = 12 }: { text: string; size?: number }) {
   const [copied, setCopied] = useState(false);
@@ -137,14 +137,16 @@ function ToolRun({ calls, results, organizing }: {
           return (
             <div key={c.id} className="px-3.5 py-2 text-xs">
               <div className="flex items-center gap-2">
-                {!r ? <Spinner className="h-3 w-3 shrink-0" />
+                {/* Spinner inherits currentColor; without this it would pick up
+                    body ink instead of the muted in-progress grey. */}
+                {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
                   : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
                   : <Check size={13} className="shrink-0 text-ok" />}
                 <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : toolShortName(c.name)}</span>
                 {q && <span className="truncate text-tx3">「{q}」</span>}
               </div>
               {r?.isError && (
-                <div className="mt-1.5 whitespace-pre-wrap break-words rounded-md border border-err/30 bg-err/8 px-2 py-1.5 text-[11px] leading-relaxed text-err">
+                <div className="mt-1.5 whitespace-pre-wrap break-words rounded-md border border-err/30 bg-err/10 px-2 py-1.5 text-[11px] leading-relaxed text-err">
                   {r.result.slice(0, 500)}
                 </div>
               )}
@@ -199,12 +201,11 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
               value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus
             />
             <div className="mt-2 flex justify-end gap-2">
-              <button className="h-8 cursor-pointer rounded-md border border-line2 bg-bg1 px-3 text-[13px] font-medium text-tx transition-colors hover:bg-bg2"
-                onClick={() => setEditing(false)}>取消</button>
-              <button className="h-8 cursor-pointer rounded-md bg-pri px-3 text-[13px] font-medium text-prifg shadow-xs transition-colors hover:bg-pri2"
+              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>取消</Button>
+              <Button variant="primary" size="sm"
                 onClick={() => { setEditing(false); if (draft.trim()) onEdit?.(draft.trim()); }}>
                 重新发送
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
@@ -300,7 +301,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           </div>
         )}
         {msg.status === 'error' && msg.error && (
-          <div className="my-2 flex items-start gap-2 rounded-lg border border-err/30 bg-err/8 px-3.5 py-2.5 text-[13px] leading-relaxed text-err">
+          <div className="my-2 flex items-start gap-2 rounded-lg border border-err/30 bg-err/10 px-3.5 py-2.5 text-[13px] leading-relaxed text-err">
             <CircleAlert size={15} className="mt-0.5 shrink-0" />
             <span className="min-w-0 break-words">{msg.error}</span>
           </div>

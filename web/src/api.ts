@@ -140,3 +140,8 @@ export function fmtDate(ts: number): string {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+/** Human message from a thrown value — the admin pages' toast helper. */
+export function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : '操作失败';
+}

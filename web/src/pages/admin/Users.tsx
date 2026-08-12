@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Ban, CircleCheck, KeyRound, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { api, fmtDate, fmtTokens } from '../../api';
-import { Badge, Button, Field, Input, Modal, ModalActions, Select, Spinner, confirmDialog, toast } from '../../components/ui';
+import { Badge, Button, Field, Input, Modal, ModalActions, Select, Spinner, Td, Th, confirmDialog, toast } from '../../components/ui';
 import type { AdminUser } from '../../types';
-
-const th = 'border-b border-line bg-bg2/50 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-tx3';
-const td = 'border-b border-line px-3 py-2.5 text-tx2 group-last:border-0';
 
 function userLabel(u: AdminUser): string {
   return u.displayName ? `${u.displayName} (${u.username})` : u.username;
@@ -113,11 +110,11 @@ export default function Users() {
   }
 
   if (!users) {
-    return <div className="flex justify-center py-24"><Spinner className="h-6 w-6" /></div>;
+    return <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>;
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-6">
+    <div className="mx-auto max-w-5xl space-y-5 p-6">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-base font-semibold tracking-tight text-tx">用户</h1>
@@ -132,31 +129,31 @@ export default function Users() {
         <table className="w-full whitespace-nowrap text-xs">
           <thead>
             <tr>
-              <th className={th}>用户名</th>
-              <th className={th}>角色</th>
-              <th className={th}>状态</th>
-              <th className={`${th} text-right`}>Tokens</th>
-              <th className={`${th} text-right`}>请求</th>
-              <th className={`${th} text-right`}>图片</th>
-              <th className={th}>注册时间</th>
-              <th className={`${th} text-right`}>操作</th>
+              <Th>用户名</Th>
+              <Th>角色</Th>
+              <Th>状态</Th>
+              <Th className="text-right">Tokens</Th>
+              <Th className="text-right">请求</Th>
+              <Th className="text-right">图片</Th>
+              <Th>注册时间</Th>
+              <Th className="text-right">操作</Th>
             </tr>
           </thead>
           <tbody>
             {users.map((u) => (
               <tr key={u.id} className="group transition-colors hover:bg-bg2/60">
-                <td className={`${td} font-medium text-tx`}>{userLabel(u)}</td>
-                <td className={td}>
+                <Td className="font-medium text-tx">{userLabel(u)}</Td>
+                <Td>
                   <Badge tone={u.role === 'admin' ? 'acc' : 'default'}>{u.role === 'admin' ? '管理员' : '用户'}</Badge>
-                </td>
-                <td className={td}>
+                </Td>
+                <Td>
                   <Badge tone={u.disabled ? 'err' : 'ok'}>{u.disabled ? '已停用' : '正常'}</Badge>
-                </td>
-                <td className={`${td} text-right tabular-nums`}>{fmtTokens(u.usage.totalTokens)}</td>
-                <td className={`${td} text-right tabular-nums`}>{u.usage.requests.toLocaleString()}</td>
-                <td className={`${td} text-right tabular-nums`}>{u.usage.images.toLocaleString()}</td>
-                <td className={`${td} tabular-nums`}>{fmtDate(u.createdAt)}</td>
-                <td className={td}>
+                </Td>
+                <Td className="text-right tabular-nums">{fmtTokens(u.usage.totalTokens)}</Td>
+                <Td className="text-right tabular-nums">{u.usage.requests.toLocaleString()}</Td>
+                <Td className="text-right tabular-nums">{u.usage.images.toLocaleString()}</Td>
+                <Td className="tabular-nums">{fmtDate(u.createdAt)}</Td>
+                <Td>
                   <div className="flex items-center justify-end gap-0.5">
                     <Button variant="ghost" size="iconSm" title="重置密码"
                       onClick={() => { setNewPassword(''); setResetTarget(u); }}>
@@ -171,12 +168,12 @@ export default function Users() {
                       onClick={() => toggleDisabled(u)}>
                       {u.disabled ? <CircleCheck size={14} className="text-ok" /> : <Ban size={14} />}
                     </Button>
-                    <Button variant="ghost" size="iconSm" className="hover:!bg-err/10 hover:!text-err" title="删除"
+                    <Button variant="dangerGhost" size="iconSm" title="删除"
                       onClick={() => deleteUser(u)}>
                       <Trash2 size={14} />
                     </Button>
                   </div>
-                </td>
+                </Td>
               </tr>
             ))}
           </tbody>
@@ -201,7 +198,9 @@ export default function Users() {
           </Field>
           <ModalActions>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>取消</Button>
-            <Button variant="primary" disabled={busy} onClick={createUser}>{busy ? '创建中…' : '创建用户'}</Button>
+            <Button variant="primary" disabled={busy} onClick={createUser}>
+              {busy && <Spinner className="h-3.5 w-3.5" />}创建用户
+            </Button>
           </ModalActions>
         </form>
       </Modal>
@@ -215,7 +214,9 @@ export default function Users() {
           </Field>
           <ModalActions>
             <Button variant="outline" onClick={() => setResetTarget(null)}>取消</Button>
-            <Button variant="primary" disabled={busy} onClick={resetPassword}>{busy ? '请稍候…' : '重置密码'}</Button>
+            <Button variant="primary" disabled={busy} onClick={resetPassword}>
+              {busy && <Spinner className="h-3.5 w-3.5" />}重置密码
+            </Button>
           </ModalActions>
         </form>
       </Modal>

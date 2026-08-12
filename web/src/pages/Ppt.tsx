@@ -6,7 +6,7 @@ import { useUi } from '../store';
 import { api, ApiError, fmtDuration, fmtTime, fmtTokens } from '../api';
 import { tabAlert } from '../tabAlert';
 import {
-  Button, Input, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
+  Button, btnClass, Input, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
   toast, confirmDialog, EmptyState,
 } from '../components/ui';
 import type { DeckDetail, DeckSlide, DeckSummary, PptModel } from '../types';
@@ -21,6 +21,7 @@ const PAGE_SIZE = 30;
 const INK = '#14181F';
 const GREY = '#55606F';
 const LIGHT = '#F1F3F6';
+const LINE = '#E4E7EC';
 
 function pt(n: number) {
   return `${(n / 9.6).toFixed(2)}cqw`;
@@ -140,8 +141,8 @@ export function SlideView({ s, index, accent, deckTitle }: {
                   {s.headers.map((h, i) => (
                     <th
                       key={i}
-                      className="border border-[#E4E7EC] px-[1.6cqw] py-[1cqw] text-left font-bold text-white"
-                      style={{ background: acc }}
+                      className="border px-[1.6cqw] py-[1cqw] text-left font-bold text-white"
+                      style={{ background: acc, borderColor: LINE }}
                     >
                       {h}
                     </th>
@@ -152,7 +153,7 @@ export function SlideView({ s, index, accent, deckTitle }: {
                 {s.rows.map((r, ri) => (
                   <tr key={ri}>
                     {s.headers.map((_, ci) => (
-                      <td key={ci} className="border border-[#E4E7EC] px-[1.6cqw] py-[1cqw]" style={{ color: INK }}>
+                      <td key={ci} className="border px-[1.6cqw] py-[1cqw]" style={{ color: INK, borderColor: LINE }}>
                         {r[ci] ?? ''}
                       </td>
                     ))}
@@ -427,9 +428,9 @@ export default function Ppt() {
         <div className="mx-auto max-w-5xl p-6">
           {/* ---- generation form ---- */}
           <Card title="新建演示文稿" desc="描述主题与要求,AI 负责大纲、内容与版式,生成后可下载 .pptx。" className="fade-up"
-            bodyClassName={models === null || models.length === 0 ? '!p-0' : ''}>
+            flush={models === null || models.length === 0}>
             {models === null ? (
-              <div className="flex justify-center py-10"><Spinner className="h-5 w-5" /></div>
+              <div className="flex justify-center py-10 text-tx3"><Spinner className="h-5 w-5" /></div>
             ) : models.length === 0 ? (
               <EmptyState
                 icon={<Presentation size={22} />}
@@ -460,8 +461,7 @@ export default function Ppt() {
                   </Field>
                 </div>
 
-                <div>
-                  <div className="mb-1.5 text-[13px] font-medium text-tx">主题与要求</div>
+                <Field label="主题与要求">
                   <Textarea
                     rows={3}
                     value={topic}
@@ -472,7 +472,7 @@ export default function Ppt() {
                       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void generate(); }
                     }}
                   />
-                </div>
+                </Field>
 
                 {genError && (
                   <div className="whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
@@ -503,15 +503,15 @@ export default function Ppt() {
               )}
             </div>
             {!listLoaded ? (
-              <div className="flex justify-center py-16"><Spinner className="h-5 w-5" /></div>
+              <div className="flex justify-center py-16 text-tx3"><Spinner className="h-5 w-5" /></div>
             ) : list.length === 0 ? (
-              <div className="rounded-xl border border-line bg-bg1">
+              <Card flush>
                 <EmptyState
                   icon={<Presentation size={22} />}
                   title="还没有生成过演示文稿"
                   hint="在上方输入主题,生成你的第一份 PPT。"
                 />
-              </div>
+              </Card>
             ) : (
               <>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -520,7 +520,7 @@ export default function Ppt() {
                       key={d.id}
                       type="button"
                       onClick={() => void openDeck(d)}
-                      className="group cursor-pointer rounded-lg border border-line bg-bg1 p-3.5 text-left shadow-xs transition-shadow hover:shadow-md"
+                      className="group cursor-pointer rounded-lg border border-line bg-bg1 p-3.5 text-left shadow-xs transition-colors hover:border-line2 hover:bg-bg2"
                     >
                       <div className="flex items-start gap-2.5">
                         <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-acc/10 text-acc">
@@ -589,7 +589,7 @@ export default function Ppt() {
               <a
                 href={`/api/ppt/${preview.id}/pptx`}
                 download
-                className="inline-flex h-9 cursor-pointer select-none items-center justify-center gap-1.5 rounded-md bg-pri px-3.5 text-[13px] font-medium leading-none text-prifg shadow-xs transition-colors hover:bg-pri2"
+                className={btnClass('primary', 'md')}
               >
                 <Download size={14} />下载 .pptx
               </a>

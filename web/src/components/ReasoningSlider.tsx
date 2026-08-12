@@ -3,24 +3,41 @@ import {
   type CSSProperties, type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { useUi } from '../store';
 import type { ReasoningLevel } from '../types';
 
 // The rail reads as an energy ramp: cobalt at rest, violet in the middle,
 // fuchsia at full tilt. The stops live on the FULL rail and the fill merely
 // unclips them, so a colour stays glued to its rung — dragging right doesn't
 // recolour what you already passed, it reveals hotter ground ahead.
-const RAMP: [number, number, number][] = [[37, 99, 235], [124, 58, 237], [217, 38, 169]];
-const RAMP_CSS = 'linear-gradient(90deg, rgb(37 99 235), rgb(124 58 237) 55%, rgb(217 38 169))';
+// Two rails, mirroring the acc/accs token pair:
+// Solid fills (track, badges) stay saturated in both themes — white text on them clears AA.
+const RAMP_SOLID: [number, number, number][] = [[31, 79, 216], [124, 58, 237], [192, 38, 160]]; // #1f4fd8(=acc) → #7c3aed → #c026a0
+// Readable-as-text values — lifted on dark the way --color-acc is.
+const RAMP_TEXT_DARK: [number, number, number][] = [[122, 162, 255], [183, 149, 248], [238, 111, 196]]; // #7aa2ff → #b795f8 → #ee6fc4
+const RAMP_CSS = 'linear-gradient(90deg, rgb(31 79 216), rgb(124 58 237) 55%, rgb(192 38 160))';
 
-// Colour of the ramp at ratio t ∈ [0,1] — keeps the thumb, its glow and the
-// active label in step with the ground the thumb is standing on. Exported so
-// the trigger button in the composer can wear the same tint as the rung it
-// currently sits on. Returns space-separated RGB for use in `rgb(${...})`.
-export function rampAt(t: number) {
+// Colour of a ramp at ratio t ∈ [0,1] — keeps the thumb, its glow and the
+// active label in step with the ground the thumb is standing on.
+// Returns space-separated RGB for use in `rgb(${...})`.
+function mixAt(ramp: [number, number, number][], t: number) {
   const seg = t <= 0.55 ? 0 : 1;
   const local = seg === 0 ? t / 0.55 : (t - 0.55) / 0.45;
-  const [a, b] = [RAMP[seg], RAMP[seg + 1]];
+  const [a, b] = [ramp[seg], ramp[seg + 1]];
   return a.map((v, i) => Math.round(v + (b[i] - v) * local)).join(' ');
+}
+
+/** Solid ramp colour — for fills that carry white text or a glow (track,
+    thumb, badge grounds). Theme-independent. Exported so the composer's
+    trigger and badge wear the same tint as the rung they sit on. */
+export function rampAt(t: number) {
+  return mixAt(RAMP_SOLID, t);
+}
+
+/** Ramp colour for text on the page surface: the solid values sink below AA
+    on the dark canvas, so dark mode reads from the lifted rail. */
+export function rampTextAt(t: number, dark: boolean) {
+  return mixAt(dark ? RAMP_TEXT_DARK : RAMP_SOLID, t);
 }
 
 // A native <input type="range"> gives named, discrete levels nothing to hold on
@@ -35,6 +52,7 @@ export function ReasoningSlider({ levels, index, onChange }: {
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
+  const dark = useUi((s) => s.theme) === 'dark';
   const last = levels.length - 1;
   const ratio = last > 0 ? index / last : 0;
   const progress = ratio * 100;
@@ -89,7 +107,9 @@ export function ReasoningSlider({ levels, index, onChange }: {
       {/* The rail spans stop-centre to stop-centre, so it is inset by half a
           column on each side and the labels below line up with the dots. */}
       <div className="relative mx-[calc(50%/var(--n))] h-6">
-        <div className="absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 overflow-hidden rounded-full bg-bg3 shadow-[inset_0_1px_2px_rgb(16_20_28_/_0.14)]">
+        {/* Shadows (here and on the thumb) ride on pure black, not page ink —
+            they have to hold up on both the light and the dark canvas. */}
+        <div className="absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 overflow-hidden rounded-full bg-bg3 shadow-[inset_0_1px_2px_rgb(0_0_0_/_0.15)]">
           {/* Full-width ramp, unclipped up to the thumb. clip-path (not width)
               keeps the gradient anchored to the rail so colours don't slide. */}
           <div
@@ -135,7 +155,7 @@ export function ReasoningSlider({ levels, index, onChange }: {
           style={{
             left: `${progress}%`,
             borderColor: `rgb(${tint})`,
-            boxShadow: `0 1px 2px rgb(16 20 28 / 0.2), 0 0 ${3 + 11 * ratio}px rgb(${tint} / ${0.25 + 0.5 * ratio})`,
+            boxShadow: `0 1px 2px rgb(0 0 0 / 0.22), 0 0 ${3 + 11 * ratio}px rgb(${tint} / ${0.25 + 0.5 * ratio})`,
           }}
         />
       </div>
@@ -148,7 +168,7 @@ export function ReasoningSlider({ levels, index, onChange }: {
             className={`truncate px-0.5 text-center text-[10px] leading-4 transition-[color,transform] ${
               i === index ? 'scale-105 font-semibold' : 'text-tx3 group-hover/sl:text-tx2'
             }`}
-            style={i === index ? { color: `rgb(${rampAt(last > 0 ? i / last : 0)})` } : undefined}
+            style={i === index ? { color: `rgb(${rampTextAt(last > 0 ? i / last : 0, dark)})` } : undefined}
           >
             {l.label}
           </span>

@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check, ChevronDown, ChevronUp, Download, FlaskConical, Pencil, Plus, Server, Star, Trash2, Upload, X,
 } from 'lucide-react';
-import { api } from '../../api';
+import { api, errMsg } from '../../api';
 import {
   Badge, Button, EmptyState, Field, Input, Modal, ModalActions, SegmentedControl, Select, Spinner,
-  StatusDot, Textarea, Toggle, confirmDialog, toast,
+  StatusDot, Td, Textarea, Th, Toggle, ToggleRow, confirmDialog, toast,
 } from '../../components/ui';
+import { KeyValueEditor, objectToPairs, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
 import { ProviderAvatar } from '../../components/ModelAvatar';
 import type { AdminModel, AdminProvider, ReasoningLevel, ReasoningMode } from '../../types';
 
@@ -23,54 +24,6 @@ const DEFAULT_URLS: Record<ProviderType, string> = {
   anthropic: 'https://api.anthropic.com',
   gemini: 'https://generativelanguage.googleapis.com',
 };
-
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : '操作失败';
-}
-
-// ---------- key-value editor ----------
-interface KVPair { k: string; v: string }
-
-function objectToPairs(obj: Record<string, string> | null | undefined): KVPair[] {
-  return Object.entries(obj ?? {}).map(([k, v]) => ({ k, v }));
-}
-
-function pairsToObject(pairs: KVPair[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const p of pairs) {
-    const k = p.k.trim();
-    if (k) out[k] = p.v;
-  }
-  return out;
-}
-
-function KeyValueEditor({ pairs, onChange, keyPlaceholder = 'Key', valuePlaceholder = 'Value' }: {
-  pairs: KVPair[]; onChange(pairs: KVPair[]): void; keyPlaceholder?: string; valuePlaceholder?: string;
-}) {
-  return (
-    <div className="space-y-2">
-      {pairs.map((p, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <Input
-            placeholder={keyPlaceholder} value={p.k}
-            onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))}
-          />
-          <Input
-            placeholder={valuePlaceholder} value={p.v}
-            onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))}
-          />
-          <Button variant="ghost" size="icon" title="删除此行" className="shrink-0"
-            onClick={() => onChange(pairs.filter((_, j) => j !== i))}>
-            <X size={14} />
-          </Button>
-        </div>
-      ))}
-      <Button variant="ghost" size="sm" onClick={() => onChange([...pairs, { k: '', v: '' }])}>
-        <Plus size={13} />添加一行
-      </Button>
-    </div>
-  );
-}
 
 // ---------- provider create / edit modal ----------
 function ProviderModal({ provider, onClose, onSaved }: {
@@ -200,24 +153,18 @@ function ProviderModal({ provider, onClose, onSaved }: {
         )}
 
         {type === 'openai' && (
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg2/50 px-3 py-2.5">
-            <div>
-              <div className="text-xs font-medium">使用 Responses API</div>
-              <div className="mt-0.5 text-[11px] text-tx3">新一代接口,支持推理摘要,仅官方及兼容网关支持</div>
-            </div>
-            <Toggle checked={useResponses} onChange={setUseResponses} />
-          </div>
+          <ToggleRow
+            label="使用 Responses API" desc="新一代接口,支持推理摘要,仅官方及兼容网关支持"
+            checked={useResponses} onChange={setUseResponses}
+          />
         )}
 
         {type === 'gemini' && (
           <>
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg2/50 px-3 py-2.5">
-              <div>
-                <div className="text-xs font-medium">使用 Vertex AI</div>
-                <div className="mt-0.5 text-[11px] text-tx3">使用服务账号鉴权,无需 API Key</div>
-              </div>
-              <Toggle checked={useVertex} onChange={setUseVertex} />
-            </div>
+            <ToggleRow
+              label="使用 Vertex AI" desc="使用服务账号鉴权,无需 API Key"
+              checked={useVertex} onChange={setUseVertex}
+            />
             {useVertex && (
               <div className="space-y-4 rounded-lg border border-line bg-bg2/30 p-3">
                 <Field label="Service Account JSON" hint="可直接上传 .json 文件,或粘贴完整内容">
@@ -424,35 +371,24 @@ function ReasoningModal({ model, reload, onClose }: {
             {rows.map((r, i) => (
               <div key={i} className="flex items-center gap-2">
                 <Input
-                  value={r.value} placeholder="xhigh" className="!h-8 flex-1 font-mono text-xs"
+                  value={r.value} placeholder="xhigh" uiSize="sm" className="flex-1 font-mono text-xs"
                   onChange={(e) => setRow(i, { value: e.target.value })}
                 />
                 <Input
-                  value={r.label} placeholder="留空自动" className="!h-8 flex-1 text-xs"
+                  value={r.label} placeholder="留空自动" uiSize="sm" className="flex-1 text-xs"
                   onChange={(e) => setRow(i, { label: e.target.value })}
                 />
                 <div className="flex shrink-0">
-                  <button
-                    type="button" title="上移" disabled={i === 0}
-                    className="cursor-pointer rounded p-0.5 text-tx3 transition-colors hover:text-tx disabled:pointer-events-none disabled:opacity-25"
-                    onClick={() => move(i, -1)}
-                  >
+                  <Button variant="ghost" size="iconXs" title="上移" disabled={i === 0} onClick={() => move(i, -1)}>
                     <ChevronUp size={13} />
-                  </button>
-                  <button
-                    type="button" title="下移" disabled={i === rows.length - 1}
-                    className="cursor-pointer rounded p-0.5 text-tx3 transition-colors hover:text-tx disabled:pointer-events-none disabled:opacity-25"
-                    onClick={() => move(i, 1)}
-                  >
+                  </Button>
+                  <Button variant="ghost" size="iconXs" title="下移" disabled={i === rows.length - 1} onClick={() => move(i, 1)}>
                     <ChevronDown size={13} />
-                  </button>
-                  <button
-                    type="button" title="删除此档位"
-                    className="cursor-pointer rounded p-0.5 text-tx3 transition-colors hover:text-err"
-                    onClick={() => setRows(rows.filter((_, j) => j !== i))}
-                  >
+                  </Button>
+                  <Button variant="dangerGhost" size="iconXs" title="删除此档位"
+                    onClick={() => setRows(rows.filter((_, j) => j !== i))}>
                     <X size={13} />
-                  </button>
+                  </Button>
                 </div>
               </div>
             ))}
@@ -494,7 +430,7 @@ function ReasoningCell({ model, reload }: { model: AdminModel; reload(): Promise
         type="button"
         title="设置推理档位"
         onClick={() => setOpen(true)}
-        className="flex max-w-[15rem] cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-bg3"
+        className="flex max-w-[15rem] cursor-pointer items-center gap-1.5 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-bg3"
       >
         <Badge tone={mode === 'custom' ? 'acc' : 'default'}>{MODE_LABELS[mode]}</Badge>
         {levels.length ? (
@@ -544,9 +480,9 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
   }
 
   return (
-    <tr className="group border-b border-line transition-colors last:border-0 hover:bg-bg2/60">
-      <td className="max-w-[220px] truncate py-2 pr-3 font-mono text-tx">{model.modelId}</td>
-      <td className="py-2 pr-3 text-tx2">
+    <tr className="group transition-colors hover:bg-bg2/60">
+      <Td className="max-w-[220px] truncate font-mono text-tx">{model.modelId}</Td>
+      <Td>
         {editingName ? (
           <div className="flex items-center gap-1">
             <div className="w-40">
@@ -556,38 +492,37 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
                 onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditingName(false); }}
               />
             </div>
-            <button className="cursor-pointer rounded p-1 text-ok transition-colors hover:bg-bg3" title="保存" onClick={saveName}>
-              <Check size={13} />
-            </button>
+            <Button variant="ghost" size="iconXs" title="保存" onClick={saveName}>
+              <Check size={13} className="text-ok" />
+            </Button>
           </div>
         ) : (
           <span className="inline-flex items-center gap-1.5">
             <span className={model.displayName ? '' : 'text-tx3'}>{model.displayName || '—'}</span>
-            <button className="cursor-pointer rounded p-0.5 text-tx3 transition-colors hover:text-tx" title="编辑显示名"
+            <Button variant="ghost" size="iconXs" title="编辑显示名"
               onClick={() => { setNameVal(model.displayName ?? ''); setEditingName(true); }}>
               <Pencil size={12} />
-            </button>
+            </Button>
           </span>
         )}
-      </td>
-      <td className="px-2 py-2 text-center"><Toggle checked={model.vision} disabled={busy} onChange={(v) => patch({ vision: v })} /></td>
-      <td className="px-2 py-2 text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></td>
-      <td className="px-2 py-2 text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></td>
-      <td className="px-2 py-2"><ReasoningCell model={model} reload={reload} /></td>
-      <td className="px-2 py-2 text-center">
-        <button
-          className="cursor-pointer rounded p-1 text-tx3 transition-colors hover:text-acc disabled:opacity-40"
-          title={model.isDefault ? '当前默认模型' : '设为默认'} disabled={busy}
-          onClick={() => { if (!model.isDefault) patch({ isDefault: true }, '已设为默认'); }}>
+      </Td>
+      <Td className="text-center"><Toggle checked={model.vision} disabled={busy} onChange={(v) => patch({ vision: v })} /></Td>
+      <Td className="text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></Td>
+      <Td className="text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></Td>
+      <Td><ReasoningCell model={model} reload={reload} /></Td>
+      <Td className="text-center">
+        <Button variant="ghost" size="iconXs"
+          title={model.isDefault ? '当前默认模型' : '设为默认'} disabled={busy || model.isDefault}
+          onClick={() => patch({ isDefault: true }, '已设为默认')}>
           <Star size={14} className={model.isDefault ? 'text-acc' : ''} fill={model.isDefault ? 'currentColor' : 'none'} />
-        </button>
-      </td>
-      <td className="px-2 py-2 text-center"><Toggle checked={model.enabled} disabled={busy} onChange={(v) => patch({ enabled: v })} /></td>
-      <td className="py-2 pl-2 text-right">
-        <button className="cursor-pointer rounded p-1 text-tx3 transition-colors hover:text-err disabled:opacity-40" title="删除" disabled={busy} onClick={remove}>
+        </Button>
+      </Td>
+      <Td className="text-center"><Toggle checked={model.enabled} disabled={busy} onChange={(v) => patch({ enabled: v })} /></Td>
+      <Td className="text-right">
+        <Button variant="dangerGhost" size="iconXs" title="删除" disabled={busy} onClick={remove}>
           <Trash2 size={13} />
-        </button>
-      </td>
+        </Button>
+      </Td>
     </tr>
   );
 }
@@ -642,7 +577,7 @@ function ProviderAvatarPicker({ provider, reload }: { provider: AdminProvider; r
         className="cursor-pointer rounded-lg transition-opacity hover:opacity-70 disabled:opacity-40"
       >
         {busy
-          ? <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-line2 bg-bg2"><Spinner className="h-3.5 w-3.5" /></span>
+          ? <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-line2 bg-bg2 text-tx3"><Spinner className="h-3.5 w-3.5" /></span>
           : <ProviderAvatar name={provider.name} type={provider.type} baseUrl={provider.baseUrl}
               avatarUrl={provider.avatarUrl} size={32} />}
       </button>
@@ -669,6 +604,7 @@ function ProviderCard({ provider, reload, onEdit }: {
   const [fetched, setFetched] = useState<{ id: string; name?: string }[] | null>(null);
   const [manualId, setManualId] = useState('');
   const [adding, setAdding] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const models = provider.models ?? [];
   // Vertex authenticates with a service account, so "no API key" is its
   // normal, healthy state — judge it by the credential it actually uses.
@@ -676,11 +612,14 @@ function ProviderCard({ provider, reload, onEdit }: {
   const hasCred = usesVertex ? provider.hasVertexSa : provider.hasKey;
 
   async function setEnabled(v: boolean) {
+    if (toggling) return;
+    setToggling(true);
     try {
       await api.patch(`/api/admin/providers/${provider.id}`, { enabled: v });
       toast(v ? '已启用' : '已禁用', 'ok');
       await reload();
     } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setToggling(false); }
   }
 
   async function test() {
@@ -747,12 +686,12 @@ function ProviderCard({ provider, reload, onEdit }: {
           {usesVertex ? (hasCred ? '已配置凭证' : '未配置凭证') : (hasCred ? '已配置 Key' : '未配置 Key')}
         </Badge>
         <div className="ml-auto flex items-center gap-1.5">
-          <Toggle checked={provider.enabled} onChange={setEnabled} />
+          <Toggle checked={provider.enabled} disabled={toggling} onChange={setEnabled} />
           <Button variant="outline" size="sm" onClick={test} disabled={testing}>
             {testing ? <Spinner className="h-3.5 w-3.5" /> : <FlaskConical size={13} />}测试
           </Button>
           <Button variant="ghost" size="iconSm" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
-          <Button variant="ghost" size="iconSm" className="hover:!bg-err/10 hover:!text-err" title="删除" onClick={remove}>
+          <Button variant="dangerGhost" size="iconSm" title="删除" onClick={remove}>
             <Trash2 size={14} />
           </Button>
         </div>
@@ -766,7 +705,7 @@ function ProviderCard({ provider, reload, onEdit }: {
           <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); addManual(); }}>
             <div className="w-52">
               <Input value={manualId} onChange={(e) => setManualId(e.target.value)}
-                placeholder="手动输入模型 ID" className="!h-8 text-xs" />
+                placeholder="手动输入模型 ID" uiSize="sm" className="text-xs" />
             </div>
             <Button variant="outline" size="sm" type="submit" disabled={adding || !manualId.trim()}>
               {adding ? <Spinner className="h-3.5 w-3.5" /> : <Plus size={13} />}手动添加
@@ -782,16 +721,16 @@ function ProviderCard({ provider, reload, onEdit }: {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-line text-left">
-                  <th className="py-2 pr-3 text-[11px] font-semibold uppercase tracking-wider text-tx3">模型 ID</th>
-                  <th className="py-2 pr-3 text-[11px] font-semibold uppercase tracking-wider text-tx3">显示名</th>
-                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">视觉</th>
-                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">工具</th>
-                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">绘图</th>
-                  <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-tx3">推理档位</th>
-                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">默认</th>
-                  <th className="px-2 py-2 text-center text-[11px] font-semibold uppercase tracking-wider text-tx3">启用</th>
-                  <th className="py-2 pl-2 text-right text-[11px] font-semibold uppercase tracking-wider text-tx3">删除</th>
+                <tr>
+                  <Th>模型 ID</Th>
+                  <Th>显示名</Th>
+                  <Th className="text-center">视觉</Th>
+                  <Th className="text-center">工具</Th>
+                  <Th className="text-center">绘图</Th>
+                  <Th>推理档位</Th>
+                  <Th className="text-center">默认</Th>
+                  <Th className="text-center">启用</Th>
+                  <Th className="text-right">删除</Th>
                 </tr>
               </thead>
               <tbody>
@@ -830,7 +769,7 @@ export default function Providers() {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-6">
+    <div className="mx-auto max-w-5xl space-y-5 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-base font-semibold tracking-tight text-tx">模型服务</h1>
@@ -844,7 +783,7 @@ export default function Providers() {
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-16"><Spinner className="h-6 w-6" /></div>
+        <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>
       ) : providers.length === 0 ? (
         <div className="rounded-xl border border-line bg-bg1 shadow-xs">
           <EmptyState
