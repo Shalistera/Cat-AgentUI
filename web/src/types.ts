@@ -150,18 +150,28 @@ export interface AdminUsage {
   byDay: UsageByDay[]; byUser: UsageByUser[]; byModel: UsageByModel[];
   byKind: UsageByKind[]; totals: UsageTotals;
 }
-export interface MyUsage { byDay: UsageByDay[]; byModel: UsageByModel[]; totals: UsageTotals }
+export interface MyUsage {
+  byDay: UsageByDay[]; byModel: UsageByModel[]; totals: UsageTotals;
+  /** limit null = 不限额;used 为本月已用 tokens。 */
+  quota: { limit: number | null; used: number };
+}
 
 export interface AdminUser {
   id: string; username: string; displayName: string | null; role: 'admin' | 'user';
   disabled: boolean; createdAt: number; lastActiveAt: number | null;
-  usage: { totalTokens: number; requests: number; images: number };
+  /** null = 跟随全局默认,0 = 不限,>0 = 每月上限。 */
+  monthlyTokenQuota: number | null;
+  usage: { totalTokens: number; requests: number; images: number; monthTokens: number };
 }
+
+export type ModelAccessMode = 'shared' | 'restricted';
 
 export interface AdminModel {
   id: string; providerId: string; modelId: string; displayName: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; enabled: boolean;
   isDefault: boolean; sortOrder: number;
+  accessMode: ModelAccessMode;
+  allowedUserIds: string[];
   reasoning: {
     mode: ReasoningMode;
     /** What the model offers right now, under the current mode. */
@@ -202,6 +212,12 @@ export interface AppSettings {
   imageRetentionDays: number;
   /** Chat-born image retention in days; 0 = keep forever. Separate policy. */
   chatImageRetentionDays: number;
+  /** 默认月度 token 配额,0 = 不限。用户可单独覆盖。 */
+  quotaMonthlyTokens: number;
+  /** 超额动作:拒绝,或对话降级到指定模型。 */
+  quotaAction: 'block' | 'downgrade';
+  /** 降级目标模型(models.id),null = 未设置(降级时按拒绝处理)。 */
+  quotaFallbackModelId: string | null;
 }
 
 // SSE stream handler callbacks

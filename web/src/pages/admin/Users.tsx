@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Ban, CircleCheck, KeyRound, Plus, ShieldCheck, Trash2 } from 'lucide-react';
-import { api, fmtDate, fmtTokens } from '../../api';
+import { api, errMsg, fmtDate, fmtTokens } from '../../api';
 import { Badge, Button, Field, Input, Modal, ModalActions, Select, Spinner, Td, Th, confirmDialog, toast } from '../../components/ui';
 import type { AdminUser } from '../../types';
 
 function userLabel(u: AdminUser): string {
   return u.displayName ? `${u.displayName} (${u.username})` : u.username;
+}
+
+/** The cap as the admin reads it — admins are exempt, 0 means uncapped. */
+function quotaLabel(u: AdminUser): string {
+  if (u.role === 'admin') return '豁免';
+  if (u.monthlyTokenQuota === null) return '默认';
+  if (u.monthlyTokenQuota === 0) return '不限';
+  return fmtTokens(u.monthlyTokenQuota);
 }
 
 export default function Users() {
@@ -19,6 +27,9 @@ export default function Users() {
   // reset-password modal
   const [resetTarget, setResetTarget] = useState<AdminUser | null>(null);
   const [newPassword, setNewPassword] = useState('');
+  // quota modal
+  const [quotaTarget, setQuotaTarget] = useState<AdminUser | null>(null);
+  const [quotaValue, setQuotaValue] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +69,28 @@ export default function Users() {
       await load();
     } catch (e) {
       toast(e instanceof Error ? e.message : '重置失败', 'err');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveQuota() {
+    if (!quotaTarget || busy) return;
+    const raw = quotaValue.trim();
+    let quota: number | null = null;
+    if (raw !== '') {
+      const n = Math.round(Number(raw));
+      if (!Number.isFinite(n) || n < 0) { toast('配额需为不小于 0 的整数', 'err'); return; }
+      quota = n;
+    }
+    setBusy(true);
+    try {
+      await api.patch(`/api/admin/users/${quotaTarget.id}`, { monthlyTokenQuota: quota });
+      toast('已更新月度配额', 'ok');
+      setQuotaTarget(null);
+      await load();
+    } catch (e) {
+      toast(errMsg(e), 'err');
     } finally {
       setBusy(false);
     }
@@ -133,6 +166,7 @@ export default function Users() {
               <Th>角色</Th>
               <Th>状态</Th>
               <Th className="text-right">Tokens</Th>
+              <Th className="text-right">本月 / 配额</Th>
               <Th className="text-right">请求</Th>
               <Th className="text-right">图片</Th>
               <Th>注册时间</Th>
@@ -150,6 +184,22 @@ export default function Users() {
                   <Badge tone={u.disabled ? 'err' : 'ok'}>{u.disabled ? '已停用' : '正常'}</Badge>
                 </Td>
                 <Td className="text-right tabular-nums">{fmtTokens(u.usage.totalTokens)}</Td>
+                <Td className="text-right">
+                  <button
+                    type="button"
+                    title="设置月度配额"
+                    onClick={() => {
+                      setQuotaValue(u.monthlyTokenQuota === null ? '' : String(u.monthlyTokenQuota));
+                      setQuotaTarget(u);
+                    }}
+                    className="cursor-pointer rounded-sm px-1 py-0.5 tabular-nums transition-colors hover:bg-bg3"
+                  >
+                    {fmtTokens(u.usage.monthTokens)} / <span className={
+                      u.role !== 'admin' && (u.monthlyTokenQuota ?? -1) > 0
+                        && u.usage.monthTokens >= u.monthlyTokenQuota! ? 'text-err' : ''
+                    }>{quotaLabel(u)}</span>
+                  </button>
+                </Td>
                 <Td className="text-right tabular-nums">{u.usage.requests.toLocaleString()}</Td>
                 <Td className="text-right tabular-nums">{u.usage.images.toLocaleString()}</Td>
                 <Td className="tabular-nums">{fmtDate(u.createdAt)}</Td>
@@ -200,6 +250,33 @@ export default function Users() {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>取消</Button>
             <Button variant="primary" disabled={busy} onClick={createUser}>
               {busy && <Spinner className="h-3.5 w-3.5" />}创建用户
+            </Button>
+          </ModalActions>
+        </form>
+      </Modal>
+
+      <Modal open={!!quotaTarget} onClose={() => setQuotaTarget(null)}
+        title={`月度 token 配额${quotaTarget ? ` — ${userLabel(quotaTarget)}` : ''}`}>
+        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); saveQuota(); }}>
+          {quotaTarget?.role === 'admin' && (
+            <p className="rounded-md border border-line bg-bg2/50 px-3 py-2 text-xs leading-relaxed text-tx3">
+              管理员不受配额限制,此处的设置仅在该账号转为普通用户后生效。
+            </p>
+          )}
+          <Field label="每月 token 上限" hint="留空 = 跟随应用设置里的默认配额;0 = 不限;超额行为在「应用设置 → 成本治理」里配置">
+            <Input
+              type="number" min={0} step={1} inputMode="numeric"
+              value={quotaValue} onChange={(e) => setQuotaValue(e.target.value)}
+              autoFocus placeholder="留空跟随默认"
+            />
+          </Field>
+          {quotaTarget && (
+            <p className="text-xs text-tx3">本月已用 {fmtTokens(quotaTarget.usage.monthTokens)} tokens,每月 1 日重新计算。</p>
+          )}
+          <ModalActions>
+            <Button variant="outline" onClick={() => setQuotaTarget(null)}>取消</Button>
+            <Button variant="primary" disabled={busy} onClick={saveQuota}>
+              {busy && <Spinner className="h-3.5 w-3.5" />}保存
             </Button>
           </ModalActions>
         </form>

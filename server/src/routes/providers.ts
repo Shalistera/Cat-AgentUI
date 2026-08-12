@@ -5,6 +5,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { encryptSecret, newId } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
+import { accessUserIds, accessibleOnly, replaceModelAccess } from '../model-access.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import {
   MAX_LEVELS, defaultLevels, effectiveLevels, normalizeLevels, parseLevels, parseMode,
@@ -20,7 +21,7 @@ const IMAGE_MODEL_RE = /gpt-image|dall-e|-image|imagen/i;
 // The console shows all three ladders at once: what the model offers today,
 // what the admin typed, and what the defaults would give — so switching modes
 // in the editor never lands on an empty list.
-function publicModel(m: ModelRow, type: ProviderType) {
+function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[]) {
   return {
     id: m.id,
     providerId: m.providerId,
@@ -29,6 +30,8 @@ function publicModel(m: ModelRow, type: ProviderType) {
     vision: !!m.vision,
     tools: !!m.tools,
     imageGen: !!m.imageGen,
+    accessMode: m.accessMode === 'restricted' ? 'restricted' : 'shared',
+    allowedUserIds: allowedUserIds ?? accessUserIds(m.id),
     reasoning: {
       mode: parseMode(m.reasoningMode),
       levels: effectiveLevels(m.reasoningMode, m.reasoningLevels, type, m.modelId),
@@ -150,6 +153,8 @@ const modelPatchSchema = z.object({
   enabled: z.boolean().optional(),
   isDefault: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
+  accessMode: z.enum(['shared', 'restricted']).optional(),
+  allowedUserIds: z.array(z.string().max(64)).max(500).optional(),
 });
 
 function getProvider(id: string): ProviderRow | undefined {
@@ -387,10 +392,12 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.isDefault !== undefined) patch.isDefault = d.isDefault ? 1 : 0;
     if (d.sortOrder !== undefined) patch.sortOrder = d.sortOrder;
+    if (d.accessMode !== undefined) patch.accessMode = d.accessMode;
 
     if (Object.keys(patch).length) {
       db.update(schema.models).set(patch).where(eq(schema.models.id, id)).run();
     }
+    if (d.allowedUserIds !== undefined) replaceModelAccess(id, d.allowedUserIds);
     const updated = db.select().from(schema.models).where(eq(schema.models.id, id)).get()!;
     return publicModel(updated, getProvider(updated.providerId)!.type as ProviderType);
   });
@@ -419,6 +426,7 @@ export async function providerRoutes(app: FastifyInstance) {
       reasoningMode: schema.models.reasoningMode,
       reasoningLevels: schema.models.reasoningLevels,
       isDefault: schema.models.isDefault,
+      accessMode: schema.models.accessMode,
       providerId: schema.providers.id,
       providerName: schema.providers.name,
       providerType: schema.providers.type,
@@ -428,7 +436,7 @@ export async function providerRoutes(app: FastifyInstance) {
       .where(and(eq(schema.models.enabled, 1), eq(schema.providers.enabled, 1)))
       .orderBy(asc(schema.providers.sortOrder), asc(schema.models.sortOrder), asc(schema.models.modelId))
       .all();
-    return rows.map((r) => ({
+    return accessibleOnly(rows, req.user!).map((r) => ({
       id: r.id,
       modelId: r.modelId,
       displayName: r.displayName || r.modelId,

@@ -9,6 +9,8 @@ import { config } from '../config.js';
 import { requireAuth } from '../auth.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
+import { accessibleOnly, canUseModel } from '../model-access.js';
+import { checkQuota, quotaBlockMessage } from '../quota.js';
 import type { GeneratedImage } from '../types.js';
 import { tryAcquireImageJob } from '../admission.js';
 import {
@@ -105,10 +107,11 @@ async function rollbackSavedImages(saved: SavedImage[]): Promise<void> {
 export async function imageRoutes(app: FastifyInstance) {
   app.get('/api/images/models', async (req, reply) => {
     requireAuth(req, reply);
-    return db.select({
+    const rows = db.select({
       id: schema.models.id,
       modelId: schema.models.modelId,
       displayName: schema.models.displayName,
+      accessMode: schema.models.accessMode,
       providerName: schema.providers.name,
       providerType: schema.providers.type,
     }).from(schema.models)
@@ -120,6 +123,7 @@ export async function imageRoutes(app: FastifyInstance) {
       ))
       .orderBy(schema.models.sortOrder)
       .all();
+    return accessibleOnly(rows, req.user!).map(({ accessMode: _, ...m }) => m);
   });
 
   app.post('/api/images/generate', async (req, reply) => {
@@ -139,6 +143,12 @@ export async function imageRoutes(app: FastifyInstance) {
     const provider = db.select().from(schema.providers)
       .where(and(eq(schema.providers.id, model.providerId), eq(schema.providers.enabled, 1))).get();
     if (!provider) return reply.code(400).send({ error: '模型不可用' });
+    if (!canUseModel(req.user!, model.id)) {
+      return reply.code(403).send({ error: '该模型未对你开放' });
+    }
+    // Image generation has no cheaper fallback, so over-quota always refuses.
+    const quota = checkQuota(req.user!.id);
+    if (!quota.ok) return reply.code(429).send({ error: quotaBlockMessage(quota) });
 
     const adapter = getAdapter(provider.type);
     if (!adapter.generateImages) {

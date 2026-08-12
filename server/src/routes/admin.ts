@@ -4,6 +4,10 @@ import { and, asc, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
 import { db, schema, now, getSetting, setSetting } from '../db/index.js';
 import { hashPassword, newId } from '../crypto.js';
 import { requireAdmin, requireAuth } from '../auth.js';
+import {
+  QUOTA_ACTION_KEY, QUOTA_DEFAULT_KEY, QUOTA_FALLBACK_KEY,
+  effectiveQuota, monthStartDay, monthTokens, quotaSettings,
+} from '../quota.js';
 import { CHAT_IMAGE_RETENTION_KEY, IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
 import { unlinkStoredFiles } from '../storage.js';
 
@@ -54,6 +58,7 @@ function adminUser(u: typeof schema.users.$inferSelect) {
     displayName: u.displayName,
     role: u.role,
     disabled: !!u.disabled,
+    monthlyTokenQuota: u.monthlyTokenQuota,
     createdAt: u.createdAt,
     lastActiveAt: u.lastActiveAt,
   };
@@ -76,6 +81,8 @@ const patchUserSchema = z.object({
   disabled: z.boolean().optional(),
   password: z.string().min(8).max(128).optional(),
   displayName: z.string().max(64).optional(),
+  // null = follow the app default, 0 = unlimited, >0 = monthly cap
+  monthlyTokenQuota: z.number().int().min(0).max(1e15).nullish(),
 });
 
 const settingsSchema = z.object({
@@ -83,6 +90,9 @@ const settingsSchema = z.object({
   brand: z.string().min(1).max(64).optional(),
   imageRetentionDays: z.number().int().min(0).max(3650).optional(), // 工坊图,0 = keep forever
   chatImageRetentionDays: z.number().int().min(0).max(3650).optional(), // 对话图,0 = keep forever
+  quotaMonthlyTokens: z.number().int().min(0).max(1e15).optional(), // 默认月度配额,0 = 不限
+  quotaAction: z.enum(['block', 'downgrade']).optional(),
+  quotaFallbackModelId: z.string().max(64).nullish(), // models.id,空 = 未设置
 });
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -92,6 +102,11 @@ export async function adminRoutes(app: FastifyInstance) {
     const usageRows = db.select({ userId: schema.usageLog.userId, ...sums })
       .from(schema.usageLog).groupBy(schema.usageLog.userId).all();
     const usageMap = new Map(usageRows.map((r) => [r.userId, r]));
+    const monthRows = db.select({ userId: schema.usageLog.userId, totalTokens: sums.totalTokens })
+      .from(schema.usageLog)
+      .where(gte(schema.usageLog.day, monthStartDay()))
+      .groupBy(schema.usageLog.userId).all();
+    const monthMap = new Map(monthRows.map((r) => [r.userId, r.totalTokens]));
     return users.map((u) => {
       const usage = usageMap.get(u.id);
       return {
@@ -100,6 +115,7 @@ export async function adminRoutes(app: FastifyInstance) {
           totalTokens: usage?.totalTokens ?? 0,
           requests: usage?.requests ?? 0,
           images: usage?.images ?? 0,
+          monthTokens: monthMap.get(u.id) ?? 0,
         },
       };
     });
@@ -153,6 +169,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (data.disabled !== undefined) patch.disabled = data.disabled ? 1 : 0;
     if (data.password !== undefined) patch.passwordHash = await hashPassword(data.password);
     if (data.displayName !== undefined) patch.displayName = data.displayName;
+    if (data.monthlyTokenQuota !== undefined) patch.monthlyTokenQuota = data.monthlyTokenQuota;
 
     if (Object.keys(patch).length) {
       db.update(schema.users).set(patch).where(eq(schema.users.id, id)).run();
@@ -235,12 +252,18 @@ export async function adminRoutes(app: FastifyInstance) {
     return { days, byDay, byModel, totals };
   });
 
-  const settingsView = () => ({
-    signupEnabled: getSetting('signup_enabled', false),
-    brand: getSetting('brand', 'Cat-AgentUI'),
-    imageRetentionDays: getSetting(IMAGE_RETENTION_KEY, 0),
-    chatImageRetentionDays: getSetting(CHAT_IMAGE_RETENTION_KEY, 0),
-  });
+  const settingsView = () => {
+    const quota = quotaSettings();
+    return {
+      signupEnabled: getSetting('signup_enabled', false),
+      brand: getSetting('brand', 'Cat-AgentUI'),
+      imageRetentionDays: getSetting(IMAGE_RETENTION_KEY, 0),
+      chatImageRetentionDays: getSetting(CHAT_IMAGE_RETENTION_KEY, 0),
+      quotaMonthlyTokens: quota.defaultQuota,
+      quotaAction: quota.action,
+      quotaFallbackModelId: quota.fallbackModelId || null,
+    };
+  };
 
   app.get('/api/admin/settings', async (req, reply) => {
     requireAdmin(req, reply);
@@ -255,6 +278,17 @@ export async function adminRoutes(app: FastifyInstance) {
     if (body.data.brand !== undefined) setSetting('brand', body.data.brand);
     if (body.data.imageRetentionDays !== undefined) setSetting(IMAGE_RETENTION_KEY, body.data.imageRetentionDays);
     if (body.data.chatImageRetentionDays !== undefined) setSetting(CHAT_IMAGE_RETENTION_KEY, body.data.chatImageRetentionDays);
+    if (body.data.quotaMonthlyTokens !== undefined) setSetting(QUOTA_DEFAULT_KEY, body.data.quotaMonthlyTokens);
+    if (body.data.quotaAction !== undefined) setSetting(QUOTA_ACTION_KEY, body.data.quotaAction);
+    if (body.data.quotaFallbackModelId !== undefined) {
+      const id = body.data.quotaFallbackModelId;
+      if (id) {
+        const m = db.select({ id: schema.models.id, imageGen: schema.models.imageGen })
+          .from(schema.models).where(eq(schema.models.id, id)).get();
+        if (!m || m.imageGen) return reply.code(400).send({ error: '降级模型无效,请选择一个文本模型' });
+      }
+      setSetting(QUOTA_FALLBACK_KEY, id ?? '');
+    }
     if (body.data.imageRetentionDays !== undefined || body.data.chatImageRetentionDays !== undefined) {
       // A shortened window should take effect now, not at the next hourly tick.
       sweepExpiredImages();
@@ -267,6 +301,12 @@ export async function adminRoutes(app: FastifyInstance) {
     const cutoff = now() - 30 * DAY_MS;
     const where = and(eq(schema.usageLog.userId, req.user!.id), gte(schema.usageLog.createdAt, cutoff));
     const { byDay, byModel, totals } = usageAggregates(where, 10);
-    return { days: 30, byDay, byModel, totals };
+    const me = db.select({ role: schema.users.role, monthlyTokenQuota: schema.users.monthlyTokenQuota })
+      .from(schema.users).where(eq(schema.users.id, req.user!.id)).get();
+    const limit = me ? effectiveQuota(me) : null;
+    return {
+      days: 30, byDay, byModel, totals,
+      quota: { limit, used: limit !== null ? monthTokens(req.user!.id) : 0 },
+    };
   });
 }

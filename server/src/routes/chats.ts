@@ -11,6 +11,8 @@ import { validateMcpSelection } from '../mcp/access.js';
 import { getSearchServerId } from './mcp.js';
 import { saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
+import { canUseModel, grantedModelIds } from '../model-access.js';
+import { checkQuota, quotaBlockMessage } from '../quota.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
@@ -319,8 +321,13 @@ function pickModel(rows: ReturnType<typeof enabledModelRows>) {
 
 // Fallback when neither the request nor the chat names a model. Prefers a text
 // model — silently defaulting to an image model would surprise every new chat.
-function getDefaultModel() {
-  const rows = enabledModelRows();
+// Only considers models this user is allowed to see.
+function getDefaultModel(user: { id: string; role: string }) {
+  let rows = enabledModelRows();
+  if (user.role !== 'admin') {
+    const granted = grantedModelIds(user.id);
+    rows = rows.filter((r) => r.models.accessMode === 'shared' || granted.has(r.models.id));
+  }
   const text = rows.filter((r) => !r.models.imageGen);
   return pickModel(text.length ? text : rows);
 }
@@ -516,9 +523,32 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!chat) return reply.code(404).send({ error: '对话不存在' });
 
     // resolve model
-    const picked = getModelWithProvider(body.modelId ?? chat.modelId) ?? getDefaultModel();
+    const picked = getModelWithProvider(body.modelId ?? chat.modelId) ?? getDefaultModel(user);
     if (!picked) return reply.code(400).send({ error: '没有可用的模型,请联系管理员配置' });
-    const { model, provider } = picked;
+    let { model, provider } = picked;
+    if (!canUseModel(user, model.id)) {
+      return reply.code(403).send({ error: '该模型未对你开放,请选择其他模型' });
+    }
+
+    // Monthly token quota. Over-quota text turns can be downgraded to the
+    // admin-designated fallback model; image turns are always refused (there
+    // is no cheaper model to fall back to).
+    let downgradeNotice: string | null = null;
+    const quota = checkQuota(user.id);
+    if (!quota.ok) {
+      let downgraded = false;
+      if (quota.action === 'downgrade' && !model.imageGen && quota.fallbackModelId) {
+        const fallback = getModelWithProvider(quota.fallbackModelId);
+        if (fallback && !fallback.model.imageGen) {
+          if (fallback.model.id !== model.id) {
+            ({ model, provider } = fallback);
+            downgradeNotice = `本月 token 配额已用完,已自动切换到基础模型「${model.displayName || model.modelId}」`;
+          }
+          downgraded = true;
+        }
+      }
+      if (!downgraded) return reply.code(429).send({ error: quotaBlockMessage(quota) });
+    }
 
     const chatLease = tryAcquireChatTurn(user.id, chatId);
     if (!chatLease) {
@@ -682,6 +712,7 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     sse.send('meta', { messageId: assistantId, userMessageId, model: model.modelId });
+    if (downgradeNotice) sse.send('notice', { message: downgradeNotice });
     if (mcpAccess.denied.length) {
       sse.send('notice', { message: '部分 MCP 服务器已被禁用或撤销授权,本次不会调用' });
     }

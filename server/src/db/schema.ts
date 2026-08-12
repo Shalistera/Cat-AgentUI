@@ -7,6 +7,9 @@ export const users = sqliteTable('users', {
   role: text('role').notNull().default('user'), // 'admin' | 'user'
   displayName: text('display_name'),
   disabled: integer('disabled').notNull().default(0),
+  // Monthly token ceiling: null = follow the app-wide default, 0 = unlimited
+  // for this user, >0 = hard cap. Admins are always exempt (see quota.ts).
+  monthlyTokenQuota: integer('monthly_token_quota'),
   settings: text('settings').notNull().default('{}'), // JSON: { theme, lang, ... }
   createdAt: integer('created_at').notNull(),
   lastActiveAt: integer('last_active_at'),
@@ -61,8 +64,22 @@ export const models = sqliteTable('models', {
   enabled: integer('enabled').notNull().default(1),
   isDefault: integer('is_default').notNull().default(0),
   sortOrder: integer('sort_order').notNull().default(0),
+  // Mirrors mcpServers.accessMode: 'shared' shows the model to everyone,
+  // 'restricted' only to explicitly granted users. Admins always see all.
+  accessMode: text('access_mode').notNull().default('shared'),
   createdAt: integer('created_at').notNull(),
 });
+
+// Restricted models require an explicit ordinary-user grant; admins retain
+// implicit access. Same shape as mcpServerAccess for the same reasons.
+export const modelAccess = sqliteTable('model_access', {
+  modelId: text('model_id').notNull().references(() => models.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.modelId, t.userId] }),
+  index('idx_model_access_user').on(t.userId),
+]);
 
 // A project bundles custom instructions and reference documents; chats opted
 // into it get both injected into their system prompt. Documents are plain text

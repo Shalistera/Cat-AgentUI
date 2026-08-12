@@ -182,6 +182,25 @@ export default function Settings() {
                   <Stat label="生成图片" value={usage.totals.images.toLocaleString()} />
                 </div>
 
+                {usage.quota?.limit != null && (
+                  <div>
+                    <div className="eyebrow mb-2">本月配额</div>
+                    <div className="space-y-1.5">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-bg3">
+                        <div
+                          className={`h-full rounded-full transition-[width] ${usage.quota.used >= usage.quota.limit ? 'bg-err' : 'bg-acc'}`}
+                          style={{ width: `${Math.min(100, (usage.quota.used / usage.quota.limit) * 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-tx3">
+                        已用 <span className="tabular-nums text-tx2">{fmtTokens(usage.quota.used)}</span>
+                        {' / '}<span className="tabular-nums text-tx2">{fmtTokens(usage.quota.limit)}</span> tokens,
+                        每月 1 日重新计算{usage.quota.used >= usage.quota.limit ? ';本月配额已用完' : ''}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <div className="eyebrow mb-2">近 30 天每日 Tokens</div>
                   <TokensBarChart byDay={usage.byDay} />

@@ -6,6 +6,8 @@ import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
+import { accessibleOnly, canUseModel } from '../model-access.js';
+import { checkQuota, quotaBlockMessage } from '../quota.js';
 import { buildDeckPrompt, parseDeckSpec, renderDeckPptx, type DeckSpec } from '../deck.js';
 
 const generateSchema = z.object({
@@ -54,10 +56,11 @@ export async function pptRoutes(app: FastifyInstance) {
   // Any enabled text model can write a deck spec — image models can't.
   app.get('/api/ppt/models', async (req, reply) => {
     requireAuth(req, reply);
-    return db.select({
+    const rows = db.select({
       id: schema.models.id,
       modelId: schema.models.modelId,
       displayName: schema.models.displayName,
+      accessMode: schema.models.accessMode,
       providerName: schema.providers.name,
       providerType: schema.providers.type,
     }).from(schema.models)
@@ -69,6 +72,7 @@ export async function pptRoutes(app: FastifyInstance) {
       ))
       .orderBy(schema.models.sortOrder)
       .all();
+    return accessibleOnly(rows, req.user!).map(({ accessMode: _, ...m }) => m);
   });
 
   app.post('/api/ppt/generate', async (req, reply) => {
@@ -88,6 +92,13 @@ export async function pptRoutes(app: FastifyInstance) {
     const provider = db.select().from(schema.providers)
       .where(and(eq(schema.providers.id, model.providerId), eq(schema.providers.enabled, 1))).get();
     if (!provider) return reply.code(400).send({ error: '模型不可用' });
+    if (!canUseModel(req.user!, model.id)) {
+      return reply.code(403).send({ error: '该模型未对你开放' });
+    }
+    // PPT jobs have no notice channel to explain a silent downgrade, so
+    // over-quota always refuses here regardless of the configured action.
+    const quota = checkQuota(req.user!.id);
+    if (!quota.ok) return reply.code(429).send({ error: quotaBlockMessage(quota) });
 
     const userId = req.user!.id;
     const job: PptJob = { id: newId(), userId, createdAt: Date.now(), status: 'running' };

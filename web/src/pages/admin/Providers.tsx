@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check, ChevronDown, ChevronUp, Download, FlaskConical, Pencil, Plus, Server, Star, Trash2, Upload, X,
+  Check, ChevronDown, ChevronUp, Download, FlaskConical, Pencil, Plus, Server, Star, Trash2, Upload, Users, X,
 } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
@@ -9,7 +9,7 @@ import {
 } from '../../components/ui';
 import { KeyValueEditor, objectToPairs, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
 import { ProviderAvatar } from '../../components/ModelAvatar';
-import type { AdminModel, AdminProvider, ReasoningLevel, ReasoningMode } from '../../types';
+import type { AdminModel, AdminProvider, AdminUser, ModelAccessMode, ReasoningLevel, ReasoningMode } from '../../types';
 
 type ProviderType = AdminProvider['type'];
 
@@ -420,6 +420,109 @@ function ReasoningModal({ model, reload, onClose }: {
   );
 }
 
+// ---------- model visibility ----------
+/**
+ * Mirrors the MCP servers' access control: shared models are visible to every
+ * account, restricted ones only to the ticked ordinary users (admins always
+ * see everything). Enforced across chat, 绘图 and PPT.
+ */
+function AccessModal({ model, reload, onClose }: {
+  model: AdminModel; reload(): Promise<void>; onClose(): void;
+}) {
+  const [mode, setMode] = useState<ModelAccessMode>(model.accessMode);
+  const [allowed, setAllowed] = useState<string[]>(model.allowedUserIds);
+  const [users, setUsers] = useState<AdminUser[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get<AdminUser[]>('/api/admin/users')
+      .then((r) => setUsers(r.filter((u) => u.role === 'user')))
+      .catch((e) => toast(errMsg(e), 'err'));
+  }, []);
+
+  async function save() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.patch(`/api/admin/models/${model.id}`, { accessMode: mode, allowedUserIds: allowed });
+      await reload();
+      toast('已更新模型可见性', 'ok');
+      onClose();
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Modal open onClose={onClose} title="模型可见性" desc={model.modelId}>
+      <div className="space-y-4">
+        <Field label="访问范围" hint="贵模型建议仅指定用户,与配额同属成本治理">
+          <Select value={mode} onChange={(e) => setMode(e.target.value as ModelAccessMode)}>
+            <option value="shared">所有登录用户</option>
+            <option value="restricted">仅指定普通用户</option>
+          </Select>
+        </Field>
+
+        {mode === 'restricted' && (
+          <Field label="指定普通用户" hint="管理员始终可用;未勾选的用户在模型列表里看不到它">
+            {!users ? (
+              <div className="flex justify-center py-4 text-tx3"><Spinner className="h-4 w-4" /></div>
+            ) : (
+              <div className="max-h-48 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-bg0">
+                {users.length === 0 ? (
+                  <div className="px-3 py-3 text-xs text-tx3">暂无普通用户</div>
+                ) : users.map((u) => (
+                  <div key={u.id} className="flex items-center gap-3 px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13px] font-medium text-tx">{u.displayName || u.username}</div>
+                      {u.displayName && <div className="truncate text-[11px] text-tx3">@{u.username}</div>}
+                    </div>
+                    {u.disabled && <Badge tone="err">已停用</Badge>}
+                    <Toggle
+                      checked={allowed.includes(u.id)}
+                      onChange={(checked) => setAllowed(checked
+                        ? [...allowed, u.id]
+                        : allowed.filter((id) => id !== u.id))}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </Field>
+        )}
+
+        <ModalActions>
+          <Button variant="outline" onClick={onClose}>取消</Button>
+          <Button variant="primary" disabled={busy} onClick={save}>
+            {busy && <Spinner className="h-3.5 w-3.5" />}保存
+          </Button>
+        </ModalActions>
+      </div>
+    </Modal>
+  );
+}
+
+function AccessCell({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const restricted = model.accessMode === 'restricted';
+
+  return (
+    <>
+      <button
+        type="button"
+        title="设置模型可见性"
+        onClick={() => setOpen(true)}
+        className="flex cursor-pointer items-center gap-1.5 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-bg3"
+      >
+        <Badge tone={restricted ? 'acc' : 'default'}>
+          {restricted ? <><Users size={10} />指定 {model.allowedUserIds.length}</> : '全员'}
+        </Badge>
+        <Pencil size={11} className="shrink-0 text-tx3" />
+      </button>
+      {open && <AccessModal model={model} reload={reload} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
 function ReasoningCell({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
   const [open, setOpen] = useState(false);
   const { mode, levels } = model.reasoning;
@@ -510,6 +613,7 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
       <Td className="text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></Td>
       <Td className="text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></Td>
       <Td><ReasoningCell model={model} reload={reload} /></Td>
+      <Td><AccessCell model={model} reload={reload} /></Td>
       <Td className="text-center">
         <Button variant="ghost" size="iconXs"
           title={model.isDefault ? '当前默认模型' : '设为默认'} disabled={busy || model.isDefault}
@@ -728,6 +832,7 @@ function ProviderCard({ provider, reload, onEdit }: {
                   <Th className="text-center">工具</Th>
                   <Th className="text-center">绘图</Th>
                   <Th>推理档位</Th>
+                  <Th>可见性</Th>
                   <Th className="text-center">默认</Th>
                   <Th className="text-center">启用</Th>
                   <Th className="text-right">删除</Th>
