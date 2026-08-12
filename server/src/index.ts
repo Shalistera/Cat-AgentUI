@@ -16,6 +16,8 @@ import { pptRoutes } from './routes/ppt.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { importRoutes } from './routes/import.js';
+import { projectRoutes } from './routes/projects.js';
+import { initKnowledgeIndex } from './knowledge.js';
 import { startRetentionSweeper } from './retention.js';
 import { reconcileStorageMetadata } from './storage.js';
 import { PasswordQueueFullError } from './crypto.js';
@@ -28,6 +30,7 @@ setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000 })
 
 async function main() {
   runMigrations();
+  initKnowledgeIndex();
   await reconcileStorageMetadata();
 
   const app = Fastify({
@@ -62,6 +65,7 @@ async function main() {
   await app.register(uploadRoutes);
   await app.register(mcpRoutes);
   await app.register(importRoutes);
+  await app.register(projectRoutes);
 
   // static SPA
   const webDist = path.join(repoRoot, 'web', 'dist');

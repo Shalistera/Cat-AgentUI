@@ -12,6 +12,8 @@ import { getSearchServerId } from './mcp.js';
 import { saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
+import { buildProjectPrompt } from './projects.js';
+import { callProjectTool, isProjectTool } from '../knowledge.js';
 import type {
   AdapterMessage, AdapterMessagePart, MessagePart, ProviderType, ReasoningRequest, ToolDef,
 } from '../types.js';
@@ -254,8 +256,13 @@ async function buildBoundedHistory(
 function chatSummary(c: typeof schema.chats.$inferSelect) {
   return {
     id: c.id, title: c.title, pinned: !!c.pinned, modelId: c.modelId,
-    createdAt: c.createdAt, updatedAt: c.updatedAt,
+    projectId: c.projectId, createdAt: c.createdAt, updatedAt: c.updatedAt,
   };
+}
+
+function ownsProject(projectId: string, userId: string): boolean {
+  return !!db.select({ id: schema.projects.id }).from(schema.projects)
+    .where(and(eq(schema.projects.id, projectId), eq(schema.projects.userId, userId))).get();
 }
 
 function messageDto(m: typeof schema.messages.$inferSelect) {
@@ -391,12 +398,19 @@ export async function chatRoutes(app: FastifyInstance) {
 
   app.post('/api/chats', async (req, reply) => {
     requireAuth(req, reply);
-    const body = z.object({ modelId: z.string().max(64).nullish() }).safeParse(req.body ?? {});
+    const body = z.object({
+      modelId: z.string().max(64).nullish(),
+      projectId: z.string().max(64).nullish(),
+    }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    if (body.data.projectId && !ownsProject(body.data.projectId, req.user!.id)) {
+      return reply.code(404).send({ error: '项目不存在' });
+    }
     const id = newId();
     const t = now();
     db.insert(schema.chats).values({
       id, userId: req.user!.id, title: '', modelId: body.data.modelId ?? null,
+      projectId: body.data.projectId ?? null,
       createdAt: t, updatedAt: t,
     }).run();
     const c = db.select().from(schema.chats).where(eq(schema.chats.id, id)).get()!;
@@ -438,6 +452,7 @@ export async function chatRoutes(app: FastifyInstance) {
       mcpServerIds: z.array(z.string().max(64)).max(20).optional(),
       pinned: z.boolean().optional(),
       modelId: z.string().max(64).nullish(),
+      projectId: z.string().max(64).nullish(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const c = db.select().from(schema.chats)
@@ -459,6 +474,12 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     if (d.pinned !== undefined) patch.pinned = d.pinned ? 1 : 0;
     if (d.modelId !== undefined) patch.modelId = d.modelId;
+    if (d.projectId !== undefined) {
+      if (d.projectId && !ownsProject(d.projectId, req.user!.id)) {
+        return reply.code(404).send({ error: '项目不存在' });
+      }
+      patch.projectId = d.projectId;
+    }
     db.update(schema.chats).set(patch).where(eq(schema.chats.id, id)).run();
     const updated = db.select().from(schema.chats).where(eq(schema.chats.id, id)).get()!;
     let savedMcpServerIds: string[] = [];
@@ -630,7 +651,15 @@ export async function chatRoutes(app: FastifyInstance) {
     // model to search on demand instead of on every message.
     const searchServerId = getSearchServerId();
     const searchActive = !!toolDefs && !!searchServerId && mcpServerIds.includes(searchServerId);
-    const systemPrompt = [chat.systemPrompt, searchActive ? SEARCH_HINT : null]
+    // Project knowledge leads the prompt: it is the stable, cacheable prefix
+    // (per-chat systemPrompt varies more often than the project block does).
+    // Small corpora ride along whole; big ones become a manifest plus the
+    // project_search / project_read_doc tools. Image turns skip all of it.
+    const project = chat.projectId && !model.imageGen
+      ? buildProjectPrompt(chat.projectId, user.id, !!model.tools)
+      : { block: null, tools: null };
+    if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
+    const systemPrompt = [project.block, chat.systemPrompt, searchActive ? SEARCH_HINT : null]
       .filter(Boolean).join('\n\n') || undefined;
 
     // --- start streaming ---
@@ -804,10 +833,14 @@ export async function chatRoutes(app: FastifyInstance) {
                 abortTextForTimeout(`对话生成超过 ${Math.ceil(config.chatTurnTimeoutMs / 1000)} 秒总时限`);
                 throw new Error(textTimeoutError ?? '对话生成超时');
               }
-              const { result, isError } = await callTool(
-                call.name, call.args, toolCapabilities, user,
-                { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },
-              );
+              // Project knowledge tools are served in-process; everything else
+              // goes out to its MCP server.
+              const { result, isError } = isProjectTool(call.name) && chat.projectId
+                ? callProjectTool(chat.projectId, call.name, call.args)
+                : await callTool(
+                  call.name, call.args, toolCapabilities, user,
+                  { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },
+                );
               const resultLimit = Math.min(100_000, Math.floor(config.maxContextTextChars / 4));
               const trimmed = result.length > resultLimit
                 ? `${result.slice(0, resultLimit)}\n…(结果已截断)`

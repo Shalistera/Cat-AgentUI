@@ -112,7 +112,14 @@ async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): As
     messages: toMessages(req.messages),
     stream: true,
   };
-  if (req.system) body.system = req.system;
+  // Long system prompts (project knowledge riding along) get an explicit cache
+  // breakpoint — Anthropic only caches on request, and the docs block is the
+  // stable prefix that repeats every turn of a project chat.
+  if (req.system) {
+    body.system = req.system.length >= 4096
+      ? [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }]
+      : req.system;
+  }
   // Extended thinking pins temperature to 1; sending both is a 400.
   if (thinking) body.thinking = { type: 'enabled', budget_tokens: thinking };
   else if (req.temperature !== undefined) body.temperature = req.temperature;

@@ -7,6 +7,8 @@ import { Sidebar } from './components/Sidebar';
 import Login from './pages/Login';
 import Chat from './pages/Chat';
 import Images from './pages/Images';
+import Gallery from './pages/Gallery';
+import ProjectPage from './pages/Project';
 import Ppt from './pages/Ppt';
 import Settings from './pages/Settings';
 import Admin from './pages/admin/Admin';
@@ -18,7 +20,7 @@ function Shell() {
   const loc = useLocation();
 
   if (!loaded) {
-    return <div className="flex h-full items-center justify-center"><Spinner className="h-6 w-6" /></div>;
+    return <div className="flex h-full items-center justify-center text-tx3"><Spinner className="h-6 w-6" /></div>;
   }
   if (!user) return <Navigate to="/login" state={{ from: loc.pathname }} replace />;
 
@@ -26,7 +28,7 @@ function Shell() {
     <div className="flex h-full overflow-hidden bg-bg0">
       <Sidebar />
       {sidebarOpen && (
-        <div className="fixed inset-0 z-30 bg-[var(--color-scrim)] md:hidden" onClick={() => setSidebarOpen(false)} />
+        <div className="fixed inset-0 z-30 bg-scrim md:hidden" onClick={() => setSidebarOpen(false)} />
       )}
       {/* Content sits on the raised white surface; the grey canvas stays behind
           the rail, which is what separates navigation from work. */}
@@ -61,7 +63,9 @@ export default function App() {
         <Route element={<Shell />}>
           <Route path="/" element={<Chat />} />
           <Route path="/chat/:id" element={<Chat />} />
+          <Route path="/projects/:id" element={<ProjectPage />} />
           <Route path="/images" element={<Images />} />
+          <Route path="/images/gallery" element={<Gallery />} />
           <Route path="/ppt" element={<Ppt />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/admin/*" element={<AdminGate />} />

@@ -64,11 +64,36 @@ export const models = sqliteTable('models', {
   createdAt: integer('created_at').notNull(),
 });
 
+// A project bundles custom instructions and reference documents; chats opted
+// into it get both injected into their system prompt. Documents are plain text
+// only (the UI reads files client-side) — no binary parsing, no OCR.
+export const projects = sqliteTable('projects', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description'),
+  instructions: text('instructions'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+}, (t) => [index('idx_projects_user').on(t.userId, t.updatedAt)]);
+
+export const projectDocs = sqliteTable('project_docs', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(), // display filename
+  content: text('content').notNull(), // plain text, injected verbatim
+  chars: integer('chars').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [index('idx_project_docs_project').on(t.projectId)]);
+
 export const chats = sqliteTable('chats', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text('title').notNull().default(''),
   modelId: text('model_id'), // references models.id, kept loose so model deletion doesn't break chats
+  // references projects.id, kept loose so deleting a project leaves its chats
+  // intact (they just fall out of the project)
+  projectId: text('project_id'),
   systemPrompt: text('system_prompt'),
   temperature: real('temperature'),
   maxTokens: integer('max_tokens'),

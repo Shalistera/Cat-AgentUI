@@ -32,7 +32,26 @@ export interface Message {
 
 export interface ChatSummary {
   id: string; title: string; pinned: boolean; modelId: string | null;
+  projectId: string | null;
   createdAt: number; updatedAt: number;
+}
+
+export interface Project {
+  id: string; name: string;
+  description: string | null;
+  instructions: string | null;
+  createdAt: number; updatedAt: number;
+  /** Present in list responses. */
+  docCount?: number; totalChars?: number;
+}
+
+export interface ProjectDoc { id: string; name: string; chars: number; createdAt: number }
+
+export interface ProjectLimits {
+  maxDocs: number; maxDocChars: number; maxTotalChars: number; maxInstructionsChars: number;
+  /** At or below this many total chars the corpus is injected whole; above it
+      the model retrieves on demand. */
+  injectChars: number;
 }
 
 /** 'off', or the `value` of one of the model's reasoning levels. */

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api } from './api';
-import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, User } from './types';
+import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, Project, User } from './types';
 
 // ---- theme ----
 // Light is the product default; `html.dark` is the opt-in override. First-time
@@ -94,6 +94,32 @@ export const useChats = create<ChatsState>((set, get) => ({
   },
   remove(id) {
     set({ chats: get().chats.filter((c) => c.id !== id) });
+  },
+}));
+
+// ---- projects (sidebar cache) ----
+interface ProjectsState {
+  projects: Project[];
+  loaded: boolean;
+  load(force?: boolean): Promise<void>;
+  upsert(p: Project): void;
+  remove(id: string): void;
+}
+
+export const useProjects = create<ProjectsState>((set, get) => ({
+  projects: [],
+  loaded: false,
+  async load(force) {
+    if (get().loaded && !force) return;
+    const r = await api.get<{ projects: Project[] }>('/api/projects');
+    set({ projects: r.projects, loaded: true });
+  },
+  upsert(p) {
+    const rest = get().projects.filter((x) => x.id !== p.id);
+    set({ projects: [p, ...rest] });
+  },
+  remove(id) {
+    set({ projects: get().projects.filter((p) => p.id !== id) });
   },
 }));
 

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowDown, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowDown, FolderClosed, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
-import { searchPrefKey, useAuth, useChats, useMcp, useModels, useUi } from '../store';
+import { searchPrefKey, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
 import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
@@ -30,6 +30,11 @@ function draftToPatch(d: ComposerSettings) {
 
 export default function Chat() {
   const { id: routeId } = useParams();
+  // `/?project=<id>` seeds a fresh chat into that project; once the chat is
+  // created the association lives on the chat row itself.
+  const [searchParams] = useSearchParams();
+  const projectParam = routeId ? null : searchParams.get('project');
+  const projects = useProjects((s) => s.projects);
   const nav = useNavigate();
   const { user, bootstrap } = useAuth();
   const { sidebarOpen, setSidebarOpen } = useUi();
@@ -149,7 +154,10 @@ export default function Chat() {
 
   async function ensureChat(): Promise<ChatDetail> {
     if (chatRef.current) return chatRef.current;
-    const r = await api.post<{ chat: ChatDetail }>('/api/chats', { modelId: modelSel?.id ?? null });
+    const r = await api.post<{ chat: ChatDetail }>('/api/chats', {
+      modelId: modelSel?.id ?? null,
+      projectId: projectParam,
+    });
     let created = r.chat;
     const patch = draftToPatch(settings);
     if (patch.systemPrompt || patch.reasoningEffort !== 'off' || mcpSelected.length) {
@@ -159,7 +167,8 @@ export default function Chat() {
     setChat(created);
     chatsStore.upsert({
       id: created.id, title: created.title, pinned: created.pinned,
-      modelId: created.modelId, createdAt: created.createdAt, updatedAt: created.updatedAt,
+      modelId: created.modelId, projectId: created.projectId,
+      createdAt: created.createdAt, updatedAt: created.updatedAt,
     });
     skipLoadRef.current = created.id;
     nav(`/chat/${created.id}`);
@@ -358,6 +367,17 @@ export default function Chat() {
           </Button>
         )}
       >
+        {(() => {
+          const pid = chat?.projectId ?? projectParam;
+          const project = pid ? projects.find((p) => p.id === pid) : null;
+          return project ? (
+            <Link to={`/projects/${project.id}`} title="打开项目"
+              className="flex max-w-[14rem] items-center gap-1.5 rounded-md border border-line bg-bg2 px-2.5 py-1 text-xs font-medium text-tx2 transition-colors hover:border-line2 hover:text-tx">
+              <FolderClosed size={12} className="shrink-0 text-tx3" />
+              <span className="truncate">{project.name}</span>
+            </Link>
+          ) : null;
+        })()}
         {user?.role === 'admin' && models.length === 0 && modelsLoaded && (
           <Button variant="primary" size="sm" onClick={() => nav('/admin/providers')}>配置模型服务</Button>
         )}
@@ -365,7 +385,9 @@ export default function Chat() {
 
       {isEmpty ? (
         <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-10">
-          <div className="fade-up w-full max-w-2xl">
+          {/* Same 44rem as the conversation column below — the composer must not
+              change width when the first message lands. */}
+          <div className="fade-up w-full max-w-[44rem]">
             <div className="mb-8 flex flex-col items-center text-center">
               <CatMark size={56} />
               <h2 className="mt-4 text-xl font-semibold tracking-tight text-tx">
@@ -392,6 +414,8 @@ export default function Chat() {
               </div>
             )}
 
+            {/* Recessed bg0 (the ToggleRow treatment) keeps static info quiet —
+                surface + shadow + hover stays reserved for clickable cards. */}
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               {capabilities.map((c) => (
                 <div key={c.title} className="rounded-lg border border-line bg-bg0 px-3.5 py-3">
@@ -428,7 +452,7 @@ export default function Chat() {
             {!stick && (
               <button
                 title="回到底部"
-                className="absolute -top-11 left-1/2 flex h-8 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-full border border-line2 bg-bg1 text-tx2 shadow-md transition-colors hover:text-tx"
+                className="absolute -top-11 left-1/2 flex h-8 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-full border border-line2 bg-bg1 text-tx2 shadow-md transition-colors hover:bg-bg2 hover:text-tx"
                 onClick={() => { setStick(true); if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }}
               >
                 <ArrowDown size={14} />

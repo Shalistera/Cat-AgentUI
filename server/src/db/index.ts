@@ -14,6 +14,8 @@ sqlite.pragma('busy_timeout = 5000');
 
 export const db = drizzle(sqlite, { schema });
 export { schema };
+/** Raw handle for things drizzle can't model (FTS5 virtual tables). */
+export const rawDb = sqlite;
 
 export function runMigrations() {
   migrate(db, { migrationsFolder: path.join(serverRoot, 'drizzle') });
