@@ -1,5 +1,6 @@
 import type { ChatAdapter, ProviderRuntimeConfig, ProviderType } from '../types.js';
 import { decryptSecret } from '../crypto.js';
+import { providerExtraHeaders } from '../secrets.js';
 import { openaiAdapter } from './openai.js';
 import { anthropicAdapter } from './anthropic.js';
 import { geminiAdapter } from './gemini.js';
@@ -27,11 +28,10 @@ export interface ProviderRow {
   vertexLocation: string | null;
   vertexSaJsonEnc: string | null;
   extraHeaders: string;
+  extraHeadersEnc: string | null;
 }
 
 export function toRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
-  let extraHeaders: Record<string, string> = {};
-  try { extraHeaders = JSON.parse(row.extraHeaders || '{}'); } catch { /* ignore */ }
   return {
     id: row.id,
     type: row.type as ProviderType,
@@ -42,6 +42,6 @@ export function toRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
     vertexProject: row.vertexProject,
     vertexLocation: row.vertexLocation,
     vertexSaJson: row.vertexSaJsonEnc ? decryptSecret(row.vertexSaJsonEnc) : null,
-    extraHeaders,
+    extraHeaders: providerExtraHeaders(row),
   };
 }

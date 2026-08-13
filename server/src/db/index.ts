@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
@@ -6,11 +7,18 @@ import { eq } from 'drizzle-orm';
 import { config, serverRoot } from '../config.js';
 import * as schema from './schema.js';
 
-const sqlite = new Database(path.join(config.dataDir, 'cat-agentui.db'));
+const dbPath = path.join(config.dataDir, 'cat-agentui.db');
+const sqlite = new Database(dbPath);
 sqlite.pragma('journal_mode = WAL');
 sqlite.pragma('synchronous = NORMAL');
 sqlite.pragma('foreign_keys = ON');
 sqlite.pragma('busy_timeout = 5000');
+// Credential echoes and legacy plaintext headers are scrubbed during startup;
+// zero deleted cells instead of leaving recoverable bytes in SQLite free pages.
+sqlite.pragma('secure_delete = ON');
+for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+  try { fs.chmodSync(file, 0o600); } catch { /* file may not exist yet */ }
+}
 
 export const db = drizzle(sqlite, { schema });
 export { schema };

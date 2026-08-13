@@ -12,6 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-agentui-security-'));
 const viteFsProbe = path.join(root, 'data', `vite-fs-probe-${process.pid}-${Date.now()}.txt`);
 const webRequire = createRequire(path.join(root, 'web', 'package.json'));
+const Database = webRequire('better-sqlite3');
 const viteCli = path.join(path.dirname(webRequire.resolve('vite/package.json')), 'bin', 'vite.js');
 const katexFonts = path.join(path.dirname(webRequire.resolve('katex/package.json')), 'dist', 'fonts');
 const children = [];
@@ -99,6 +100,18 @@ async function run() {
   const [appPort, mockPort, vitePort] = await Promise.all([freePort(), freePort(), freePort()]);
   const base = `http://127.0.0.1:${appPort}`;
   const viteBase = `http://127.0.0.1:${vitePort}`;
+  const providerKey = 'PROVIDER_KEY_CANARY_d87f2f37';
+  const providerKeyPrefix = providerKey.slice(0, 12);
+  const providerKeyTail = providerKey.slice(12);
+  const providerHeader = 'PROVIDER_HEADER_CANARY_90acfb31';
+  const mcpEnvSecret = 'MCP_ENV_CANARY_16ed8ac2';
+  const mcpHeaderSecret = 'MCP_HEADER_CANARY_8fc046f1';
+  const appSecret = 'APP_SECRET_CANARY_22a753f8';
+  const legacyHeaderSecret = 'LEGACY_HEADER_CANARY_734f01a9';
+  const secretCanaries = [
+    providerKey, providerKeyTail, providerHeader, mcpEnvSecret, mcpHeaderSecret,
+    appSecret, legacyHeaderSecret,
+  ];
 
   fs.mkdirSync(path.dirname(viteFsProbe), { recursive: true });
   fs.writeFileSync(viteFsProbe, 'Vite filesystem isolation probe\n', { flag: 'wx' });
@@ -143,26 +156,26 @@ async function run() {
   }
 
   const mock = start(process.execPath, ['scripts/mock-openai.mjs', String(mockPort)]);
-  const app = start(process.execPath, ['server/dist/index.js'], {
-    env: {
-      ...process.env,
-      DATA_DIR: dataDir,
-      HOST: '127.0.0.1',
-      PORT: String(appPort),
-      COOKIE_SECURE: 'false',
-      MAX_USER_UPLOAD_MB: '20',
-      MAX_USER_IMAGE_MB: '40',
-      MAX_TOTAL_STORAGE_MB: '100',
-      MAX_MESSAGE_ATTACHMENT_MB: '10',
-      DEFAULT_MODEL_OUTPUT_TOKENS: '256',
-      MAX_MODEL_OUTPUT_TOKENS: '1024',
-      MAX_TURN_OUTPUT_CHARS: '1000',
-      CHAT_TURN_TIMEOUT_SECONDS: '3',
-      CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS: '1',
-      PASSWORD_CONCURRENCY: '1',
-      PASSWORD_QUEUE_MAX: '2',
-    },
-  });
+  const appEnv = {
+    ...process.env,
+    DATA_DIR: dataDir,
+    HOST: '127.0.0.1',
+    PORT: String(appPort),
+    SECRET_KEY: appSecret,
+    COOKIE_SECURE: 'false',
+    MAX_USER_UPLOAD_MB: '20',
+    MAX_USER_IMAGE_MB: '40',
+    MAX_TOTAL_STORAGE_MB: '100',
+    MAX_MESSAGE_ATTACHMENT_MB: '10',
+    DEFAULT_MODEL_OUTPUT_TOKENS: '256',
+    MAX_MODEL_OUTPUT_TOKENS: '1024',
+    MAX_TURN_OUTPUT_CHARS: '1000',
+    CHAT_TURN_TIMEOUT_SECONDS: '3',
+    CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS: '1',
+    PASSWORD_CONCURRENCY: '1',
+    PASSWORD_QUEUE_MAX: '2',
+  };
+  const app = start(process.execPath, ['server/dist/index.js'], { env: appEnv });
   let appLogs = '';
   app.stderr.on('data', (chunk) => { appLogs += chunk.toString(); });
   app.stdout.on('data', (chunk) => { appLogs += chunk.toString(); });
@@ -223,7 +236,14 @@ async function run() {
   const userId = createdUser.json.user.id;
 
   const provider = await jsonReq('POST', '/api/admin/providers', {
-    name: 'mock', type: 'openai', baseUrl: `http://127.0.0.1:${mockPort}/v1`, apiKey: 'test',
+    name: 'mock', type: 'openai', baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+    apiKey: providerKey,
+    // The shorter value deliberately prefixes the API key; streaming
+    // redaction must not reveal the longer key's tail at a chunk boundary.
+    extraHeaders: {
+      'x-audit-secret': providerHeader,
+      'x-prefix-secret': providerKeyPrefix,
+    },
   }, adminCookie);
   assert(provider.status === 200, 'create provider');
   await jsonReq('POST', '/api/admin/models', {
@@ -234,14 +254,30 @@ async function run() {
     ],
   }, adminCookie);
   const providers = await jsonReq('GET', '/api/admin/providers', undefined, adminCookie);
+  assert(!secretCanaries.some((secret) => JSON.stringify(providers.json).includes(secret)),
+    'provider secrets are write-only');
   const configured = providers.json.find((item) => item.id === provider.json.id);
+  assert(configured.hasKey && configured.hasExtraHeaders
+    && configured.extraHeaderKeys.includes('x-audit-secret')
+    && configured.extraHeaderKeys.includes('x-prefix-secret'), 'provider secret metadata');
+  const preservedProvider = await jsonReq('PATCH', `/api/admin/providers/${provider.json.id}`, {
+    extraHeaders: { 'x-empty-header': '' },
+    preserveExtraHeaderKeys: ['x-audit-secret', 'x-prefix-secret'],
+  }, adminCookie);
+  assert(preservedProvider.status === 200
+    && preservedProvider.json.extraHeaderKeys.includes('x-audit-secret')
+    && preservedProvider.json.extraHeaderKeys.includes('x-prefix-secret')
+    && preservedProvider.json.extraHeaderKeys.includes('x-empty-header')
+    && !secretCanaries.some((secret) => JSON.stringify(preservedProvider.json).includes(secret)),
+  'write-only provider headers preserve/replace semantics');
   const textModel = configured.models.find((item) => item.modelId === 'mock-gpt');
   const imageModel = configured.models.find((item) => item.modelId === 'mock-image');
   assert(textModel && imageModel, 'model ids');
 
   const mcp = await jsonReq('POST', '/api/admin/mcp', {
     name: 'mock-tools', transport: 'stdio', command: process.execPath,
-    args: [path.join(root, 'scripts', 'mock-mcp.mjs')], enabled: true,
+    args: [path.join(root, 'scripts', 'mock-mcp.mjs')],
+    env: { MOCK_MCP_SECRET: mcpEnvSecret }, enabled: true,
     accessMode: 'restricted', allowedUserIds: [],
   }, adminCookie);
   assert(mcp.status === 200, 'create MCP');
@@ -251,6 +287,80 @@ async function run() {
   });
   assert(login.status === 200, 'user login');
   const userCookie = login.cookie;
+  const forwardedHttpsLogin = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: {
+      'x-csrf': '1', 'x-forwarded-proto': 'https', 'content-type': 'application/json',
+    },
+    body: JSON.stringify({ username: 'alice', password: 'password-123' }),
+  });
+  assert(forwardedHttpsLogin.status === 200
+    && /;\s*Secure(?:;|$)/i.test(forwardedHttpsLogin.headers.get('set-cookie') || ''),
+  'HTTPS proxy session cookie is Secure');
+
+  // Provider text and error bodies are attacker-controlled. Neither whole nor
+  // cross-chunk echoes of request credentials may reach SSE or saved history.
+  const echoChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  const echoTurn = await stream(echoChat.json.chat.id, [
+    { type: 'text', text: 'echo_auth_content' },
+  ], textModel.id, userCookie);
+  assert(echoTurn.status === 200
+    && !secretCanaries.some((secret) => echoTurn.text.includes(secret))
+    && echoTurn.text.includes('敏感信息已隐藏'), 'provider streamed secret redaction');
+  let echoSaved = await jsonReq('GET', `/api/chats/${echoChat.json.chat.id}`, undefined, userCookie);
+  assert(!secretCanaries.some((secret) => JSON.stringify(echoSaved.json).includes(secret)),
+    'provider streamed secret not persisted');
+  const errorTurn = await stream(echoChat.json.chat.id, [
+    { type: 'text', text: 'echo_auth_error' },
+  ], textModel.id, userCookie);
+  assert(errorTurn.status === 200 && errorTurn.text.includes('event: error')
+    && !secretCanaries.some((secret) => errorTurn.text.includes(secret)),
+  'provider error secret redaction');
+  echoSaved = await jsonReq('GET', `/api/chats/${echoChat.json.chat.id}`, undefined, userCookie);
+  assert(!secretCanaries.some((secret) => JSON.stringify(echoSaved.json).includes(secret)),
+    'provider error secret not persisted');
+  await jsonReq('DELETE', `/api/chats/${echoChat.json.chat.id}`, undefined, userCookie);
+
+  // A remote MCP handshake can also reflect its Authorization header.
+  const remoteMcp = await jsonReq('POST', '/api/admin/mcp', {
+    name: 'remote-secret-probe', transport: 'http',
+    url: `http://127.0.0.1:${mockPort}/mcp-leak`,
+    headers: { authorization: `Bearer ${mcpHeaderSecret}` },
+    accessMode: 'restricted', allowedUserIds: [userId], enabled: true,
+  }, adminCookie);
+  assert(remoteMcp.status === 200, 'create remote MCP secret probe');
+  const remoteChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  await jsonReq('PATCH', `/api/chats/${remoteChat.json.chat.id}`, {
+    mcpServerIds: [remoteMcp.json.id],
+  }, userCookie);
+  const remoteTurn = await stream(remoteChat.json.chat.id, [
+    { type: 'text', text: 'ordinary request' },
+  ], textModel.id, userCookie);
+  assert(remoteTurn.status === 200 && remoteTurn.text.includes('event: notice')
+    && !remoteTurn.text.includes(mcpHeaderSecret), 'MCP connection error secret redaction');
+  await jsonReq('DELETE', `/api/chats/${remoteChat.json.chat.id}`, undefined, userCookie);
+
+  const adminMcpList = await jsonReq('GET', '/api/admin/mcp', undefined, adminCookie);
+  assert(!secretCanaries.some((secret) => JSON.stringify(adminMcpList.json).includes(secret)),
+    'MCP secrets and saved errors are write-only');
+
+  // At rest, Provider custom headers and all MCP credentials are ciphertext.
+  const auditDb = new Database(path.join(dataDir, 'cat-agentui.db'), { readonly: true, fileMustExist: true });
+  const providerAtRest = auditDb.prepare(
+    'select extra_headers legacy, extra_headers_enc encrypted from providers where id = ?',
+  ).get(provider.json.id);
+  const mcpAtRest = auditDb.prepare(
+    'select env_enc, headers_enc from mcp_servers where id in (?, ?)',
+  ).all(mcp.json.id, remoteMcp.json.id);
+  auditDb.close();
+  assert(providerAtRest.legacy === '{}' && providerAtRest.encrypted
+    && !providerAtRest.encrypted.includes(providerHeader), 'provider headers encrypted at rest');
+  assert(mcpAtRest.length === 2 && !secretCanaries.some((secret) => JSON.stringify(mcpAtRest).includes(secret)),
+    'MCP secrets encrypted at rest');
+  assert((fs.statSync(dataDir).mode & 0o777) === 0o700
+    && (fs.statSync(path.join(dataDir, 'cat-agentui.db')).mode & 0o777) === 0o600,
+  'secret-bearing storage permissions');
+  await jsonReq('DELETE', `/api/admin/mcp/${remoteMcp.json.id}`, undefined, adminCookie);
 
   const limitChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
   const limitTurn = await stream(limitChat.json.chat.id, [
@@ -306,8 +416,28 @@ async function run() {
     mcpServerIds: [mcp.json.id],
   }, userCookie);
   assert(bound.status === 200, 'MCP bind after grant');
-  const toolTurn = await stream(chatId, [{ type: 'text', text: 'use_tool' }], textModel.id, userCookie);
-  assert(toolTurn.status === 200 && toolTurn.text.includes('event: tool_result'), 'authorized tool call');
+  const toolTurn = await stream(chatId, [{ type: 'text', text: 'use_tool leak_env' }], textModel.id, userCookie);
+  assert(toolTurn.status === 200 && toolTurn.text.includes('event: tool_result')
+    && toolTurn.text.includes('敏感信息已隐藏') && !toolTurn.text.includes(mcpEnvSecret),
+  'authorized tool call secret redaction');
+  const toolSaved = await jsonReq('GET', `/api/chats/${chatId}`, undefined, userCookie);
+  assert(!JSON.stringify(toolSaved.json).includes(mcpEnvSecret), 'MCP secret not persisted');
+
+  // A hostile Provider can place its request credential in tool-call metadata
+  // or arguments. Redact before the call reaches MCP, SSE, or persistence.
+  const argChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  await jsonReq('PATCH', `/api/chats/${argChat.json.chat.id}`, {
+    mcpServerIds: [mcp.json.id],
+  }, userCookie);
+  const argTurn = await stream(argChat.json.chat.id, [
+    { type: 'text', text: 'use_tool tool_arg_auth' },
+  ], textModel.id, userCookie);
+  assert(argTurn.status === 200 && argTurn.text.includes('event: tool_result')
+    && argTurn.text.includes('敏感信息已隐藏') && !argTurn.text.includes(providerKey),
+  'tool-call credential redaction');
+  const argSaved = await jsonReq('GET', `/api/chats/${argChat.json.chat.id}`, undefined, userCookie);
+  assert(!JSON.stringify(argSaved.json).includes(providerKey), 'tool-call credential not persisted');
+  await jsonReq('DELETE', `/api/chats/${argChat.json.chat.id}`, undefined, userCookie);
 
   await jsonReq('PATCH', `/api/admin/mcp/${mcp.json.id}`, { allowedUserIds: [] }, adminCookie);
   const revokedTurn = await stream(chatId, [{ type: 'text', text: 'use_tool again' }], textModel.id, userCookie);
@@ -384,9 +514,67 @@ async function run() {
   const wrongResults = await Promise.all(wrongLogins);
   assert(wrongResults.some((item) => item.status === 503), 'password queue bound');
   assert(health.ok && healthMs < 200, `password queue blocked event loop (${healthMs.toFixed(1)}ms)`);
+  assert(!secretCanaries.some((secret) => appLogs.includes(secret)), 'secrets absent from app logs');
+
+  // Simulate a pre-0012 plaintext custom-header row, then prove the next start
+  // encrypts it and truncates WAL frames containing the old value.
+  await new Promise((resolve) => {
+    if (app.exitCode !== null) return resolve();
+    app.once('exit', resolve);
+    app.kill('SIGTERM');
+  });
+  const legacyDb = new Database(path.join(dataDir, 'cat-agentui.db'));
+  legacyDb.prepare(
+    'update providers set extra_headers = ?, extra_headers_enc = null where id = ?',
+  ).run(JSON.stringify({ 'x-legacy-secret': legacyHeaderSecret }), provider.json.id);
+  legacyDb.prepare('update chats set title = ? where id = ?')
+    .run(`legacy echo ${legacyHeaderSecret}`, chatId);
+  legacyDb.prepare('update messages set error = ? where chat_id = ?')
+    .run(`legacy error authorization=Bearer ${legacyHeaderSecret}`, chatId);
+  legacyDb.close();
+
+  const restarted = start(process.execPath, ['server/dist/index.js'], { env: appEnv });
+  let restartedLogs = '';
+  restarted.stderr.on('data', (chunk) => { restartedLogs += chunk.toString(); });
+  restarted.stdout.on('data', (chunk) => { restartedLogs += chunk.toString(); });
+  await waitForHealth(base, restarted).catch((err) => {
+    throw new Error(`${err instanceof Error ? err.message : String(err)}\n${restartedLogs}`);
+  });
+  const migratedDb = new Database(path.join(dataDir, 'cat-agentui.db'), {
+    readonly: true, fileMustExist: true,
+  });
+  const migratedHeader = migratedDb.prepare(
+    'select extra_headers legacy, extra_headers_enc encrypted from providers where id = ?',
+  ).get(provider.json.id);
+  migratedDb.close();
+  assert(migratedHeader.legacy === '{}' && migratedHeader.encrypted
+    && !migratedHeader.encrypted.includes(legacyHeaderSecret), 'legacy provider header migration');
+  const legacyEchoCount = new Database(path.join(dataDir, 'cat-agentui.db'), {
+    readonly: true, fileMustExist: true,
+  });
+  const leakedRows = legacyEchoCount.prepare(
+    'select (select count(*) from chats where title like ?) + (select count(*) from messages where error like ?) total',
+  ).get(`%${legacyHeaderSecret}%`, `%${legacyHeaderSecret}%`);
+  legacyEchoCount.close();
+  assert(Number(leakedRows.total) === 0, 'legacy persisted secret echoes scrubbed');
+  assert(!secretCanaries.some((secret) => restartedLogs.includes(secret)),
+    'secrets absent from restart logs');
+  for (const suffix of ['', '-wal', '-shm']) {
+    const file = path.join(dataDir, `cat-agentui.db${suffix}`);
+    if (!fs.existsSync(file)) continue;
+    const bytes = fs.readFileSync(file).toString('latin1');
+    assert(!secretCanaries.some((secret) => bytes.includes(secret)),
+      `plaintext secret found in SQLite${suffix || ' main file'}`);
+  }
 
   return {
     viteFsIsolation: 'pass',
+    providerSecretRedaction: 'pass',
+    mcpSecretRedaction: 'pass',
+    encryptedCustomHeaders: 'pass',
+    legacyHeaderMigration: 'pass',
+    secretFilePermissions: 'pass',
+    secureProxyCookie: 'pass',
     mcpAcl: 'pass',
     mcpRevocation: 'pass',
     mcpSharedAccess: 'pass',

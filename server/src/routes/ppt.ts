@@ -9,6 +9,7 @@ import { recordUsage } from '../usage.js';
 import { accessibleOnly, canUseModel } from '../model-access.js';
 import { checkQuota, quotaBlockMessage } from '../quota.js';
 import { buildDeckPrompt, parseDeckSpec, renderDeckPptx, type DeckSpec } from '../deck.js';
+import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
 
 const generateSchema = z.object({
   modelId: z.string(),
@@ -108,6 +109,7 @@ export async function pptRoutes(app: FastifyInstance) {
 
     void (async () => {
       const t0 = Date.now();
+      const secretValues = allConfiguredSecretValues();
       try {
         const adapter = getAdapter(provider.type);
         let text = '';
@@ -129,6 +131,7 @@ export async function pptRoutes(app: FastifyInstance) {
           }
         }
 
+        text = redactSensitiveText(text, secretValues);
         const spec = parseDeckSpec(text);
         const durationMs = Date.now() - t0;
         const id = newId();
@@ -163,7 +166,10 @@ export async function pptRoutes(app: FastifyInstance) {
         job.status = 'done';
         console.log(`[ppt] job ${job.id} done in ${(durationMs / 1000).toFixed(1)}s, ${spec.slides.length} slides`);
       } catch (err) {
-        job.error = err instanceof Error ? err.message : String(err);
+        job.error = redactSensitiveText(
+          err instanceof Error ? err.message : String(err),
+          secretValues,
+        );
         job.status = 'error';
         console.log(`[ppt] job ${job.id} error after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${job.error}`);
       }

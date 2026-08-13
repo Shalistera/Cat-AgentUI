@@ -5,7 +5,7 @@ import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { config, repoRoot } from './config.js';
-import { runMigrations } from './db/index.js';
+import { rawDb, runMigrations } from './db/index.js';
 import { authPlugin } from './auth.js';
 import { authRoutes } from './routes/auth.js';
 import { chatRoutes } from './routes/chats.js';
@@ -21,6 +21,10 @@ import { initKnowledgeIndex } from './knowledge.js';
 import { startRetentionSweeper } from './retention.js';
 import { reconcileStorageMetadata } from './storage.js';
 import { PasswordQueueFullError } from './crypto.js';
+import {
+  allConfiguredSecretValues, migrateLegacyProviderHeaders, redactSensitiveText,
+  scrubPersistedSecretEchoes,
+} from './secrets.js';
 
 // Slow image gateways can sit for many minutes before sending response
 // headers; undici's default 300s headersTimeout would abort those upstream
@@ -30,11 +34,27 @@ setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000 })
 
 async function main() {
   runMigrations();
+  const secretsMigrated = migrateLegacyProviderHeaders();
+  const secretEchoesScrubbed = scrubPersistedSecretEchoes();
+  if (secretsMigrated || secretEchoesScrubbed) {
+    // No request can be in flight yet. Merge the sanitized pages and discard
+    // old WAL frames that may still contain a pre-redaction plaintext value.
+    rawDb.pragma('wal_checkpoint(TRUNCATE)');
+  }
   initKnowledgeIndex();
   await reconcileStorageMetadata();
 
   const app = Fastify({
-    logger: { level: 'warn' },
+    logger: {
+      level: 'warn',
+      redact: {
+        paths: [
+          'req.headers.authorization', 'req.headers.cookie', "req.headers['x-api-key']",
+          "res.headers['set-cookie']",
+        ],
+        censor: '[敏感信息已隐藏]',
+      },
+    },
     bodyLimit: 5 * 1024 * 1024,
     trustProxy: config.trustProxy,
   });
@@ -49,12 +69,25 @@ async function main() {
     if (err.message === 'unauthorized') return reply.code(401).send({ error: '请先登录' });
     if (err.message === 'forbidden') return reply.code(403).send({ error: '需要管理员权限' });
     if (err instanceof PasswordQueueFullError) return reply.code(503).send({ error: err.message });
-    req.log.error(err);
+    const secretValues = allConfiguredSecretValues();
+    const safeMessage = redactSensitiveText(err.message, secretValues);
+    const safeStack = err.stack ? redactSensitiveText(err.stack, secretValues) : undefined;
+    req.log.error({ err: { name: err.name, message: safeMessage, stack: safeStack } });
     reply.code(err.statusCode && err.statusCode >= 400 ? err.statusCode : 500)
       .send({ error: err.statusCode === 413 ? '请求体过大' : '服务器内部错误' });
   });
 
   app.get('/api/health', async () => ({ ok: true }));
+
+  // Credentials are only accepted on admin/auth requests and are never echoed;
+  // explicitly forbid browser/proxy caches from retaining those responses.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (req.url.startsWith('/api/admin/') || req.url.startsWith('/api/auth/')) {
+      reply.header('cache-control', 'no-store');
+      reply.header('pragma', 'no-cache');
+    }
+    return payload;
+  });
 
   await app.register(authRoutes);
   await app.register(chatRoutes);
@@ -105,6 +138,7 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error('启动失败:', e);
+  const raw = e instanceof Error ? (e.stack || e.message) : String(e);
+  console.error('启动失败:', redactSensitiveText(raw, [config.secretKey]));
   process.exit(1);
 });

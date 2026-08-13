@@ -76,6 +76,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 http.createServer(async (req, res) => {
   console.log(`${new Date().toISOString().slice(11, 19)} ${req.method} ${req.url}`);
+  // A deliberately hostile upstream used by the security regression: some
+  // gateways echo request headers in connection errors.
+  if (req.url === '/mcp-leak') {
+    res.writeHead(401, { 'content-type': 'text/plain' });
+    res.end(`denied authorization=${req.headers.authorization || ''}`);
+    return;
+  }
   if (req.url === '/v1/models') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ data: [{ id: 'mock-gpt' }, { id: 'mock-image' }] }));
@@ -93,13 +100,32 @@ http.createServer(async (req, res) => {
     const wantsSlowStream = /slow_stream/.test(lastText ?? '');
     const wantsLongOutput = /long_output/.test(lastText ?? '');
     const wantsLimitCheck = /check_output_limit/.test(lastText ?? '');
+    const wantsAuthError = /echo_auth_error/.test(lastText ?? '');
+    const wantsAuthContent = /echo_auth_content/.test(lastText ?? '');
     const wantsTool = body.tools?.length && /use_tool/.test(lastText ?? '') && !hasToolResult;
+
+    if (wantsAuthError) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        error: {
+          message: `diagnostic authorization=${req.headers.authorization || ''}; x-audit-secret=${req.headers['x-audit-secret'] || ''}`,
+        },
+      }));
+      return;
+    }
 
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
     const base = { id: 'chatcmpl-mock', object: 'chat.completion.chunk', model: body.model };
 
-    if (wantsStall) {
+    if (wantsAuthContent) {
+      const leaked = `${req.headers.authorization || ''}|${req.headers['x-audit-secret'] || ''}`;
+      // Split in awkward positions to prove redaction works across SSE chunks.
+      for (const t of [leaked.slice(0, 11), leaked.slice(11, 23), leaked.slice(23)]) {
+        send({ ...base, choices: [{ index: 0, delta: { content: t }, finish_reason: null }] });
+      }
+      send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    } else if (wantsStall) {
       await sleep(1500);
       send({ ...base, choices: [{ index: 0, delta: { content: 'late' }, finish_reason: null }] });
       send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
@@ -116,8 +142,17 @@ http.createServer(async (req, res) => {
       send({ ...base, choices: [{ index: 0, delta: { content: `max_tokens:${body.max_tokens}` }, finish_reason: null }] });
       send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
     } else if (wantsTool) {
-      send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_mock1', type: 'function', function: { name: body.tools[0].function.name, arguments: '' } }] }, finish_reason: null }] });
-      send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"query":"cat"}' } }] }, finish_reason: null }] });
+      const selected = /leak_env/.test(lastText ?? '')
+        ? (body.tools.find((tool) => tool.function.name.includes('leak_env')) ?? body.tools[0])
+        : body.tools[0];
+      const args = /tool_arg_auth/.test(lastText ?? '')
+        ? JSON.stringify({ query: req.headers.authorization || '' })
+        : '{"query":"cat"}';
+      const callId = /tool_arg_auth/.test(lastText ?? '')
+        ? (req.headers.authorization || 'call_mock1')
+        : 'call_mock1';
+      send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: callId, type: 'function', function: { name: selected.function.name, arguments: '' } }] }, finish_reason: null }] });
+      send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] });
       send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } });
     } else {
       const reply = hasToolResult

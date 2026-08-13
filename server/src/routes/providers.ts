@@ -5,6 +5,9 @@ import { and, asc, eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { encryptSecret, newId } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
+import {
+  allConfiguredSecretValues, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
+} from '../secrets.js';
 import { accessUserIds, accessibleOnly, replaceModelAccess } from '../model-access.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import {
@@ -44,11 +47,10 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
   };
 }
 
-// SECURITY: api keys / vertex SA JSON are write-only — never returned,
-// only hasKey / hasVertexSa booleans.
+// SECURITY: API keys, Vertex SA JSON, and custom header values are write-only.
 function publicProvider(p: ProviderRow, modelRows?: ModelRow[]) {
-  let extraHeaders: Record<string, string> = {};
-  try { extraHeaders = JSON.parse(p.extraHeaders || '{}'); } catch { /* ignore */ }
+  let extraHeaderKeys: string[] = [];
+  try { extraHeaderKeys = Object.keys(providerExtraHeaders(p)); } catch { /* keep editor usable */ }
   return {
     id: p.id,
     name: p.name,
@@ -60,7 +62,8 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[]) {
     vertexProject: p.vertexProject,
     vertexLocation: p.vertexLocation,
     hasVertexSa: !!p.vertexSaJsonEnc,
-    extraHeaders,
+    hasExtraHeaders: !!p.extraHeadersEnc || extraHeaderKeys.length > 0,
+    extraHeaderKeys,
     // The payload itself is never inlined here — a provider list with several
     // 128 KB data URIs in it would dwarf the rest of the response.
     avatarUrl: p.avatar ? avatarUrl(p.id, p.avatar) : null,
@@ -123,6 +126,9 @@ const providerPatchSchema = z.object({
   vertexLocation: z.string().max(50).nullish(),
   vertexSaJson: z.string().max(20000).nullish(),
   extraHeaders: z.record(z.string(), z.string()).nullish(),
+  // The admin API never returns saved values. The editor sends unchanged key
+  // names here so they can be retained while additions/replacements are merged.
+  preserveExtraHeaderKeys: z.array(z.string().max(200)).max(200).optional(),
   enabled: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
 });
@@ -200,7 +206,8 @@ export async function providerRoutes(app: FastifyInstance) {
       vertexProject: d.vertexProject ? d.vertexProject : null,
       vertexLocation: d.vertexLocation ? d.vertexLocation : null,
       vertexSaJsonEnc: d.vertexSaJson ? encryptSecret(d.vertexSaJson) : null,
-      extraHeaders: JSON.stringify(d.extraHeaders ?? {}),
+      extraHeaders: '{}',
+      extraHeadersEnc: encryptSecretRecord(d.extraHeaders ?? {}),
       createdAt: now(),
     }).run();
     return publicProvider(getProvider(id)!);
@@ -235,7 +242,28 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.useVertex !== undefined) patch.useVertex = d.useVertex ? 1 : 0;
     if (d.vertexProject !== undefined) patch.vertexProject = d.vertexProject || null;
     if (d.vertexLocation !== undefined) patch.vertexLocation = d.vertexLocation || null;
-    if (d.extraHeaders !== undefined) patch.extraHeaders = JSON.stringify(d.extraHeaders ?? {});
+    if (d.extraHeaders !== undefined || d.preserveExtraHeaderKeys !== undefined) {
+      let current: Record<string, string> = Object.create(null) as Record<string, string>;
+      try { current = providerExtraHeaders(row); } catch { /* explicit replacement can repair it */ }
+      const next: Record<string, string> = Object.create(null) as Record<string, string>;
+      // A page loaded before this rollout sends `{ extraHeaders: {} }` on every
+      // edit because it cannot understand write-only header metadata. Treat
+      // that one legacy shape as "keep"; the new editor sends an explicit
+      // preserve list (including [] when the user intentionally clears all).
+      const preserve = d.preserveExtraHeaderKeys
+        ?? (d.extraHeaders && Object.keys(d.extraHeaders).length === 0 ? Object.keys(current) : []);
+      for (const key of preserve) {
+        if (Object.hasOwn(current, key)) next[key] = current[key];
+      }
+      for (const [key, value] of Object.entries(d.extraHeaders ?? {})) {
+        // Empty-valued custom headers were supported before values became
+        // write-only, so keep that behavior for API clients and newly-added
+        // rows in the panel. Unchanged saved rows are carried by `preserve`.
+        if (key) next[key] = value;
+      }
+      patch.extraHeaders = '{}';
+      patch.extraHeadersEnc = encryptSecretRecord(next);
+    }
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.sortOrder !== undefined) patch.sortOrder = d.sortOrder;
 
@@ -305,9 +333,16 @@ export async function providerRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'Provider 不存在' });
     try {
       const list = await getAdapter(row.type).listModels(toRuntimeConfig(row));
-      return { ok: true, models: list.map((m) => ({ id: m.id, name: m.name ?? m.id })) };
+      const secretValues = allConfiguredSecretValues();
+      return {
+        ok: true,
+        models: list.map((m) => ({
+          id: redactSensitiveText(m.id, secretValues),
+          name: redactSensitiveText(m.name ?? m.id, secretValues),
+        })),
+      };
     } catch (err) {
-      return { ok: false, error: errMessage(err) };
+      return { ok: false, error: redactSensitiveText(errMessage(err), allConfiguredSecretValues()) };
     }
   });
 
@@ -320,7 +355,7 @@ export async function providerRoutes(app: FastifyInstance) {
       const list = await getAdapter(row.type).listModels(toRuntimeConfig(row));
       return { ok: true, modelCount: list.length };
     } catch (err) {
-      return { ok: false, error: errMessage(err) };
+      return { ok: false, error: redactSensitiveText(errMessage(err), allConfiguredSecretValues()) };
     }
   });
 

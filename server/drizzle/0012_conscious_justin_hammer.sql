@@ -1,0 +1,1 @@
+ALTER TABLE `providers` ADD `extra_headers_enc` text;

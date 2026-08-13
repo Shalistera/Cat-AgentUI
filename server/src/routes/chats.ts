@@ -27,6 +27,9 @@ import {
   cleanupUnreferencedUploads, tryReserveStorage, uploadIdsFromPartsJson,
   type OwnedMedia, type StorageReservation,
 } from '../storage.js';
+import {
+  allConfiguredSecretValues, redactSensitiveText, StreamingSecretRedactor,
+} from '../secrets.js';
 
 // ---- helpers ----
 
@@ -691,6 +694,9 @@ export async function chatRoutes(app: FastifyInstance) {
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
     const systemPrompt = [project.block, chat.systemPrompt, searchActive ? SEARCH_HINT : null]
       .filter(Boolean).join('\n\n') || undefined;
+    // Take one snapshot for the whole turn. It covers Provider credentials,
+    // custom headers, MCP env/headers, and SECRET_KEY without querying per token.
+    const secretValues = allConfiguredSecretValues();
 
     // --- start streaming ---
     const sse = createSse(reply);
@@ -788,13 +794,17 @@ export async function chatRoutes(app: FastifyInstance) {
             userId: user.id, providerId: provider.id, model: model.modelId,
             prompt: request, size: null, durationMs: elapsed, img: g, source: 'chat',
           });
-          const part: MessagePart = { type: 'image', imageId: saved.id, mime: g.mime };
+          const part: MessagePart = {
+            type: 'image', imageId: saved.id,
+            mime: redactSensitiveText(g.mime, secretValues),
+          };
           parts.push(part);
           sse.send('image', part);
           if (g.text) {
             consumeOutput(g.text.length);
-            appendText(parts, 'text', g.text);
-            sse.send('delta', { text: g.text });
+            const safeText = redactSensitiveText(g.text, secretValues);
+            appendText(parts, 'text', safeText);
+            sse.send('delta', { text: safeText });
           }
         }
         // one response can carry several images with the same usage object — count it once
@@ -815,6 +825,8 @@ export async function chatRoutes(app: FastifyInstance) {
           if (parts.length) messages.push({ role: 'assistant', parts: toAdapterPartsNoImages(parts) });
           const pendingCalls: { id: string; name: string; args: string }[] = [];
           let stopReason = 'stop';
+          const textRedactor = new StreamingSecretRedactor(secretValues);
+          const reasoningRedactor = new StreamingSecretRedactor(secretValues);
 
           resetProviderIdleTimer();
           try {
@@ -833,18 +845,34 @@ export async function chatRoutes(app: FastifyInstance) {
               if (ev.type === 'text') {
                 if (ttft === null) ttft = Date.now() - t0;
                 consumeOutput(ev.text.length);
-                appendText(parts, 'text', ev.text);
-                sse.send('delta', { text: ev.text });
+                const safeText = textRedactor.push(ev.text);
+                if (safeText) {
+                  appendText(parts, 'text', safeText);
+                  sse.send('delta', { text: safeText });
+                }
               } else if (ev.type === 'reasoning') {
                 if (ttft === null) ttft = Date.now() - t0;
                 consumeOutput(ev.text.length);
-                appendText(parts, 'reasoning', ev.text);
-                sse.send('reasoning', { text: ev.text });
+                const safeText = reasoningRedactor.push(ev.text);
+                if (safeText) {
+                  appendText(parts, 'reasoning', safeText);
+                  sse.send('reasoning', { text: safeText });
+                }
               } else if (ev.type === 'tool_call') {
                 consumeOutput(ev.id.length + ev.name.length + ev.args.length);
-                parts.push({ type: 'tool_call', id: ev.id, name: ev.name, args: ev.args, sig: ev.sig });
-                pendingCalls.push(ev);
-                sse.send('tool_call', { id: ev.id, name: ev.name, args: ev.args });
+                const safeCall = {
+                  ...ev,
+                  id: redactSensitiveText(ev.id, secretValues),
+                  name: redactSensitiveText(ev.name, secretValues),
+                  args: redactSensitiveText(ev.args, secretValues),
+                  sig: ev.sig ? redactSensitiveText(ev.sig, secretValues) : undefined,
+                };
+                parts.push({
+                  type: 'tool_call', id: safeCall.id, name: safeCall.name,
+                  args: safeCall.args, sig: safeCall.sig,
+                });
+                pendingCalls.push(safeCall);
+                sse.send('tool_call', { id: safeCall.id, name: safeCall.name, args: safeCall.args });
               } else if (ev.type === 'usage') {
                 usage.prompt += ev.usage.promptTokens ?? 0;
                 usage.completion += ev.usage.completionTokens ?? 0;
@@ -855,6 +883,16 @@ export async function chatRoutes(app: FastifyInstance) {
             }
           } finally {
             clearProviderIdleTimer();
+            const textTail = textRedactor.flush();
+            if (textTail) {
+              appendText(parts, 'text', textTail);
+              sse.send('delta', { text: textTail });
+            }
+            const reasoningTail = reasoningRedactor.flush();
+            if (reasoningTail) {
+              appendText(parts, 'reasoning', reasoningTail);
+              sse.send('reasoning', { text: reasoningTail });
+            }
           }
 
           if (stopReason === 'tool_calls' && pendingCalls.length && iterations < config.maxToolIterations) {
@@ -872,10 +910,11 @@ export async function chatRoutes(app: FastifyInstance) {
                   call.name, call.args, toolCapabilities, user,
                   { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },
                 );
+              const safeResult = redactSensitiveText(result, secretValues);
               const resultLimit = Math.min(100_000, Math.floor(config.maxContextTextChars / 4));
-              const trimmed = result.length > resultLimit
-                ? `${result.slice(0, resultLimit)}\n…(结果已截断)`
-                : result;
+              const trimmed = safeResult.length > resultLimit
+                ? `${safeResult.slice(0, resultLimit)}\n…(结果已截断)`
+                : safeResult;
               consumeOutput(call.name.length + trimmed.length);
               const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: trimmed, isError };
               parts.push(part);
@@ -897,7 +936,7 @@ export async function chatRoutes(app: FastifyInstance) {
         status = 'stopped';
       } else {
         status = 'error';
-        errMsg = e instanceof Error ? e.message : String(e);
+        errMsg = redactSensitiveText(e instanceof Error ? e.message : String(e), secretValues);
         sse.send('error', { message: errMsg });
       }
     }
@@ -960,7 +999,8 @@ export async function chatRoutes(app: FastifyInstance) {
             tUsage.total += ev.usage.totalTokens ?? 0;
           }
         }
-        title = title.trim().replace(/^["'「『]|["'」』]$/g, '').split('\n')[0].slice(0, 60);
+        title = redactSensitiveText(title, secretValues)
+          .trim().replace(/^["'「『]|["'」』]$/g, '').split('\n')[0].slice(0, 60);
         if (title) {
           db.update(schema.chats).set({ title }).where(eq(schema.chats.id, chatId)).run();
           sse.send('title', { title });

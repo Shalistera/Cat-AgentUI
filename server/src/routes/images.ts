@@ -17,6 +17,7 @@ import {
   decodeGeneratedImage, extForMime, getOwnedUploadMedia,
   MIME_BY_EXT, quotaErrorMessage, readMediaBase64, tryReserveStorage,
 } from '../storage.js';
+import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
 
 const generateSchema = z.object({
   modelId: z.string(),
@@ -197,6 +198,7 @@ export async function imageRoutes(app: FastifyInstance) {
       void (async () => {
         const t0 = Date.now();
         const saved: SavedImage[] = [];
+        const secretValues = allConfiguredSecretValues();
         try {
           const generated = await adapter.generateImages!(toRuntimeConfig(provider), {
             model: model.modelId, prompt, size, quality, n: requestedN,
@@ -238,9 +240,10 @@ export async function imageRoutes(app: FastifyInstance) {
           console.log(`[img] job ${job.id} done in ${(durationMs / 1000).toFixed(1)}s, ${saved.length} image(s)`);
         } catch (err) {
           if (saved.length) await rollbackSavedImages(saved);
-          job.error = err instanceof Error && err.name === 'TimeoutError'
+          const rawError = err instanceof Error && err.name === 'TimeoutError'
             ? '图片生成超时(超过 10 分钟)'
             : err instanceof Error ? err.message : String(err);
+          job.error = redactSensitiveText(rawError, secretValues);
           job.status = 'error';
           console.log(`[img] job ${job.id} error after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${job.error}`);
         } finally {

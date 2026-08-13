@@ -2,8 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db, schema, now, getSetting, setSetting } from '../db/index.js';
-import { newId, encryptSecret, decryptSecret } from '../crypto.js';
+import { newId } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
+import {
+  allConfiguredSecretValues, decryptSecretRecord, encryptSecretRecord, redactSensitiveText,
+} from '../secrets.js';
 import { invalidateServer, testServer } from '../mcp/manager.js';
 import {
   accessibleMcpServers, accessUserIds, replaceMcpAccess,
@@ -17,16 +20,11 @@ function parseJson<T>(raw: string | null | undefined, fallback: T): T {
 // SECURITY: env / headers hold credentials (bearer tokens, API keys). They are
 // stored AES-256-GCM encrypted (like provider API keys) and are write-only:
 // responses expose hasEnv/hasHeaders plus key names — never the values.
-function encryptRecord(rec: Record<string, string>): string | null {
-  return Object.keys(rec).length ? encryptSecret(JSON.stringify(rec)) : null;
-}
-
 /** Key names only (values never leave the server). Decryption failure → []. */
 function secretKeys(enc: string | null): string[] {
   if (!enc) return [];
   try {
-    const rec = JSON.parse(decryptSecret(enc)) as Record<string, string>;
-    return Object.keys(rec);
+    return Object.keys(decryptSecretRecord(enc));
   } catch {
     return [];
   }
@@ -72,9 +70,14 @@ export async function mcpRoutes(app: FastifyInstance) {
   app.get('/api/mcp/servers', async (req, reply) => {
     requireAuth(req, reply);
     const searchId = getSearchServerId();
+    const secretValues = allConfiguredSecretValues();
     const rows = accessibleMcpServers(req.user!);
     return rows.map((r) => {
-      const tools = parseJson<{ name: string; description: string }[]>(r.toolsCache, []);
+      const tools = parseJson<{ name: string; description: string }[]>(r.toolsCache, [])
+        .map((tool) => ({
+          name: redactSensitiveText(tool.name, secretValues),
+          description: redactSensitiveText(tool.description, secretValues),
+        }));
       return {
         id: r.id,
         name: r.name,
@@ -93,6 +96,7 @@ export async function mcpRoutes(app: FastifyInstance) {
   app.get('/api/admin/mcp', async (req, reply) => {
     requireAdmin(req, reply);
     const searchId = getSearchServerId();
+    const secretValues = allConfiguredSecretValues();
     const rows = db.select().from(schema.mcpServers).all();
     return rows.map((r) => ({
       id: r.id,
@@ -109,8 +113,12 @@ export async function mcpRoutes(app: FastifyInstance) {
       enabled: Boolean(r.enabled),
       accessMode: r.accessMode,
       lastStatus: r.lastStatus,
-      lastError: r.lastError,
-      toolsCache: parseJson<{ name: string; description: string }[]>(r.toolsCache, []),
+      lastError: r.lastError ? redactSensitiveText(r.lastError, secretValues) : null,
+      toolsCache: parseJson<{ name: string; description: string }[]>(r.toolsCache, [])
+        .map((tool) => ({
+          name: redactSensitiveText(tool.name, secretValues),
+          description: redactSensitiveText(tool.description, secretValues),
+        })),
       allowedUserIds: accessUserIds(r.id),
       createdAt: r.createdAt,
     }));
@@ -131,9 +139,9 @@ export async function mcpRoutes(app: FastifyInstance) {
       transport: d.transport,
       command: d.command ?? null,
       args: JSON.stringify(d.args ?? []),
-      envEnc: encryptRecord(d.env ?? {}),
+      envEnc: encryptSecretRecord(d.env ?? {}),
       url: d.url ?? null,
-      headersEnc: encryptRecord(d.headers ?? {}),
+      headersEnc: encryptSecretRecord(d.headers ?? {}),
       enabled: (d.enabled ?? true) ? 1 : 0,
       accessMode: d.accessMode ?? 'shared',
       createdAt: now(),
@@ -164,9 +172,9 @@ export async function mcpRoutes(app: FastifyInstance) {
     if (d.command !== undefined) patch.command = d.command;
     if (d.args !== undefined) patch.args = JSON.stringify(d.args);
     // Secrets: undefined = keep, empty object = clear, otherwise encrypt and replace.
-    if (d.env !== undefined) patch.envEnc = encryptRecord(d.env);
+    if (d.env !== undefined) patch.envEnc = encryptSecretRecord(d.env);
     if (d.url !== undefined) patch.url = d.url;
-    if (d.headers !== undefined) patch.headersEnc = encryptRecord(d.headers);
+    if (d.headers !== undefined) patch.headersEnc = encryptSecretRecord(d.headers);
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.accessMode !== undefined) patch.accessMode = d.accessMode;
 

@@ -188,7 +188,8 @@ export interface AdminProvider {
   baseUrl: string | null; hasKey: boolean;
   useResponses: boolean; useVertex: boolean;
   vertexProject: string | null; vertexLocation: string | null; hasVertexSa: boolean;
-  extraHeaders: Record<string, string>; enabled: boolean; sortOrder: number;
+  hasExtraHeaders: boolean; extraHeaderKeys: string[];
+  enabled: boolean; sortOrder: number;
   avatarUrl: string | null;
   models: AdminModel[];
 }

@@ -7,7 +7,7 @@ import {
   Badge, Button, EmptyState, Field, Input, Modal, ModalActions, SegmentedControl, Select, Spinner,
   StatusDot, Td, Textarea, Th, Toggle, ToggleRow, confirmDialog, toast,
 } from '../../components/ui';
-import { KeyValueEditor, objectToPairs, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
+import { KeyValueEditor, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
 import { ProviderAvatar } from '../../components/ModelAvatar';
 import type { AdminModel, AdminProvider, AdminUser, ModelAccessMode, ReasoningLevel, ReasoningMode } from '../../types';
 
@@ -39,7 +39,11 @@ function ProviderModal({ provider, onClose, onSaved }: {
   const [vertexProject, setVertexProject] = useState(provider?.vertexProject ?? '');
   const [vertexLocation, setVertexLocation] = useState(provider?.vertexLocation ?? '');
   const [vertexSaJson, setVertexSaJson] = useState('');
-  const [headers, setHeaders] = useState<KVPair[]>(objectToPairs(provider?.extraHeaders));
+  // Saved header values are write-only. Blank values on existing key rows mean
+  // "keep", while typing replaces that key and deleting the row removes it.
+  const [headers, setHeaders] = useState<KVPair[]>(
+    (provider?.extraHeaderKeys ?? []).map((k) => ({ k, v: '' })),
+  );
   const [hasKey, setHasKey] = useState(provider?.hasKey ?? false);
   const [hasVertexSa, setHasVertexSa] = useState(provider?.hasVertexSa ?? false);
   const [busy, setBusy] = useState(false);
@@ -77,8 +81,20 @@ function ProviderModal({ provider, onClose, onSaved }: {
       useVertex: type === 'gemini' ? useVertex : false,
       vertexProject: vertexProject.trim() || null,
       vertexLocation: vertexLocation.trim() || null,
-      extraHeaders: pairsToObject(headers),
     };
+    const existingHeaderKeys = new Set(provider?.extraHeaderKeys ?? []);
+    // A blank existing row means "keep"; a newly-added blank row remains a
+    // real empty-valued header, matching the panel's behavior before values
+    // became write-only.
+    const headerValues = pairsToObject(headers.filter(
+      (p) => p.v.length > 0 || !existingHeaderKeys.has(p.k),
+    ));
+    body.extraHeaders = headerValues;
+    if (isEdit) {
+      body.preserveExtraHeaderKeys = headers
+        .filter((p) => existingHeaderKeys.has(p.k) && p.v.length === 0)
+        .map((p) => p.k);
+    }
     if (apiKey) body.apiKey = apiKey;
     if (vertexSaJson.trim()) {
       // Validate here, with a message that says what's wrong — the server
@@ -196,8 +212,9 @@ function ProviderModal({ provider, onClose, onSaved }: {
           </>
         )}
 
-        <Field label="自定义 Headers">
-          <KeyValueEditor pairs={headers} onChange={setHeaders} keyPlaceholder="Header 名称" valuePlaceholder="Header 值" />
+        <Field label="自定义 Headers" hint={isEdit ? '已保存值不回显;留空保持,填写替换,删除行即移除' : undefined}>
+          <KeyValueEditor pairs={headers} onChange={setHeaders} keyPlaceholder="Header 名称"
+            valuePlaceholder={isEdit ? '留空保持原值' : 'Header 值'} valueType="password" />
         </Field>
 
         <ModalActions>

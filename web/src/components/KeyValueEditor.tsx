@@ -19,8 +19,9 @@ export function pairsToObject(pairs: KVPair[]): Record<string, string> {
   return out;
 }
 
-export function KeyValueEditor({ pairs, onChange, keyPlaceholder = 'Key', valuePlaceholder = 'Value' }: {
+export function KeyValueEditor({ pairs, onChange, keyPlaceholder = 'Key', valuePlaceholder = 'Value', valueType = 'text' }: {
   pairs: KVPair[]; onChange(pairs: KVPair[]): void; keyPlaceholder?: string; valuePlaceholder?: string;
+  valueType?: 'text' | 'password';
 }) {
   return (
     <div className="space-y-2">
@@ -31,6 +32,7 @@ export function KeyValueEditor({ pairs, onChange, keyPlaceholder = 'Key', valueP
             onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))}
           />
           <Input
+            type={valueType} autoComplete={valueType === 'password' ? 'new-password' : undefined}
             placeholder={valuePlaceholder} value={p.v}
             onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))}
           />

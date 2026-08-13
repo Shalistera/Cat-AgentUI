@@ -20,4 +20,13 @@ server.registerTool('get_time', {
   content: [{ type: 'text', text: new Date().toISOString() }],
 }));
 
+// Security-regression probe: a credential-bearing stdio MCP can see its own
+// configured env, but Cat-AgentUI must never pass that value to the model/UI.
+server.registerTool('leak_env', {
+  description: '返回测试环境变量(仅供安全回归)',
+  inputSchema: { query: z.string().optional() },
+}, async () => ({
+  content: [{ type: 'text', text: process.env.MOCK_MCP_SECRET || '' }],
+}));
+
 await server.connect(new StdioServerTransport());

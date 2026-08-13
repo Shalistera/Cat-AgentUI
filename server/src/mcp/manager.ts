@@ -6,7 +6,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
-import { decryptSecret } from '../crypto.js';
+import {
+  allConfiguredSecretValues, decryptSecretRecord, redactSensitiveText, redactSensitiveValue,
+} from '../secrets.js';
 import type { ToolDef } from '../types.js';
 import { canUseMcpServer, type McpAccessUser } from './access.js';
 
@@ -62,14 +64,7 @@ function pickEnv(): Record<string, string> {
  * of buildTransport catch and report it — never crash the process.
  */
 function decryptRecord(enc: string | null, label: string): Record<string, string> {
-  if (!enc) return {};
-  let plain: string;
-  try {
-    plain = decryptSecret(enc);
-  } catch {
-    throw new Error(`无法解密该服务器的${label}(SECRET_KEY 可能已更换),请在管理后台重新填写并保存`);
-  }
-  return parseJson<Record<string, string>>(plain, {});
+  return decryptSecretRecord(enc, `该服务器的${label}`);
 }
 
 function buildTransport(row: ServerRow) {
@@ -217,6 +212,7 @@ export async function getToolsForServers(serverIds: string[], user: McpAccessUse
   const tools: ToolDef[] = [];
   const errors: { serverId: string; name: string; error: string }[] = [];
   const routes = new Map<string, ToolRoute>();
+  const secretValues = allConfiguredSecretValues();
 
   for (const serverId of new Set(serverIds)) {
     const row = getServerRow(serverId);
@@ -236,12 +232,16 @@ export async function getToolsForServers(serverIds: string[], user: McpAccessUse
         if (definitionChars > MAX_TOOL_DEFINITION_CHARS) {
           throw new Error('工具定义总大小超过限制');
         }
-        const nsName = namespacedToolName(row.name, serverId, tool.name, routes);
+        const publicToolName = redactSensitiveText(tool.name, secretValues);
+        const nsName = namespacedToolName(row.name, serverId, publicToolName, routes);
         routes.set(nsName, { serverId, originalName: tool.name });
         tools.push({
           name: nsName,
-          description: tool.description ?? '',
-          parameters: (tool.inputSchema ?? { type: 'object', properties: {} }) as Record<string, unknown>,
+          description: redactSensitiveText(tool.description ?? '', secretValues),
+          parameters: redactSensitiveValue(
+            tool.inputSchema ?? { type: 'object', properties: {} },
+            secretValues,
+          ) as Record<string, unknown>,
         });
       }
     } catch (err) {
@@ -249,7 +249,11 @@ export async function getToolsForServers(serverIds: string[], user: McpAccessUse
       for (const [name, route] of routes) {
         if (route.serverId === serverId) routes.delete(name);
       }
-      errors.push({ serverId, name: row.name, error: errMsg(err) });
+      errors.push({
+        serverId,
+        name: row.name,
+        error: redactSensitiveText(errMsg(err), secretValues),
+      });
       // The connection is likely dead — drop it so the next attempt reconnects.
       await dropScopedConnection(serverId, user.id);
     }
@@ -324,9 +328,13 @@ export async function callTool(
     }
     let result = blocks.join('\n');
     if (result.length >= MAX_TOOL_RESULT_CHARS) result += '\n…(结果已截断)';
+    result = redactSensitiveText(result, allConfiguredSecretValues());
     return { result, isError: Boolean(res?.isError) };
   } catch (err) {
-    return { result: errMsg(err), isError: true };
+    return {
+      result: redactSensitiveText(errMsg(err), allConfiguredSecretValues()),
+      isError: true,
+    };
   }
 }
 
@@ -344,20 +352,22 @@ export async function testServer(serverId: string): Promise<{
   if (!row) return { ok: false, error: 'MCP 服务器不存在' };
 
   try {
+    const secretValues = allConfiguredSecretValues();
     const client = await getClient(serverId, '__admin_test__');
     const listed = await client.listTools(undefined, { timeout: LIST_TIMEOUT_MS });
     if (listed.tools.length > MAX_TOOLS_PER_TURN) {
       throw new Error(`工具数量超过 ${MAX_TOOLS_PER_TURN} 个限制`);
     }
     const tools = listed.tools.map((t) => ({
-      name: t.name.slice(0, 256), description: (t.description ?? '').slice(0, 4000),
+      name: redactSensitiveText(t.name.slice(0, 256), secretValues),
+      description: redactSensitiveText((t.description ?? '').slice(0, 4000), secretValues),
     }));
     db.update(schema.mcpServers)
       .set({ lastStatus: 'ok', lastError: null, toolsCache: JSON.stringify(tools) })
       .where(eq(schema.mcpServers.id, serverId)).run();
     return { ok: true, tools };
   } catch (err) {
-    const error = errMsg(err);
+    const error = redactSensitiveText(errMsg(err), allConfiguredSecretValues());
     db.update(schema.mcpServers)
       .set({ lastStatus: 'error', lastError: error })
       .where(eq(schema.mcpServers.id, serverId)).run();

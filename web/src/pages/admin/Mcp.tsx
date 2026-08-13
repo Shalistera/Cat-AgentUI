@@ -98,7 +98,7 @@ function McpModal({ server, users, onClose, onSaved }: {
                 {isEdit && (server.envKeys?.length ?? 0) > 0 && (
                   <div className="text-[11px] text-tx3">已配置:{server.envKeys.join('、')}(值不回显)</div>
                 )}
-                <KeyValueEditor pairs={envPairs} onChange={setEnvPairs} keyPlaceholder="变量名" valuePlaceholder="值" />
+                <KeyValueEditor pairs={envPairs} onChange={setEnvPairs} keyPlaceholder="变量名" valuePlaceholder="值" valueType="password" />
               </div>
             </Field>
           </>
@@ -112,7 +112,7 @@ function McpModal({ server, users, onClose, onSaved }: {
                 {isEdit && (server.headerKeys?.length ?? 0) > 0 && (
                   <div className="text-[11px] text-tx3">已配置:{server.headerKeys.join('、')}(值不回显)</div>
                 )}
-                <KeyValueEditor pairs={headerPairs} onChange={setHeaderPairs} keyPlaceholder="Header 名称" valuePlaceholder="Header 值" />
+                <KeyValueEditor pairs={headerPairs} onChange={setHeaderPairs} keyPlaceholder="Header 名称" valuePlaceholder="Header 值" valueType="password" />
               </div>
             </Field>
           </>

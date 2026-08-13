@@ -35,7 +35,10 @@ export const providers = sqliteTable('providers', {
   vertexProject: text('vertex_project'),
   vertexLocation: text('vertex_location'),
   vertexSaJsonEnc: text('vertex_sa_json_enc'), // encrypted service account JSON
-  extraHeaders: text('extra_headers').notNull().default('{}'), // JSON
+  // extra_headers is retained only as a one-start compatibility source for
+  // pre-0012 rows. New values live encrypted in extra_headers_enc.
+  extraHeaders: text('extra_headers').notNull().default('{}'),
+  extraHeadersEnc: text('extra_headers_enc'), // encrypted JSON Record<string,string>
   // Optional custom avatar as a data URI. null = fall back to the built-in
   // brand mark for this provider's type. Stored inline rather than on disk so
   // it survives a plain db copy and needs no cleanup path.

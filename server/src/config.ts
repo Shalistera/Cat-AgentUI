@@ -3,6 +3,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+// Runtime-created databases, WAL files, media, and secret files must not inherit
+// a permissive service-manager umask (the previous default produced 0644 DBs).
+process.umask(0o077);
+
 // serverRoot = server/ (works from both src/ via tsx and dist/ after tsc)
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const serverRoot = path.resolve(here, '..');
@@ -40,8 +44,13 @@ const defaultModelOutputTokens = intEnv('DEFAULT_MODEL_OUTPUT_TOKENS', 8_192, 25
 let secretKey = env('SECRET_KEY');
 if (!secretKey) {
   secretKey = crypto.randomBytes(32).toString('base64url');
-  fs.appendFileSync(envPath, `${fs.existsSync(envPath) && fs.readFileSync(envPath, 'utf8').length > 0 ? '\n' : ''}SECRET_KEY=${secretKey}\n`);
+  fs.appendFileSync(
+    envPath,
+    `${fs.existsSync(envPath) && fs.readFileSync(envPath, 'utf8').length > 0 ? '\n' : ''}SECRET_KEY=${secretKey}\n`,
+    { encoding: 'utf8', mode: 0o600 },
+  );
 }
+try { fs.chmodSync(envPath, 0o600); } catch { /* read-only/external secret source */ }
 
 export const config = {
   port: intEnv('PORT', 3000, 1, 65535),
@@ -86,5 +95,7 @@ export const config = {
 };
 
 for (const d of ['', 'uploads', 'images']) {
-  fs.mkdirSync(path.join(config.dataDir, d), { recursive: true });
+  const dir = path.join(config.dataDir, d);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(dir, 0o700); } catch { /* best effort on unusual filesystems */ }
 }

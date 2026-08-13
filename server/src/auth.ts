@@ -38,11 +38,22 @@ export function destroySession(token: string) {
 }
 
 export function setSessionCookie(reply: FastifyReply, token: string) {
+  const forwardedProto = String(reply.request.headers['x-forwarded-proto'] ?? '')
+    .split(',')[0].trim().toLowerCase();
+  const browserUrl = String(
+    reply.request.headers.origin ?? reply.request.headers.referer ?? '',
+  );
+  let browserUsedHttps = false;
+  try { browserUsedHttps = new URL(browserUrl).protocol === 'https:'; } catch { /* absent/malformed */ }
   reply.setCookie(COOKIE_NAME, token, {
     path: '/',
     httpOnly: true,
     sameSite: 'lax',
-    secure: config.cookieSecure,
+    // Automatically retain Secure behind a normal HTTPS reverse proxy even if
+    // COOKIE_SECURE was omitted. Trusting a spoofed header can only make the
+    // attacker's own cookie stricter; it cannot weaken another session.
+    secure: config.cookieSecure || reply.request.protocol === 'https'
+      || forwardedProto === 'https' || browserUsedHttps,
     maxAge: Math.floor(config.sessionTtlMs / 1000),
   });
 }
