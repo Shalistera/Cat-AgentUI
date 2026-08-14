@@ -47,6 +47,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [modelSel, setModelSel] = useState<ModelInfo | null>(null);
+  const [webSearch, setWebSearch] = useState(false);
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
   const [settings, setSettings] = useState<ComposerSettings>(draftFromChat(null));
   const [stick, setStick] = useState(true);
@@ -84,7 +85,7 @@ export default function Chat() {
     abortRef.current?.abort();
     setStreaming(false);
     if (!routeId) {
-      setChat(null); setMessages([]); setMcpSelected([]); setSettings(draftFromChat(null));
+      setChat(null); setMessages([]); setWebSearch(false); setMcpSelected([]); setSettings(draftFromChat(null));
       return;
     }
     let cancelled = false;
@@ -92,6 +93,7 @@ export default function Chat() {
       .then((r) => {
         if (cancelled) return;
         setChat(r.chat); setMessages(r.messages);
+        setWebSearch(r.chat.webSearch);
         setMcpSelected(r.chat.mcpServerIds); setSettings(draftFromChat(r.chat));
         setStick(true);
       })
@@ -103,15 +105,14 @@ export default function Chat() {
     return () => { cancelled = true; };
   }, [routeId, nav]);
 
-  // New chats start with 联网搜索 on (when the admin designated a search server)
-  // unless this user switched it off last time. Loaded chats keep their own
-  // saved selection — this only fills the blank pre-chat state.
+  // New chats start with 联网搜索 on when the selected model has Vertex
+  // native search or an accessible MCP fallback, unless this user switched it
+  // off last time. Loaded chats keep their own saved preference.
   useEffect(() => {
-    if (routeId || chat) return;
-    const search = mcpServers.find((s) => s.isSearch && s.enabled);
-    if (!search || localStorage.getItem(searchPrefKey(user?.id)) === '0') return;
-    setMcpSelected((prev) => (prev.includes(search.id) ? prev : [...prev, search.id]));
-  }, [routeId, chat, mcpServers, user?.id]);
+    if (routeId || chat || localStorage.getItem(searchPrefKey(user?.id)) === '0') return;
+    const fallback = mcpServers.some((s) => s.isSearch && s.enabled);
+    if (modelSel?.nativeSearch || (fallback && modelSel?.tools && !modelSel.imageGen)) setWebSearch(true);
+  }, [routeId, chat, mcpServers, modelSel, user?.id]);
 
   // A payload handed off from the project page's composer: adopt its model /
   // settings / MCP choices, then fire it through the normal send path.
@@ -124,8 +125,11 @@ export default function Chat() {
     chatHandoff.payload = null;
     setModelSel(m);
     setSettings(h.settings);
+    setWebSearch(h.webSearch);
     setMcpSelected(h.mcpSelected);
-    void send(h.text, h.images, { modelId: m.id, settings: h.settings, mcpSelected: h.mcpSelected });
+    void send(h.text, h.images, {
+      modelId: m.id, settings: h.settings, webSearch: h.webSearch, mcpSelected: h.mcpSelected,
+    });
   }, [routeId, modelsLoaded, models, modelSel, streaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // auto scroll
@@ -152,6 +156,14 @@ export default function Chat() {
     }, 600);
   }
 
+  function persistWebSearch(enabled: boolean) {
+    setWebSearch(enabled);
+    const target = chatRef.current;
+    if (!target) return;
+    api.patch(`/api/chats/${target.id}`, { webSearch: enabled })
+      .catch(() => toast('保存联网搜索设置失败', 'err'));
+  }
+
   function persistMcp(ids: string[]) {
     setMcpSelected(ids);
     const target = chatRef.current;
@@ -167,7 +179,12 @@ export default function Chat() {
 
   // Overrides let a handed-off send (project page composer) use its own model /
   // settings without waiting for this page's setState round-trips.
-  interface SendOverrides { modelId?: string; settings?: ComposerSettings; mcpSelected?: string[] }
+  interface SendOverrides {
+    modelId?: string;
+    settings?: ComposerSettings;
+    webSearch?: boolean;
+    mcpSelected?: string[];
+  }
 
   async function ensureChat(o?: SendOverrides): Promise<ChatDetail> {
     if (chatRef.current) return chatRef.current;
@@ -177,9 +194,12 @@ export default function Chat() {
     });
     let created = r.chat;
     const patch = draftToPatch(o?.settings ?? settings);
+    const search = o?.webSearch ?? webSearch;
     const mcp = o?.mcpSelected ?? mcpSelected;
-    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || mcp.length) {
-      const p = await api.patch<{ chat: ChatDetail }>(`/api/chats/${created.id}`, { ...patch, mcpServerIds: mcp });
+    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || search || mcp.length) {
+      const p = await api.patch<{ chat: ChatDetail }>(`/api/chats/${created.id}`, {
+        ...patch, webSearch: search, mcpServerIds: mcp,
+      });
       created = p.chat;
     }
     setChat(created);
@@ -257,6 +277,7 @@ export default function Chat() {
       onReasoning(t) { buf.reasoning += t; },
       onToolCall(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_call', ...d }] })); },
       onToolResult(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_result', ...d }] })); },
+      onGrounding(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
       onImage(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'image', imageId: d.imageId, mime: d.mime }] })); },
       onUsage(d) {
         applyToAssistant((m) => ({
@@ -351,6 +372,8 @@ export default function Chat() {
       disabled={modelsLoaded && models.length === 0}
       model={modelSel}
       onModelChange={selectModel}
+      webSearch={webSearch}
+      onWebSearchChange={persistWebSearch}
       mcpSelected={mcpSelected}
       onMcpChange={persistMcp}
       settings={settings}

@@ -13,7 +13,8 @@ export type MessagePart =
   | { type: 'reasoning'; text: string }
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
-  | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean };
+  | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
+  | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; renderedContent?: string };
 
 export interface Message {
   id: string;
@@ -67,12 +68,13 @@ export interface ChatDetail extends ChatSummary {
   temperature: number | null;
   maxTokens: number | null;
   reasoningEffort: ReasoningEffort | null;
+  webSearch: boolean;
   mcpServerIds: string[];
 }
 
 export interface ModelInfo {
   id: string; modelId: string; displayName: string;
-  vision: boolean; tools: boolean; imageGen: boolean; isDefault: boolean;
+  vision: boolean; tools: boolean; imageGen: boolean; nativeSearch: boolean; isDefault: boolean;
   providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini';
   /** Content-addressed URL of the provider's custom avatar; null = built-in mark. */
   providerAvatarUrl: string | null;
@@ -228,6 +230,7 @@ export interface StreamHandlers {
   onReasoning?(text: string): void;
   onToolCall?(d: { id: string; name: string; args: string }): void;
   onToolResult?(d: { toolCallId: string; name: string; result: string; isError?: boolean }): void;
+  onGrounding?(d: Extract<MessagePart, { type: 'grounding' }>): void;
   onImage?(d: { imageId: string; mime?: string }): void;
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;
   onNotice?(message: string): void;

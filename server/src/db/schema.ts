@@ -121,6 +121,9 @@ export const chats = sqliteTable('chats', {
   // translate it per vendor (effort name vs. thinking token budget), and a level
   // no longer on the ladder is dropped rather than sent.
   reasoningEffort: text('reasoning_effort'),
+  // Provider-neutral user intent. Vertex Gemini fulfills it with the native
+  // googleSearch tool; other providers can fall back to the designated MCP.
+  webSearch: integer('web_search').notNull().default(0),
   mcpServerIds: text('mcp_server_ids').notNull().default('[]'), // JSON string[]
   pinned: integer('pinned').notNull().default(0),
   createdAt: integer('created_at').notNull(),

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { GoogleAuth } from 'google-auth-library';
 import type {
-  AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage,
+  AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, GroundingInfo,
   ImageGenRequest, ProviderRuntimeConfig, UsageInfo,
 } from '../types.js';
 import { sseMessages, readErrorBody, readJsonLimited } from './sse.js';
@@ -144,6 +144,17 @@ function cleanSchema(schema: any): any {
   return out;
 }
 
+/** Gemini 1.5 used the deprecated googleSearchRetrieval shape. Cat-AgentUI's
+ * native integration intentionally targets the current googleSearch tool used
+ * by currently supported Gemini 2.5 and newer Vertex models. */
+export function supportsVertexGoogleSearch(model: string): boolean {
+  const match = /^gemini-(\d+)(?:\.(\d+))?/i.exec(model.trim());
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2] ?? 0);
+  return major > 2 || (major === 2 && minor >= 5);
+}
+
 function buildChatBody(req: ChatRequest): any {
   const body: any = { contents: toContents(req.messages) };
   if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
@@ -159,7 +170,9 @@ function buildChatBody(req: ChatRequest): any {
     generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: budget > 0 };
   }
   if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
-  if (req.tools?.length) {
+  if (req.webSearch) {
+    body.tools = [{ googleSearch: {} }];
+  } else if (req.tools?.length) {
     body.tools = [{
       functionDeclarations: req.tools.map((t) => ({
         name: t.name, description: t.description, parameters: cleanSchema(t.parameters),
@@ -167,6 +180,27 @@ function buildChatBody(req: ChatRequest): any {
     }];
   }
   return body;
+}
+
+function groundingOf(metadata: any): GroundingInfo | null {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const queries = Array.isArray(metadata.webSearchQueries)
+    ? metadata.webSearchQueries.filter((q: unknown): q is string => typeof q === 'string' && !!q.trim())
+    : [];
+  const sources = Array.isArray(metadata.groundingChunks)
+    ? metadata.groundingChunks.flatMap((chunk: any) => {
+      const web = chunk?.web;
+      return typeof web?.uri === 'string' && web.uri
+        ? [{ uri: web.uri, title: typeof web.title === 'string' && web.title ? web.title : web.uri }]
+        : [];
+    })
+    : [];
+  const renderedContent = typeof metadata.searchEntryPoint?.renderedContent === 'string'
+    ? metadata.searchEntryPoint.renderedContent
+    : undefined;
+  return queries.length || sources.length || renderedContent
+    ? { queries, sources, ...(renderedContent ? { renderedContent } : {}) }
+    : null;
 }
 
 function toUsage(u: any): UsageInfo {
@@ -189,6 +223,7 @@ export const geminiAdapter: ChatAdapter = {
     let finishReason: string | null = null;
     let sawToolCall = false;
     let callCounter = 0;
+    let grounding: GroundingInfo | null = null;
 
     for await (const msg of sseMessages(res)) {
       let chunk: any;
@@ -196,6 +231,7 @@ export const geminiAdapter: ChatAdapter = {
       if (chunk.usageMetadata) usage = chunk.usageMetadata;
       const cand = chunk.candidates?.[0];
       if (!cand) continue;
+      grounding = groundingOf(cand.groundingMetadata) ?? grounding;
       for (const part of cand.content?.parts ?? []) {
         if (part.thought === true && part.text) {
           yield { type: 'reasoning', text: part.text };
@@ -215,6 +251,7 @@ export const geminiAdapter: ChatAdapter = {
       if (cand.finishReason) finishReason = cand.finishReason;
     }
 
+    if (grounding) yield { type: 'grounding', grounding };
     if (usage) yield { type: 'usage', usage: toUsage(usage) };
     const reason = sawToolCall ? 'tool_calls'
       : finishReason === 'MAX_TOKENS' ? 'length'

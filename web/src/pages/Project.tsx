@@ -52,6 +52,7 @@ export default function ProjectPage() {
   const loadMcp = useMcp((s) => s.load);
   const mcpServers = useMcp((s) => s.servers);
   const [modelSel, setModelSel] = useState<ModelInfo | null>(null);
+  const [webSearch, setWebSearch] = useState(false);
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
   const [settings, setSettings] = useState<ComposerSettings>({ systemPrompt: '', reasoningEffort: 'off' });
 
@@ -74,10 +75,10 @@ export default function ProjectPage() {
   }, [modelsLoaded, models]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const search = mcpServers.find((s) => s.isSearch && s.enabled);
-    if (!search || localStorage.getItem(searchPrefKey(user?.id)) === '0') return;
-    setMcpSelected((prev) => (prev.includes(search.id) ? prev : [...prev, search.id]));
-  }, [mcpServers, user?.id]);
+    if (localStorage.getItem(searchPrefKey(user?.id)) === '0') return;
+    const fallback = mcpServers.some((s) => s.isSearch && s.enabled);
+    if (modelSel?.nativeSearch || (fallback && modelSel?.tools && !modelSel.imageGen)) setWebSearch(true);
+  }, [mcpServers, modelSel, user?.id]);
 
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -96,7 +97,9 @@ export default function ProjectPage() {
 
   function startChat(text: string, images: PendingImage[]) {
     if (!project) return;
-    chatHandoff.payload = { text, images, modelId: modelSel?.id ?? null, settings, mcpSelected };
+    chatHandoff.payload = {
+      text, images, modelId: modelSel?.id ?? null, settings, webSearch, mcpSelected,
+    };
     nav(`/?project=${project.id}`);
   }
 
@@ -274,6 +277,8 @@ export default function ProjectPage() {
               disabled={modelsLoaded && models.length === 0}
               model={modelSel}
               onModelChange={(m) => { setModelSel(m); localStorage.setItem(LAST_MODEL_KEY, m.id); }}
+              webSearch={webSearch}
+              onWebSearchChange={setWebSearch}
               mcpSelected={mcpSelected}
               onMcpChange={setMcpSelected}
               settings={settings}

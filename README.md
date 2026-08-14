@@ -16,6 +16,7 @@
 - **每条回复的透明统计**:耗时、首字延迟、输入/输出 tokens、tokens/s
 - **绘图工坊**:OpenAI `gpt-image-1` 与 Google Nano Banana(`gemini-*-image`)系列,支持参考图(图生图/编辑)、画廊管理
 - **对话内直接出图**:在对话里直接选绘图模型即可作画,自动带上当前对话的上下文与图片,可以接着说「换成蓝色」「把背景改成雨天」;生成的图片同样进入画廊
+- **联网搜索**:Vertex AI 上的 Gemini 2.5/3.x 可直接使用原生 Google Search Grounding,无需 Brave MCP;其他 Provider 仍可回退到管理员指定的搜索 MCP
 - **MCP 工具**:stdio / Streamable HTTP / SSE 三种传输,支持全员共享或指定用户访问,对话中按需启用,工具调用过程完整可见
 - **多用户**:首个注册用户自动成为管理员;管理端可建用户、停用、重置密码;可关闭开放注册
 - **用量看板**:管理员可查看每用户/每模型/每日的 tokens、请求数与绘图量;用户可见自己的用量
@@ -83,6 +84,20 @@ npx pm2 save
 | `PASSWORD_CONCURRENCY` | scrypt 同时执行数 | `2` |
 | `PASSWORD_QUEUE_MAX` | scrypt 等待队列长度 | `32` |
 | `MAX_TOOL_ITERATIONS` | 单次回复最多 MCP 工具轮数 | `10` |
+
+### Vertex Gemini 原生联网搜索
+
+将 Gemini Provider 配置为 **Vertex AI**,并启用 Gemini 2.5/3.x 文本模型的“工具调用”后,
+聊天输入框会直接显示“联网”开关,不需要安装或指定 Brave MCP。后端在 Vertex
+`generateContent` 请求中发送 `tools: [{ googleSearch: {} }]`,并保存/展示返回的来源和
+Google Search Suggestions。非 Vertex 模型仍可使用 **管理后台 → MCP** 中指定的搜索服务器
+作为回退。
+
+Vertex API 目前不允许在同一个 `generateContent` 请求中混用 `googleSearch` 与函数调用工具。
+因此当同一轮还启用了 MCP 工具或大型项目资料的检索工具时,Cat-AgentUI 会保留这些工具、跳过
+本轮原生搜索并给出提示,不会静默丢弃工具。支持模型、配额、计费与展示条款以
+[Google Cloud 官方说明](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search)
+为准。
 
 MCP 默认对所有登录用户共享,适合联网搜索等基础工具。文件、命令执行或内部系统等
 敏感 MCP 应在 **管理后台 → MCP → 编辑服务器 → 访问范围** 中改为“仅指定普通用户”;

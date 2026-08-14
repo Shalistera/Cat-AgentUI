@@ -1,0 +1,1 @@
+ALTER TABLE `chats` ADD `web_search` integer DEFAULT 0 NOT NULL;

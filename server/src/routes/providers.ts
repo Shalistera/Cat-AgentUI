@@ -10,6 +10,7 @@ import {
 } from '../secrets.js';
 import { accessUserIds, accessibleOnly, replaceModelAccess } from '../model-access.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
+import { supportsVertexGoogleSearch } from '../providers/gemini.js';
 import {
   MAX_LEVELS, defaultLevels, effectiveLevels, normalizeLevels, parseLevels, parseMode,
 } from '../reasoning.js';
@@ -465,6 +466,7 @@ export async function providerRoutes(app: FastifyInstance) {
       providerId: schema.providers.id,
       providerName: schema.providers.name,
       providerType: schema.providers.type,
+      providerUseVertex: schema.providers.useVertex,
       providerAvatar: schema.providers.avatar,
     }).from(schema.models)
       .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
@@ -478,6 +480,8 @@ export async function providerRoutes(app: FastifyInstance) {
       vision: !!r.vision,
       tools: !!r.tools,
       imageGen: !!r.imageGen,
+      nativeSearch: !!r.tools && !r.imageGen && r.providerType === 'gemini'
+        && !!r.providerUseVertex && supportsVertexGoogleSearch(r.modelId),
       // Only the resolved ladder — the chat UI has no use for how it was decided.
       reasoningLevels: effectiveLevels(
         r.reasoningMode, r.reasoningLevels, r.providerType as ProviderType, r.modelId,

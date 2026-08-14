@@ -10,7 +10,11 @@ export type MessagePart =
   // sig: opaque per-call signature some vendors (Gemini 3 thought_signature)
   // require to be echoed verbatim when the call is replayed as history.
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string } // args = JSON string
-  | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean };
+  | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
+  // Google Search grounding is executed inside Vertex AI rather than through
+  // our function/MCP loop. Keep its attribution metadata beside the answer so
+  // saved chats can still render sources and the required Search Suggestions.
+  | { type: 'grounding'; queries: string[]; sources: GroundingSource[]; renderedContent?: string };
 
 export type Role = 'user' | 'assistant';
 
@@ -41,6 +45,18 @@ export interface ToolDef {
   name: string;
   description: string;
   parameters: Record<string, unknown>; // JSON Schema
+}
+
+export interface GroundingSource {
+  uri: string;
+  title: string;
+}
+
+export interface GroundingInfo {
+  queries: string[];
+  sources: GroundingSource[];
+  /** Google-provided HTML/CSS for Search Suggestions. Render in a sandbox. */
+  renderedContent?: string;
 }
 
 // Normalized message fed into adapters. Attachments already resolved to base64.
@@ -75,6 +91,8 @@ export interface ChatRequest {
   system?: string;
   messages: AdapterMessage[];
   tools?: ToolDef[];
+  /** Enable the provider-native web-search tool for this request. */
+  webSearch?: boolean;
   temperature?: number;
   maxTokens?: number;
   hardMaxTokens?: number;
@@ -86,6 +104,7 @@ export type AdapterEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
+  | { type: 'grounding'; grounding: GroundingInfo }
   | { type: 'usage'; usage: UsageInfo }
   | { type: 'stop'; reason: 'stop' | 'tool_calls' | 'length' | 'other' };
 

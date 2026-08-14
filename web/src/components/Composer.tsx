@@ -40,6 +40,8 @@ interface ComposerProps {
   disabled?: boolean;
   model: ModelInfo | null;
   onModelChange(m: ModelInfo): void;
+  webSearch: boolean;
+  onWebSearchChange(enabled: boolean): void;
   mcpSelected: string[];
   onMcpChange(ids: string[]): void;
   settings: ComposerSettings;
@@ -67,20 +69,20 @@ export function Composer(props: ComposerProps) {
   const user = useAuth((s) => s.user);
   const dark = useUi((s) => s.theme) === 'dark';
   const mcpServers = useMcp((s) => s.servers).filter((s) => s.enabled);
-  // The search server gets its own toggle; the generic tools menu holds the rest.
+  // Vertex Gemini exposes Google Search natively. The designated search MCP
+  // remains a fallback for other providers; both share one provider-neutral
+  // chat preference and one composer toggle.
   const searchServer = mcpServers.find((s) => s.isSearch) ?? null;
   const toolServers = mcpServers.filter((s) => !s.isSearch);
-  const searchOn = !!searchServer && props.mcpSelected.includes(searchServer.id);
+  const searchAvailable = !!model?.nativeSearch || (!!searchServer && !!model?.tools && !model.imageGen);
+  const searchOn = props.webSearch;
   const toolCount = props.mcpSelected.filter((id) => id !== searchServer?.id).length;
 
   function toggleSearch() {
-    if (!searchServer) return;
-    const next = searchOn
-      ? props.mcpSelected.filter((x) => x !== searchServer.id)
-      : [...props.mcpSelected, searchServer.id];
+    if (!searchAvailable) return;
     // Remembered per user so new chats keep the last choice.
     try { localStorage.setItem(searchPrefKey(user?.id), searchOn ? '0' : '1'); } catch { /* ignore */ }
-    props.onMcpChange(next);
+    props.onWebSearchChange(!searchOn);
   }
 
   useEffect(() => {
@@ -166,6 +168,7 @@ export function Composer(props: ComposerProps) {
       m.imageGen ? '图像生成' : '对话',
       m.vision ? '视觉理解' : '',
       m.tools ? '工具调用' : '',
+      m.nativeSearch ? 'Vertex Google 搜索' : '',
       m.reasoningLevels.length ? '可调推理强度' : '',
     ].filter(Boolean).join(' · ');
     return `${m.displayName}\n模型 ID：${m.modelId}\n服务商：${m.providerName}\n能力：${capabilities}`;
@@ -265,12 +268,14 @@ export function Composer(props: ComposerProps) {
             <Plus size={15} />
           </button>
 
-          {searchServer && model?.tools && !imageMode && (
+          {searchAvailable && !imageMode && (
             <button
               aria-pressed={searchOn}
               className={`${toolBtn} ${searchOn ? 'border-acc/40 bg-acc/10 text-acc hover:border-acc/40 hover:bg-acc/10 hover:text-acc' : ''}`}
               title={searchOn
-                ? `联网搜索已开启(${searchServer.name}):模型会在需要时自行搜索,点击关闭`
+                ? model?.nativeSearch
+                  ? '联网搜索已开启(Vertex AI 原生 Google Search):模型会按需搜索;与其他工具冲突时本轮优先其他工具'
+                  : `联网搜索已开启(${searchServer?.name ?? 'MCP'}):模型会在需要时自行搜索,点击关闭`
                 : '开启联网搜索:模型将在需要时自行决定是否搜索'}
               onClick={toggleSearch}
             >

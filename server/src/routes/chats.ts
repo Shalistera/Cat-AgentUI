@@ -6,6 +6,7 @@ import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
+import { supportsVertexGoogleSearch } from '../providers/gemini.js';
 import { getToolsForServers, callTool, type McpCapabilities } from '../mcp/manager.js';
 import { validateMcpSelection } from '../mcp/access.js';
 import { getSearchServerId } from './mcp.js';
@@ -17,7 +18,7 @@ import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
 import type {
-  AdapterMessage, AdapterMessagePart, MessagePart, ProviderType, ReasoningRequest, ToolDef,
+  AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, ToolDef,
 } from '../types.js';
 import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
@@ -116,6 +117,36 @@ function toAdapterPartsNoImages(parts: MessagePart[]): AdapterMessagePart[] {
     // reasoning parts are never replayed to providers
   }
   return out;
+}
+
+const MAX_GROUNDING_QUERIES = 20;
+const MAX_GROUNDING_SOURCES = 30;
+const MAX_GROUNDING_HTML_CHARS = 100_000;
+
+function safeGroundingPart(
+  grounding: GroundingInfo, secretValues: string[],
+): Extract<MessagePart, { type: 'grounding' }> | null {
+  const queries = [...new Set(grounding.queries)]
+    .map((q) => redactSensitiveText(q.trim(), secretValues).slice(0, 500))
+    .filter(Boolean).slice(0, MAX_GROUNDING_QUERIES);
+  const seenUris = new Set<string>();
+  const sources = grounding.sources.flatMap((source) => {
+    if (seenUris.size >= MAX_GROUNDING_SOURCES) return [];
+    let uri: URL;
+    try { uri = new URL(source.uri); } catch { return []; }
+    if (!['http:', 'https:'].includes(uri.protocol) || uri.username || uri.password) return [];
+    const href = redactSensitiveText(uri.toString(), secretValues).slice(0, 4000);
+    if (seenUris.has(href)) return [];
+    seenUris.add(href);
+    const title = redactSensitiveText(source.title.trim(), secretValues).slice(0, 500) || href;
+    return [{ uri: href, title }];
+  });
+  const renderedContent = grounding.renderedContent
+    ? redactSensitiveText(grounding.renderedContent, secretValues).slice(0, MAX_GROUNDING_HTML_CHARS)
+    : undefined;
+  return queries.length || sources.length || renderedContent
+    ? { type: 'grounding', queries, sources, ...(renderedContent ? { renderedContent } : {}) }
+    : null;
 }
 
 class InputBudgetError extends Error {
@@ -424,7 +455,7 @@ export async function chatRoutes(app: FastifyInstance) {
       createdAt: t, updatedAt: t,
     }).run();
     const c = db.select().from(schema.chats).where(eq(schema.chats.id, id)).get()!;
-    return { chat: { ...chatSummary(c), systemPrompt: c.systemPrompt, temperature: c.temperature, maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort, mcpServerIds: [] } };
+    return { chat: { ...chatSummary(c), systemPrompt: c.systemPrompt, temperature: c.temperature, maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort, webSearch: false, mcpServerIds: [] } };
   });
 
   app.get('/api/chats/:id', async (req, reply) => {
@@ -439,12 +470,17 @@ export async function chatRoutes(app: FastifyInstance) {
       .orderBy(asc(schema.messages.seq), asc(schema.messages.createdAt)).all();
     let savedMcpServerIds: string[] = [];
     try { savedMcpServerIds = JSON.parse(c.mcpServerIds); } catch { /* ignore */ }
-    const mcpServerIds = validateMcpSelection(req.user!, savedMcpServerIds).allowed;
+    const searchServerId = getSearchServerId();
+    const legacySearch = !!searchServerId && savedMcpServerIds.includes(searchServerId);
+    const mcpServerIds = validateMcpSelection(
+      req.user!, savedMcpServerIds.filter((serverId) => serverId !== searchServerId),
+    ).allowed;
     return {
       chat: {
         ...chatSummary(c),
         systemPrompt: c.systemPrompt, temperature: c.temperature,
-        maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort, mcpServerIds,
+        maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort,
+        webSearch: !!c.webSearch || legacySearch, mcpServerIds,
       },
       messages: msgs.map(messageDto),
     };
@@ -459,6 +495,7 @@ export async function chatRoutes(app: FastifyInstance) {
       temperature: z.number().min(0).max(2).nullish(),
       maxTokens: z.number().int().min(1).max(config.maxModelOutputTokens).nullish(),
       reasoningEffort: z.string().max(32).nullish(),
+      webSearch: z.boolean().optional(),
       mcpServerIds: z.array(z.string().max(64)).max(20).optional(),
       pinned: z.boolean().optional(),
       modelId: z.string().max(64).nullish(),
@@ -475,12 +512,23 @@ export async function chatRoutes(app: FastifyInstance) {
     if (d.temperature !== undefined) patch.temperature = d.temperature;
     if (d.maxTokens !== undefined) patch.maxTokens = d.maxTokens;
     if (d.reasoningEffort !== undefined) patch.reasoningEffort = d.reasoningEffort;
+    const searchServerId = getSearchServerId();
+    if (d.webSearch !== undefined) patch.webSearch = d.webSearch ? 1 : 0;
     if (d.mcpServerIds !== undefined) {
-      const access = validateMcpSelection(req.user!, d.mcpServerIds);
+      // Search intent is now provider-neutral and stored separately. Never let
+      // the designated fallback leak back into the generic tool selection.
+      const requested = d.mcpServerIds.filter((serverId) => serverId !== searchServerId);
+      const access = validateMcpSelection(req.user!, requested);
       if (access.denied.length) {
         return reply.code(403).send({ error: '所选 MCP 服务器不存在、已禁用或未授权' });
       }
       patch.mcpServerIds = JSON.stringify(access.allowed);
+    } else if (d.webSearch !== undefined && searchServerId) {
+      // Best-effort legacy cleanup only. Do not make changing the search toggle
+      // fail because an unrelated, previously saved MCP grant was revoked.
+      let saved: string[] = [];
+      try { saved = JSON.parse(c.mcpServerIds); } catch { /* ignore */ }
+      patch.mcpServerIds = JSON.stringify(saved.filter((serverId) => serverId !== searchServerId));
     }
     if (d.pinned !== undefined) patch.pinned = d.pinned ? 1 : 0;
     if (d.modelId !== undefined) patch.modelId = d.modelId;
@@ -495,7 +543,11 @@ export async function chatRoutes(app: FastifyInstance) {
     let savedMcpServerIds: string[] = [];
     try { savedMcpServerIds = JSON.parse(updated.mcpServerIds); } catch { /* ignore */ }
     const mcpServerIds = validateMcpSelection(req.user!, savedMcpServerIds).allowed;
-    return { chat: { ...chatSummary(updated), systemPrompt: updated.systemPrompt, temperature: updated.temperature, maxTokens: updated.maxTokens, reasoningEffort: updated.reasoningEffort, mcpServerIds } };
+    return { chat: {
+      ...chatSummary(updated), systemPrompt: updated.systemPrompt, temperature: updated.temperature,
+      maxTokens: updated.maxTokens, reasoningEffort: updated.reasoningEffort,
+      webSearch: !!updated.webSearch, mcpServerIds,
+    } };
   });
 
   app.delete('/api/chats/:id', async (req, reply) => {
@@ -665,10 +717,24 @@ export async function chatRoutes(app: FastifyInstance) {
     applyHistoryMutation();
     if (removedUploadIds.length) await cleanupUnreferencedUploads(user.id, removedUploadIds);
 
-    // MCP tools
+    // Search is a provider-neutral chat preference. Vertex Gemini 2.5+ uses
+    // googleSearch directly; other models can still fall back to the one
+    // admin-designated search MCP. Legacy chats may carry that MCP id instead
+    // of the new web_search bit, so treat it as the same intent.
     let savedMcpServerIds: string[] = [];
     try { savedMcpServerIds = JSON.parse(chat.mcpServerIds); } catch { /* ignore */ }
-    const mcpAccess = validateMcpSelection(user, savedMcpServerIds);
+    const searchServerId = getSearchServerId();
+    const webSearchRequested = !!chat.webSearch
+      || (!!searchServerId && savedMcpServerIds.includes(searchServerId));
+    const nativeSearchCapable = webSearchRequested && !!model.tools && !model.imageGen
+      && provider.type === 'gemini' && !!provider.useVertex
+      && supportsVertexGoogleSearch(model.modelId);
+    const requestedMcpServerIds = savedMcpServerIds.filter((id) => id !== searchServerId);
+    if (webSearchRequested && !nativeSearchCapable && searchServerId) {
+      requestedMcpServerIds.push(searchServerId);
+    }
+
+    const mcpAccess = validateMcpSelection(user, requestedMcpServerIds);
     const mcpServerIds = mcpAccess.allowed;
     let toolDefs: ToolDef[] | undefined;
     let toolErrors: { serverId: string; name: string; error: string }[] = [];
@@ -679,11 +745,9 @@ export async function chatRoutes(app: FastifyInstance) {
       toolErrors = r.errors;
       toolCapabilities = r.capabilities;
     }
+    const mcpSearchActive = webSearchRequested && !nativeSearchCapable && !!searchServerId
+      && [...toolCapabilities.routes.values()].some((route) => route.serverId === searchServerId);
 
-    // When the designated search server actually contributed tools, teach the
-    // model to search on demand instead of on every message.
-    const searchServerId = getSearchServerId();
-    const searchActive = !!toolDefs && !!searchServerId && mcpServerIds.includes(searchServerId);
     // Project knowledge leads the prompt: it is the stable, cacheable prefix
     // (per-chat systemPrompt varies more often than the project block does).
     // Small corpora ride along whole; big ones become a manifest plus the
@@ -692,6 +756,12 @@ export async function chatRoutes(app: FastifyInstance) {
       ? buildProjectPrompt(chat.projectId, user.id, !!model.tools)
       : { block: null, tools: null };
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
+    // Vertex currently rejects googleSearch + functionDeclarations in one
+    // generateContent request. Preserve explicit MCP/project tools and disable
+    // native search for this turn rather than silently dropping those tools.
+    const nativeSearchBlockedByTools = nativeSearchCapable && !!toolDefs?.length;
+    const nativeSearchActive = nativeSearchCapable && !nativeSearchBlockedByTools;
+    const searchActive = nativeSearchActive || mcpSearchActive;
     const systemPrompt = [project.block, chat.systemPrompt, searchActive ? SEARCH_HINT : null]
       .filter(Boolean).join('\n\n') || undefined;
     // Take one snapshot for the whole turn. It covers Provider credentials,
@@ -721,6 +791,9 @@ export async function chatRoutes(app: FastifyInstance) {
     if (downgradeNotice) sse.send('notice', { message: downgradeNotice });
     if (mcpAccess.denied.length) {
       sse.send('notice', { message: '部分 MCP 服务器已被禁用或撤销授权,本次不会调用' });
+    }
+    if (nativeSearchBlockedByTools) {
+      sse.send('notice', { message: 'Vertex Google 搜索暂不能与 MCP/项目检索工具在同一次请求中组合,本轮保留其他工具并跳过联网搜索' });
     }
     for (const te of toolErrors) sse.send('notice', { message: `MCP 服务器「${te.name}」连接失败: ${te.error}` });
 
@@ -835,6 +908,7 @@ export async function chatRoutes(app: FastifyInstance) {
               system: systemPrompt,
               messages,
               tools: toolDefs,
+              webSearch: nativeSearchActive,
               temperature: chat.temperature ?? undefined,
               maxTokens: Math.min(chat.maxTokens ?? config.defaultModelOutputTokens, config.maxModelOutputTokens),
               hardMaxTokens: config.maxModelOutputTokens,
@@ -873,6 +947,12 @@ export async function chatRoutes(app: FastifyInstance) {
                 });
                 pendingCalls.push(safeCall);
                 sse.send('tool_call', { id: safeCall.id, name: safeCall.name, args: safeCall.args });
+              } else if (ev.type === 'grounding') {
+                const grounding = safeGroundingPart(ev.grounding, secretValues);
+                if (grounding) {
+                  parts.push(grounding);
+                  sse.send('grounding', grounding);
+                }
               } else if (ev.type === 'usage') {
                 usage.prompt += ev.usage.promptTokens ?? 0;
                 usage.completion += ev.usage.completionTokens ?? 0;

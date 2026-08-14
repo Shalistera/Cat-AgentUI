@@ -158,6 +158,59 @@ function ToolRun({ calls, results, organizing }: {
   );
 }
 
+type GroundingPart = Extract<MessagePart, { type: 'grounding' }>;
+
+function sourceHost(uri: string): string {
+  try { return new URL(uri).hostname.replace(/^www\./, ''); } catch { return uri; }
+}
+
+function GroundingBlock({ part }: { part: GroundingPart }) {
+  const [open, setOpen] = useState(false);
+  const count = part.sources.length;
+  return (
+    <div className="my-2.5">
+      {/* Vertex returns Google's compliant Search Suggestions markup. Keep it
+          isolated from our origin while preserving its exact HTML/CSS. */}
+      {part.renderedContent && (
+        <iframe
+          title="Google Search Suggestions"
+          srcDoc={part.renderedContent}
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
+          referrerPolicy="no-referrer"
+          className="mb-2 h-20 w-full overflow-hidden border-0 bg-transparent"
+        />
+      )}
+      {(count > 0 || part.queries.length > 0) && (
+        <Disclosure
+          open={open}
+          onToggle={() => setOpen(!open)}
+          icon={<Globe size={13} className="shrink-0 text-tx3" />}
+          label={<span className="font-medium text-tx2">Google 搜索{count ? ` · ${count} 个来源` : ''}</span>}
+        >
+          <div className="border-t border-line bg-bg1 px-3.5 py-2.5">
+            {part.queries.length > 0 && (
+              <p className="mb-2 break-words text-[11px] leading-relaxed text-tx3">
+                搜索：{part.queries.join(' · ')}
+              </p>
+            )}
+            {count > 0 && (
+              <div className="space-y-1.5">
+                {part.sources.map((source, i) => (
+                  <a key={`${source.uri}-${i}`} href={source.uri} target="_blank" rel="noreferrer"
+                    className="block rounded-md px-2 py-1.5 transition-colors hover:bg-bg2">
+                    <span className="block truncate text-xs font-medium text-tx hover:text-acc">{source.title}</span>
+                    <span className="mt-0.5 block truncate text-[10px] text-tx3">{sourceHost(source.uri)}</span>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        </Disclosure>
+      )}
+    </div>
+  );
+}
+
 function partsToPlainText(parts: MessagePart[]): string {
   return parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 }
@@ -270,6 +323,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             organizing={isStreaming && trailing && allDone} />,
         );
       }
+    } else if (p.type === 'grounding') {
+      rendered.push(<GroundingBlock key={i} part={p} />);
     } else if (p.type === 'image') {
       const src = partSrc(p);
       if (src) {
