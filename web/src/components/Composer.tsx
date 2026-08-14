@@ -268,7 +268,9 @@ export function Composer(props: ComposerProps) {
           {searchAvailable && !imageMode && (
             <button
               aria-pressed={searchOn}
-              className={`${toolBtn} ${searchOn ? 'border-acc/40 bg-acc/10 text-acc hover:border-acc/40 hover:bg-acc/10 hover:text-acc' : ''}`}
+              /* On-state is a solid accs fill: the old 10% tint was routinely
+                 read as "off" — users could not tell which state they were in. */
+              className={`${toolBtn} ${searchOn ? 'border-accs bg-accs text-accfg shadow-xs hover:border-accs hover:bg-accs hover:text-accfg hover:opacity-90' : ''}`}
               title={searchOn
                 ? model?.nativeSearch
                   ? '联网搜索已开启(Vertex AI 原生 Google Search):模型会按需搜索;与其他工具冲突时本轮优先其他工具'
