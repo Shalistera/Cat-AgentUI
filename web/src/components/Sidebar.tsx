@@ -3,21 +3,36 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon, Presentation,
   ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose, MoreHorizontal,
-  FolderClosed, Plus,
+  FolderClosed, FolderOutput, Plus, ChevronRight,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { api } from '../api';
 import { CatWordmark } from './Logo';
-import { Button, Field, Input, Modal, ModalActions, Popover, confirmDialog, toast } from './ui';
-import type { ChatSummary, Project } from '../types';
+import { Button, Input, Modal, ModalActions, Popover, confirmDialog, toast } from './ui';
+import { CreateProjectModal } from './CreateProjectModal';
+import type { ChatSummary } from '../types';
 import { appVersionLabel, appVersionTitle } from '../version';
 
 function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
   const nav = useNavigate();
   const { patch, remove } = useChats();
+  const { projects } = useProjects();
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState(chat.title);
+
+  const moveTargets = projects.filter((p) => p.id !== chat.projectId);
+
+  async function moveToProject(projectId: string | null, name?: string) {
+    setMenuOpen(false);
+    try {
+      await api.patch(`/api/chats/${chat.id}`, { projectId });
+      patch(chat.id, { projectId });
+      toast(projectId ? `已移入「${name}」` : '已移出项目', 'ok');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '移动失败', 'err');
+    }
+  }
 
   async function togglePin() {
     setMenuOpen(false);
@@ -62,7 +77,7 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
       <div className="pr-1">
         {/* The list scrolls, so the menu rides the portal-based Popover — an
             absolutely positioned panel would clip against the overflow rail. */}
-        <Popover open={menuOpen} setOpen={setMenuOpen} align="right" width="w-32" trigger={
+        <Popover open={menuOpen} setOpen={setMenuOpen} align="right" width="w-44" trigger={
           <button
             title="更多操作"
             className={`cursor-pointer rounded-sm p-1 text-tx3 transition-opacity hover:bg-bg3 hover:text-tx ${menuOpen ? '' : 'opacity-0 group-focus-within:opacity-100 group-hover:opacity-100'}`}
@@ -78,6 +93,24 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
               onClick={() => { setMenuOpen(false); setTitle(chat.title); setRenaming(true); }}>
               <Pencil size={12} />重命名
             </button>
+            {(moveTargets.length > 0 || chat.projectId) && (
+              <>
+                <div className="my-1 border-t border-line" />
+                <div className="eyebrow px-2 py-1">移动到项目</div>
+                {moveTargets.map((p) => (
+                  <button key={p.id} className={menuItem} onClick={() => moveToProject(p.id, p.name)}>
+                    <FolderClosed size={12} className="shrink-0" />
+                    <span className="truncate">{p.name}</span>
+                  </button>
+                ))}
+                {chat.projectId && (
+                  <button className={menuItem} onClick={() => moveToProject(null)}>
+                    <FolderOutput size={12} className="shrink-0" />移出项目
+                  </button>
+                )}
+                <div className="my-1 border-t border-line" />
+              </>
+            )}
             <button className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-err transition-colors hover:bg-err/10" onClick={doDelete}>
               <Trash2 size={12} />删除
             </button>
@@ -110,39 +143,46 @@ export function Sidebar() {
   const { theme, setTheme, sidebarOpen, setSidebarOpen } = useUi();
   const [query, setQuery] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
-  const [projectName, setProjectName] = useState('');
-  const [projectBusy, setProjectBusy] = useState(false);
 
   useEffect(() => { if (user && !loaded) load().catch(() => toast('加载对话列表失败', 'err')); }, [user, loaded, load]);
   useEffect(() => {
     if (user && !projectsStore.loaded) projectsStore.load().catch(() => { /* section just stays empty */ });
   }, [user, projectsStore]);
 
-  async function createProject() {
-    const name = projectName.trim();
-    if (!name || projectBusy) return;
-    setProjectBusy(true);
-    try {
-      const r = await api.post<{ project: Project }>('/api/projects', { name });
-      projectsStore.upsert(r.project);
-      setCreatingProject(false);
-      setProjectName('');
-      nav(`/projects/${r.project.id}`);
-      if (window.innerWidth <= 900) setSidebarOpen(false);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '创建项目失败', 'err');
-    } finally {
-      setProjectBusy(false);
+  const q = query.trim().toLowerCase();
+  const searching = q.length > 0;
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  // Chats inside a project live under that project's node only — never in
+  // 置顶/最近 — so the rail always answers "does this chat belong to a project?".
+  const { pinned, recent, byProject } = useMemo(() => {
+    const known = new Set(projectsStore.projects.map((p) => p.id));
+    const byProject = new Map<string, ChatSummary[]>();
+    const loose: ChatSummary[] = [];
+    for (const c of chats) {
+      if (q && !(c.title || '新对话').toLowerCase().includes(q)) continue;
+      if (c.projectId && known.has(c.projectId)) {
+        if (!byProject.has(c.projectId)) byProject.set(c.projectId, []);
+        byProject.get(c.projectId)!.push(c);
+      } else {
+        loose.push(c);
+      }
     }
-  }
+    for (const list of byProject.values()) list.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    return { pinned: loose.filter((c) => c.pinned), recent: loose.filter((c) => !c.pinned), byProject };
+  }, [chats, q, projectsStore.projects]);
 
-  const { pinned, recent } = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = q ? chats.filter((c) => (c.title || '新对话').toLowerCase().includes(q)) : chats;
-    return { pinned: list.filter((c) => c.pinned), recent: list.filter((c) => !c.pinned) };
-  }, [chats, query]);
+  const activeChatProjectId = useMemo(
+    () => chats.find((c) => c.id === activeChatId)?.projectId ?? null,
+    [chats, activeChatId],
+  );
 
-  const empty = pinned.length === 0 && recent.length === 0;
+  // While searching, a project stays visible only if it (or a chat in it) matches.
+  const visibleProjects = searching
+    ? projectsStore.projects.filter((p) => byProject.has(p.id) || p.name.toLowerCase().includes(q))
+    : projectsStore.projects;
+
+  const empty = pinned.length === 0 && recent.length === 0 && byProject.size === 0;
 
   function newChat() {
     nav('/');
@@ -192,32 +232,73 @@ export function Sidebar() {
 
       {/* conversation list */}
       <div className="mt-3 flex-1 space-y-4 overflow-y-auto px-3 pb-3">
-        <div className="space-y-0.5">
-          <div className="flex items-center justify-between px-2 pb-1">
-            <span className="eyebrow">项目</span>
-            <button
-              title="新建项目"
-              className="cursor-pointer rounded-sm p-0.5 text-tx3 transition-colors hover:bg-bg3 hover:text-tx"
-              onClick={() => setCreatingProject(true)}
-            >
-              <Plus size={13} />
-            </button>
+        {(!searching || visibleProjects.length > 0) && (
+          <div className="space-y-0.5">
+            <div className="flex items-center justify-between px-2 pb-1">
+              <button
+                title="查看全部项目"
+                className="eyebrow cursor-pointer rounded-sm transition-colors hover:text-tx"
+                onClick={() => { nav('/projects'); if (window.innerWidth <= 900) setSidebarOpen(false); }}
+              >
+                项目
+              </button>
+              <button
+                title="新建项目"
+                className="cursor-pointer rounded-sm p-0.5 text-tx3 transition-colors hover:bg-bg3 hover:text-tx"
+                onClick={() => setCreatingProject(true)}
+              >
+                <Plus size={13} />
+              </button>
+            </div>
+            {visibleProjects.map((p) => {
+              const chatsIn = byProject.get(p.id) ?? [];
+              // Searching forces matching projects open; otherwise an explicit
+              // toggle wins, and the project holding the current chat auto-opens.
+              const open = searching
+                ? chatsIn.length > 0
+                : (expanded[p.id] ?? (p.id === activeProjectId || p.id === activeChatProjectId));
+              return (
+                <div key={p.id}>
+                  <div className={`group flex items-center rounded-md border transition-colors ${
+                    p.id === activeProjectId ? 'border-line bg-bg1 shadow-xs' : 'border-transparent hover:bg-bg2'}`}>
+                    <button
+                      title={open ? '收起' : '展开'}
+                      className="cursor-pointer self-stretch rounded-sm pl-1.5 pr-0.5 text-tx3 transition-colors hover:text-tx"
+                      onClick={() => setExpanded((e) => ({ ...e, [p.id]: !open }))}
+                    >
+                      <ChevronRight size={12} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
+                    </button>
+                    <button
+                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-[7px] pr-1 text-left"
+                      onClick={() => { nav(`/projects/${p.id}`); if (window.innerWidth <= 900) setSidebarOpen(false); }}
+                    >
+                      <FolderClosed size={13} className="shrink-0 text-tx3" />
+                      <span className={`min-w-0 flex-1 truncate text-[13px] ${p.id === activeProjectId ? 'font-medium text-tx' : 'text-tx'}`}>{p.name}</span>
+                    </button>
+                    <button
+                      title="在项目中新建对话"
+                      className="mr-1 cursor-pointer rounded-sm p-1 text-tx3 opacity-0 transition-opacity hover:bg-bg3 hover:text-tx group-focus-within:opacity-100 group-hover:opacity-100"
+                      onClick={() => { nav(`/?project=${p.id}`); if (window.innerWidth <= 900) setSidebarOpen(false); }}
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </div>
+                  {open && (
+                    <div className="ml-[13px] space-y-0.5 border-l border-line py-0.5 pl-1.5">
+                      {chatsIn.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
+                      {chatsIn.length === 0 && (
+                        <p className="px-2 py-1 text-[11px] text-tx3">项目内还没有对话</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {projectsStore.loaded && projectsStore.projects.length === 0 && (
+              <p className="px-2 pb-1 text-[11px] leading-relaxed text-tx3">用项目沉淀指令与资料,项目内的对话自动携带它们。</p>
+            )}
           </div>
-          {projectsStore.projects.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => { nav(`/projects/${p.id}`); if (window.innerWidth <= 900) setSidebarOpen(false); }}
-              className={`flex w-full cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-[7px] text-left transition-colors ${
-                p.id === activeProjectId ? 'border-line bg-bg1 shadow-xs' : 'border-transparent hover:bg-bg2'}`}
-            >
-              <FolderClosed size={13} className="shrink-0 text-tx3" />
-              <span className="min-w-0 flex-1 truncate text-[13px] text-tx">{p.name}</span>
-            </button>
-          ))}
-          {projectsStore.loaded && projectsStore.projects.length === 0 && (
-            <p className="px-2 pb-1 text-[11px] leading-relaxed text-tx3">用项目沉淀指令与资料,项目内的对话自动携带它们。</p>
-          )}
-        </div>
+        )}
 
         {pinned.length > 0 && (
           <div className="space-y-0.5">
@@ -227,7 +308,7 @@ export function Sidebar() {
         )}
         {recent.length > 0 && (
           <div className="space-y-0.5">
-            {pinned.length > 0 && <div className="eyebrow px-2 pb-1">最近</div>}
+            {(pinned.length > 0 || visibleProjects.length > 0) && <div className="eyebrow px-2 pb-1">最近</div>}
             {recent.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
           </div>
         )}
@@ -278,19 +359,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <Modal open={creatingProject} onClose={() => setCreatingProject(false)} title="新建项目"
-        desc="项目可以沉淀一份指令和参考资料,项目内的每个对话都会自动带上它们。">
-        <form onSubmit={(e) => { e.preventDefault(); createProject(); }}>
-          <Field label="项目名称" required>
-            <Input value={projectName} onChange={(e) => setProjectName(e.target.value)}
-              autoFocus maxLength={80} placeholder="例如:季度复盘、API 集成…" />
-          </Field>
-          <ModalActions>
-            <Button variant="outline" onClick={() => setCreatingProject(false)}>取消</Button>
-            <Button type="submit" variant="primary" disabled={projectBusy || !projectName.trim()}>创建</Button>
-          </ModalActions>
-        </form>
-      </Modal>
+      <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} />
     </aside>
   );
 }

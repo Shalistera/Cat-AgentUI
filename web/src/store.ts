@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { api } from './api';
 import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, Project, User } from './types';
+import type { ComposerSettings, PendingImage } from './components/Composer';
 
 // ---- theme ----
 // Light is the product default; `html.dark` is the opt-in override. First-time
@@ -122,6 +123,21 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     set({ projects: get().projects.filter((p) => p.id !== id) });
   },
 }));
+
+// The composer remembers the last explicitly chosen model across pages.
+export const LAST_MODEL_KEY = 'cat-last-model';
+
+// One-shot handoff: the project page's composer stashes its full payload here,
+// then navigates to `/?project=<id>`; the chat page consumes it and auto-sends.
+// Module-level (not router state) so back-navigation can never replay the send.
+export interface ChatHandoffPayload {
+  text: string;
+  images: PendingImage[];
+  modelId: string | null;
+  settings: ComposerSettings;
+  mcpSelected: string[];
+}
+export const chatHandoff: { payload: ChatHandoffPayload | null } = { payload: null };
 
 // ---- models & mcp servers (shared caches) ----
 interface ModelsState {

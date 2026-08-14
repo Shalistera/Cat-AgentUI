@@ -9,6 +9,7 @@ import Chat from './pages/Chat';
 import Images from './pages/Images';
 import Gallery from './pages/Gallery';
 import ProjectPage from './pages/Project';
+import ProjectsPage from './pages/Projects';
 import Ppt from './pages/Ppt';
 import Settings from './pages/Settings';
 import Admin from './pages/admin/Admin';
@@ -63,6 +64,7 @@ export default function App() {
         <Route element={<Shell />}>
           <Route path="/" element={<Chat />} />
           <Route path="/chat/:id" element={<Chat />} />
+          <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
           <Route path="/images" element={<Images />} />
           <Route path="/images/gallery" element={<Gallery />} />

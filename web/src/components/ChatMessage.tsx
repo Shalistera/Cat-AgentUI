@@ -291,7 +291,9 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
     : null;
 
   return (
-    <div className="group flex gap-3">
+    // sm:pr mirrors the avatar column (30px + gap-3) so the text block sits
+    // centered in the column and the composer overhangs it equally per side.
+    <div className="group flex gap-3 sm:pr-[42px]">
       <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={msg.model} size={30} /></div>
       <div className="min-w-0 flex-1">
         {rendered}

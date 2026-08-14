@@ -2,15 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowDown, FolderClosed, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
-import { searchPrefKey, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
+import { chatHandoff, LAST_MODEL_KEY, searchPrefKey, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
 import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
 import { Button, PageHeader, toast } from '../components/ui';
 import { tabAlert } from '../tabAlert';
 import type { ChatDetail, Message, MessagePart, ModelInfo } from '../types';
-
-const LAST_MODEL_KEY = 'cat-last-model';
 
 function draftFromChat(c: ChatDetail | null): ComposerSettings {
   return {
@@ -115,6 +113,21 @@ export default function Chat() {
     setMcpSelected((prev) => (prev.includes(search.id) ? prev : [...prev, search.id]));
   }, [routeId, chat, mcpServers, user?.id]);
 
+  // A payload handed off from the project page's composer: adopt its model /
+  // settings / MCP choices, then fire it through the normal send path.
+  // Consumed exactly once — see chatHandoff.
+  useEffect(() => {
+    const h = chatHandoff.payload;
+    if (routeId || !h || streaming || !modelsLoaded) return;
+    const m = (h.modelId ? models.find((x) => x.id === h.modelId) : null) ?? modelSel;
+    if (!m) return; // no models yet (default pick lands next render) — keep the payload
+    chatHandoff.payload = null;
+    setModelSel(m);
+    setSettings(h.settings);
+    setMcpSelected(h.mcpSelected);
+    void send(h.text, h.images, { modelId: m.id, settings: h.settings, mcpSelected: h.mcpSelected });
+  }, [routeId, modelsLoaded, models, modelSel, streaming]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // auto scroll
   useEffect(() => {
     if (stick && scrollRef.current) {
@@ -152,16 +165,21 @@ export default function Chat() {
     localStorage.setItem(LAST_MODEL_KEY, m.id);
   }
 
-  async function ensureChat(): Promise<ChatDetail> {
+  // Overrides let a handed-off send (project page composer) use its own model /
+  // settings without waiting for this page's setState round-trips.
+  interface SendOverrides { modelId?: string; settings?: ComposerSettings; mcpSelected?: string[] }
+
+  async function ensureChat(o?: SendOverrides): Promise<ChatDetail> {
     if (chatRef.current) return chatRef.current;
     const r = await api.post<{ chat: ChatDetail }>('/api/chats', {
-      modelId: modelSel?.id ?? null,
+      modelId: o?.modelId ?? modelSel?.id ?? null,
       projectId: projectParam,
     });
     let created = r.chat;
-    const patch = draftToPatch(settings);
-    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || mcpSelected.length) {
-      const p = await api.patch<{ chat: ChatDetail }>(`/api/chats/${created.id}`, { ...patch, mcpServerIds: mcpSelected });
+    const patch = draftToPatch(o?.settings ?? settings);
+    const mcp = o?.mcpSelected ?? mcpSelected;
+    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || mcp.length) {
+      const p = await api.patch<{ chat: ChatDetail }>(`/api/chats/${created.id}`, { ...patch, mcpServerIds: mcp });
       created = p.chat;
     }
     setChat(created);
@@ -268,10 +286,11 @@ export default function Chat() {
       });
   }
 
-  async function send(text: string, images: PendingImage[]) {
+  async function send(text: string, images: PendingImage[], o?: SendOverrides) {
     if (streaming) return;
+    const sendModel = (o?.modelId ? models.find((m) => m.id === o.modelId) : null) ?? modelSel;
     try {
-      const target = await ensureChat();
+      const target = await ensureChat(o);
       const content: ({ type: 'text'; text: string } | { type: 'image'; uploadId: string })[] = [];
       for (const img of images) content.push({ type: 'image', uploadId: img.uploadId });
       if (text) content.push({ type: 'text', text });
@@ -282,9 +301,9 @@ export default function Chat() {
       setMessages((prev) => [
         ...prev,
         { id: 'tmp-u', role: 'user', parts, model: null, status: 'done', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs },
-        { id: 'tmp-a', role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
+        { id: 'tmp-a', role: 'assistant', parts: [], model: sendModel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
       ]);
-      runStream(target.id, { content, modelId: modelSel?.id });
+      runStream(target.id, { content, modelId: sendModel?.id });
     } catch (e) {
       toast(e instanceof Error ? e.message : '发送失败', 'err');
     }
@@ -385,9 +404,10 @@ export default function Chat() {
 
       {isEmpty ? (
         <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-10">
-          {/* Same 44rem as the conversation column below — the composer must not
-              change width when the first message lands. */}
-          <div className="fade-up w-full max-w-[44rem]">
+          {/* 54rem shell matches the conversation column; the composer itself is
+              capped at 48rem here too so its width doesn't jump when the first
+              message lands. */}
+          <div className="fade-up w-full max-w-[54rem]">
             <div className="mb-8 flex flex-col items-center text-center">
               <CatMark size={56} />
               <h2 className="mt-4 text-xl font-semibold tracking-tight text-tx">
@@ -396,7 +416,7 @@ export default function Chat() {
               <p className="mt-1.5 text-[13px] text-tx2">开始一段新对话,或从左侧继续此前的记录。</p>
             </div>
 
-            {composer}
+            <div className="mx-auto max-w-[48rem]">{composer}</div>
 
             {modelSel && !streaming && (
               <div className="mt-4 grid gap-2 sm:grid-cols-2">
@@ -432,9 +452,11 @@ export default function Chat() {
       ) : (
         <>
           <div ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
-            {/* 44rem ≈ 42 CJK chars/line at 16px — the comfortable ceiling for
-                long-form Chinese; 3xl let lines run past it. */}
-            <div className="mx-auto flex max-w-[44rem] flex-col gap-7 px-4 py-7 sm:px-6">
+            {/* 54rem message column over a 48rem composer (chatgpt-style: content
+                slightly wider than the input). Both widths are deliberate user
+                picks — change them in tandem with the composer wrappers below
+                and in the empty state. */}
+            <div className="mx-auto flex w-full max-w-[54rem] flex-col gap-7 px-4 py-7 sm:px-6">
               {messages.map((m, i) => (
                 <ChatMessage
                   key={m.id}
@@ -458,7 +480,7 @@ export default function Chat() {
                 <ArrowDown size={14} />
               </button>
             )}
-            <div className="mx-auto max-w-[44rem]">{composer}</div>
+            <div className="mx-auto max-w-[48rem]">{composer}</div>
             <p className="mt-2 text-center text-[11px] text-tx3">内容由 AI 生成,请自行核实关键信息。</p>
           </div>
         </>

@@ -157,7 +157,8 @@ export function Spinner({ className = 'h-4 w-4' }: { className?: string }) {
 // ---------- layout ----------
 /** Sticky page header shared by every route, so chrome never shifts. */
 export function PageHeader({ title, subtitle, left, children }: {
-  title: string; subtitle?: string; left?: ReactNode; children?: ReactNode;
+  /** Plain string, or a breadcrumb-style node (e.g. 项目 › 项目名). */
+  title: ReactNode; subtitle?: string; left?: ReactNode; children?: ReactNode;
 }) {
   return (
     <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-line bg-bg1/85 px-4 backdrop-blur-md sm:px-6">
