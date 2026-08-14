@@ -195,12 +195,7 @@ function groundingOf(metadata: any): GroundingInfo | null {
         : [];
     })
     : [];
-  const renderedContent = typeof metadata.searchEntryPoint?.renderedContent === 'string'
-    ? metadata.searchEntryPoint.renderedContent
-    : undefined;
-  return queries.length || sources.length || renderedContent
-    ? { queries, sources, ...(renderedContent ? { renderedContent } : {}) }
-    : null;
+  return queries.length || sources.length ? { queries, sources } : null;
 }
 
 function toUsage(u: any): UsageInfo {

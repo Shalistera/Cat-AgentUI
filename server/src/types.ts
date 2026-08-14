@@ -13,8 +13,8 @@ export type MessagePart =
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
   // Google Search grounding is executed inside Vertex AI rather than through
   // our function/MCP loop. Keep its attribution metadata beside the answer so
-  // saved chats can still render sources and the required Search Suggestions.
-  | { type: 'grounding'; queries: string[]; sources: GroundingSource[]; renderedContent?: string };
+  // saved chats can still render sources.
+  | { type: 'grounding'; queries: string[]; sources: GroundingSource[] };
 
 export type Role = 'user' | 'assistant';
 
@@ -55,8 +55,6 @@ export interface GroundingSource {
 export interface GroundingInfo {
   queries: string[];
   sources: GroundingSource[];
-  /** Google-provided HTML/CSS for Search Suggestions. Render in a sandbox. */
-  renderedContent?: string;
 }
 
 // Normalized message fed into adapters. Attachments already resolved to base64.

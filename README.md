@@ -89,9 +89,8 @@ npx pm2 save
 
 将 Gemini Provider 配置为 **Vertex AI**,并启用 Gemini 2.5/3.x 文本模型的“工具调用”后,
 聊天输入框会直接显示“联网”开关,不需要安装或指定 Brave MCP。后端在 Vertex
-`generateContent` 请求中发送 `tools: [{ googleSearch: {} }]`,并保存/展示返回的来源和
-Google Search Suggestions。非 Vertex 模型仍可使用 **管理后台 → MCP** 中指定的搜索服务器
-作为回退。
+`generateContent` 请求中发送 `tools: [{ googleSearch: {} }]`,并保存/展示返回的来源。
+非 Vertex 模型仍可使用 **管理后台 → MCP** 中指定的搜索服务器作为回退。
 
 Vertex API 目前不允许在同一个 `generateContent` 请求中混用 `googleSearch` 与函数调用工具。
 因此当同一轮还启用了 MCP 工具或大型项目资料的检索工具时,Cat-AgentUI 会保留这些工具、跳过

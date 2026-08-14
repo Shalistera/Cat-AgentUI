@@ -121,7 +121,6 @@ function toAdapterPartsNoImages(parts: MessagePart[]): AdapterMessagePart[] {
 
 const MAX_GROUNDING_QUERIES = 20;
 const MAX_GROUNDING_SOURCES = 30;
-const MAX_GROUNDING_HTML_CHARS = 100_000;
 
 function safeGroundingPart(
   grounding: GroundingInfo, secretValues: string[],
@@ -141,11 +140,8 @@ function safeGroundingPart(
     const title = redactSensitiveText(source.title.trim(), secretValues).slice(0, 500) || href;
     return [{ uri: href, title }];
   });
-  const renderedContent = grounding.renderedContent
-    ? redactSensitiveText(grounding.renderedContent, secretValues).slice(0, MAX_GROUNDING_HTML_CHARS)
-    : undefined;
-  return queries.length || sources.length || renderedContent
-    ? { type: 'grounding', queries, sources, ...(renderedContent ? { renderedContent } : {}) }
+  return queries.length || sources.length
+    ? { type: 'grounding', queries, sources }
     : null;
 }
 

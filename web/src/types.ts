@@ -14,7 +14,7 @@ export type MessagePart =
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
-  | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; renderedContent?: string };
+  | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[] };
 
 export interface Message {
   id: string;
