@@ -45,6 +45,7 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
     enabled: !!m.enabled,
     isDefault: !!m.isDefault,
     sortOrder: m.sortOrder,
+    defaultWebSearch: !!m.defaultWebSearch,
   };
 }
 
@@ -160,9 +161,14 @@ const modelPatchSchema = z.object({
   enabled: z.boolean().optional(),
   isDefault: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
+  defaultWebSearch: z.boolean().optional(),
   accessMode: z.enum(['shared', 'restricted']).optional(),
   allowedUserIds: z.array(z.string().max(64)).max(500).optional(),
 });
+
+// Full desired ordering, first item on top. Ids that no longer exist are
+// skipped; rows not mentioned keep their old sortOrder.
+const orderSchema = z.object({ ids: z.array(z.string().min(1).max(64)).max(500) });
 
 function getProvider(id: string): ProviderRow | undefined {
   return db.select().from(schema.providers).where(eq(schema.providers.id, id)).get();
@@ -272,6 +278,45 @@ export async function providerRoutes(app: FastifyInstance) {
       db.update(schema.providers).set(patch).where(eq(schema.providers.id, id)).run();
     }
     return publicProvider(getProvider(id)!);
+  });
+
+  // One request per drag/click: renumber in list order instead of a PATCH
+  // per row, so a reorder can't be half-applied.
+  app.put('/api/admin/providers/order', async (req, reply) => {
+    requireAdmin(req, reply);
+    const body = orderSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const existing = new Set(
+      db.select({ id: schema.providers.id }).from(schema.providers).all().map((r) => r.id),
+    );
+    db.transaction(() => {
+      let i = 0;
+      for (const pid of body.data.ids) {
+        if (!existing.has(pid)) continue;
+        db.update(schema.providers).set({ sortOrder: i++ }).where(eq(schema.providers.id, pid)).run();
+      }
+    });
+    return { ok: true };
+  });
+
+  app.put('/api/admin/providers/:id/models/order', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    if (!getProvider(id)) return reply.code(404).send({ error: 'Provider 不存在' });
+    const body = orderSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const existing = new Set(
+      db.select({ id: schema.models.id }).from(schema.models)
+        .where(eq(schema.models.providerId, id)).all().map((r) => r.id),
+    );
+    db.transaction(() => {
+      let i = 0;
+      for (const mid of body.data.ids) {
+        if (!existing.has(mid)) continue;
+        db.update(schema.models).set({ sortOrder: i++ }).where(eq(schema.models.id, mid)).run();
+      }
+    });
+    return { ok: true };
   });
 
   app.delete('/api/admin/providers/:id', async (req, reply) => {
@@ -428,6 +473,7 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.isDefault !== undefined) patch.isDefault = d.isDefault ? 1 : 0;
     if (d.sortOrder !== undefined) patch.sortOrder = d.sortOrder;
+    if (d.defaultWebSearch !== undefined) patch.defaultWebSearch = d.defaultWebSearch ? 1 : 0;
     if (d.accessMode !== undefined) patch.accessMode = d.accessMode;
 
     if (Object.keys(patch).length) {
@@ -462,6 +508,7 @@ export async function providerRoutes(app: FastifyInstance) {
       reasoningMode: schema.models.reasoningMode,
       reasoningLevels: schema.models.reasoningLevels,
       isDefault: schema.models.isDefault,
+      defaultWebSearch: schema.models.defaultWebSearch,
       accessMode: schema.models.accessMode,
       providerId: schema.providers.id,
       providerName: schema.providers.name,
@@ -482,6 +529,7 @@ export async function providerRoutes(app: FastifyInstance) {
       imageGen: !!r.imageGen,
       nativeSearch: !!r.tools && !r.imageGen && r.providerType === 'gemini'
         && !!r.providerUseVertex && supportsVertexGoogleSearch(r.modelId),
+      defaultWebSearch: !!r.defaultWebSearch,
       // Only the resolved ladder — the chat UI has no use for how it was decided.
       reasoningLevels: effectiveLevels(
         r.reasoningMode, r.reasoningLevels, r.providerType as ProviderType, r.modelId,

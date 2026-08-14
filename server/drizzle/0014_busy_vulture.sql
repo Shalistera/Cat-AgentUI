@@ -1,0 +1,1 @@
+ALTER TABLE `models` ADD `default_web_search` integer DEFAULT 0 NOT NULL;

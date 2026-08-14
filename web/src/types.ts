@@ -75,6 +75,8 @@ export interface ChatDetail extends ChatSummary {
 export interface ModelInfo {
   id: string; modelId: string; displayName: string;
   vision: boolean; tools: boolean; imageGen: boolean; nativeSearch: boolean; isDefault: boolean;
+  /** Admin default for the 联网搜索 toggle on new chats with this model. */
+  defaultWebSearch: boolean;
   providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini';
   /** Content-addressed URL of the provider's custom avatar; null = built-in mark. */
   providerAvatarUrl: string | null;
@@ -172,6 +174,7 @@ export interface AdminModel {
   id: string; providerId: string; modelId: string; displayName: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; enabled: boolean;
   isDefault: boolean; sortOrder: number;
+  defaultWebSearch: boolean;
   accessMode: ModelAccessMode;
   allowedUserIds: string[];
   reasoning: {

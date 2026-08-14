@@ -566,7 +566,10 @@ function ReasoningCell({ model, reload }: { model: AdminModel; reload(): Promise
 }
 
 // ---------- model row ----------
-function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
+function ModelRow({ model, reload, index, count, onMove }: {
+  model: AdminModel; reload(): Promise<void>;
+  index: number; count: number; onMove(dir: -1 | 1): Promise<void>;
+}) {
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(model.displayName ?? '');
   const [busy, setBusy] = useState(false);
@@ -599,8 +602,24 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
     } catch (e) { toast(errMsg(e), 'err'); setBusy(false); }
   }
 
+  async function move(dir: -1 | 1) {
+    if (busy) return;
+    setBusy(true);
+    try { await onMove(dir); }
+    catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
   return (
     <tr className="group transition-colors hover:bg-bg2/60">
+      <Td className="whitespace-nowrap">
+        <Button variant="ghost" size="iconXs" title="上移" disabled={busy || index === 0} onClick={() => move(-1)}>
+          <ChevronUp size={13} />
+        </Button>
+        <Button variant="ghost" size="iconXs" title="下移" disabled={busy || index === count - 1} onClick={() => move(1)}>
+          <ChevronDown size={13} />
+        </Button>
+      </Td>
       <Td className="max-w-[220px] truncate font-mono text-tx">{model.modelId}</Td>
       <Td>
         {editingName ? (
@@ -630,6 +649,12 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
       <Td className="text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></Td>
       <Td className="text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></Td>
       <Td><ReasoningCell model={model} reload={reload} /></Td>
+      <Td className="text-center">
+        <Toggle
+          checked={model.defaultWebSearch} disabled={busy || model.imageGen}
+          onChange={(v) => patch({ defaultWebSearch: v }, v ? '新对话将默认开启联网搜索' : '已关闭默认联网')}
+        />
+      </Td>
       <Td><AccessCell model={model} reload={reload} /></Td>
       <Td className="text-center">
         <Button variant="ghost" size="iconXs"
@@ -717,8 +742,9 @@ function ProviderAvatarPicker({ provider, reload }: { provider: AdminProvider; r
   );
 }
 
-function ProviderCard({ provider, reload, onEdit }: {
+function ProviderCard({ provider, reload, onEdit, index, count, onMove }: {
   provider: AdminProvider; reload(): Promise<void>; onEdit(): void;
+  index: number; count: number; onMove(dir: -1 | 1): Promise<void>;
 }) {
   const [testing, setTesting] = useState(false);
   const [fetching, setFetching] = useState(false);
@@ -778,6 +804,14 @@ function ProviderCard({ provider, reload, onEdit }: {
     finally { setFetching(false); }
   }
 
+  async function moveModel(i: number, dir: -1 | 1) {
+    const ids = models.map((m) => m.id);
+    const [moved] = ids.splice(i, 1);
+    ids.splice(i + dir, 0, moved);
+    await api.put(`/api/admin/providers/${provider.id}/models/order`, { ids });
+    await reload();
+  }
+
   async function addManual() {
     const id = manualId.trim();
     if (!id || adding) return;
@@ -807,6 +841,14 @@ function ProviderCard({ provider, reload, onEdit }: {
           {usesVertex ? (hasCred ? '已配置凭证' : '未配置凭证') : (hasCred ? '已配置 Key' : '未配置 Key')}
         </Badge>
         <div className="ml-auto flex items-center gap-1.5">
+          <Button variant="ghost" size="iconSm" title="上移(影响模型选择器里的分组顺序)"
+            disabled={index === 0} onClick={() => onMove(-1)}>
+            <ChevronUp size={14} />
+          </Button>
+          <Button variant="ghost" size="iconSm" title="下移"
+            disabled={index === count - 1} onClick={() => onMove(1)}>
+            <ChevronDown size={14} />
+          </Button>
           <Toggle checked={provider.enabled} disabled={toggling} onChange={setEnabled} />
           <Button variant="outline" size="sm" onClick={test} disabled={testing}>
             {testing ? <Spinner className="h-3.5 w-3.5" /> : <FlaskConical size={13} />}测试
@@ -843,12 +885,14 @@ function ProviderCard({ provider, reload, onEdit }: {
             <table className="w-full text-xs">
               <thead>
                 <tr>
+                  <Th>排序</Th>
                   <Th>模型 ID</Th>
                   <Th>显示名</Th>
                   <Th className="text-center">视觉</Th>
                   <Th className="text-center">工具</Th>
                   <Th className="text-center">绘图</Th>
                   <Th>推理档位</Th>
+                  <Th className="text-center" title="新对话默认开启联网搜索(需要该模型可用搜索)">默认联网</Th>
                   <Th>可见性</Th>
                   <Th className="text-center">默认</Th>
                   <Th className="text-center">启用</Th>
@@ -856,7 +900,10 @@ function ProviderCard({ provider, reload, onEdit }: {
                 </tr>
               </thead>
               <tbody>
-                {models.map((m) => <ModelRow key={m.id} model={m} reload={reload} />)}
+                {models.map((m, i) => (
+                  <ModelRow key={m.id} model={m} reload={reload}
+                    index={i} count={models.length} onMove={(dir) => moveModel(i, dir)} />
+                ))}
               </tbody>
             </table>
           </div>
@@ -890,6 +937,19 @@ export default function Providers() {
 
   useEffect(() => { load(); }, [load]);
 
+  async function moveProvider(i: number, dir: -1 | 1) {
+    const next = [...providers];
+    const [moved] = next.splice(i, 1);
+    next.splice(i + dir, 0, moved);
+    setProviders(next); // optimistic — the arrows would feel broken with a round-trip lag
+    try {
+      await api.put('/api/admin/providers/order', { ids: next.map((p) => p.id) });
+    } catch (e) {
+      toast(errMsg(e), 'err');
+      await load();
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -921,8 +981,9 @@ export default function Providers() {
         </div>
       ) : (
         <div className="space-y-3">
-          {providers.map((p) => (
+          {providers.map((p, i) => (
             <ProviderCard key={p.id} provider={p} reload={load}
+              index={i} count={providers.length} onMove={(dir) => moveProvider(i, dir)}
               onEdit={() => { setEditing(p); setFormOpen(true); }} />
           ))}
         </div>

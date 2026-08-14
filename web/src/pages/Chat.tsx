@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowDown, FolderClosed, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
-import { chatHandoff, LAST_MODEL_KEY, searchPrefKey, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
+import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
 import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
@@ -54,6 +54,9 @@ export default function Chat() {
 
   const abortRef = useRef<AbortController | null>(null);
   const skipLoadRef = useRef<string | null>(null);
+  // A handed-off send chose its own 联网搜索 state; the model-default effect
+  // below must not overwrite it when the model subsequently changes state.
+  const handoffAppliedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const settingsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatRef = useRef<ChatDetail | null>(null);
@@ -85,6 +88,7 @@ export default function Chat() {
     abortRef.current?.abort();
     setStreaming(false);
     if (!routeId) {
+      handoffAppliedRef.current = false;
       setChat(null); setMessages([]); setWebSearch(false); setMcpSelected([]); setSettings(draftFromChat(null));
       return;
     }
@@ -105,14 +109,16 @@ export default function Chat() {
     return () => { cancelled = true; };
   }, [routeId, nav]);
 
-  // New chats start with 联网搜索 on when the selected model has Vertex
-  // native search or an accessible MCP fallback, unless this user switched it
-  // off last time. Loaded chats keep their own saved preference.
+  // New chats adopt the admin-configured 联网搜索 default of the selected model
+  // (only when search is actually available to it). Loaded chats keep their own
+  // saved preference; a handed-off send carries its own explicit choice, which
+  // this must not clobber — hence the payload/applied guards.
   useEffect(() => {
-    if (routeId || chat || localStorage.getItem(searchPrefKey(user?.id)) === '0') return;
+    if (routeId || chat || !modelSel || chatHandoff.payload || handoffAppliedRef.current) return;
     const fallback = mcpServers.some((s) => s.isSearch && s.enabled);
-    if (modelSel?.nativeSearch || (fallback && modelSel?.tools && !modelSel.imageGen)) setWebSearch(true);
-  }, [routeId, chat, mcpServers, modelSel, user?.id]);
+    const available = modelSel.nativeSearch || (fallback && modelSel.tools && !modelSel.imageGen);
+    setWebSearch(available && modelSel.defaultWebSearch);
+  }, [routeId, chat, mcpServers, modelSel]);
 
   // A payload handed off from the project page's composer: adopt its model /
   // settings / MCP choices, then fire it through the normal send path.
@@ -123,6 +129,7 @@ export default function Chat() {
     const m = (h.modelId ? models.find((x) => x.id === h.modelId) : null) ?? modelSel;
     if (!m) return; // no models yet (default pick lands next render) — keep the payload
     chatHandoff.payload = null;
+    handoffAppliedRef.current = true;
     setModelSel(m);
     setSettings(h.settings);
     setWebSearch(h.webSearch);

@@ -67,6 +67,10 @@ export const models = sqliteTable('models', {
   enabled: integer('enabled').notNull().default(1),
   isDefault: integer('is_default').notNull().default(0),
   sortOrder: integer('sort_order').notNull().default(0),
+  // Admin-set default for the composer's 联网搜索 toggle on NEW chats with this
+  // model. Only takes effect when search is actually available to the model
+  // (Vertex native search or the designated search MCP).
+  defaultWebSearch: integer('default_web_search').notNull().default(0),
   // Mirrors mcpServers.accessMode: 'shared' shows the model to everyone,
   // 'restricted' only to explicitly granted users. Admins always see all.
   accessMode: text('access_mode').notNull().default('shared'),

@@ -3,7 +3,7 @@ import {
   ArrowLeft, ArrowUp, Check, ChevronDown, Gauge, Globe, Image as ImageIcon,
   Loader2, Plus, Search, Settings2, Square, Wrench, X,
 } from 'lucide-react';
-import { searchPrefKey, useAuth, useMcp, useModels, useUi } from '../store';
+import { useMcp, useModels, useUi } from '../store';
 import { api, uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
@@ -66,7 +66,6 @@ export function Composer(props: ComposerProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const models = useModels((s) => s.models);
-  const user = useAuth((s) => s.user);
   const dark = useUi((s) => s.theme) === 'dark';
   const mcpServers = useMcp((s) => s.servers).filter((s) => s.enabled);
   // Vertex Gemini exposes Google Search natively. The designated search MCP
@@ -80,8 +79,6 @@ export function Composer(props: ComposerProps) {
 
   function toggleSearch() {
     if (!searchAvailable) return;
-    // Remembered per user so new chats keep the last choice.
-    try { localStorage.setItem(searchPrefKey(user?.id), searchOn ? '0' : '1'); } catch { /* ignore */ }
     props.onWebSearchChange(!searchOn);
   }
 

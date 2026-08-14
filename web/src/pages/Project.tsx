@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { api, fmtTime } from '../api';
 import {
-  chatHandoff, LAST_MODEL_KEY, searchPrefKey, useAuth, useChats, useMcp, useModels, useProjects, useUi,
+  chatHandoff, LAST_MODEL_KEY, useChats, useMcp, useModels, useProjects, useUi,
 } from '../store';
 import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
 import {
@@ -44,8 +44,7 @@ export default function ProjectPage() {
   const [savingMeta, setSavingMeta] = useState(false);
 
   // Composer state — same defaults as a fresh chat on the chat page: last used
-  // model → admin default, and 联网搜索 on unless this user switched it off.
-  const { user } = useAuth();
+  // model → admin default, and 联网搜索 following the model's admin default.
   const models = useModels((s) => s.models);
   const modelsLoaded = useModels((s) => s.loaded);
   const loadModels = useModels((s) => s.load);
@@ -75,10 +74,11 @@ export default function ProjectPage() {
   }, [modelsLoaded, models]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (localStorage.getItem(searchPrefKey(user?.id)) === '0') return;
+    if (!modelSel) return;
     const fallback = mcpServers.some((s) => s.isSearch && s.enabled);
-    if (modelSel?.nativeSearch || (fallback && modelSel?.tools && !modelSel.imageGen)) setWebSearch(true);
-  }, [mcpServers, modelSel, user?.id]);
+    const available = modelSel.nativeSearch || (fallback && modelSel.tools && !modelSel.imageGen);
+    setWebSearch(available && modelSel.defaultWebSearch);
+  }, [mcpServers, modelSel]);
 
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
