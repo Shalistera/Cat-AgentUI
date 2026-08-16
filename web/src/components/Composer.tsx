@@ -10,7 +10,12 @@ import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
 import { Button, Field, Popover, toast, Toggle } from './ui';
 import type { ModelInfo, ReasoningEffort, ReasoningLevel } from '../types';
 
-const toolBtn = 'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-transparent px-2 text-xs font-medium text-tx2 transition-colors hover:border-line hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none';
+/* Active tool buttons build their palette on top of the colourless shape base,
+   never on `toolBtn`: stacking `text-accfg` after `text-tx2` leaves the winner
+   to Tailwind's stylesheet order, which is how the 联网 on-state ended up grey
+   on cobalt in both themes. */
+const toolBtnShape = 'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none';
+const toolBtn = `${toolBtnShape} border-transparent text-tx2 hover:border-line hover:bg-bg2 hover:text-tx`;
 
 // `off` is a real stop rather than an absence — Gemini needs an explicit zero
 // budget to actually stop thinking. Everything above it comes from the model's
@@ -268,9 +273,11 @@ export function Composer(props: ComposerProps) {
           {searchAvailable && !imageMode && (
             <button
               aria-pressed={searchOn}
-              /* On-state is a solid accs fill: the old 10% tint was routinely
-                 read as "off" — users could not tell which state they were in. */
-              className={`${toolBtn} ${searchOn ? 'border-accs bg-accs text-accfg shadow-xs hover:border-accs hover:bg-accs hover:text-accfg hover:opacity-90' : ''}`}
+              /* On-state is a solid accs fill: a mere tint was routinely read
+                 as "off". accs keeps white text AA in both themes. */
+              className={searchOn
+                ? `${toolBtnShape} border-accs bg-accs text-accfg shadow-xs hover:opacity-90`
+                : toolBtn}
               title={searchOn
                 ? model?.nativeSearch
                   ? '联网搜索已开启(Vertex AI 原生 Google Search):模型会按需搜索;与其他工具冲突时本轮优先其他工具'
@@ -285,7 +292,7 @@ export function Composer(props: ComposerProps) {
 
           {toolServers.length > 0 && model?.tools && !imageMode && (
             <Popover open={mcpOpen} setOpen={setMcpOpen} trigger={
-              <button className={`${toolBtn} ${toolCount ? 'border-acc/40 bg-acc/10 text-acc hover:border-acc/40 hover:bg-acc/10 hover:text-acc' : ''}`} title="MCP 工具">
+              <button className={toolCount ? `${toolBtnShape} border-acc/40 bg-acc/10 text-acc` : toolBtn} title="MCP 工具">
                 <Wrench size={13} />
                 <span className="max-sm:hidden">工具</span>
                 {toolCount > 0 && <span className="font-semibold tabular-nums">{toolCount}</span>}
@@ -319,7 +326,7 @@ export function Composer(props: ComposerProps) {
               their own secondary views inside the same anchored popover. */}
           <Popover open={panelOpen} setOpen={setPanelOpen} align="right" width="w-[22rem]" trigger={
             <button
-              className={`${toolBtn} border-line bg-bg1 pl-1.5`}
+              className={`${toolBtnShape} border-line bg-bg1 pl-1.5 text-tx2 hover:bg-bg2 hover:text-tx`}
               title="选择模型"
             >
               {model && <ModelAvatar info={model} size={16} tile={false} />}
@@ -428,7 +435,7 @@ export function Composer(props: ComposerProps) {
           {efforts.length > 1 && (
             <Popover key={model?.id} open={effortOpen} setOpen={setEffortOpen} align="right" width="w-80" trigger={
               <button
-                className={`${toolBtn} fade-up border-line bg-bg1`}
+                className={`${toolBtnShape} fade-up border-line bg-bg1 text-tx2 hover:bg-bg2 hover:text-tx`}
                 title={`思考强度：${effort.label}`}
                 style={thinking ? {
                   color: `rgb(${effortText})`,

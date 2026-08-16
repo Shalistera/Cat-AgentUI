@@ -224,6 +224,8 @@ export interface AppSettings {
   quotaAction: 'block' | 'downgrade';
   /** 降级目标模型(models.id),null = 未设置(降级时按拒绝处理)。 */
   quotaFallbackModelId: string | null;
+  /** 对话标题生成模型(models.id),null = 跟随当前对话的模型。 */
+  titleModelId: string | null;
 }
 
 // SSE stream handler callbacks

@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import {
   BrainCircuit, Check, ChevronDown, ChevronRight, Copy, Clock, Globe, Pencil,
-  RefreshCw, Wrench, Zap, CircleAlert, Ban,
+  RefreshCw, Trash2, Wrench, Zap, CircleAlert, Ban,
 } from 'lucide-react';
 import type { Message, MessagePart } from '../types';
 import { fmtDuration, fmtTokens } from '../api';
@@ -213,9 +213,11 @@ interface Props {
   pendingLabel?: string; // shown while waiting for the first output
   onRegenerate?: () => void;
   onEdit?: (text: string) => void;
+  /** Remove this message from the conversation (and from all later context). */
+  onDelete?: () => void;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onEdit }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onEdit, onDelete }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -260,6 +262,11 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             {onEdit && (
               <button title="编辑并重新发送" className={iconBtn} onClick={() => { setDraft(text); setEditing(true); }}>
                 <Pencil size={12} />
+              </button>
+            )}
+            {onDelete && (
+              <button title="删除这条消息(之后的回复不再引用它)" className={`${iconBtn} hover:text-err`} onClick={onDelete}>
+                <Trash2 size={12} />
               </button>
             )}
           </div>
@@ -359,6 +366,11 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
               {onRegenerate && (
                 <button title="重新生成" className={iconBtn} onClick={onRegenerate}>
                   <RefreshCw size={12} />
+                </button>
+              )}
+              {onDelete && (
+                <button title="删除这条消息(之后的回复不再引用它)" className={`${iconBtn} hover:text-err`} onClick={onDelete}>
+                  <Trash2 size={12} />
                 </button>
               )}
             </span>

@@ -9,6 +9,7 @@ import {
   effectiveQuota, monthStartDay, monthTokens, quotaSettings,
 } from '../quota.js';
 import { CHAT_IMAGE_RETENTION_KEY, IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
+import { TITLE_MODEL_KEY } from './chats.js';
 import { unlinkStoredFiles } from '../storage.js';
 
 const DAY_MS = 86_400_000;
@@ -93,6 +94,7 @@ const settingsSchema = z.object({
   quotaMonthlyTokens: z.number().int().min(0).max(1e15).optional(), // 默认月度配额,0 = 不限
   quotaAction: z.enum(['block', 'downgrade']).optional(),
   quotaFallbackModelId: z.string().max(64).nullish(), // models.id,空 = 未设置
+  titleModelId: z.string().max(64).nullish(), // 对话标题生成模型,空 = 跟随对话模型
 });
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -262,6 +264,7 @@ export async function adminRoutes(app: FastifyInstance) {
       quotaMonthlyTokens: quota.defaultQuota,
       quotaAction: quota.action,
       quotaFallbackModelId: quota.fallbackModelId || null,
+      titleModelId: getSetting(TITLE_MODEL_KEY, '') || null,
     };
   };
 
@@ -288,6 +291,15 @@ export async function adminRoutes(app: FastifyInstance) {
         if (!m || m.imageGen) return reply.code(400).send({ error: '降级模型无效,请选择一个文本模型' });
       }
       setSetting(QUOTA_FALLBACK_KEY, id ?? '');
+    }
+    if (body.data.titleModelId !== undefined) {
+      const id = body.data.titleModelId;
+      if (id) {
+        const m = db.select({ id: schema.models.id, imageGen: schema.models.imageGen })
+          .from(schema.models).where(eq(schema.models.id, id)).get();
+        if (!m || m.imageGen) return reply.code(400).send({ error: '标题模型无效,请选择一个文本模型' });
+      }
+      setSetting(TITLE_MODEL_KEY, id ?? '');
     }
     if (body.data.imageRetentionDays !== undefined || body.data.chatImageRetentionDays !== undefined) {
       // A shortened window should take effect now, not at the next hourly tick.

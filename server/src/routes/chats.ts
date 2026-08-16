@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { and, asc, desc, eq, gt, gte, lt, lte, sql } from 'drizzle-orm';
-import { db, schema, now } from '../db/index.js';
+import { db, schema, now, getSetting } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
@@ -362,8 +362,20 @@ function getDefaultModel(user: { id: string; role: string }) {
   return pickModel(text.length ? text : rows);
 }
 
+// Admin-designated cheap model for auto-titling ('' = unset). Keeps the big
+// conversation model out of a job any small model does fine.
+export const TITLE_MODEL_KEY = 'title_model_id';
+
 // Titles need a text model: an image model can't answer the title prompt.
-function getTitleModel() {
+// Preference order: the admin-designated title model → the model that just
+// answered (text turns only) → any enabled text model.
+function getTitleModel(current?: { model: typeof schema.models.$inferSelect; provider: typeof schema.providers.$inferSelect }) {
+  const configured = getSetting<string>(TITLE_MODEL_KEY, '');
+  if (configured) {
+    const picked = getModelWithProvider(configured);
+    if (picked && !picked.model.imageGen) return picked;
+  }
+  if (current && !current.model.imageGen) return current;
   return pickModel(enabledModelRows().filter((r) => !r.models.imageGen));
 }
 
@@ -544,6 +556,59 @@ export async function chatRoutes(app: FastifyInstance) {
       maxTokens: updated.maxTokens, reasoningEffort: updated.reasoningEffort,
       webSearch: !!updated.webSearch, mcpServerIds,
     } };
+  });
+
+  // Remove one message from the conversation. History is always re-read from
+  // this table when building provider context, so a deleted row is gone from
+  // every later turn — which is the whole point of the feature.
+  app.delete('/api/chats/:id/messages/:messageId', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id: chatId, messageId } = req.params as { id: string; messageId: string };
+    const c = db.select({ id: schema.chats.id }).from(schema.chats)
+      .where(and(eq(schema.chats.id, chatId), eq(schema.chats.userId, req.user!.id))).get();
+    if (!c) return reply.code(404).send({ error: '对话不存在' });
+    const msg = db.select().from(schema.messages)
+      .where(and(eq(schema.messages.id, messageId), eq(schema.messages.chatId, chatId))).get();
+    if (!msg) return reply.code(404).send({ error: '消息不存在' });
+    if (msg.status === 'streaming') {
+      return reply.code(409).send({ error: '正在生成中的消息不能删除' });
+    }
+    db.delete(schema.messages).where(eq(schema.messages.id, messageId)).run();
+    db.update(schema.chats).set({ updatedAt: now() }).where(eq(schema.chats.id, chatId)).run();
+    await cleanupUnreferencedUploads(req.user!.id, uploadIdsFromPartsJson(msg.parts));
+    return { ok: true };
+  });
+
+  // Fork the conversation: a brand-new chat carrying the full message history
+  // and every per-chat setting, titled 「原标题·分支」.
+  app.post('/api/chats/:id/branch', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const c = db.select().from(schema.chats)
+      .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+    if (!c) return reply.code(404).send({ error: '对话不存在' });
+    const msgs = db.select().from(schema.messages).where(eq(schema.messages.chatId, id))
+      .orderBy(asc(schema.messages.seq), asc(schema.messages.createdAt)).all();
+    const branchId = newId();
+    const t = now();
+    db.insert(schema.chats).values({
+      id: branchId, userId: c.userId,
+      title: `${c.title || '对话'}·分支`.slice(0, 120),
+      modelId: c.modelId, projectId: c.projectId,
+      systemPrompt: c.systemPrompt, temperature: c.temperature, maxTokens: c.maxTokens,
+      reasoningEffort: c.reasoningEffort, webSearch: c.webSearch, mcpServerIds: c.mcpServerIds,
+      createdAt: t, updatedAt: t,
+    }).run();
+    for (const m of msgs) {
+      db.insert(schema.messages).values({
+        ...m, id: newId(), chatId: branchId,
+        // A lingering 'streaming' row (crashed turn) must not fork as one — the
+        // client would wait forever for output that is never coming.
+        status: m.status === 'streaming' ? 'stopped' : m.status,
+      }).run();
+    }
+    const created = db.select().from(schema.chats).where(eq(schema.chats.id, branchId)).get()!;
+    return { chat: chatSummary(created) };
   });
 
   app.delete('/api/chats/:id', async (req, reply) => {
@@ -1046,8 +1111,8 @@ export async function chatRoutes(app: FastifyInstance) {
       totalTokens: usage.total || null, durationMs, ttftMs: ttft,
     });
 
-    // auto-title on first successful exchange (an image model can't title, so borrow a text one)
-    const titlePick = model.imageGen ? getTitleModel() : { model, provider };
+    // auto-title on first successful exchange
+    const titlePick = getTitleModel({ model, provider });
     if (!chat.title && status === 'done' && !clientGone && titlePick) {
       try {
         // text-only replay: the title never needs the pictures, and non-vision

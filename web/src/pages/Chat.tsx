@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowDown, FolderClosed, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
+import { ArrowDown, FolderClosed, GitBranch, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
 import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
-import { Button, PageHeader, toast } from '../components/ui';
+import { Button, PageHeader, confirmDialog, toast } from '../components/ui';
 import { tabAlert } from '../tabAlert';
-import type { ChatDetail, Message, MessagePart, ModelInfo } from '../types';
+import type { ChatDetail, ChatSummary, Message, MessagePart, ModelInfo } from '../types';
 
 function draftFromChat(c: ChatDetail | null): ComposerSettings {
   return {
@@ -370,6 +370,34 @@ export default function Chat() {
     runStream(chatRef.current.id, { editMessageId: msgId, content, modelId: modelSel?.id });
   }
 
+  async function deleteMessage(msgId: string) {
+    if (streaming || !chatRef.current) return;
+    const ok = await confirmDialog('删除这条消息?', '删除后这条消息将不再作为上下文参与后续回复,且无法恢复。');
+    if (!ok) return;
+    try {
+      await api.del(`/api/chats/${chatRef.current.id}/messages/${msgId}`);
+      setMessages((prev) => prev.filter((m) => m.id !== msgId));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '删除消息失败', 'err');
+    }
+  }
+
+  const [branching, setBranching] = useState(false);
+  async function branchChat() {
+    if (!chatRef.current || branching) return;
+    setBranching(true);
+    try {
+      const r = await api.post<{ chat: ChatSummary }>(`/api/chats/${chatRef.current.id}/branch`);
+      chatsStore.upsert(r.chat);
+      nav(`/chat/${r.chat.id}`);
+      toast('已创建分支对话', 'ok');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '创建分支失败', 'err');
+    } finally {
+      setBranching(false);
+    }
+  }
+
   const isEmpty = !routeId && messages.length === 0;
   const lastAssistantIdx = messages.map((m) => m.role).lastIndexOf('assistant');
 
@@ -427,6 +455,12 @@ export default function Chat() {
             </Link>
           ) : null;
         })()}
+        {chat && (
+          <Button variant="ghost" size="icon" title="创建分支:复制完整上下文到一个新对话"
+            disabled={streaming || branching} onClick={() => void branchChat()}>
+            <GitBranch size={16} />
+          </Button>
+        )}
         {user?.role === 'admin' && models.length === 0 && modelsLoaded && (
           <Button variant="primary" size="sm" onClick={() => nav('/admin/providers')}>配置模型服务</Button>
         )}
@@ -495,6 +529,7 @@ export default function Chat() {
                   pendingLabel={modelSel?.imageGen ? '正在生成图片,可能需要 1–3 分钟…' : undefined}
                   onRegenerate={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? () => regenerate(m.id) : undefined}
                   onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
+                  onDelete={!streaming && !!chat ? () => void deleteMessage(m.id) : undefined}
                 />
               ))}
               <div className="h-2" />

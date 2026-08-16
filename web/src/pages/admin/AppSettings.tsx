@@ -14,6 +14,7 @@ export default function AppSettings() {
   const [quotaTokens, setQuotaTokens] = useState('0');
   const [quotaAction, setQuotaAction] = useState<AppSettingsDto['quotaAction']>('block');
   const [quotaFallback, setQuotaFallback] = useState('');
+  const [titleModel, setTitleModel] = useState('');
   const [textModels, setTextModels] = useState<ModelInfo[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -24,6 +25,7 @@ export default function AppSettings() {
     setQuotaTokens(String(r.quotaMonthlyTokens ?? 0));
     setQuotaAction(r.quotaAction ?? 'block');
     setQuotaFallback(r.quotaFallbackModelId ?? '');
+    setTitleModel(r.titleModelId ?? '');
   }
 
   useEffect(() => {
@@ -55,6 +57,7 @@ export default function AppSettings() {
         quotaMonthlyTokens: Math.max(0, Math.round(Number(quotaTokens)) || 0),
         quotaAction,
         quotaFallbackModelId: quotaFallback || null,
+        titleModelId: titleModel || null,
       });
       apply(r);
       toast('已保存', 'ok');
@@ -151,6 +154,18 @@ export default function AppSettings() {
               </Select>
             </Field>
           </div>
+
+          <Field
+            label="对话标题生成模型"
+            hint="首轮回复后自动为对话命名所用的模型。指定一个便宜的小模型可以省下大模型的 tokens;未设置时沿用当前对话的模型。"
+          >
+            <Select value={titleModel} onChange={(e) => setTitleModel(e.target.value)}>
+              <option value="">未设置(跟随对话模型)</option>
+              {textModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.displayName}({m.providerName})</option>
+              ))}
+            </Select>
+          </Field>
 
           <div className="flex justify-end border-t border-line pt-4">
             <Button variant="primary" disabled={busy} onClick={save}>
