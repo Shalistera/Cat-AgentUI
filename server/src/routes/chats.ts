@@ -579,16 +579,25 @@ export async function chatRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // Fork the conversation: a brand-new chat carrying the full message history
-  // and every per-chat setting, titled 「原标题·分支」.
+  // Fork the conversation: a brand-new chat carrying the message history and
+  // every per-chat setting, titled 「原标题·分支」. The button lives on each
+  // message, so `uptoMessageId` bounds the copy — everything up to and
+  // including that message; omitted = the whole conversation.
   app.post('/api/chats/:id/branch', async (req, reply) => {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };
+    const body = z.object({ uptoMessageId: z.string().max(64).optional() }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const c = db.select().from(schema.chats)
       .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
     if (!c) return reply.code(404).send({ error: '对话不存在' });
-    const msgs = db.select().from(schema.messages).where(eq(schema.messages.chatId, id))
+    let msgs = db.select().from(schema.messages).where(eq(schema.messages.chatId, id))
       .orderBy(asc(schema.messages.seq), asc(schema.messages.createdAt)).all();
+    if (body.data.uptoMessageId) {
+      const idx = msgs.findIndex((m) => m.id === body.data.uptoMessageId);
+      if (idx < 0) return reply.code(404).send({ error: '消息不存在' });
+      msgs = msgs.slice(0, idx + 1);
+    }
     const branchId = newId();
     const t = now();
     db.insert(schema.chats).values({

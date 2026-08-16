@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowDown, FolderClosed, GitBranch, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
+import { ArrowDown, FolderClosed, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
 import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
@@ -383,11 +383,11 @@ export default function Chat() {
   }
 
   const [branching, setBranching] = useState(false);
-  async function branchChat() {
+  async function branchChat(uptoMessageId: string) {
     if (!chatRef.current || branching) return;
     setBranching(true);
     try {
-      const r = await api.post<{ chat: ChatSummary }>(`/api/chats/${chatRef.current.id}/branch`);
+      const r = await api.post<{ chat: ChatSummary }>(`/api/chats/${chatRef.current.id}/branch`, { uptoMessageId });
       chatsStore.upsert(r.chat);
       nav(`/chat/${r.chat.id}`);
       toast('已创建分支对话', 'ok');
@@ -455,12 +455,6 @@ export default function Chat() {
             </Link>
           ) : null;
         })()}
-        {chat && (
-          <Button variant="ghost" size="icon" title="创建分支:复制完整上下文到一个新对话"
-            disabled={streaming || branching} onClick={() => void branchChat()}>
-            <GitBranch size={16} />
-          </Button>
-        )}
         {user?.role === 'admin' && models.length === 0 && modelsLoaded && (
           <Button variant="primary" size="sm" onClick={() => nav('/admin/providers')}>配置模型服务</Button>
         )}
@@ -530,6 +524,7 @@ export default function Chat() {
                   onRegenerate={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? () => regenerate(m.id) : undefined}
                   onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
                   onDelete={!streaming && !!chat ? () => void deleteMessage(m.id) : undefined}
+                  onBranch={!streaming && !!chat ? () => void branchChat(m.id) : undefined}
                 />
               ))}
               <div className="h-2" />
