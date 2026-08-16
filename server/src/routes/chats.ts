@@ -366,17 +366,23 @@ function getDefaultModel(user: { id: string; role: string }) {
 // conversation model out of a job any small model does fine.
 export const TITLE_MODEL_KEY = 'title_model_id';
 
+type ModelPick = { model: typeof schema.models.$inferSelect; provider: typeof schema.providers.$inferSelect };
+
 // Titles need a text model: an image model can't answer the title prompt.
-// Preference order: the admin-designated title model → the model that just
-// answered (text turns only) → any enabled text model.
-function getTitleModel(current?: { model: typeof schema.models.$inferSelect; provider: typeof schema.providers.$inferSelect }) {
+// Ordered fallback chain — the admin-designated title model → the model that
+// just answered (text turns only) → the default text model. Generation walks
+// the list so one provider having a bad moment (429, timeout) doesn't leave
+// the chat untitled.
+function getTitleCandidates(current?: ModelPick): ModelPick[] {
+  const out: ModelPick[] = [];
+  const push = (p: ModelPick | null | undefined) => {
+    if (p && !p.model.imageGen && !out.some((x) => x.model.id === p.model.id)) out.push(p);
+  };
   const configured = getSetting<string>(TITLE_MODEL_KEY, '');
-  if (configured) {
-    const picked = getModelWithProvider(configured);
-    if (picked && !picked.model.imageGen) return picked;
-  }
-  if (current && !current.model.imageGen) return current;
-  return pickModel(enabledModelRows().filter((r) => !r.models.imageGen));
+  if (configured) push(getModelWithProvider(configured));
+  push(current);
+  push(pickModel(enabledModelRows().filter((r) => !r.models.imageGen)));
+  return out;
 }
 
 const IMAGE_TIMEOUT_MS = 300_000;
@@ -1129,46 +1135,50 @@ export async function chatRoutes(app: FastifyInstance) {
     });
 
     // auto-title on first successful exchange
-    const titlePick = getTitleModel({ model, provider });
-    if (!chat.title && status === 'done' && !clientGone && titlePick) {
-      try {
-        // text-only replay: the title never needs the pictures, and non-vision
-        // title models would choke on them
-        const titleMessages: AdapterMessage[] = baseHistory.map((m) => ({
-          role: m.role,
-          parts: m.parts.filter((p) => p.type !== 'image'),
-        })).filter((m) => m.parts.length > 0);
-        while (titleMessages.length && titleMessages[0].role !== 'user') titleMessages.shift();
-        titleMessages.push(
-          { role: 'assistant', parts: toAdapterPartsNoImages(finalParts) },
-          { role: 'user', parts: [{ type: 'text', text: wantsTitleEmoji(user.settings) ? TITLE_PROMPT_EMOJI : TITLE_PROMPT }] },
-        );
-        let title = '';
-        const tUsage = { prompt: 0, completion: 0, total: 0 };
-        const tAdapter = getAdapter(titlePick.provider.type);
-        for await (const ev of tAdapter.streamChat(toRuntimeConfig(titlePick.provider), {
-          model: titlePick.model.modelId, messages: titleMessages, maxTokens: 500,
-          signal: AbortSignal.timeout(20_000),
-        })) {
-          if (ev.type === 'text') title += ev.text;
-          else if (ev.type === 'usage') {
-            tUsage.prompt += ev.usage.promptTokens ?? 0;
-            tUsage.completion += ev.usage.completionTokens ?? 0;
-            tUsage.total += ev.usage.totalTokens ?? 0;
+    if (!chat.title && status === 'done' && !clientGone) {
+      // text-only replay: the title never needs the pictures, and non-vision
+      // title models would choke on them
+      const titleMessages: AdapterMessage[] = baseHistory.map((m) => ({
+        role: m.role,
+        parts: m.parts.filter((p) => p.type !== 'image'),
+      })).filter((m) => m.parts.length > 0);
+      while (titleMessages.length && titleMessages[0].role !== 'user') titleMessages.shift();
+      titleMessages.push(
+        { role: 'assistant', parts: toAdapterPartsNoImages(finalParts) },
+        { role: 'user', parts: [{ type: 'text', text: wantsTitleEmoji(user.settings) ? TITLE_PROMPT_EMOJI : TITLE_PROMPT }] },
+      );
+      for (const titlePick of getTitleCandidates({ model, provider })) {
+        try {
+          let title = '';
+          const tUsage = { prompt: 0, completion: 0, total: 0 };
+          const tAdapter = getAdapter(titlePick.provider.type);
+          for await (const ev of tAdapter.streamChat(toRuntimeConfig(titlePick.provider), {
+            model: titlePick.model.modelId, messages: titleMessages, maxTokens: 500,
+            signal: AbortSignal.timeout(20_000),
+          })) {
+            if (ev.type === 'text') title += ev.text;
+            else if (ev.type === 'usage') {
+              tUsage.prompt += ev.usage.promptTokens ?? 0;
+              tUsage.completion += ev.usage.completionTokens ?? 0;
+              tUsage.total += ev.usage.totalTokens ?? 0;
+            }
           }
-        }
-        title = redactSensitiveText(title, secretValues)
-          .trim().replace(/^["'「『]|["'」』]$/g, '').split('\n')[0].slice(0, 60);
-        if (title) {
-          db.update(schema.chats).set({ title }).where(eq(schema.chats.id, chatId)).run();
-          sse.send('title', { title });
-        }
-        recordUsage({
-          userId: user.id, chatId, providerId: titlePick.provider.id, providerType: titlePick.provider.type,
-          model: titlePick.model.modelId, kind: 'title',
-          promptTokens: tUsage.prompt, completionTokens: tUsage.completion, totalTokens: tUsage.total,
-        });
-      } catch { /* title generation is best-effort */ }
+          // Tokens were spent even when the attempt yields nothing usable.
+          recordUsage({
+            userId: user.id, chatId, providerId: titlePick.provider.id, providerType: titlePick.provider.type,
+            model: titlePick.model.modelId, kind: 'title',
+            promptTokens: tUsage.prompt, completionTokens: tUsage.completion, totalTokens: tUsage.total,
+          });
+          title = redactSensitiveText(title, secretValues)
+            .trim().replace(/^["'「『]|["'」』]$/g, '').split('\n')[0].slice(0, 60);
+          if (title) {
+            db.update(schema.chats).set({ title }).where(eq(schema.chats.id, chatId)).run();
+            sse.send('title', { title });
+            break;
+          }
+          // an empty title is a failed attempt too — fall through to the next model
+        } catch { /* best-effort: try the next candidate */ }
+      }
     }
 
     sse.send('done', { status });
