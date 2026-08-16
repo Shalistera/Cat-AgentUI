@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { PanelLeft, Check } from 'lucide-react';
 import { api, fmtTokens } from '../api';
 import { useAuth, useUi } from '../store';
-import { Button, Input, Field, Spinner, Card, PageHeader, Stat, toast } from '../components/ui';
+import { Button, Input, Field, Spinner, Card, PageHeader, Stat, ToggleRow, toast } from '../components/ui';
 import { TokensBarChart } from '../components/TokensBarChart';
 import type { MyUsage, User } from '../types';
 
@@ -63,6 +63,9 @@ export default function Settings() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
 
+  // chat preferences — saved to the account, not this browser
+  const [titleEmoji, setTitleEmoji] = useState(!!user?.settings.titleEmoji);
+
   // usage
   const [usage, setUsage] = useState<MyUsage | null>(null);
   const [usageFailed, setUsageFailed] = useState(false);
@@ -84,6 +87,17 @@ export default function Settings() {
       toast(err instanceof Error ? err.message : '保存失败', 'err');
     } finally {
       setSavingProfile(false);
+    }
+  }
+
+  async function toggleTitleEmoji(v: boolean) {
+    setTitleEmoji(v); // optimistic — the toggle should feel instant
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { titleEmoji: v } });
+      useAuth.setState({ user: r.user });
+    } catch (err) {
+      setTitleEmoji(!v);
+      toast(err instanceof Error ? err.message : '保存失败', 'err');
     }
   }
 
@@ -155,6 +169,14 @@ export default function Settings() {
                 </Button>
               </div>
             </div>
+          </Card>
+
+          <Card title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">
+            <ToggleRow
+              label="标题自动加 emoji"
+              desc="开启后,自动生成的对话标题会以一个匹配主题的 emoji 开头"
+              checked={titleEmoji} onChange={(v) => void toggleTitleEmoji(v)}
+            />
           </Card>
 
           <Card title="外观" desc="主题选择会保存在本机,立即生效。">

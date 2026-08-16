@@ -5,7 +5,7 @@ export interface Bootstrap { needsSetup: boolean; signupEnabled: boolean; brand:
 export interface User {
   id: string; username: string; role: 'admin' | 'user';
   displayName: string | null;
-  settings: { theme?: 'dark' | 'light'; lang?: 'zh' | 'en' };
+  settings: { theme?: 'dark' | 'light'; lang?: 'zh' | 'en'; titleEmoji?: boolean };
 }
 
 export type MessagePart =

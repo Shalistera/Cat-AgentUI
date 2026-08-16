@@ -430,6 +430,14 @@ const streamBodySchema = z.object({
 });
 
 const TITLE_PROMPT = '请为上面这段对话生成一个简短的标题(不超过16个字),直接输出标题文本,不要任何引号、句号或解释。';
+// Per-user opt-in (settings.titleEmoji): same prompt, but the title leads with
+// one topic-matching emoji.
+const TITLE_PROMPT_EMOJI = '请为上面这段对话生成一个简短的标题(不超过16个字),标题的第一个字符必须是一个最能代表对话主题的 emoji,其后紧跟标题文本。直接输出标题,不要任何引号、句号或解释。';
+
+function wantsTitleEmoji(settingsJson: string): boolean {
+  try { return !!(JSON.parse(settingsJson) as { titleEmoji?: unknown }).titleEmoji; }
+  catch { return false; }
+}
 
 // Injected when the admin-designated search MCP rides on the request. There is
 // deliberately no "search now" button: like the first-party ChatGPT/Claude/
@@ -1133,7 +1141,7 @@ export async function chatRoutes(app: FastifyInstance) {
         while (titleMessages.length && titleMessages[0].role !== 'user') titleMessages.shift();
         titleMessages.push(
           { role: 'assistant', parts: toAdapterPartsNoImages(finalParts) },
-          { role: 'user', parts: [{ type: 'text', text: TITLE_PROMPT }] },
+          { role: 'user', parts: [{ type: 'text', text: wantsTitleEmoji(user.settings) ? TITLE_PROMPT_EMOJI : TITLE_PROMPT }] },
         );
         let title = '';
         const tUsage = { prompt: 0, completion: 0, total: 0 };
