@@ -701,10 +701,15 @@ export async function chatRoutes(app: FastifyInstance) {
     // releases all process-local leases/reservations.
     try {
     if (model.imageGen) {
-      imageLease = tryAcquireImageJob(user.id);
-      if (!imageLease) {
-        return reply.code(429).send({ error: '图片生成并发数已达上限,请等待当前任务完成' });
+      const admission = tryAcquireImageJob(user.id, model.id);
+      if (!admission.ok) {
+        return reply.code(429).send({
+          error: admission.reason === 'model-busy'
+            ? '该模型正在生成中,请等待完成或换一个模型'
+            : '图片生成并发数已达上限,请等待当前任务完成',
+        });
       }
+      imageLease = admission.lease;
       const reserved = tryReserveStorage(user.id, 'image', config.maxGeneratedImageBytes);
       if (!reserved.ok) {
         return reply.code(413).send({ error: quotaErrorMessage('image', reserved.reason) });

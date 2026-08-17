@@ -36,19 +36,33 @@ export function tryAcquireChatTurn(userId: string, chatId: string): AdmissionLea
 
 let activeImagesGlobal = 0;
 const activeImagesByUser = new Map<string, number>();
+// One job per (user, model): a user can drive several different image models
+// at once, but the same model queues behind itself.
+const activeImageModels = new Set<string>();
 
-export function tryAcquireImageJob(userId: string): AdmissionLease | null {
+export type ImageJobAdmission =
+  | { ok: true; lease: AdmissionLease }
+  | { ok: false; reason: 'model-busy' | 'limit' };
+
+export function tryAcquireImageJob(userId: string, modelId: string): ImageJobAdmission {
+  const key = `${userId}:${modelId}`;
+  if (activeImageModels.has(key)) return { ok: false, reason: 'model-busy' };
   const userActive = activeImagesByUser.get(userId) ?? 0;
   if (userActive >= config.maxImageConcurrencyPerUser
-    || activeImagesGlobal >= config.maxImageConcurrencyGlobal) return null;
+    || activeImagesGlobal >= config.maxImageConcurrencyGlobal) return { ok: false, reason: 'limit' };
   activeImagesGlobal++;
   activeImagesByUser.set(userId, userActive + 1);
-  return once(() => {
-    activeImagesGlobal = Math.max(0, activeImagesGlobal - 1);
-    const next = Math.max(0, (activeImagesByUser.get(userId) ?? 1) - 1);
-    if (next) activeImagesByUser.set(userId, next);
-    else activeImagesByUser.delete(userId);
-  });
+  activeImageModels.add(key);
+  return {
+    ok: true,
+    lease: once(() => {
+      activeImagesGlobal = Math.max(0, activeImagesGlobal - 1);
+      activeImageModels.delete(key);
+      const next = Math.max(0, (activeImagesByUser.get(userId) ?? 1) - 1);
+      if (next) activeImagesByUser.set(userId, next);
+      else activeImagesByUser.delete(userId);
+    }),
+  };
 }
 
 let activeContextImageBytesGlobal = 0;

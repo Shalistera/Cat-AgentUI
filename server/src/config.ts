@@ -86,8 +86,10 @@ export const config = {
   // Process-local admission control (deployment intentionally runs one process).
   maxChatConcurrencyPerUser: intEnv('MAX_CHAT_CONCURRENCY_PER_USER', 2, 1, 10),
   maxChatConcurrencyGlobal: intEnv('MAX_CHAT_CONCURRENCY_GLOBAL', 20, 1, 100),
-  maxImageConcurrencyPerUser: intEnv('MAX_IMAGE_CONCURRENCY_PER_USER', 1, 1, 4),
-  maxImageConcurrencyGlobal: intEnv('MAX_IMAGE_CONCURRENCY_GLOBAL', 4, 1, 20),
+  // Per-user cap spans *distinct* models — the same model never runs twice at
+  // once for one user (see admission.ts).
+  maxImageConcurrencyPerUser: intEnv('MAX_IMAGE_CONCURRENCY_PER_USER', 3, 1, 8),
+  maxImageConcurrencyGlobal: intEnv('MAX_IMAGE_CONCURRENCY_GLOBAL', 8, 1, 40),
   passwordConcurrency: intEnv('PASSWORD_CONCURRENCY', 2, 1, 8),
   passwordQueueMax: intEnv('PASSWORD_QUEUE_MAX', 32, 1, 500),
 

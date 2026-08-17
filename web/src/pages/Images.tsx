@@ -24,6 +24,11 @@ const HISTORY_MAX = 10;
 type QuickPrompt = { title: string; prompt: string };
 const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: '去背景', prompt: '去背景' }];
 
+// A generation in flight. The server admits one job per model per user, so
+// several of these can run side by side — one per model.
+type RunningJob = { id: string; modelId: string; prompt: string; startedAt: number };
+type ActiveJobs = { jobs?: { jobId: string; modelId: string; prompt: string; createdAt: number }[] };
+
 // Accepts both the current {title, prompt} shape and the legacy plain-string
 // entries (which double as their own title).
 function normalizeQuick(raw: unknown): QuickPrompt[] {
@@ -57,19 +62,24 @@ export default function Images() {
   const [refSlots, setRefSlots] = useState<(string | null)[]>(Array(MAX_REFS).fill(null));
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [genError, setGenError] = useState<string | null>(null);
-  const [elapsed, setElapsed] = useState(0);
+  // Generation state is a list, not a boolean: one job per model can run at a
+  // time, so picking another model lets the user start a second one right away.
+  const [running, setRunning] = useState<RunningJob[]>([]);
+  const [submitting, setSubmitting] = useState<string[]>([]);
+  const [genError, setGenError] = useState<{ label: string; message: string } | null>(null);
+  // One ticker drives every job's elapsed counter.
+  const [, setTick] = useState(0);
   const aliveRef = useRef(true);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const jobRef = useRef<string | null>(null);
+  const trackedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     aliveRef.current = true;
-    return () => {
-      aliveRef.current = false;
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+    return () => { aliveRef.current = false; };
   }, []);
+  useEffect(() => {
+    if (!running.length) return;
+    const t = setInterval(() => setTick((v) => v + 1), 100);
+    return () => clearInterval(t);
+  }, [running.length]);
   const slotFileRef = useRef<HTMLInputElement>(null);
   const slotTargetRef = useRef<number>(0);
 
@@ -89,6 +99,19 @@ export default function Images() {
   const [refPreview, setRefPreview] = useState<number | null>(null);
 
   const model = models?.find((m) => m.id === modelId) ?? null;
+  // Async job callbacks outlive the render they were created in, so they read
+  // the model list through a ref instead of a stale closure.
+  const modelsRef = useRef<ImageModel[] | null>(null);
+  modelsRef.current = models;
+  function modelLabel(id: string) {
+    const m = modelsRef.current?.find((x) => x.id === id);
+    return m ? (m.displayName || m.modelId) : '图像模型';
+  }
+
+  const busyModels = useMemo(
+    () => new Set([...running.map((j) => j.modelId), ...submitting]),
+    [running, submitting],
+  );
 
   // Last 10 distinct prompts, straight from the user's own gallery — survives
   // reloads and other devices without any extra storage.
@@ -208,12 +231,6 @@ export default function Images() {
     try { localStorage.setItem(quickKey, JSON.stringify(next)); } catch { /* ignore */ }
   }
 
-  function startElapsedTimer(startedAt: number) {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setElapsed((Date.now() - startedAt) / 1000);
-    timerRef.current = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 100);
-  }
-
   // Last-resort recovery: the job result may have landed in the gallery even
   // when we lost track of the job itself. Returns how many fresh images were
   // pulled in.
@@ -240,11 +257,11 @@ export default function Images() {
   // failure for up to 12 minutes (the server gives up at 10), and before
   // surfacing any error it checks the gallery in case the result arrived
   // despite us losing the job.
-  async function runJob(jobId: string, startedAt: number) {
-    if (jobRef.current === jobId) return;
-    jobRef.current = jobId;
-    setGenerating(true);
-    startElapsedTimer(startedAt);
+  async function runJob(job: RunningJob) {
+    if (trackedRef.current.has(job.id)) return;
+    trackedRef.current.add(job.id);
+    setRunning((prev) => (prev.some((j) => j.id === job.id) ? prev : [...prev, job]));
+    const { id: jobId, startedAt } = job;
     try {
       for (;;) {
         await new Promise((r) => setTimeout(r, 2500));
@@ -267,7 +284,7 @@ export default function Images() {
           setTotal((t) => t + imgs.length);
           // Prompt and reference images stay put on purpose — iterating on
           // the same inputs is the common case.
-          toast(`已生成 ${imgs.length} 张图片`, 'ok');
+          toast(`${modelLabel(job.modelId)}:已生成 ${imgs.length} 张图片`, 'ok');
           tabAlert();
           return;
         }
@@ -280,22 +297,24 @@ export default function Images() {
         return;
       }
       const msg = err instanceof Error ? err.message : '生成失败';
-      if (aliveRef.current) setGenError(msg);
+      if (aliveRef.current) setGenError({ label: modelLabel(job.modelId), message: msg });
       toast(msg, 'err');
       tabAlert();
     } finally {
-      jobRef.current = null;
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-      if (aliveRef.current) setGenerating(false);
+      trackedRef.current.delete(jobId);
+      if (aliveRef.current) setRunning((prev) => prev.filter((j) => j.id !== jobId));
     }
   }
 
-  // Re-attach to a still-running job after a reload / tab switch, so closing
-  // the page mid-generation loses nothing.
+  // Re-attach to every still-running job after a reload / tab switch, so
+  // closing the page mid-generation loses nothing — and a second window shows
+  // the same tasks instead of looking idle.
   useEffect(() => {
-    api.get<{ jobId?: string; createdAt?: number }>('/api/images/jobs/active')
+    api.get<ActiveJobs>('/api/images/jobs/active')
       .then((r) => {
-        if (r.jobId) void runJob(r.jobId, r.createdAt ?? Date.now());
+        for (const j of r.jobs ?? []) {
+          void runJob({ id: j.jobId, modelId: j.modelId, prompt: j.prompt, startedAt: j.createdAt });
+        }
       })
       .catch(() => { /* ignore */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -303,38 +322,41 @@ export default function Images() {
 
   async function generate() {
     const p = prompt.trim();
-    if (!p || !model || generating) return;
-    setGenerating(true);
+    if (!p || !model || uploading || busyModels.has(model.id)) return;
+    const mid = model.id;
     setGenError(null);
+    setSubmitting((prev) => [...prev, mid]);
     const start = Date.now();
-    startElapsedTimer(start);
-    let jobId: string;
     try {
-      const body: Record<string, unknown> = { modelId: model.id, prompt: p, n };
+      const body: Record<string, unknown> = { modelId: mid, prompt: p, n };
       const refIds = refSlots.filter((x): x is string => !!x);
       if (refIds.length) body.inputUploadIds = refIds;
-      ({ jobId } = await api.post<{ jobId: string }>('/api/images/generate', body));
+      const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
+      void runJob({ id: jobId, modelId: mid, prompt: p, startedAt: start });
     } catch (err) {
-      // The submit response can get lost in transit (e.g. a proxy cutting the
-      // connection) while the server accepted the job — ask it before failing.
-      const active = await api.get<{ jobId?: string; createdAt?: number }>('/api/images/jobs/active')
-        .catch(() => null);
-      if (active?.jobId) {
-        void runJob(active.jobId, active.createdAt ?? start);
-        return;
+      // Pick up anything this window doesn't know about yet — typically a job
+      // the same user started in another tab, which is also why a refusal
+      // (429 「该模型正在生成中」) can arrive out of nowhere.
+      const active = await api.get<ActiveJobs>('/api/images/jobs/active').catch(() => null);
+      const untracked = (active?.jobs ?? []).filter((j) => !trackedRef.current.has(j.jobId));
+      for (const j of untracked) {
+        void runJob({ id: j.jobId, modelId: j.modelId, prompt: j.prompt, startedAt: j.createdAt });
       }
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-      setGenerating(false);
+      // An ApiError means the server answered and refused: nothing was queued,
+      // so report it. Anything else is a lost response (e.g. a proxy cutting
+      // the connection) and one of the jobs above is probably ours.
+      if (!(err instanceof ApiError) && untracked.some((j) => j.modelId === mid)) return;
       const msg = err instanceof Error ? err.message : '生成失败';
-      setGenError(msg);
+      setGenError({ label: modelLabel(mid), message: msg });
       toast(msg, 'err');
       tabAlert();
-      return;
+    } finally {
+      setSubmitting((prev) => prev.filter((x) => x !== mid));
     }
-    void runJob(jobId, start);
   }
 
-  const canGenerate = !!prompt.trim() && !!model && !generating && !uploading;
+  const currentJob = model ? running.find((j) => j.modelId === model.id) ?? null : null;
+  const canGenerate = !!prompt.trim() && !!model && !uploading && !busyModels.has(model.id);
 
   return (
     // The +1px type bump this page pioneered is now app-wide (see index.css).
@@ -523,18 +545,41 @@ export default function Images() {
 
                 {genError && (
                   <div className="whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
-                    生成失败:{genError}
+                    生成失败({genError.label}):{genError.message}
+                  </div>
+                )}
+
+                {/* Every job in flight, one row each — the same list shows up
+                    in a second window after re-attaching. */}
+                {running.length > 0 && (
+                  <div className="space-y-1.5">
+                    {running.map((j) => (
+                      <div
+                        key={j.id}
+                        className="flex items-center gap-2 rounded-md border border-line bg-bg1 px-3 py-2 text-[13px]"
+                      >
+                        <Spinner className="h-3.5 w-3.5 shrink-0 text-tx3" />
+                        <span className="shrink-0 font-medium text-tx">{modelLabel(j.modelId)}</span>
+                        <span className="truncate text-tx3">{j.prompt}</span>
+                        <span className="ml-auto shrink-0 tabular-nums text-tx3">
+                          {((Date.now() - j.startedAt) / 1000).toFixed(1)}s
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 )}
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
                   <p className="text-xs leading-relaxed text-tx3">
-                    部分模型生成需要几分钟,请耐心等待;期间可切到其他标签页,完成后标签会有提示。Cmd / Ctrl + Enter 快速提交。
+                    部分模型生成需要几分钟,请耐心等待;期间可切到其他标签页,完成后标签会有提示。
+                    换一个模型即可同时发起下一张,同一模型需等当前任务完成。Cmd / Ctrl + Enter 快速提交。
                   </p>
                   <Button variant="primary" disabled={!canGenerate} onClick={generate} className="shrink-0">
-                    {generating
-                      ? <><Spinner className="h-4 w-4" />生成中 {elapsed.toFixed(1)}s</>
-                      : <><Sparkles size={15} />生成图片</>}
+                    {currentJob
+                      ? <><Spinner className="h-4 w-4" />生成中 {((Date.now() - currentJob.startedAt) / 1000).toFixed(1)}s</>
+                      : model && submitting.includes(model.id)
+                        ? <><Spinner className="h-4 w-4" />提交中</>
+                        : <><Sparkles size={15} />生成图片</>}
                   </Button>
                 </div>
               </div>

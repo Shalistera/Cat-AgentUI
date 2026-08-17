@@ -38,6 +38,9 @@ const JOB_TTL_MS = 30 * 60 * 1000;
 interface ImageJob {
   id: string;
   userId: string;
+  /** models-table id, so a re-attaching client can label the running task. */
+  modelId: string;
+  prompt: string;
   createdAt: number;
   status: 'running' | 'done' | 'error';
   images?: SavedImage[];
@@ -156,10 +159,15 @@ export async function imageRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: '该 Provider 不支持图像生成' });
     }
 
-    const imageLease = tryAcquireImageJob(req.user!.id);
-    if (!imageLease) {
-      return reply.code(429).send({ error: '图片生成并发数已达上限,请等待当前任务完成' });
+    const admission = tryAcquireImageJob(req.user!.id, model.id);
+    if (!admission.ok) {
+      return reply.code(429).send({
+        error: admission.reason === 'model-busy'
+          ? '该模型正在生成中,请等待完成或换一个模型'
+          : '图片生成并发数已达上限,请等待当前任务完成',
+      });
     }
+    const imageLease = admission.lease;
     const requestedN = n ?? 1;
     const reserved = tryReserveStorage(
       req.user!.id, 'image', requestedN * config.maxGeneratedImageBytes,
@@ -189,7 +197,10 @@ export async function imageRoutes(app: FastifyInstance) {
       }
 
       const userId = req.user!.id;
-      const job: ImageJob = { id: newId(), userId, createdAt: Date.now(), status: 'running' };
+      const job: ImageJob = {
+        id: newId(), userId, modelId: model.id, prompt,
+        createdAt: Date.now(), status: 'running',
+      };
       jobs.set(job.id, job);
       cleanupJobs();
       handedOff = true;
@@ -262,15 +273,15 @@ export async function imageRoutes(app: FastifyInstance) {
   });
 
   // The client's submit response can get lost in transit (proxy hiccup, page
-  // reload) while the job keeps running here — this lets it re-attach.
+  // reload) while the job keeps running here — this lets it re-attach. All of
+  // the user's running jobs are listed: several models can be in flight.
   app.get('/api/images/jobs/active', async (req, reply) => {
     requireAuth(req, reply);
-    let latest: ImageJob | null = null;
-    for (const j of jobs.values()) {
-      if (j.userId !== req.user!.id || j.status !== 'running') continue;
-      if (!latest || j.createdAt > latest.createdAt) latest = j;
-    }
-    return latest ? { jobId: latest.id, createdAt: latest.createdAt } : {};
+    const running = [...jobs.values()]
+      .filter((j) => j.userId === req.user!.id && j.status === 'running')
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((j) => ({ jobId: j.id, modelId: j.modelId, prompt: j.prompt, createdAt: j.createdAt }));
+    return { jobs: running };
   });
 
   app.get('/api/images/jobs/:id', async (req, reply) => {

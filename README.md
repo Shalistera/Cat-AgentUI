@@ -79,8 +79,8 @@ npx pm2 save
 | `MAX_GENERATED_IMAGE_MB` | 单张生成图片大小上限 | `20` |
 | `MAX_CHAT_CONCURRENCY_PER_USER` | 单用户并发对话数 | `2` |
 | `MAX_CHAT_CONCURRENCY_GLOBAL` | 全站并发对话数 | `20` |
-| `MAX_IMAGE_CONCURRENCY_PER_USER` | 单用户并发绘图数 | `1` |
-| `MAX_IMAGE_CONCURRENCY_GLOBAL` | 全站并发绘图数 | `4` |
+| `MAX_IMAGE_CONCURRENCY_PER_USER` | 单用户并发绘图数(同一模型始终只能跑一个,需换模型才能并发) | `3` |
+| `MAX_IMAGE_CONCURRENCY_GLOBAL` | 全站并发绘图数 | `8` |
 | `PASSWORD_CONCURRENCY` | scrypt 同时执行数 | `2` |
 | `PASSWORD_QUEUE_MAX` | scrypt 等待队列长度 | `32` |
 | `MAX_TOOL_ITERATIONS` | 单次回复最多 MCP 工具轮数 | `10` |
