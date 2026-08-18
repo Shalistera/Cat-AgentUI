@@ -3,12 +3,28 @@ import type {
   ImageGenRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
 import { sseMessages, readBodyLimited, readErrorBody, readJsonLimited } from './sse.js';
+import { isBareOrigin, stripEndpointSuffix, trimUrl } from './base-url.js';
 import { config } from '../config.js';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
 
+// Endpoints this adapter appends to the base — pasting any of them as the
+// base URL is a common mistake, since that is the URL most gateways document.
+const ENDPOINTS = [
+  '/chat/completions', '/completions', '/responses', '/models', '/embeddings',
+  '/images/generations', '/images/edits',
+];
+
 function base(cfg: ProviderRuntimeConfig): string {
-  return (cfg.baseUrl || DEFAULT_BASE).replace(/\/+$/, '');
+  const raw = trimUrl(cfg.baseUrl || DEFAULT_BASE);
+  const u = stripEndpointSuffix(raw, ENDPOINTS);
+  // A pasted endpoint names its own root — `https://host/chat/completions`
+  // stays at `https://host`, no /v1 guessing.
+  if (u !== raw) return u;
+  // A bare origin, though, is the OpenAI-compatible root, which lives under
+  // /v1 on essentially every gateway. Without this, `https://host` fetches
+  // `https://host/models` and the model list comes back 404.
+  return isBareOrigin(u) ? `${u}/v1` : u;
 }
 
 function headers(cfg: ProviderRuntimeConfig, json = true): Record<string, string> {

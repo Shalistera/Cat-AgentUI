@@ -150,7 +150,7 @@ function ProviderModal({ provider, onClose, onSaved }: {
             <option value="gemini">Google Gemini</option>
           </Select>
         </Field>
-        <Field label="API 地址" hint="留空使用官方地址,可填任意兼容网关">
+        <Field label="API 地址" hint="留空使用官方地址;可填任意兼容网关,写到 /v1 或整条接口地址都能识别">
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={DEFAULT_URLS[type]} />
         </Field>
         {!vertexMode && (

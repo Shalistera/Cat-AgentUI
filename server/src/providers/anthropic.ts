@@ -2,11 +2,17 @@ import type {
   AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
 import { sseMessages, readErrorBody } from './sse.js';
+import { stripEndpointSuffix, trimUrl } from './base-url.js';
 
 const DEFAULT_BASE = 'https://api.anthropic.com';
 
+// This adapter builds `/v1/...` itself, so a base that already carries the
+// endpoint — or just the `/v1` prefix — has to be cut back to the origin.
+const ENDPOINTS = ['/v1/messages', '/v1/models', '/messages', '/models'];
+
 function base(cfg: ProviderRuntimeConfig): string {
-  return (cfg.baseUrl || DEFAULT_BASE).replace(/\/+$/, '');
+  const u = stripEndpointSuffix(cfg.baseUrl || DEFAULT_BASE, ENDPOINTS);
+  return /\/v1$/i.test(u) ? trimUrl(u.slice(0, -'/v1'.length)) : u;
 }
 
 function headers(cfg: ProviderRuntimeConfig, json = true): Record<string, string> {

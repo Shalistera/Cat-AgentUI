@@ -5,15 +5,16 @@ import type {
   ImageGenRequest, ProviderRuntimeConfig, UsageInfo,
 } from '../types.js';
 import { sseMessages, readErrorBody, readJsonLimited } from './sse.js';
+import { stripEndpointSuffix, trimUrl } from './base-url.js';
 import { config } from '../config.js';
 
 const DEFAULT_STUDIO_BASE = 'https://generativelanguage.googleapis.com';
 
-// AI Studio origin: strip trailing slash and an already-present /v1beta suffix.
+// AI Studio origin: the adapter appends `/v1beta/...`, so cut back anything the
+// user pasted from the docs (the version prefix, or a whole endpoint).
 function studioOrigin(cfg: ProviderRuntimeConfig): string {
-  let o = (cfg.baseUrl || DEFAULT_STUDIO_BASE).replace(/\/+$/, '');
-  if (o.endsWith('/v1beta')) o = o.slice(0, -'/v1beta'.length);
-  return o;
+  const o = stripEndpointSuffix(cfg.baseUrl || DEFAULT_STUDIO_BASE, ['/v1beta/models', '/models']);
+  return /\/v1beta$/i.test(o) ? trimUrl(o.slice(0, -'/v1beta'.length)) : o;
 }
 
 // Vertex auth clients cached per provider config; the lib refreshes tokens
