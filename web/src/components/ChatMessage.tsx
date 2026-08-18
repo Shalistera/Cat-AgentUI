@@ -1,13 +1,14 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import {
   BrainCircuit, Check, ChevronDown, ChevronRight, Copy, Clock, GitBranch, Globe,
-  Pencil, RefreshCw, Trash2, Wrench, Zap, CircleAlert, Ban,
+  Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, Zap, CircleAlert, Ban,
 } from 'lucide-react';
-import type { Message, MessagePart } from '../types';
+import type { Message, MessagePart, ModelInfo } from '../types';
 import { fmtDuration, fmtTokens } from '../api';
+import { useModels } from '../store';
 import { Markdown } from './Markdown';
 import { ModelAvatar } from './ModelAvatar';
-import { Button, Spinner } from './ui';
+import { Button, Popover, Spinner } from './ui';
 
 const iconBtn = 'flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm text-tx3 transition-colors hover:bg-bg2 hover:text-tx';
 
@@ -23,6 +24,83 @@ function CopyBtn({ text, size = 12 }: { text: string; size?: number }) {
     >
       {copied ? <Check size={size} className="text-ok" /> : <Copy size={size} />}
     </button>
+  );
+}
+
+/** 重新生成菜单:沿用上次的模型,或换一个模型(同时成为本对话的默认模型)。 */
+function RegenerateMenu({ lastModel, onSame, onWith }: {
+  /** Provider model id of the message being regenerated — display only. */
+  lastModel: string | null;
+  onSame(): void;
+  onWith(m: ModelInfo): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [query, setQuery] = useState('');
+  const models = useModels((s) => s.models);
+
+  useEffect(() => {
+    if (!open) { setPicking(false); setQuery(''); }
+  }, [open]);
+
+  const filtered = query.trim()
+    ? models.filter((m) => `${m.displayName} ${m.modelId} ${m.providerName}`.toLowerCase().includes(query.toLowerCase()))
+    : models;
+
+  const menuRow = 'flex w-full cursor-pointer items-start gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-bg2';
+
+  return (
+    <Popover open={open} setOpen={setOpen} width="w-72" trigger={
+      <button title="重新生成" className={iconBtn}><RefreshCw size={12} /></button>
+    }>
+      {!picking ? (
+        <div className="py-1">
+          <button className={menuRow} onClick={() => { setOpen(false); onSame(); }}>
+            <RefreshCw size={14} className="mt-0.5 shrink-0 text-tx3" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-tx">用上次的模型重新生成</span>
+              {lastModel && <span className="mt-0.5 block truncate font-mono text-[11px] text-tx3">{lastModel}</span>}
+            </span>
+          </button>
+          <button className={menuRow} onClick={() => setPicking(true)}>
+            <Shuffle size={14} className="mt-0.5 shrink-0 text-tx3" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-tx">用其他模型重新生成</span>
+              <span className="mt-0.5 block text-[11px] text-tx3">选择的模型将成为本对话的默认模型</span>
+            </span>
+            <ChevronRight size={13} className="mt-1 shrink-0 text-tx3" />
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="border-b border-line p-2">
+            <label className="relative block">
+              <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tx3" />
+              <input
+                autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
+                aria-label="搜索模型" placeholder="搜索名称、ID 或服务商…"
+                className="w-full rounded-md border border-field bg-bg1 py-1.5 pl-8 pr-2.5 text-xs text-tx transition-colors placeholder:text-tx3 hover:border-tx3"
+              />
+            </label>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {filtered.map((m) => (
+              <button key={m.id}
+                className="flex w-full cursor-pointer items-center gap-2.5 border-b border-line/70 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-bg2"
+                onClick={() => { setOpen(false); onWith(m); }}
+              >
+                <ModelAvatar info={m} size={24} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-semibold text-tx">{m.displayName}</span>
+                  <span className="mt-0.5 block truncate text-[11px] text-tx3">{m.providerName} · {m.modelId}</span>
+                </span>
+              </button>
+            ))}
+            {filtered.length === 0 && <p className="px-3 py-6 text-center text-xs text-tx3">没有匹配的模型</p>}
+          </div>
+        </>
+      )}
+    </Popover>
   );
 }
 
@@ -212,6 +290,8 @@ interface Props {
   isStreaming: boolean; // this message is currently being generated
   pendingLabel?: string; // shown while waiting for the first output
   onRegenerate?: () => void;
+  /** Regenerate with a different model, which becomes the chat's default. */
+  onRegenerateWith?: (m: ModelInfo) => void;
   onEdit?: (text: string) => void;
   /** Remove this message from the conversation (and from all later context). */
   onDelete?: () => void;
@@ -219,7 +299,7 @@ interface Props {
   onBranch?: () => void;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onEdit, onDelete, onBranch }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -227,7 +307,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
     const text = partsToPlainText(msg.parts);
     const images = msg.parts.filter((p) => p.type === 'image');
     return (
-      <div className="group flex flex-col items-end gap-1.5">
+      <div className="flex flex-col items-end gap-1.5">
         {images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-2">
             {images.map((p, i) => p.type === 'image' && partSrc(p) && (
@@ -259,7 +339,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           )
         )}
         {!editing && (
-          <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <div className="flex items-center gap-0.5">
             <CopyBtn text={text} />
             {onEdit && (
               <button title="编辑并重新发送" className={iconBtn} onClick={() => { setDraft(text); setEditing(true); }}>
@@ -348,7 +428,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   return (
     // sm:pr mirrors the avatar column (30px + gap-3) so the text block sits
     // centered in the column and the composer overhangs it equally per side.
-    <div className="group flex gap-3 sm:pr-[42px]">
+    <div className="flex gap-3 sm:pr-[42px]">
       <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={msg.model} size={30} /></div>
       <div className="min-w-0 flex-1">
         {rendered}
@@ -368,12 +448,16 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         )}
         {!isStreaming && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tx3">
-            <span className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+            <span className="flex items-center gap-0.5">
               <CopyBtn text={plain} />
               {onRegenerate && (
-                <button title="重新生成" className={iconBtn} onClick={onRegenerate}>
-                  <RefreshCw size={12} />
-                </button>
+                onRegenerateWith
+                  ? <RegenerateMenu lastModel={msg.model} onSame={onRegenerate} onWith={onRegenerateWith} />
+                  : (
+                    <button title="重新生成" className={iconBtn} onClick={onRegenerate}>
+                      <RefreshCw size={12} />
+                    </button>
+                  )
               )}
               {onBranch && (
                 <button title="从这里创建分支:复制到此为止的对话到一个新对话" className={iconBtn} onClick={onBranch}>

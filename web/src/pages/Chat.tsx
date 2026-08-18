@@ -341,15 +341,22 @@ export default function Chat() {
     abortRef.current?.abort();
   }
 
-  function regenerate(msgId: string) {
+  function regenerate(msgId: string, withModel?: ModelInfo) {
     if (streaming || !chatRef.current) return;
     const idx = messages.findIndex((m) => m.id === msgId);
     if (idx < 0) return;
+    const m = withModel ?? modelSel;
+    if (withModel) {
+      // 换模型重生成:选中的模型即刻成为本对话的默认模型(服务端随流保存
+      // chat.modelId;本地 chat 也要同步,否则 chat 状态一变会把 modelSel 拽回旧值)。
+      selectModel(withModel);
+      setChat((c) => (c ? { ...c, modelId: withModel.id } : c));
+    }
     setMessages((prev) => [
       ...prev.slice(0, idx),
-      { id: 'tmp-a', role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
+      { id: 'tmp-a', role: 'assistant', parts: [], model: m?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
     ]);
-    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: modelSel?.id });
+    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: m?.id });
   }
 
   function editUser(msgId: string, newText: string) {
@@ -522,6 +529,7 @@ export default function Chat() {
                   isStreaming={streaming && i === messages.length - 1 && m.role === 'assistant'}
                   pendingLabel={modelSel?.imageGen ? '正在生成图片,可能需要 1–3 分钟…' : undefined}
                   onRegenerate={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? () => regenerate(m.id) : undefined}
+                  onRegenerateWith={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? (pick) => regenerate(m.id, pick) : undefined}
                   onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
                   onDelete={!streaming && !!chat ? () => void deleteMessage(m.id) : undefined}
                   onBranch={!streaming && !!chat ? () => void branchChat(m.id) : undefined}
