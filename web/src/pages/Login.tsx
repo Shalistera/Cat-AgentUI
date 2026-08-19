@@ -103,8 +103,10 @@ export default function Login() {
       </aside>
 
       {/* Form panel */}
-      <div className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto px-6 py-10">
-        <div className="fade-up w-full max-w-[364px]">
+      {/* m-auto (not justify-center) so short viewports scroll instead of
+          clipping the top of the form above the scroll start. */}
+      <div className="flex min-w-0 flex-1 overflow-y-auto px-6 py-10">
+        <div className="fade-up m-auto w-full max-w-[364px]">
           <div className="lg:hidden">
             <CatMark size={44} />
           </div>

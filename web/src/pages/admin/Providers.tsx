@@ -522,13 +522,17 @@ function ProviderCard({ provider, reload, onEdit }: {
         <span className="text-[13px] font-semibold text-tx">{provider.name}</span>
         <Badge>{TYPE_LABELS[provider.type]}</Badge>
         {usesVertex && <Badge>Vertex</Badge>}
-        <span className="min-w-0 max-w-[16rem] flex-1 truncate font-mono text-[11px] text-tx3" title={provider.baseUrl || DEFAULT_URLS[provider.type]}>
+        {/* Phones keep only name/type/toggle in the header — the status dot
+            already encodes the credential state the hidden badge spells out. */}
+        <span className="hidden min-w-0 max-w-[16rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block" title={provider.baseUrl || DEFAULT_URLS[provider.type]}>
           {provider.baseUrl || DEFAULT_URLS[provider.type]}
         </span>
-        <span className="text-[11px] tabular-nums text-tx3">{models.length} 个模型 · {enabledCount} 已启用</span>
-        <Badge tone={hasCred ? 'ok' : 'err'}>
-          {usesVertex ? (hasCred ? '已配置凭证' : '未配置凭证') : (hasCred ? '已配置 Key' : '未配置 Key')}
-        </Badge>
+        <span className="hidden text-[11px] tabular-nums text-tx3 sm:inline">{models.length} 个模型 · {enabledCount} 已启用</span>
+        <span className="hidden sm:contents">
+          <Badge tone={hasCred ? 'ok' : 'err'}>
+            {usesVertex ? (hasCred ? '已配置凭证' : '未配置凭证') : (hasCred ? '已配置 Key' : '未配置 Key')}
+          </Badge>
+        </span>
         <div className="ml-auto flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
           <Toggle checked={provider.enabled} disabled={toggling} onChange={setEnabled} />
         </div>
@@ -536,28 +540,32 @@ function ProviderCard({ provider, reload, onEdit }: {
 
       {open && (
         <div className="space-y-3 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={fetchModels} disabled={fetching}>
-              {fetching ? <Spinner className="h-3.5 w-3.5" /> : <Download size={13} />}拉取模型列表
-            </Button>
+          {/* Two deliberate rows at every width — a single flex-wrap row used
+              to shatter into three ragged lines on phones. */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Button variant="outline" size="sm" onClick={fetchModels} disabled={fetching}>
+                {fetching ? <Spinner className="h-3.5 w-3.5" /> : <Download size={13} />}拉取模型列表
+              </Button>
+              <div className="ml-auto flex items-center gap-1.5">
+                <Button variant="outline" size="sm" onClick={test} disabled={testing}>
+                  {testing ? <Spinner className="h-3.5 w-3.5" /> : <FlaskConical size={13} />}测试
+                </Button>
+                <Button variant="ghost" size="iconSm" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
+                <Button variant="dangerGhost" size="iconSm" title="删除" onClick={remove}>
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+            </div>
             <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); addManual(); }}>
-              <div className="w-52">
+              <div className="min-w-0 flex-1 sm:max-w-[16rem]">
                 <Input value={manualId} onChange={(e) => setManualId(e.target.value)}
                   placeholder="手动输入模型 ID" uiSize="sm" className="text-xs" />
               </div>
-              <Button variant="outline" size="sm" type="submit" disabled={adding || !manualId.trim()}>
+              <Button variant="outline" size="sm" type="submit" className="shrink-0" disabled={adding || !manualId.trim()}>
                 {adding ? <Spinner className="h-3.5 w-3.5" /> : <Plus size={13} />}手动添加
               </Button>
             </form>
-            <div className="ml-auto flex items-center gap-1.5">
-              <Button variant="outline" size="sm" onClick={test} disabled={testing}>
-                {testing ? <Spinner className="h-3.5 w-3.5" /> : <FlaskConical size={13} />}测试
-              </Button>
-              <Button variant="ghost" size="iconSm" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
-              <Button variant="dangerGhost" size="iconSm" title="删除" onClick={remove}>
-                <Trash2 size={14} />
-              </Button>
-            </div>
           </div>
 
           {models.length === 0 ? (
@@ -620,7 +628,7 @@ export default function Providers() {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-6">
+    <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-base font-semibold tracking-tight text-tx">模型服务</h1>

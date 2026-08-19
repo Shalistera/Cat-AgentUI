@@ -147,7 +147,7 @@ export default function Users() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-6">
+    <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-base font-semibold tracking-tight text-tx">用户</h1>

@@ -358,7 +358,7 @@ export default function Models() {
   const totalModels = providers.reduce((n, p) => n + (p.models?.length ?? 0), 0);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-6">
+    <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
       <div className="min-w-0">
         <h1 className="text-base font-semibold tracking-tight text-tx">模型设置</h1>
         <p className="mt-0.5 text-xs leading-relaxed text-tx3">
@@ -386,7 +386,7 @@ export default function Models() {
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="w-56">
+            <div className="w-full sm:w-56">
               <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索模型 ID / 显示名…" uiSize="sm" />
             </div>
             <Select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)} className="w-auto text-xs">

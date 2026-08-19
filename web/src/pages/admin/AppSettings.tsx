@@ -74,7 +74,7 @@ export default function AppSettings() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 p-6">
+    <div className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
       <div>
         <h1 className="text-base font-semibold tracking-tight text-tx">应用设置</h1>
         <p className="mt-0.5 text-xs text-tx3">站点名称、注册开关与生成图片的保留策略</p>

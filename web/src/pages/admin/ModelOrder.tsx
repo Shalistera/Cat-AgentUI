@@ -75,7 +75,7 @@ export default function ModelOrder() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 p-6">
+    <div className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
       <div className="min-w-0">
         <h1 className="text-base font-semibold tracking-tight text-tx">模型排序</h1>
         <p className="mt-0.5 text-xs leading-relaxed text-tx3">

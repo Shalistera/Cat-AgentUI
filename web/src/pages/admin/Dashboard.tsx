@@ -39,7 +39,7 @@ export default function Dashboard() {
   const { totals, byDay, byUser, byModel, byKind } = usage;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-6">
+    <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
       {/* filter row above everything it scopes */}
       <div className="flex items-center justify-between gap-3">
         <div>

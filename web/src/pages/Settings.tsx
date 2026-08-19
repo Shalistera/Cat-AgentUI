@@ -130,7 +130,7 @@ export default function Settings() {
       />
 
       <div className="flex-1 overflow-y-auto bg-bg0">
-        <div className="fade-up mx-auto max-w-3xl space-y-5 p-6">
+        <div className="fade-up mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
           <Card title="个人资料" desc="用户名不可修改;昵称会显示在界面各处。">
             <div className="space-y-4">
               <Field label="用户名">

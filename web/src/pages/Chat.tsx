@@ -468,11 +468,14 @@ export default function Chat() {
       </PageHeader>
 
       {isEmpty ? (
-        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-10">
+        // Centering lives on the child's auto margins, not justify-center: a
+        // justify-centered scroll container clips overflowing content above
+        // the scroll start, which cut the cat mark off on phones.
+        <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6 sm:py-10">
           {/* 54rem shell matches the conversation column; the composer itself is
               capped at 48rem here too so its width doesn't jump when the first
               message lands. */}
-          <div className="fade-up w-full max-w-[54rem]">
+          <div className="fade-up m-auto w-full max-w-[54rem]">
             <div className="mb-8 flex flex-col items-center text-center">
               <CatMark size={56} />
               <h2 className="mt-4 text-xl font-semibold tracking-tight text-tx">
