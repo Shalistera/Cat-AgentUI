@@ -586,14 +586,22 @@ export async function providerRoutes(app: FastifyInstance) {
     // A user's own drag order (settings.modelOrder, model row ids) wins over
     // the admin order. The sort is stable, so models the user never ranked —
     // e.g. added after they last dragged — stay in admin order at the end.
-    let userOrder: unknown;
+    // Starred models (settings.favoriteModels) are then hoisted above
+    // everything, keeping their relative order within the starred group.
+    let settings: Record<string, unknown> = {};
     try {
-      userOrder = (JSON.parse(req.user!.settings || '{}') as Record<string, unknown>).modelOrder;
+      settings = JSON.parse(req.user!.settings || '{}') as Record<string, unknown>;
     } catch { /* malformed settings — admin order */ }
+    const userOrder = settings.modelOrder;
     if (Array.isArray(userOrder) && userOrder.length) {
       const pos = new Map<string, number>();
       userOrder.forEach((id, i) => { if (typeof id === 'string' && !pos.has(id)) pos.set(id, i); });
       list.sort((a, b) => (pos.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (pos.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+    }
+    const favorites = settings.favoriteModels;
+    if (Array.isArray(favorites) && favorites.length) {
+      const fav = new Set(favorites.filter((x) => typeof x === 'string'));
+      list.sort((a, b) => (fav.has(a.id) ? 0 : 1) - (fav.has(b.id) ? 0 : 1));
     }
     return list;
   });

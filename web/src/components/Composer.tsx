@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeft, ArrowUp, Check, ChevronDown, Gauge, Globe, Image as ImageIcon,
-  Loader2, Plus, RotateCcw, Search, Settings2, Square, Wrench, X,
+  Loader2, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAuth, useMcp, useModels, useUi } from '../store';
 import { api, errMsg, uploadFile } from '../api';
@@ -158,13 +158,22 @@ export function Composer(props: ComposerProps) {
   const customOrder = user?.settings.modelOrder;
   const hasCustomOrder = Array.isArray(customOrder) && customOrder.length > 0;
   const dragEnabled = !modelQuery.trim() && models.length > 1;
+  const favoriteIds = Array.isArray(user?.settings.favoriteModels) ? user.settings.favoriteModels : [];
+  const favSet = new Set(favoriteIds);
+
+  // Starred rows sit above everything, keeping relative order inside each group.
+  const hoistFavorites = (list: ModelInfo[], fav: Set<string>) => [
+    ...list.filter((m) => fav.has(m.id)), ...list.filter((m) => !fav.has(m.id)),
+  ];
 
   async function saveUserOrder(section: ModelInfo[]) {
     // The dragged section (chat or image rows, possibly kind-filtered) is a
-    // subset of the flat list: permute its members in place, touch nothing else.
+    // subset of the flat list: permute its members in place, touch nothing
+    // else. Favorites are re-hoisted so a drop can't fight the star pinning —
+    // what we save is exactly what stays on screen.
     const ids = new Set(section.map((m) => m.id));
     let k = 0;
-    const full = models.map((m) => (ids.has(m.id) ? section[k++] : m));
+    const full = hoistFavorites(models.map((m) => (ids.has(m.id) ? section[k++] : m)), favSet);
     const prev = models;
     useModels.setState({ models: full }); // optimistic — a snap-back drop feels broken
     try {
@@ -174,6 +183,28 @@ export function Composer(props: ComposerProps) {
       useAuth.getState().setUser(r.user);
     } catch (e) {
       useModels.setState({ models: prev });
+      toast(errMsg(e), 'err');
+    }
+  }
+
+  async function toggleFavorite(m: ModelInfo) {
+    if (!user) return;
+    const next = favSet.has(m.id) ? favoriteIds.filter((id) => id !== m.id) : [...favoriteIds, m.id];
+    const prevUser = user;
+    const prevModels = models;
+    // Optimistic: fill the star and hoist right away. Un-starring keeps the
+    // row in place until the refetch below settles it back into its real slot.
+    useAuth.getState().setUser({ ...user, settings: { ...user.settings, favoriteModels: next } });
+    useModels.setState({ models: hoistFavorites(models, new Set(next)) });
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', {
+        settings: { favoriteModels: next.length ? next : null },
+      });
+      useAuth.getState().setUser(r.user);
+      await useModels.getState().load(true);
+    } catch (e) {
+      useAuth.getState().setUser(prevUser);
+      useModels.setState({ models: prevModels });
       toast(errMsg(e), 'err');
     }
   }
@@ -234,6 +265,18 @@ export function Composer(props: ComposerProps) {
         {m.imageGen && <ImageIcon size={12} aria-label="图像生成" />}
         {m.vision && !m.imageGen && <span className="rounded-sm bg-bg3 px-1 py-0.5 text-[9px] font-medium">视觉</span>}
         {m.tools && !m.imageGen && <Wrench size={11} aria-label="工具调用" />}
+      </span>
+      <span
+        role="button"
+        aria-label={favSet.has(m.id) ? '取消收藏' : '收藏'}
+        aria-pressed={favSet.has(m.id)}
+        title={favSet.has(m.id) ? '取消收藏' : '收藏:收藏的模型始终排在最前'}
+        className={`-m-1 shrink-0 cursor-pointer p-1 transition-colors ${
+          favSet.has(m.id) ? 'text-amber-400' : 'text-tx3/60 hover:text-amber-400'
+        }`}
+        onClick={(e) => { e.stopPropagation(); void toggleFavorite(m); }}
+      >
+        <Star size={13} className={favSet.has(m.id) ? 'fill-current' : undefined} />
       </span>
       {m.id === model?.id && <Check size={14} className="shrink-0 text-acc" />}
     </button>

@@ -9,6 +9,8 @@ export interface User {
     theme?: 'dark' | 'light'; lang?: 'zh' | 'en'; titleEmoji?: boolean;
     /** Personal model-picker order (model row ids); null/absent = admin order. */
     modelOrder?: string[] | null;
+    /** Starred models (model row ids) — always hoisted to the top of the picker. */
+    favoriteModels?: string[] | null;
   };
 }
 

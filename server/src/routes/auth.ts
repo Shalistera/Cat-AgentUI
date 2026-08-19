@@ -132,12 +132,15 @@ export async function authRoutes(app: FastifyInstance) {
       settings: z.record(z.string(), z.unknown()).optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
-    // settings is a free-form merge, but modelOrder feeds a sort on every
-    // /api/models call — keep it a bounded string list (or null to reset).
-    const mo = body.data.settings?.modelOrder;
-    if (mo !== undefined && mo !== null
-      && !(Array.isArray(mo) && mo.length <= 500 && mo.every((x) => typeof x === 'string' && x.length <= 64))) {
-      return reply.code(400).send({ error: '参数错误' });
+    // settings is a free-form merge, but modelOrder / favoriteModels feed a
+    // sort on every /api/models call — keep them bounded string lists (or
+    // null to reset).
+    for (const key of ['modelOrder', 'favoriteModels'] as const) {
+      const v = body.data.settings?.[key];
+      if (v !== undefined && v !== null
+        && !(Array.isArray(v) && v.length <= 500 && v.every((x) => typeof x === 'string' && x.length <= 64))) {
+        return reply.code(400).send({ error: '参数错误' });
+      }
     }
     const patch: Record<string, unknown> = {};
     if (body.data.displayName !== undefined) patch.displayName = body.data.displayName;
