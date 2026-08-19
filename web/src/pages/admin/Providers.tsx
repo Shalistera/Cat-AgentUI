@@ -1,29 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
-  Check, ChevronDown, ChevronUp, Download, FlaskConical, Pencil, Plus, Server, Star, Trash2, Upload, Users, X,
+  Check, ChevronDown, Download, FlaskConical, Pencil, Plus, Server, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
-  Badge, Button, EmptyState, Field, Input, Modal, ModalActions, SegmentedControl, Select, Spinner,
+  Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select, Spinner,
   StatusDot, Td, Textarea, Th, Toggle, ToggleRow, confirmDialog, toast,
 } from '../../components/ui';
 import { KeyValueEditor, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
 import { ProviderAvatar } from '../../components/ModelAvatar';
-import type { AdminModel, AdminProvider, AdminUser, ModelAccessMode, ReasoningLevel, ReasoningMode } from '../../types';
-
-type ProviderType = AdminProvider['type'];
-
-const TYPE_LABELS: Record<ProviderType, string> = {
-  openai: 'OpenAI 兼容',
-  anthropic: 'Anthropic',
-  gemini: 'Google Gemini',
-};
-
-const DEFAULT_URLS: Record<ProviderType, string> = {
-  openai: 'https://api.openai.com/v1',
-  anthropic: 'https://api.anthropic.com',
-  gemini: 'https://generativelanguage.googleapis.com',
-};
+import type { AdminModel, AdminProvider } from '../../types';
+import { DEFAULT_URLS, TYPE_LABELS, type ProviderType } from './provider-common';
 
 // ---------- provider create / edit modal ----------
 function ProviderModal({ provider, onClose, onSaved }: {
@@ -302,274 +290,8 @@ function FetchModelsModal({ provider, models, onClose, onDone }: {
   );
 }
 
-// ---------- reasoning levels ----------
-const MODE_LABELS: Record<ReasoningMode, string> = { auto: '默认', custom: '自定义', off: '关闭' };
-
-/**
- * Levels default to the vendor's common tiers, derived from the model id, and
- * reach the user in Chinese. Custom is there for the week a vendor ships a tier
- * we have never heard of — which is why it takes both halves: the name the API
- * expects and the one a person can read.
- */
-function ReasoningModal({ model, reload, onClose }: {
-  model: AdminModel; reload(): Promise<void>; onClose(): void;
-}) {
-  const { mode: savedMode, custom, defaults } = model.reasoning;
-  const [mode, setMode] = useState<ReasoningMode>(savedMode);
-  // Seed the editor with whatever is already in effect, so picking 自定义 is an
-  // edit rather than a blank page.
-  const [rows, setRows] = useState<ReasoningLevel[]>(() => {
-    const seed = custom.length ? custom : defaults;
-    return seed.length ? seed : [{ value: '', label: '' }];
-  });
-  const [busy, setBusy] = useState(false);
-
-  const filled = rows.filter((r) => r.value.trim());
-  const setRow = (i: number, patch: Partial<ReasoningLevel>) =>
-    setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const move = (i: number, dir: -1 | 1) => {
-    const next = [...rows];
-    const [row] = next.splice(i, 1);
-    next.splice(i + dir, 0, row);
-    setRows(next);
-  };
-
-  async function save() {
-    if (mode === 'custom' && !filled.length) { toast('请至少填写一个档位', 'err'); return; }
-    setBusy(true);
-    try {
-      await api.patch(`/api/admin/models/${model.id}`, {
-        reasoningMode: mode,
-        // Only send the ladder when it is the one in use — otherwise a stray
-        // half-typed row would overwrite what is saved.
-        ...(mode === 'custom' ? { reasoningLevels: filled } : {}),
-      });
-      await reload();
-      toast('已更新推理档位', 'ok');
-      onClose();
-    } catch (e) { toast(errMsg(e), 'err'); }
-    finally { setBusy(false); }
-  }
-
-  return (
-    <Modal open onClose={onClose} title="推理档位" desc={model.modelId}>
-      <div className="space-y-4">
-        <SegmentedControl<ReasoningMode>
-          value={mode}
-          onChange={setMode}
-          options={(['auto', 'custom', 'off'] as const).map((m) => ({ value: m, label: MODE_LABELS[m] }))}
-        />
-
-        {mode === 'auto' && (defaults.length ? (
-          <div className="space-y-2">
-            <p className="text-xs leading-relaxed text-tx3">按该模型所属系列的常见档位自动设置,用户端显示中文。</p>
-            <div className="flex flex-wrap gap-1.5">
-              {defaults.map((l) => (
-                <Badge key={l.value}>{l.label}<span className="font-mono text-tx3">{l.value}</span></Badge>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <p className="text-xs leading-relaxed text-tx3">
-            未识别到该模型的推理档位,聊天页不会显示推理强度。如果它其实支持,改用「自定义」填写即可。
-          </p>
-        ))}
-
-        {mode === 'custom' && (
-          <div className="space-y-2">
-            <p className="text-xs leading-relaxed text-tx3">
-              从弱到强排列。左侧是发送给服务端的值(OpenAI 会原样作为 <span className="font-mono">reasoning_effort</span> 发出),
-              右侧是用户看到的名称,留空则自动取常见档位的中文名。
-            </p>
-            <div className="flex gap-2 pr-[4.5rem] text-[11px] text-tx3">
-              <span className="flex-1">值(英文)</span>
-              <span className="flex-1">显示名</span>
-            </div>
-            {rows.map((r, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Input
-                  value={r.value} placeholder="xhigh" uiSize="sm" className="flex-1 font-mono text-xs"
-                  onChange={(e) => setRow(i, { value: e.target.value })}
-                />
-                <Input
-                  value={r.label} placeholder="留空自动" uiSize="sm" className="flex-1 text-xs"
-                  onChange={(e) => setRow(i, { label: e.target.value })}
-                />
-                <div className="flex shrink-0">
-                  <Button variant="ghost" size="iconXs" title="上移" disabled={i === 0} onClick={() => move(i, -1)}>
-                    <ChevronUp size={13} />
-                  </Button>
-                  <Button variant="ghost" size="iconXs" title="下移" disabled={i === rows.length - 1} onClick={() => move(i, 1)}>
-                    <ChevronDown size={13} />
-                  </Button>
-                  <Button variant="dangerGhost" size="iconXs" title="删除此档位"
-                    onClick={() => setRows(rows.filter((_, j) => j !== i))}>
-                    <X size={13} />
-                  </Button>
-                </div>
-              </div>
-            ))}
-            <div className="flex gap-2 pt-0.5">
-              <Button variant="outline" size="sm" onClick={() => setRows([...rows, { value: '', label: '' }])}>
-                <Plus size={13} />添加档位
-              </Button>
-              {defaults.length > 0 && (
-                <Button variant="ghost" size="sm" onClick={() => setRows(defaults)}>填入默认档位</Button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {mode === 'off' && (
-          <p className="text-xs leading-relaxed text-tx3">
-            视为该模型没有推理模式:聊天页隐藏推理强度,请求里也不会带上这个字段。
-          </p>
-        )}
-
-        <ModalActions>
-          <Button variant="outline" onClick={onClose}>取消</Button>
-          <Button variant="primary" disabled={busy} onClick={save}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}保存
-          </Button>
-        </ModalActions>
-      </div>
-    </Modal>
-  );
-}
-
-// ---------- model visibility ----------
-/**
- * Mirrors the MCP servers' access control: shared models are visible to every
- * account, restricted ones only to the ticked ordinary users (admins always
- * see everything). Enforced across chat, 绘图 and PPT.
- */
-function AccessModal({ model, reload, onClose }: {
-  model: AdminModel; reload(): Promise<void>; onClose(): void;
-}) {
-  const [mode, setMode] = useState<ModelAccessMode>(model.accessMode);
-  const [allowed, setAllowed] = useState<string[]>(model.allowedUserIds);
-  const [users, setUsers] = useState<AdminUser[] | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    api.get<AdminUser[]>('/api/admin/users')
-      .then((r) => setUsers(r.filter((u) => u.role === 'user')))
-      .catch((e) => toast(errMsg(e), 'err'));
-  }, []);
-
-  async function save() {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await api.patch(`/api/admin/models/${model.id}`, { accessMode: mode, allowedUserIds: allowed });
-      await reload();
-      toast('已更新模型可见性', 'ok');
-      onClose();
-    } catch (e) { toast(errMsg(e), 'err'); }
-    finally { setBusy(false); }
-  }
-
-  return (
-    <Modal open onClose={onClose} title="模型可见性" desc={model.modelId}>
-      <div className="space-y-4">
-        <Field label="访问范围" hint="贵模型建议仅指定用户,与配额同属成本治理">
-          <Select value={mode} onChange={(e) => setMode(e.target.value as ModelAccessMode)}>
-            <option value="shared">所有登录用户</option>
-            <option value="restricted">仅指定普通用户</option>
-          </Select>
-        </Field>
-
-        {mode === 'restricted' && (
-          <Field label="指定普通用户" hint="管理员始终可用;未勾选的用户在模型列表里看不到它">
-            {!users ? (
-              <div className="flex justify-center py-4 text-tx3"><Spinner className="h-4 w-4" /></div>
-            ) : (
-              <div className="max-h-48 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-bg0">
-                {users.length === 0 ? (
-                  <div className="px-3 py-3 text-xs text-tx3">暂无普通用户</div>
-                ) : users.map((u) => (
-                  <div key={u.id} className="flex items-center gap-3 px-3 py-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13px] font-medium text-tx">{u.displayName || u.username}</div>
-                      {u.displayName && <div className="truncate text-[11px] text-tx3">@{u.username}</div>}
-                    </div>
-                    {u.disabled && <Badge tone="err">已停用</Badge>}
-                    <Toggle
-                      checked={allowed.includes(u.id)}
-                      onChange={(checked) => setAllowed(checked
-                        ? [...allowed, u.id]
-                        : allowed.filter((id) => id !== u.id))}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-          </Field>
-        )}
-
-        <ModalActions>
-          <Button variant="outline" onClick={onClose}>取消</Button>
-          <Button variant="primary" disabled={busy} onClick={save}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}保存
-          </Button>
-        </ModalActions>
-      </div>
-    </Modal>
-  );
-}
-
-function AccessCell({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
-  const [open, setOpen] = useState(false);
-  const restricted = model.accessMode === 'restricted';
-
-  return (
-    <>
-      <button
-        type="button"
-        title="设置模型可见性"
-        onClick={() => setOpen(true)}
-        className="flex cursor-pointer items-center gap-1.5 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-bg3"
-      >
-        <Badge tone={restricted ? 'acc' : 'default'}>
-          {restricted ? <><Users size={10} />指定 {model.allowedUserIds.length}</> : '全员'}
-        </Badge>
-        <Pencil size={11} className="shrink-0 text-tx3" />
-      </button>
-      {open && <AccessModal model={model} reload={reload} onClose={() => setOpen(false)} />}
-    </>
-  );
-}
-
-function ReasoningCell({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
-  const [open, setOpen] = useState(false);
-  const { mode, levels } = model.reasoning;
-
-  return (
-    <>
-      <button
-        type="button"
-        title="设置推理档位"
-        onClick={() => setOpen(true)}
-        className="flex max-w-[15rem] cursor-pointer items-center gap-1.5 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-bg3"
-      >
-        <Badge tone={mode === 'custom' ? 'acc' : 'default'}>{MODE_LABELS[mode]}</Badge>
-        {levels.length ? (
-          <span className="truncate text-[11px] text-tx2">{levels.map((l) => l.label).join(' · ')}</span>
-        ) : (
-          <span className="text-[11px] text-tx3">无</span>
-        )}
-        <Pencil size={11} className="shrink-0 text-tx3" />
-      </button>
-      {open && <ReasoningModal model={model} reload={reload} onClose={() => setOpen(false)} />}
-    </>
-  );
-}
-
-// ---------- model row ----------
-function ModelRow({ model, reload, index, count, onMove }: {
-  model: AdminModel; reload(): Promise<void>;
-  index: number; count: number; onMove(dir: -1 | 1): Promise<void>;
-}) {
+// ---------- model row (roster only: display name, enable, delete) ----------
+function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(model.displayName ?? '');
   const [busy, setBusy] = useState(false);
@@ -602,25 +324,9 @@ function ModelRow({ model, reload, index, count, onMove }: {
     } catch (e) { toast(errMsg(e), 'err'); setBusy(false); }
   }
 
-  async function move(dir: -1 | 1) {
-    if (busy) return;
-    setBusy(true);
-    try { await onMove(dir); }
-    catch (e) { toast(errMsg(e), 'err'); }
-    finally { setBusy(false); }
-  }
-
   return (
     <tr className="group transition-colors hover:bg-bg2/60">
-      <Td className="whitespace-nowrap">
-        <Button variant="ghost" size="iconXs" title="上移" disabled={busy || index === 0} onClick={() => move(-1)}>
-          <ChevronUp size={13} />
-        </Button>
-        <Button variant="ghost" size="iconXs" title="下移" disabled={busy || index === count - 1} onClick={() => move(1)}>
-          <ChevronDown size={13} />
-        </Button>
-      </Td>
-      <Td className="max-w-[220px] truncate font-mono text-tx">{model.modelId}</Td>
+      <Td className="max-w-[280px] truncate font-mono text-tx">{model.modelId}</Td>
       <Td>
         {editingName ? (
           <div className="flex items-center gap-1">
@@ -645,25 +351,7 @@ function ModelRow({ model, reload, index, count, onMove }: {
           </span>
         )}
       </Td>
-      <Td className="text-center"><Toggle checked={model.vision} disabled={busy} onChange={(v) => patch({ vision: v })} /></Td>
-      <Td className="text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></Td>
-      <Td className="text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></Td>
-      <Td><ReasoningCell model={model} reload={reload} /></Td>
-      <Td className="text-center">
-        <Toggle
-          checked={model.defaultWebSearch} disabled={busy || model.imageGen}
-          onChange={(v) => patch({ defaultWebSearch: v }, v ? '新对话将默认开启联网搜索' : '已关闭默认联网')}
-        />
-      </Td>
-      <Td><AccessCell model={model} reload={reload} /></Td>
-      <Td className="text-center">
-        <Button variant="ghost" size="iconXs"
-          title={model.isDefault ? '当前默认模型' : '设为默认'} disabled={busy || model.isDefault}
-          onClick={() => patch({ isDefault: true }, '已设为默认')}>
-          <Star size={14} className={model.isDefault ? 'text-acc' : ''} fill={model.isDefault ? 'currentColor' : 'none'} />
-        </Button>
-      </Td>
-      <Td className="text-center"><Toggle checked={model.enabled} disabled={busy} onChange={(v) => patch({ enabled: v })} /></Td>
+      <Td className="text-center"><Toggle checked={model.enabled} disabled={busy} onChange={(v) => patch({ enabled: v }, v ? '已启用' : '已停用')} /></Td>
       <Td className="text-right">
         <Button variant="dangerGhost" size="iconXs" title="删除" disabled={busy} onClick={remove}>
           <Trash2 size={13} />
@@ -673,7 +361,6 @@ function ModelRow({ model, reload, index, count, onMove }: {
   );
 }
 
-// ---------- provider card ----------
 // ---------- provider avatar ----------
 const AVATAR_MIMES = ['image/svg+xml', 'image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const AVATAR_MAX_BYTES = 128 * 1024;
@@ -742,10 +429,11 @@ function ProviderAvatarPicker({ provider, reload }: { provider: AdminProvider; r
   );
 }
 
-function ProviderCard({ provider, reload, onEdit, index, count, onMove }: {
+// ---------- provider card (collapsed by default) ----------
+function ProviderCard({ provider, reload, onEdit }: {
   provider: AdminProvider; reload(): Promise<void>; onEdit(): void;
-  index: number; count: number; onMove(dir: -1 | 1): Promise<void>;
 }) {
+  const [open, setOpen] = useState(false);
   const [testing, setTesting] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [fetched, setFetched] = useState<{ id: string; name?: string }[] | null>(null);
@@ -753,6 +441,7 @@ function ProviderCard({ provider, reload, onEdit, index, count, onMove }: {
   const [adding, setAdding] = useState(false);
   const [toggling, setToggling] = useState(false);
   const models = provider.models ?? [];
+  const enabledCount = models.filter((m) => m.enabled).length;
   // Vertex authenticates with a service account, so "no API key" is its
   // normal, healthy state — judge it by the credential it actually uses.
   const usesVertex = provider.type === 'gemini' && provider.useVertex;
@@ -804,14 +493,6 @@ function ProviderCard({ provider, reload, onEdit, index, count, onMove }: {
     finally { setFetching(false); }
   }
 
-  async function moveModel(i: number, dir: -1 | 1) {
-    const ids = models.map((m) => m.id);
-    const [moved] = ids.splice(i, 1);
-    ids.splice(i + dir, 0, moved);
-    await api.put(`/api/admin/providers/${provider.id}/models/order`, { ids });
-    await reload();
-  }
-
   async function addManual() {
     const id = manualId.trim();
     if (!id || adding) return;
@@ -828,8 +509,15 @@ function ProviderCard({ provider, reload, onEdit, index, count, onMove }: {
 
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-line px-4 py-3">
-        <ProviderAvatarPicker provider={provider} reload={reload} />
+      {/* Whole header toggles the fold; the interactive bits stop propagation. */}
+      <div
+        className={`flex cursor-pointer flex-wrap items-center gap-x-2.5 gap-y-1.5 px-4 py-3 transition-colors hover:bg-bg2/40 ${open ? 'border-b border-line' : ''}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <ChevronDown size={15} className={`shrink-0 text-tx3 transition-transform ${open ? '' : '-rotate-90'}`} />
+        <div onClick={(e) => e.stopPropagation()}>
+          <ProviderAvatarPicker provider={provider} reload={reload} />
+        </div>
         <StatusDot tone={!provider.enabled ? 'idle' : hasCred ? 'ok' : 'warn'} />
         <span className="text-[13px] font-semibold text-tx">{provider.name}</span>
         <Badge>{TYPE_LABELS[provider.type]}</Badge>
@@ -837,78 +525,72 @@ function ProviderCard({ provider, reload, onEdit, index, count, onMove }: {
         <span className="min-w-0 max-w-[16rem] flex-1 truncate font-mono text-[11px] text-tx3" title={provider.baseUrl || DEFAULT_URLS[provider.type]}>
           {provider.baseUrl || DEFAULT_URLS[provider.type]}
         </span>
+        <span className="text-[11px] tabular-nums text-tx3">{models.length} 个模型 · {enabledCount} 已启用</span>
         <Badge tone={hasCred ? 'ok' : 'err'}>
           {usesVertex ? (hasCred ? '已配置凭证' : '未配置凭证') : (hasCred ? '已配置 Key' : '未配置 Key')}
         </Badge>
-        <div className="ml-auto flex items-center gap-1.5">
-          <Button variant="ghost" size="iconSm" title="上移(影响模型选择器里的分组顺序)"
-            disabled={index === 0} onClick={() => onMove(-1)}>
-            <ChevronUp size={14} />
-          </Button>
-          <Button variant="ghost" size="iconSm" title="下移"
-            disabled={index === count - 1} onClick={() => onMove(1)}>
-            <ChevronDown size={14} />
-          </Button>
+        <div className="ml-auto flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
           <Toggle checked={provider.enabled} disabled={toggling} onChange={setEnabled} />
-          <Button variant="outline" size="sm" onClick={test} disabled={testing}>
-            {testing ? <Spinner className="h-3.5 w-3.5" /> : <FlaskConical size={13} />}测试
-          </Button>
-          <Button variant="ghost" size="iconSm" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
-          <Button variant="dangerGhost" size="iconSm" title="删除" onClick={remove}>
-            <Trash2 size={14} />
-          </Button>
         </div>
       </div>
 
-      <div className="space-y-3 px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={fetchModels} disabled={fetching}>
-            {fetching ? <Spinner className="h-3.5 w-3.5" /> : <Download size={13} />}拉取模型列表
-          </Button>
-          <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); addManual(); }}>
-            <div className="w-52">
-              <Input value={manualId} onChange={(e) => setManualId(e.target.value)}
-                placeholder="手动输入模型 ID" uiSize="sm" className="text-xs" />
-            </div>
-            <Button variant="outline" size="sm" type="submit" disabled={adding || !manualId.trim()}>
-              {adding ? <Spinner className="h-3.5 w-3.5" /> : <Plus size={13} />}手动添加
+      {open && (
+        <div className="space-y-3 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={fetchModels} disabled={fetching}>
+              {fetching ? <Spinner className="h-3.5 w-3.5" /> : <Download size={13} />}拉取模型列表
             </Button>
-          </form>
-        </div>
-
-        {models.length === 0 ? (
-          <p className="rounded-md border border-dashed border-line2 px-3 py-4 text-center text-xs text-tx3">
-            尚未添加模型 — 点击「拉取模型列表」或手动输入模型 ID
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr>
-                  <Th>排序</Th>
-                  <Th>模型 ID</Th>
-                  <Th>显示名</Th>
-                  <Th className="text-center">视觉</Th>
-                  <Th className="text-center">工具</Th>
-                  <Th className="text-center">绘图</Th>
-                  <Th>推理档位</Th>
-                  <Th className="text-center" title="新对话默认开启联网搜索(需要该模型可用搜索)">默认联网</Th>
-                  <Th>可见性</Th>
-                  <Th className="text-center">默认</Th>
-                  <Th className="text-center">启用</Th>
-                  <Th className="text-right">删除</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {models.map((m, i) => (
-                  <ModelRow key={m.id} model={m} reload={reload}
-                    index={i} count={models.length} onMove={(dir) => moveModel(i, dir)} />
-                ))}
-              </tbody>
-            </table>
+            <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); addManual(); }}>
+              <div className="w-52">
+                <Input value={manualId} onChange={(e) => setManualId(e.target.value)}
+                  placeholder="手动输入模型 ID" uiSize="sm" className="text-xs" />
+              </div>
+              <Button variant="outline" size="sm" type="submit" disabled={adding || !manualId.trim()}>
+                {adding ? <Spinner className="h-3.5 w-3.5" /> : <Plus size={13} />}手动添加
+              </Button>
+            </form>
+            <div className="ml-auto flex items-center gap-1.5">
+              <Button variant="outline" size="sm" onClick={test} disabled={testing}>
+                {testing ? <Spinner className="h-3.5 w-3.5" /> : <FlaskConical size={13} />}测试
+              </Button>
+              <Button variant="ghost" size="iconSm" title="编辑" onClick={onEdit}><Pencil size={14} /></Button>
+              <Button variant="dangerGhost" size="iconSm" title="删除" onClick={remove}>
+                <Trash2 size={14} />
+              </Button>
+            </div>
           </div>
-        )}
-      </div>
+
+          {models.length === 0 ? (
+            <p className="rounded-md border border-dashed border-line2 px-3 py-4 text-center text-xs text-tx3">
+              尚未添加模型 — 点击「拉取模型列表」或手动输入模型 ID
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr>
+                    <Th>模型 ID</Th>
+                    <Th>显示名</Th>
+                    <Th className="text-center">启用</Th>
+                    <Th className="text-right">删除</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {models.map((m) => <ModelRow key={m.id} model={m} reload={reload} />)}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="text-[11px] leading-relaxed text-tx3">
+            视觉/工具/推理等能力与可见性在
+            <Link to="/admin/models" className="mx-0.5 text-acc hover:underline">模型设置</Link>
+            配置;选择器中的显示顺序在
+            <Link to="/admin/model-order" className="mx-0.5 text-acc hover:underline">模型排序</Link>
+            调整。
+          </p>
+        </div>
+      )}
 
       {fetched !== null && (
         <FetchModelsModal provider={provider} models={fetched} onClose={() => setFetched(null)} onDone={reload} />
@@ -937,26 +619,13 @@ export default function Providers() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function moveProvider(i: number, dir: -1 | 1) {
-    const next = [...providers];
-    const [moved] = next.splice(i, 1);
-    next.splice(i + dir, 0, moved);
-    setProviders(next); // optimistic — the arrows would feel broken with a round-trip lag
-    try {
-      await api.put('/api/admin/providers/order', { ids: next.map((p) => p.id) });
-    } catch (e) {
-      toast(errMsg(e), 'err');
-      await load();
-    }
-  }
-
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-base font-semibold tracking-tight text-tx">模型服务</h1>
           <p className="mt-0.5 text-xs leading-relaxed text-tx3">
-            管理 AI 提供商及其模型,启用后即可在对话与绘图中选用。
+            管理 AI 提供商接入。点击卡片展开模型列表,在这里添加模型、设置显示名与启用状态。
           </p>
         </div>
         <Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true); }}>
@@ -981,9 +650,8 @@ export default function Providers() {
         </div>
       ) : (
         <div className="space-y-3">
-          {providers.map((p, i) => (
+          {providers.map((p) => (
             <ProviderCard key={p.id} provider={p} reload={load}
-              index={i} count={providers.length} onMove={(dir) => moveProvider(i, dir)}
               onEdit={() => { setEditing(p); setFormOpen(true); }} />
           ))}
         </div>

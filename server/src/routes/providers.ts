@@ -9,6 +9,7 @@ import {
   allConfiguredSecretValues, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
 } from '../secrets.js';
 import { accessUserIds, accessibleOnly, replaceModelAccess } from '../model-access.js';
+import { broadcast } from './events.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
 import {
@@ -217,6 +218,7 @@ export async function providerRoutes(app: FastifyInstance) {
       extraHeadersEnc: encryptSecretRecord(d.extraHeaders ?? {}),
       createdAt: now(),
     }).run();
+    broadcast('models-updated');
     return publicProvider(getProvider(id)!);
   });
 
@@ -276,6 +278,7 @@ export async function providerRoutes(app: FastifyInstance) {
 
     if (Object.keys(patch).length) {
       db.update(schema.providers).set(patch).where(eq(schema.providers.id, id)).run();
+      broadcast('models-updated');
     }
     return publicProvider(getProvider(id)!);
   });
@@ -296,6 +299,7 @@ export async function providerRoutes(app: FastifyInstance) {
         db.update(schema.providers).set({ sortOrder: i++ }).where(eq(schema.providers.id, pid)).run();
       }
     });
+    broadcast('models-updated');
     return { ok: true };
   });
 
@@ -316,6 +320,7 @@ export async function providerRoutes(app: FastifyInstance) {
         db.update(schema.models).set({ sortOrder: i++ }).where(eq(schema.models.id, mid)).run();
       }
     });
+    broadcast('models-updated');
     return { ok: true };
   });
 
@@ -325,6 +330,7 @@ export async function providerRoutes(app: FastifyInstance) {
     const row = getProvider(id);
     if (!row) return reply.code(404).send({ error: 'Provider 不存在' });
     db.delete(schema.providers).where(eq(schema.providers.id, id)).run(); // models cascade via FK
+    broadcast('models-updated');
     return { ok: true };
   });
 
@@ -347,6 +353,7 @@ export async function providerRoutes(app: FastifyInstance) {
       avatar = body.data.avatar;
     }
     db.update(schema.providers).set({ avatar }).where(eq(schema.providers.id, id)).run();
+    broadcast('models-updated');
     return publicProvider(getProvider(id)!);
   });
 
@@ -438,6 +445,7 @@ export async function providerRoutes(app: FastifyInstance) {
       }).run();
       added++;
     }
+    if (added > 0) broadcast('models-updated');
     return { added, skipped };
   });
 
@@ -480,6 +488,7 @@ export async function providerRoutes(app: FastifyInstance) {
       db.update(schema.models).set(patch).where(eq(schema.models.id, id)).run();
     }
     if (d.allowedUserIds !== undefined) replaceModelAccess(id, d.allowedUserIds);
+    broadcast('models-updated');
     const updated = db.select().from(schema.models).where(eq(schema.models.id, id)).get()!;
     return publicModel(updated, getProvider(updated.providerId)!.type as ProviderType);
   });
@@ -491,6 +500,7 @@ export async function providerRoutes(app: FastifyInstance) {
       .where(eq(schema.models.id, id)).get();
     if (!row) return reply.code(404).send({ error: '模型不存在' });
     db.delete(schema.models).where(eq(schema.models.id, id)).run();
+    broadcast('models-updated');
     return { ok: true };
   });
 

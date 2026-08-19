@@ -5,6 +5,8 @@ import { Button, PageHeader } from '../../components/ui';
 import Dashboard from './Dashboard';
 import Users from './Users';
 import Providers from './Providers';
+import Models from './Models';
+import ModelOrder from './ModelOrder';
 import Mcp from './Mcp';
 import AppSettings from './AppSettings';
 import Import from './Import';
@@ -13,6 +15,8 @@ const tabs: { to: string; label: string; end?: boolean }[] = [
   { to: '/admin', label: '总览', end: true },
   { to: '/admin/users', label: '用户' },
   { to: '/admin/providers', label: '模型服务' },
+  { to: '/admin/models', label: '模型设置' },
+  { to: '/admin/model-order', label: '模型排序' },
   { to: '/admin/mcp', label: 'MCP' },
   { to: '/admin/settings', label: '站点设置' },
   { to: '/admin/import', label: '数据迁移' },
@@ -57,6 +61,8 @@ export default function Admin() {
           <Route index element={<Dashboard />} />
           <Route path="users" element={<Users />} />
           <Route path="providers" element={<Providers />} />
+          <Route path="models" element={<Models />} />
+          <Route path="model-order" element={<ModelOrder />} />
           <Route path="mcp" element={<Mcp />} />
           <Route path="settings" element={<AppSettings />} />
           <Route path="import" element={<Import />} />
