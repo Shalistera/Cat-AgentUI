@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeft, ArrowUp, Check, ChevronDown, Gauge, Globe, Image as ImageIcon,
-  Loader2, Plus, Search, Settings2, Square, Wrench, X,
+  Loader2, Plus, RotateCcw, Search, Settings2, Square, Wrench, X,
 } from 'lucide-react';
-import { useMcp, useModels, useUi } from '../store';
-import { api, uploadFile } from '../api';
+import { useAuth, useMcp, useModels, useUi } from '../store';
+import { api, errMsg, uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
+import { SortableList } from './SortableList';
 import { Button, Field, Popover, toast, Toggle } from './ui';
-import type { ModelInfo, ReasoningEffort, ReasoningLevel } from '../types';
+import type { ModelInfo, ReasoningEffort, ReasoningLevel, User } from '../types';
 
 /* Active tool buttons build their palette on top of the colourless shape base,
    never on `toolBtn`: stacking `text-accfg` after `text-tx2` leaves the winner
@@ -71,6 +72,7 @@ export function Composer(props: ComposerProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const models = useModels((s) => s.models);
+  const user = useAuth((s) => s.user);
   const dark = useUi((s) => s.theme) === 'dark';
   const mcpServers = useMcp((s) => s.servers).filter((s) => s.enabled);
   // Vertex Gemini exposes Google Search natively. The designated search MCP
@@ -149,6 +151,44 @@ export function Composer(props: ComposerProps) {
   const imageMode = !!model?.imageGen;
   const canAttach = model?.vision || imageMode;
 
+  // Personal model order: dragging a row rewrites the whole flat order and
+  // saves it to the profile; the server then serves /api/models in that order
+  // until 恢复默认 clears it. Search results are a lookup, not a ranking, so
+  // dragging is off while a query is active.
+  const customOrder = user?.settings.modelOrder;
+  const hasCustomOrder = Array.isArray(customOrder) && customOrder.length > 0;
+  const dragEnabled = !modelQuery.trim() && models.length > 1;
+
+  async function saveUserOrder(section: ModelInfo[]) {
+    // The dragged section (chat or image rows, possibly kind-filtered) is a
+    // subset of the flat list: permute its members in place, touch nothing else.
+    const ids = new Set(section.map((m) => m.id));
+    let k = 0;
+    const full = models.map((m) => (ids.has(m.id) ? section[k++] : m));
+    const prev = models;
+    useModels.setState({ models: full }); // optimistic — a snap-back drop feels broken
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', {
+        settings: { modelOrder: full.map((m) => m.id) },
+      });
+      useAuth.getState().setUser(r.user);
+    } catch (e) {
+      useModels.setState({ models: prev });
+      toast(errMsg(e), 'err');
+    }
+  }
+
+  async function resetUserOrder() {
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { modelOrder: null } });
+      useAuth.getState().setUser(r.user);
+      await useModels.getState().load(true);
+      toast('已恢复默认排序', 'ok');
+    } catch (e) {
+      toast(errMsg(e), 'err');
+    }
+  }
+
   const efforts: ReasoningLevel[] = [OFF_LEVEL, ...(model?.reasoningLevels ?? [])];
   // A level the current model does not offer falls back to the off stop instead
   // of leaving the slider pointing at nothing.
@@ -176,12 +216,13 @@ export function Composer(props: ComposerProps) {
     return `${m.displayName}\n模型 ID：${m.modelId}\n服务商：${m.providerName}\n能力：${capabilities}`;
   }
 
-  const modelRow = (m: ModelInfo) => (
+  const modelRow = (m: ModelInfo, handle?: ReactNode) => (
     <button key={m.id}
       title={modelHint(m)}
       className={`group flex w-full cursor-pointer items-center gap-2.5 border-b border-line/70 px-3 py-2 text-left text-xs transition-colors last:border-b-0 hover:bg-bg2 ${m.id === model?.id ? 'bg-acc/10' : ''}`}
       onClick={() => { props.onModelChange(m); setModelQuery(''); setPanelOpen(false); }}
     >
+      {handle}
       <ModelAvatar info={m} size={24} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-semibold text-tx">{m.displayName}</span>
@@ -378,15 +419,38 @@ export function Composer(props: ComposerProps) {
                         {label} <span className="tabular-nums opacity-65">{count}</span>
                       </button>
                     ))}
+                    {hasCustomOrder && (
+                      <button
+                        type="button"
+                        title="你拖动过模型顺序,点击恢复为管理员设置的默认排序"
+                        onClick={() => void resetUserOrder()}
+                        className="ml-auto flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-tx3 transition-colors hover:text-tx"
+                      >
+                        <RotateCcw size={11} />
+                        恢复默认
+                      </button>
+                    )}
                   </div>
 
                   <div className="min-h-0 flex-1 overflow-y-auto">
                     {chatModels.length > 0 && imageModels.length > 0 && groupHead('对话模型')}
-                    {chatModels.map(modelRow)}
+                    {dragEnabled
+                      ? (
+                        <SortableList items={chatModels} keyOf={(m) => m.id}
+                          onReorder={(next) => void saveUserOrder(next)}
+                          renderItem={(m, handle) => modelRow(m, handle)} />
+                      )
+                      : chatModels.map((m) => modelRow(m))}
                     {imageModels.length > 0 && (
                       <>
                         {chatModels.length > 0 && groupHead('绘图模型')}
-                        {imageModels.map(modelRow)}
+                        {dragEnabled
+                          ? (
+                            <SortableList items={imageModels} keyOf={(m) => m.id}
+                              onReorder={(next) => void saveUserOrder(next)}
+                              renderItem={(m, handle) => modelRow(m, handle)} />
+                          )
+                          : imageModels.map((m) => modelRow(m))}
                       </>
                     )}
                     {filteredModels.length === 0 && (

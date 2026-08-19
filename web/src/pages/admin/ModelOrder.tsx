@@ -1,38 +1,39 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronUp, ListOrdered } from 'lucide-react';
+import { ListOrdered } from 'lucide-react';
 import { api, errMsg } from '../../api';
-import { Badge, Button, EmptyState, Spinner, toast } from '../../components/ui';
+import { Badge, Button, EmptyState, Spinner, toast, Toggle } from '../../components/ui';
 import { ProviderAvatar } from '../../components/ModelAvatar';
-import type { AdminProvider } from '../../types';
-import { TYPE_LABELS } from './provider-common';
+import { SortableList } from '../../components/SortableList';
 
-/**
- * Ordering works on the full row set but only shows what users can actually
- * see: enabled models of enabled providers. Moving a visible item swaps it
- * with its visible neighbour in the full list, so hidden (disabled) rows keep
- * their positions and nothing is renumbered behind the admin's back.
- */
-function swapVisible<T>(list: T[], visible: T[], visIndex: number, dir: -1 | 1): T[] | null {
-  const a = visible[visIndex];
-  const b = visible[visIndex + dir];
-  if (!a || !b) return null;
-  const i = list.indexOf(a);
-  const j = list.indexOf(b);
-  const next = [...list];
-  [next[i], next[j]] = [next[j], next[i]];
-  return next;
+// Flat row from GET /api/admin/models — ordering ignores providers entirely,
+// so gpt / gemini / claude rows can interleave however the admin drags them.
+interface OrderModel {
+  id: string; modelId: string; displayName: string;
+  enabled: boolean; imageGen: boolean;
+  providerId: string; providerName: string; providerType: string;
+  providerBaseUrl: string | null; providerEnabled: boolean;
+  providerAvatarUrl: string | null;
+}
+
+/** Permute the members of `subset` inside `full` without moving anything
+    else — hidden (disabled) rows keep their global positions. */
+function applySubsetOrder(full: OrderModel[], subset: OrderModel[]): OrderModel[] {
+  const ids = new Set(subset.map((m) => m.id));
+  let k = 0;
+  return full.map((m) => (ids.has(m.id) ? subset[k++] : m));
 }
 
 export default function ModelOrder() {
-  const [providers, setProviders] = useState<AdminProvider[]>([]);
+  const [rows, setRows] = useState<OrderModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get<AdminProvider[] | { providers?: AdminProvider[] }>('/api/admin/providers');
-      setProviders(Array.isArray(r) ? r : r.providers ?? []);
+      const r = await api.get<OrderModel[]>('/api/admin/models');
+      setRows(Array.isArray(r) ? r : []);
     } catch (e) {
       toast(errMsg(e), 'err');
     } finally {
@@ -42,32 +43,16 @@ export default function ModelOrder() {
 
   useEffect(() => { load(); }, [load]);
 
-  const visibleProviders = providers.filter((p) => p.enabled && (p.models ?? []).some((m) => m.enabled));
+  const hiddenCount = rows.filter((m) => !(m.enabled && m.providerEnabled)).length;
+  const visible = showHidden ? rows : rows.filter((m) => m.enabled && m.providerEnabled);
 
-  async function moveProvider(visIndex: number, dir: -1 | 1) {
+  async function reorder(subset: OrderModel[]) {
     if (busy) return;
-    const next = swapVisible(providers, visibleProviders, visIndex, dir);
-    if (!next) return;
-    setProviders(next); // optimistic — the arrows would feel broken with a round-trip lag
+    const next = applySubsetOrder(rows, subset);
+    setRows(next); // optimistic — a drop that snaps back would feel broken
     setBusy(true);
     try {
-      await api.put('/api/admin/providers/order', { ids: next.map((p) => p.id) });
-    } catch (e) {
-      toast(errMsg(e), 'err');
-      await load();
-    } finally { setBusy(false); }
-  }
-
-  async function moveModel(provider: AdminProvider, visIndex: number, dir: -1 | 1) {
-    if (busy) return;
-    const all = provider.models ?? [];
-    const visible = all.filter((m) => m.enabled);
-    const next = swapVisible(all, visible, visIndex, dir);
-    if (!next) return;
-    setProviders(providers.map((p) => (p.id === provider.id ? { ...p, models: next } : p)));
-    setBusy(true);
-    try {
-      await api.put(`/api/admin/providers/${provider.id}/models/order`, { ids: next.map((m) => m.id) });
+      await api.put('/api/admin/models/order', { ids: next.map((m) => m.id) });
     } catch (e) {
       toast(errMsg(e), 'err');
       await load();
@@ -79,18 +64,19 @@ export default function ModelOrder() {
       <div className="min-w-0">
         <h1 className="text-base font-semibold tracking-tight text-tx">模型排序</h1>
         <p className="mt-0.5 text-xs leading-relaxed text-tx3">
-          调整模型选择器中的显示顺序:列表先按服务商分组,组内按下面的顺序排列。只列出已启用的服务商与模型,改动立即对所有用户生效。
+          拖动调整模型选择器中的默认显示顺序,不区分服务商,改动立即对所有用户生效。
+          用户可以在模型选择器里拖出自己的顺序;自己排过序的用户以其个人顺序为准。
         </p>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>
-      ) : visibleProviders.length === 0 ? (
+      ) : rows.length === 0 ? (
         <div className="rounded-xl border border-line bg-bg1 shadow-xs">
           <EmptyState
             icon={<ListOrdered size={22} />}
-            title="还没有已启用的模型"
-            hint="先到「模型服务」启用服务商和模型,再回到这里调整顺序。"
+            title="还没有模型"
+            hint="先到「模型服务」添加服务商和模型,再回到这里调整顺序。"
             action={(
               <Link to="/admin/providers">
                 <Button variant="primary" size="sm">前往模型服务</Button>
@@ -99,57 +85,48 @@ export default function ModelOrder() {
           />
         </div>
       ) : (
-        <div className="space-y-3">
-          {visibleProviders.map((p, pi) => {
-            const models = (p.models ?? []).filter((m) => m.enabled);
-            const hiddenCount = (p.models ?? []).length - models.length;
-            return (
-              <div key={p.id} className="overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
-                <div className="flex items-center gap-2.5 border-b border-line px-4 py-2.5">
-                  <div className="flex shrink-0">
-                    <Button variant="ghost" size="iconXs" title="服务商上移(整组前移)"
-                      disabled={busy || pi === 0} onClick={() => moveProvider(pi, -1)}>
-                      <ChevronUp size={14} />
-                    </Button>
-                    <Button variant="ghost" size="iconXs" title="服务商下移"
-                      disabled={busy || pi === visibleProviders.length - 1} onClick={() => moveProvider(pi, 1)}>
-                      <ChevronDown size={14} />
-                    </Button>
+        <div className="overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
+          <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+            <span className="text-[13px] font-semibold text-tx">全部模型</span>
+            <span className="text-[11px] tabular-nums text-tx3">{visible.length} 个</span>
+            {hiddenCount > 0 && (
+              <label className="ml-auto flex cursor-pointer items-center gap-2 text-[11px] text-tx3">
+                显示未启用({hiddenCount})
+                <Toggle checked={showHidden} onChange={setShowHidden} />
+              </label>
+            )}
+          </div>
+          <SortableList
+            items={visible}
+            keyOf={(m) => m.id}
+            onReorder={reorder}
+            disabled={busy}
+            className="divide-y divide-line"
+            renderItem={(m, handle, dragging, index) => {
+              const off = !(m.enabled && m.providerEnabled);
+              return (
+                <div className={`flex items-center gap-2.5 px-3 py-2 transition-colors ${
+                  dragging ? '' : 'hover:bg-bg2/60'
+                } ${off ? 'opacity-55' : ''}`}>
+                  {handle}
+                  <span className="w-5 shrink-0 text-right text-[11px] tabular-nums text-tx3">
+                    {index + 1}
+                  </span>
+                  <ProviderAvatar name={m.providerName} type={m.providerType}
+                    baseUrl={m.providerBaseUrl} avatarUrl={m.providerAvatarUrl} size={22} />
+                  <div className="min-w-0 flex-1">
+                    <span className="text-xs font-medium text-tx">{m.displayName}</span>
+                    <span className="ml-2 truncate font-mono text-[11px] text-tx3 max-sm:hidden">{m.modelId}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-tx3">{m.providerName}</span>
                   </div>
-                  <ProviderAvatar name={p.name} type={p.type} baseUrl={p.baseUrl}
-                    avatarUrl={p.avatarUrl} size={24} />
-                  <span className="text-[13px] font-semibold text-tx">{p.name}</span>
-                  <Badge>{TYPE_LABELS[p.type]}</Badge>
-                  <span className="ml-auto text-[11px] tabular-nums text-tx3">
-                    {models.length} 个模型{hiddenCount > 0 ? ` · ${hiddenCount} 个未启用不参与排序` : ''}
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    {m.imageGen && <Badge>绘图</Badge>}
+                    {off && <Badge>未启用</Badge>}
                   </span>
                 </div>
-                <div className="divide-y divide-line">
-                  {models.map((m, mi) => (
-                    <div key={m.id} className="flex items-center gap-2.5 px-4 py-2 transition-colors hover:bg-bg2/60">
-                      <span className="w-5 shrink-0 text-right text-[11px] tabular-nums text-tx3">{mi + 1}</span>
-                      <div className="min-w-0 flex-1">
-                        <span className="text-xs text-tx">{m.displayName || m.modelId}</span>
-                        {m.displayName && (
-                          <span className="ml-2 truncate font-mono text-[11px] text-tx3">{m.modelId}</span>
-                        )}
-                      </div>
-                      <div className="flex shrink-0">
-                        <Button variant="ghost" size="iconXs" title="上移"
-                          disabled={busy || mi === 0} onClick={() => moveModel(p, mi, -1)}>
-                          <ChevronUp size={13} />
-                        </Button>
-                        <Button variant="ghost" size="iconXs" title="下移"
-                          disabled={busy || mi === models.length - 1} onClick={() => moveModel(p, mi, 1)}>
-                          <ChevronDown size={13} />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+              );
+            }}
+          />
         </div>
       )}
     </div>

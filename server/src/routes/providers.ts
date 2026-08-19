@@ -303,15 +303,47 @@ export async function providerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.put('/api/admin/providers/:id/models/order', async (req, reply) => {
+  // Model order is one global sequence across providers — the picker shows a
+  // flat list, so gpt/gemini/claude rows can interleave freely.
+  app.get('/api/admin/models', async (req, reply) => {
     requireAdmin(req, reply);
-    const { id } = req.params as { id: string };
-    if (!getProvider(id)) return reply.code(404).send({ error: 'Provider 不存在' });
+    const rows = db.select({
+      id: schema.models.id,
+      modelId: schema.models.modelId,
+      displayName: schema.models.displayName,
+      enabled: schema.models.enabled,
+      imageGen: schema.models.imageGen,
+      providerId: schema.providers.id,
+      providerName: schema.providers.name,
+      providerType: schema.providers.type,
+      providerBaseUrl: schema.providers.baseUrl,
+      providerEnabled: schema.providers.enabled,
+      providerAvatar: schema.providers.avatar,
+    }).from(schema.models)
+      .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
+      .orderBy(asc(schema.models.sortOrder), asc(schema.models.modelId))
+      .all();
+    return rows.map((r) => ({
+      id: r.id,
+      modelId: r.modelId,
+      displayName: r.displayName || r.modelId,
+      enabled: !!r.enabled,
+      imageGen: !!r.imageGen,
+      providerId: r.providerId,
+      providerName: r.providerName,
+      providerType: r.providerType,
+      providerBaseUrl: r.providerBaseUrl,
+      providerEnabled: !!r.providerEnabled,
+      providerAvatarUrl: r.providerAvatar ? avatarUrl(r.providerId, r.providerAvatar) : null,
+    }));
+  });
+
+  app.put('/api/admin/models/order', async (req, reply) => {
+    requireAdmin(req, reply);
     const body = orderSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const existing = new Set(
-      db.select({ id: schema.models.id }).from(schema.models)
-        .where(eq(schema.models.providerId, id)).all().map((r) => r.id),
+      db.select({ id: schema.models.id }).from(schema.models).all().map((r) => r.id),
     );
     db.transaction(() => {
       let i = 0;
@@ -528,9 +560,10 @@ export async function providerRoutes(app: FastifyInstance) {
     }).from(schema.models)
       .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
       .where(and(eq(schema.models.enabled, 1), eq(schema.providers.enabled, 1)))
-      .orderBy(asc(schema.providers.sortOrder), asc(schema.models.sortOrder), asc(schema.models.modelId))
+      // Global admin order, no provider grouping — providers can interleave.
+      .orderBy(asc(schema.models.sortOrder), asc(schema.models.modelId))
       .all();
-    return accessibleOnly(rows, req.user!).map((r) => ({
+    const list = accessibleOnly(rows, req.user!).map((r) => ({
       id: r.id,
       modelId: r.modelId,
       displayName: r.displayName || r.modelId,
@@ -550,5 +583,18 @@ export async function providerRoutes(app: FastifyInstance) {
       providerType: r.providerType,
       providerAvatarUrl: r.providerAvatar ? avatarUrl(r.providerId, r.providerAvatar) : null,
     }));
+    // A user's own drag order (settings.modelOrder, model row ids) wins over
+    // the admin order. The sort is stable, so models the user never ranked —
+    // e.g. added after they last dragged — stay in admin order at the end.
+    let userOrder: unknown;
+    try {
+      userOrder = (JSON.parse(req.user!.settings || '{}') as Record<string, unknown>).modelOrder;
+    } catch { /* malformed settings — admin order */ }
+    if (Array.isArray(userOrder) && userOrder.length) {
+      const pos = new Map<string, number>();
+      userOrder.forEach((id, i) => { if (typeof id === 'string' && !pos.has(id)) pos.set(id, i); });
+      list.sort((a, b) => (pos.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (pos.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+    }
+    return list;
   });
 }

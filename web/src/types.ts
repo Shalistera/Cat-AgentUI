@@ -5,7 +5,11 @@ export interface Bootstrap { needsSetup: boolean; signupEnabled: boolean; brand:
 export interface User {
   id: string; username: string; role: 'admin' | 'user';
   displayName: string | null;
-  settings: { theme?: 'dark' | 'light'; lang?: 'zh' | 'en'; titleEmoji?: boolean };
+  settings: {
+    theme?: 'dark' | 'light'; lang?: 'zh' | 'en'; titleEmoji?: boolean;
+    /** Personal model-picker order (model row ids); null/absent = admin order. */
+    modelOrder?: string[] | null;
+  };
 }
 
 export type MessagePart =
