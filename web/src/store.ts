@@ -39,6 +39,21 @@ export const useUi = create<UiState>((set) => {
   };
 });
 
+// ---- html preview panel ----
+// A code block's "弹出预览" pops its HTML into a side panel (Shell renders it
+// next to <main>). Content is a snapshot taken at click time, not live state.
+interface HtmlPreviewState {
+  src: string | null;
+  open(src: string): void;
+  close(): void;
+}
+
+export const useHtmlPreview = create<HtmlPreviewState>((set) => ({
+  src: null,
+  open(src) { set({ src }); },
+  close() { set({ src: null }); },
+}));
+
 // ---- auth ----
 interface AuthState {
   user: User | null;

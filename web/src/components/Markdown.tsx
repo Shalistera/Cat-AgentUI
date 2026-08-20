@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Check, Copy } from 'lucide-react';
+import { Check, Code, Copy, Eye, PanelRight } from 'lucide-react';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -29,6 +29,7 @@ import diff from 'highlight.js/lib/languages/diff';
 import dockerfile from 'highlight.js/lib/languages/dockerfile';
 import ini from 'highlight.js/lib/languages/ini';
 import plaintext from 'highlight.js/lib/languages/plaintext';
+import { useHtmlPreview } from '../store';
 
 for (const [name, lang] of Object.entries({
   javascript, typescript, python, java, c, cpp, csharp, go, rust, json, yaml,
@@ -61,8 +62,16 @@ function normalizeMath(src: string): string {
   }).join('');
 }
 
+const headBtn = 'flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] text-tx2 transition-colors hover:bg-bg3 hover:text-tx';
+
+const PREVIEWABLE_LANGS = new Set(['html', 'htm', 'svg']);
+
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  // Snapshot of the code at the moment preview was toggled on (null = source view).
+  // Freezing it keeps the sandboxed iframe from reloading on every streamed token.
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const canPreview = PREVIEWABLE_LANGS.has(lang.toLowerCase());
   const html = useMemo(() => {
     try {
       if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
@@ -75,22 +84,48 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     <div className="codeblock">
       <div className="codeblock-head">
         <span>{lang || 'code'}</span>
-        <button
-          className="flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] text-tx2 transition-colors hover:bg-bg3 hover:text-tx"
-          onClick={() => {
-            navigator.clipboard.writeText(code).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            });
-          }}
-        >
-          {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
-          {copied ? '已复制' : '复制'}
-        </button>
+        <div className="flex items-center">
+          {canPreview && (
+            <button
+              className={headBtn}
+              onClick={() => setPreviewSrc(previewSrc === null ? code : null)}
+            >
+              {previewSrc === null ? <Eye size={12} /> : <Code size={12} />}
+              {previewSrc === null ? '预览' : '代码'}
+            </button>
+          )}
+          {canPreview && (
+            <button
+              className={headBtn}
+              title="在右侧面板预览"
+              onClick={() => {
+                useHtmlPreview.getState().open(code);
+                setPreviewSrc(null); // 弹出后行内回到代码视图
+              }}
+            >
+              <PanelRight size={12} />
+            </button>
+          )}
+          <button
+            className={headBtn}
+            onClick={() => {
+              navigator.clipboard.writeText(code).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              });
+            }}
+          >
+            {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
+            {copied ? '已复制' : '复制'}
+          </button>
+        </div>
       </div>
-      {html !== null
-        ? <pre><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
-        : <pre><code>{code}</code></pre>}
+      {previewSrc !== null
+        // No allow-same-origin: previewed HTML must not reach our cookies/localStorage.
+        ? <iframe sandbox="allow-scripts allow-modals" srcDoc={previewSrc} title="HTML 预览" className="block h-[420px] w-full border-0 bg-white" />
+        : html !== null
+          ? <pre><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
+          : <pre><code>{code}</code></pre>}
     </div>
   );
 }

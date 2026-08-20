@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth, useUi } from './store';
+import { useAuth, useHtmlPreview, useUi } from './store';
 import { onUnauthorized } from './api';
 import { startRealtime, stopRealtime } from './realtime';
 import { Toaster, ConfirmHost, Spinner } from './components/ui';
 import { Sidebar } from './components/Sidebar';
+import { HtmlPreviewPanel } from './components/HtmlPreviewPanel';
 import Login from './pages/Login';
 import Chat from './pages/Chat';
 import Images from './pages/Images';
@@ -20,6 +21,10 @@ function Shell() {
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const setSidebarOpen = useUi((s) => s.setSidebarOpen);
   const loc = useLocation();
+  const closePreview = useHtmlPreview((s) => s.close);
+
+  // A popped-out HTML preview belongs to the page it came from.
+  useEffect(() => { closePreview(); }, [loc.pathname, closePreview]);
 
   // Server-pushed cache invalidation lives for exactly as long as the session.
   const userId = user?.id ?? null;
@@ -45,6 +50,7 @@ function Shell() {
       <main className="relative flex min-w-0 flex-1 flex-col bg-bg1">
         <Outlet />
       </main>
+      <HtmlPreviewPanel />
     </div>
   );
 }
