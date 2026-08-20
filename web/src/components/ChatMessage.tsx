@@ -297,9 +297,11 @@ interface Props {
   onDelete?: () => void;
   /** Fork a new chat carrying the conversation up to and including this message. */
   onBranch?: () => void;
+  /** Send a suggested follow-up question — only supplied on the latest reply. */
+  onFollowup?: (q: string) => void;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -420,6 +422,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   }
 
   const plain = partsToPlainText(msg.parts);
+  const followups = msg.parts.flatMap((p) => (p.type === 'followups' ? p.questions : []));
   const hasStats = msg.durationMs != null || msg.totalTokens != null;
   const tps = msg.completionTokens && msg.durationMs && msg.durationMs > (msg.ttftMs ?? 0)
     ? msg.completionTokens / ((msg.durationMs - (msg.ttftMs ?? 0)) / 1000)
@@ -485,6 +488,21 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
                 {tps != null && tps > 0 && <span className="tabular-nums" title="输出速度">{tps.toFixed(1)} tok/s</span>}
               </>
             )}
+          </div>
+        )}
+        {/* 快速追问 — only under the latest reply (onFollowup gates it), so
+            stale suggestions never linger on older messages. */}
+        {!isStreaming && onFollowup && followups.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {followups.map((q) => (
+              <button
+                key={q} type="button" title="点击发送这个追问"
+                onClick={() => onFollowup(q)}
+                className="cursor-pointer rounded-full border border-line bg-bg1 px-3.5 py-1.5 text-left text-[13px] leading-relaxed text-tx2 shadow-xs transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
+              >
+                {q}
+              </button>
+            ))}
           </div>
         )}
       </div>

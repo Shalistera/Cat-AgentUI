@@ -14,7 +14,9 @@ export type MessagePart =
   // Google Search grounding is executed inside Vertex AI rather than through
   // our function/MCP loop. Keep its attribution metadata beside the answer so
   // saved chats can still render sources.
-  | { type: 'grounding'; queries: string[]; sources: GroundingSource[] };
+  | { type: 'grounding'; queries: string[]; sources: GroundingSource[] }
+  // Post-answer follow-up suggestions. UI-only: never replayed to providers.
+  | { type: 'followups'; questions: string[] };
 
 export type Role = 'user' | 'assistant';
 

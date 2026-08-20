@@ -15,6 +15,8 @@ export default function AppSettings() {
   const [quotaAction, setQuotaAction] = useState<AppSettingsDto['quotaAction']>('block');
   const [quotaFallback, setQuotaFallback] = useState('');
   const [titleModel, setTitleModel] = useState('');
+  const [followupEnabled, setFollowupEnabled] = useState(true);
+  const [followupModel, setFollowupModel] = useState('');
   const [textModels, setTextModels] = useState<ModelInfo[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -26,6 +28,8 @@ export default function AppSettings() {
     setQuotaAction(r.quotaAction ?? 'block');
     setQuotaFallback(r.quotaFallbackModelId ?? '');
     setTitleModel(r.titleModelId ?? '');
+    setFollowupEnabled(r.followupEnabled ?? true);
+    setFollowupModel(r.followupModelId ?? '');
   }
 
   useEffect(() => {
@@ -58,6 +62,8 @@ export default function AppSettings() {
         quotaAction,
         quotaFallbackModelId: quotaFallback || null,
         titleModelId: titleModel || null,
+        followupEnabled,
+        followupModelId: followupModel || null,
       });
       apply(r);
       toast('已保存', 'ok');
@@ -160,6 +166,25 @@ export default function AppSettings() {
             hint="首轮回复后自动为对话命名所用的模型。指定一个便宜的小模型可以省下大模型的 tokens;未设置时沿用当前对话的模型。"
           >
             <Select value={titleModel} onChange={(e) => setTitleModel(e.target.value)}>
+              <option value="">未设置(跟随对话模型)</option>
+              {textModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.displayName}({m.providerName})</option>
+              ))}
+            </Select>
+          </Field>
+
+          <ToggleRow
+            label="回答后生成快速追问"
+            desc="每次回答完成后,自动生成 3 个可点击的追问建议(每次消耗少量 tokens)"
+            checked={followupEnabled} onChange={setFollowupEnabled}
+          />
+
+          <Field
+            label="快速追问生成模型"
+            hint="生成追问建议所用的模型,建议指定一个便宜的小模型;未设置时沿用当前对话的模型。"
+          >
+            <Select value={followupModel} onChange={(e) => setFollowupModel(e.target.value)}
+              disabled={!followupEnabled}>
               <option value="">未设置(跟随对话模型)</option>
               {textModels.map((m) => (
                 <option key={m.id} value={m.id}>{m.displayName}({m.providerName})</option>

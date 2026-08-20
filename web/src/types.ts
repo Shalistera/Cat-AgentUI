@@ -20,7 +20,8 @@ export type MessagePart =
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
-  | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[] };
+  | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[] }
+  | { type: 'followups'; questions: string[] };
 
 export interface Message {
   id: string;
@@ -232,6 +233,10 @@ export interface AppSettings {
   quotaFallbackModelId: string | null;
   /** 对话标题生成模型(models.id),null = 跟随当前对话的模型。 */
   titleModelId: string | null;
+  /** 回答完成后自动生成 3 个快速追问。 */
+  followupEnabled: boolean;
+  /** 快速追问生成模型(models.id),null = 跟随当前对话的模型。 */
+  followupModelId: string | null;
 }
 
 // SSE stream handler callbacks
@@ -246,6 +251,7 @@ export interface StreamHandlers {
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;
   onNotice?(message: string): void;
   onTitle?(title: string): void;
+  onFollowups?(d: { questions: string[] }): void;
   onError?(message: string): void;
   onDone?(status: 'done' | 'error' | 'stopped'): void;
 }

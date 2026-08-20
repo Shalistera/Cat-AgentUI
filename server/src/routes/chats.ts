@@ -362,23 +362,26 @@ function getDefaultModel(user: { id: string; role: string }) {
   return pickModel(text.length ? text : rows);
 }
 
-// Admin-designated cheap model for auto-titling ('' = unset). Keeps the big
-// conversation model out of a job any small model does fine.
+// Admin-designated cheap models for background tasks ('' = unset). Keeps the
+// big conversation model out of jobs any small model does fine.
 export const TITLE_MODEL_KEY = 'title_model_id';
+export const FOLLOWUP_MODEL_KEY = 'followup_model_id';
+// Global switch for post-answer follow-up suggestions (default on).
+export const FOLLOWUP_ENABLED_KEY = 'followup_enabled';
 
 type ModelPick = { model: typeof schema.models.$inferSelect; provider: typeof schema.providers.$inferSelect };
 
-// Titles need a text model: an image model can't answer the title prompt.
-// Ordered fallback chain — the admin-designated title model → the model that
-// just answered (text turns only) → the default text model. Generation walks
-// the list so one provider having a bad moment (429, timeout) doesn't leave
-// the chat untitled.
-function getTitleCandidates(current?: ModelPick): ModelPick[] {
+// Background tasks (title, follow-ups) need a text model: an image model can't
+// answer their prompts. Ordered fallback chain — the admin-designated task
+// model → the model that just answered (text turns only) → the default text
+// model. Generation walks the list so one provider having a bad moment
+// (429, timeout) doesn't kill the feature.
+function getTaskModelCandidates(settingKey: string, current?: ModelPick): ModelPick[] {
   const out: ModelPick[] = [];
   const push = (p: ModelPick | null | undefined) => {
     if (p && !p.model.imageGen && !out.some((x) => x.model.id === p.model.id)) out.push(p);
   };
-  const configured = getSetting<string>(TITLE_MODEL_KEY, '');
+  const configured = getSetting<string>(settingKey, '');
   if (configured) push(getModelWithProvider(configured));
   push(current);
   push(pickModel(enabledModelRows().filter((r) => !r.models.imageGen)));
@@ -443,6 +446,23 @@ const TITLE_PROMPT_EMOJI = '请为上面这段对话生成一个简短的标题(
 function wantsTitleEmoji(settingsJson: string): boolean {
   try { return !!(JSON.parse(settingsJson) as { titleEmoji?: unknown }).titleEmoji; }
   catch { return false; }
+}
+
+const FOLLOWUP_PROMPT = '基于上面这轮问答,站在提问者的角度,提出 3 个对方接下来最可能继续问的简短追问。要求:每行输出一个问题,共 3 行;直接输出问题本身,不要编号、引号或任何解释;每个问题不超过 25 个字;使用与对话相同的语言。';
+// Follow-ups only need the latest exchange, truncated — resending the whole
+// conversation would be wasted input tokens on a job this small.
+const FOLLOWUP_QUESTION_CHARS = 2000;
+const FOLLOWUP_ANSWER_CHARS = 4000;
+
+// One question per line; strip list markers / quotes the model may add anyway.
+function parseFollowups(raw: string): string[] {
+  return raw.split('\n')
+    .map((line) => line.trim()
+      .replace(/^(?:[-*•>]|\d+\s*[.、).]|[([]\d+[)\]])\s*/, '')
+      .replace(/^["'「『]|["'」』]$/g, '')
+      .trim())
+    .filter((line) => line.length >= 2 && line.length <= 100)
+    .slice(0, 3);
 }
 
 // Injected when the admin-designated search MCP rides on the request. There is
@@ -1152,7 +1172,7 @@ export async function chatRoutes(app: FastifyInstance) {
         { role: 'assistant', parts: toAdapterPartsNoImages(finalParts) },
         { role: 'user', parts: [{ type: 'text', text: wantsTitleEmoji(user.settings) ? TITLE_PROMPT_EMOJI : TITLE_PROMPT }] },
       );
-      for (const titlePick of getTitleCandidates({ model, provider })) {
+      for (const titlePick of getTaskModelCandidates(TITLE_MODEL_KEY, { model, provider })) {
         try {
           let title = '';
           const tUsage = { prompt: 0, completion: 0, total: 0 };
@@ -1183,6 +1203,57 @@ export async function chatRoutes(app: FastifyInstance) {
           }
           // an empty title is a failed attempt too — fall through to the next model
         } catch { /* best-effort: try the next candidate */ }
+      }
+    }
+
+    // 快速追问:answer done → a designated small model reads the latest
+    // exchange and suggests 3 follow-up questions. Best-effort, never blocks
+    // or fails the turn; the result is appended to the saved message so
+    // reloads keep the chips.
+    if (status === 'done' && !clientGone && !model.imageGen && getSetting(FOLLOWUP_ENABLED_KEY, true)) {
+      const textOf = (ps: { type: string; text?: string }[]) => ps
+        .filter((p) => p.type === 'text' && p.text).map((p) => p.text!).join('\n').trim();
+      const question = textOf(baseHistory[baseHistory.length - 1]?.parts ?? []);
+      const answer = textOf(finalParts);
+      if (answer) {
+        const followupMessages: AdapterMessage[] = [
+          { role: 'user', parts: [{ type: 'text', text: question.slice(0, FOLLOWUP_QUESTION_CHARS) || '(无文字,见回答)' }] },
+          { role: 'assistant', parts: [{ type: 'text', text: answer.slice(0, FOLLOWUP_ANSWER_CHARS) }] },
+          { role: 'user', parts: [{ type: 'text', text: FOLLOWUP_PROMPT }] },
+        ];
+        for (const pick of getTaskModelCandidates(FOLLOWUP_MODEL_KEY, { model, provider })) {
+          try {
+            let raw = '';
+            const fUsage = { prompt: 0, completion: 0, total: 0 };
+            const fAdapter = getAdapter(pick.provider.type);
+            for await (const ev of fAdapter.streamChat(toRuntimeConfig(pick.provider), {
+              model: pick.model.modelId, messages: followupMessages, maxTokens: 500,
+              signal: AbortSignal.timeout(20_000),
+            })) {
+              if (ev.type === 'text') raw += ev.text;
+              else if (ev.type === 'usage') {
+                fUsage.prompt += ev.usage.promptTokens ?? 0;
+                fUsage.completion += ev.usage.completionTokens ?? 0;
+                fUsage.total += ev.usage.totalTokens ?? 0;
+              }
+            }
+            // Tokens were spent even when the attempt yields nothing usable.
+            recordUsage({
+              userId: user.id, chatId, providerId: pick.provider.id, providerType: pick.provider.type,
+              model: pick.model.modelId, kind: 'followup',
+              promptTokens: fUsage.prompt, completionTokens: fUsage.completion, totalTokens: fUsage.total,
+            });
+            const questions = parseFollowups(redactSensitiveText(raw, secretValues));
+            if (questions.length) {
+              db.update(schema.messages)
+                .set({ parts: JSON.stringify([...finalParts, { type: 'followups', questions }]) })
+                .where(eq(schema.messages.id, assistantId)).run();
+              sse.send('followups', { questions });
+              break;
+            }
+            // nothing parseable — fall through to the next candidate
+          } catch { /* best-effort: try the next candidate */ }
+        }
       }
     }
 

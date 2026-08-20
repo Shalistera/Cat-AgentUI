@@ -9,7 +9,7 @@ import {
   effectiveQuota, monthStartDay, monthTokens, quotaSettings,
 } from '../quota.js';
 import { CHAT_IMAGE_RETENTION_KEY, IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
-import { TITLE_MODEL_KEY } from './chats.js';
+import { FOLLOWUP_ENABLED_KEY, FOLLOWUP_MODEL_KEY, TITLE_MODEL_KEY } from './chats.js';
 import { unlinkStoredFiles } from '../storage.js';
 
 const DAY_MS = 86_400_000;
@@ -95,6 +95,8 @@ const settingsSchema = z.object({
   quotaAction: z.enum(['block', 'downgrade']).optional(),
   quotaFallbackModelId: z.string().max(64).nullish(), // models.id,空 = 未设置
   titleModelId: z.string().max(64).nullish(), // 对话标题生成模型,空 = 跟随对话模型
+  followupEnabled: z.boolean().optional(), // 回答后自动生成快速追问
+  followupModelId: z.string().max(64).nullish(), // 快速追问生成模型,空 = 跟随对话模型
 });
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -265,6 +267,8 @@ export async function adminRoutes(app: FastifyInstance) {
       quotaAction: quota.action,
       quotaFallbackModelId: quota.fallbackModelId || null,
       titleModelId: getSetting(TITLE_MODEL_KEY, '') || null,
+      followupEnabled: getSetting(FOLLOWUP_ENABLED_KEY, true),
+      followupModelId: getSetting(FOLLOWUP_MODEL_KEY, '') || null,
     };
   };
 
@@ -300,6 +304,16 @@ export async function adminRoutes(app: FastifyInstance) {
         if (!m || m.imageGen) return reply.code(400).send({ error: '标题模型无效,请选择一个文本模型' });
       }
       setSetting(TITLE_MODEL_KEY, id ?? '');
+    }
+    if (body.data.followupEnabled !== undefined) setSetting(FOLLOWUP_ENABLED_KEY, body.data.followupEnabled);
+    if (body.data.followupModelId !== undefined) {
+      const id = body.data.followupModelId;
+      if (id) {
+        const m = db.select({ id: schema.models.id, imageGen: schema.models.imageGen })
+          .from(schema.models).where(eq(schema.models.id, id)).get();
+        if (!m || m.imageGen) return reply.code(400).send({ error: '追问模型无效,请选择一个文本模型' });
+      }
+      setSetting(FOLLOWUP_MODEL_KEY, id ?? '');
     }
     if (body.data.imageRetentionDays !== undefined || body.data.chatImageRetentionDays !== undefined) {
       // A shortened window should take effect now, not at the next hourly tick.

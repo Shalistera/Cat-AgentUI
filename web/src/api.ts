@@ -92,6 +92,7 @@ export async function streamChat(
       case 'usage': handlers.onUsage?.(data); break;
       case 'notice': handlers.onNotice?.(data.message ?? ''); break;
       case 'title': handlers.onTitle?.(data.title ?? ''); break;
+      case 'followups': handlers.onFollowups?.(data); break;
       case 'error': handlers.onError?.(data.message ?? '发生错误'); break;
       case 'done': handlers.onDone?.(data.status ?? 'done'); break;
     }

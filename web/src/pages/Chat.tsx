@@ -295,6 +295,11 @@ export default function Chat() {
       },
       onNotice(msg) { toast(msg, 'info'); },
       onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c ? { ...c, title } : c)); },
+      onFollowups(d) {
+        if (!d.questions?.length) return;
+        flush();
+        applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'followups', questions: d.questions }] }));
+      },
       onError(message) { applyToAssistant((m) => ({ ...m, status: 'error', error: message })); },
       onDone(status) { finalize(status); },
     }, controller.signal)
@@ -536,6 +541,9 @@ export default function Chat() {
                   onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
                   onDelete={!streaming && !!chat ? () => void deleteMessage(m.id) : undefined}
                   onBranch={!streaming && !!chat ? () => void branchChat(m.id) : undefined}
+                  onFollowup={m.role === 'assistant' && i === lastAssistantIdx && i === messages.length - 1 && !streaming
+                    ? (q) => void send(q, [])
+                    : undefined}
                 />
               ))}
               <div className="h-2" />

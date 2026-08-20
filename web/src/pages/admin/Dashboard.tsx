@@ -10,6 +10,7 @@ const KIND_LABELS: Record<string, string> = {
   chat: '对话',
   image: '绘图',
   title: '标题生成',
+  followup: '快速追问',
 };
 
 /** One empty-table placeholder, one voice — every card says it the same way. */
