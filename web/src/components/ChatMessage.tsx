@@ -299,9 +299,11 @@ interface Props {
   onBranch?: () => void;
   /** Send a suggested follow-up question — only supplied on the latest reply. */
   onFollowup?: (q: string) => void;
+  /** Save an in-place correction of this reply's text (no regeneration). */
+  onEditAssistant?: (text: string) => void;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -434,7 +436,28 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
     <div className="flex gap-3 sm:pr-[42px]">
       <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={msg.model} size={30} /></div>
       <div className="min-w-0 flex-1">
-        {rendered}
+        {editing ? (
+          // The editor works on the merged plain text; reasoning/tool/image
+          // blocks are untouched by the edit and come back on save.
+          <div className="w-full">
+            <textarea
+              className="w-full resize-y rounded-lg border border-field bg-bg1 px-3.5 py-2.5 font-mono text-[13px] leading-relaxed text-tx"
+              rows={Math.min(20, Math.max(4, draft.split('\n').length + 1))}
+              value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>取消</Button>
+              <Button variant="primary" size="sm"
+                onClick={() => {
+                  setEditing(false);
+                  const t = draft.trim();
+                  if (t && t !== plain) onEditAssistant?.(t);
+                }}>
+                保存修改
+              </Button>
+            </div>
+          </div>
+        ) : rendered}
         {isStreaming && msg.parts.length === 0 && (
           <div className="flex items-center gap-2 py-1 text-[13px] text-tx3">
             <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在思考…'}
@@ -449,10 +472,16 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         {msg.status === 'stopped' && (
           <div className="my-1.5 flex items-center gap-1.5 text-xs text-tx3"><Ban size={12} />已停止生成</div>
         )}
-        {!isStreaming && (
+        {!isStreaming && !editing && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tx3">
             <span className="flex items-center gap-0.5">
               <CopyBtn text={plain} />
+              {onEditAssistant && !!plain && (
+                <button title="编辑回复内容(直接修改文字,不重新生成)" className={iconBtn}
+                  onClick={() => { setDraft(plain); setEditing(true); }}>
+                  <Pencil size={12} />
+                </button>
+              )}
               {onRegenerate && (
                 onRegenerateWith
                   ? <RegenerateMenu lastModel={msg.model} onSame={onRegenerate} onWith={onRegenerateWith} />
@@ -492,7 +521,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         )}
         {/* 快速追问 — only under the latest reply (onFollowup gates it), so
             stale suggestions never linger on older messages. */}
-        {!isStreaming && onFollowup && followups.length > 0 && (
+        {!isStreaming && !editing && onFollowup && followups.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
             {followups.map((q) => (
               <button

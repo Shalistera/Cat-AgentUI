@@ -296,9 +296,13 @@ export default function Chat() {
       onNotice(msg) { toast(msg, 'info'); },
       onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c ? { ...c, title } : c)); },
       onFollowups(d) {
-        if (!d.questions?.length) return;
+        if (!d.questions?.length || !d.messageId) return;
         flush();
-        applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'followups', questions: d.questions }] }));
+        // Arrives after 'done', so the user may already be sending the next
+        // message — target the reply by id, never "the last assistant".
+        setMessages((prev) => prev.map((m) => (m.id === d.messageId
+          ? { ...m, parts: [...m.parts, { type: 'followups', questions: d.questions }] }
+          : m)));
       },
       onError(message) { applyToAssistant((m) => ({ ...m, status: 'error', error: message })); },
       onDone(status) { finalize(status); },
@@ -380,6 +384,18 @@ export default function Chat() {
       { id: 'tmp-a', role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
     ]);
     runStream(chatRef.current.id, { editMessageId: msgId, content, modelId: modelSel?.id });
+  }
+
+  // In-place correction of a model reply (no regeneration): the edited text
+  // replaces the reply's text content and feeds later context.
+  async function editAssistant(msgId: string, newText: string) {
+    if (!chatRef.current) return;
+    try {
+      const r = await api.patch<{ message: Message }>(`/api/chats/${chatRef.current.id}/messages/${msgId}`, { text: newText });
+      setMessages((prev) => prev.map((m) => (m.id === msgId ? r.message : m)));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '保存修改失败', 'err');
+    }
   }
 
   async function deleteMessage(msgId: string) {
@@ -539,6 +555,9 @@ export default function Chat() {
                   onRegenerate={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? () => regenerate(m.id) : undefined}
                   onRegenerateWith={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? (pick) => regenerate(m.id, pick) : undefined}
                   onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
+                  onEditAssistant={m.role === 'assistant' && m.status !== 'streaming' && !streaming && !!chat
+                    ? (t) => void editAssistant(m.id, t)
+                    : undefined}
                   onDelete={!streaming && !!chat ? () => void deleteMessage(m.id) : undefined}
                   onBranch={!streaming && !!chat ? () => void branchChat(m.id) : undefined}
                   onFollowup={m.role === 'assistant' && i === lastAssistantIdx && i === messages.length - 1 && !streaming

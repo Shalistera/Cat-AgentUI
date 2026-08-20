@@ -251,7 +251,7 @@ export interface StreamHandlers {
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;
   onNotice?(message: string): void;
   onTitle?(title: string): void;
-  onFollowups?(d: { questions: string[] }): void;
+  onFollowups?(d: { messageId?: string; questions: string[] }): void;
   onError?(message: string): void;
   onDone?(status: 'done' | 'error' | 'stopped'): void;
 }

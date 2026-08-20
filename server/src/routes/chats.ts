@@ -613,6 +613,46 @@ export async function chatRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Edit an assistant reply's text in place — no regeneration. The editor shows
+  // the text parts merged into one document, so saving replaces them with a
+  // single text part at the first text position; reasoning / tool / image /
+  // grounding / followups parts are preserved as-is. The edited text replays
+  // into later context, which is the point: correcting a reply steers the rest
+  // of the conversation. (User messages keep their own edit+resend flow.)
+  app.patch('/api/chats/:id/messages/:messageId', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id: chatId, messageId } = req.params as { id: string; messageId: string };
+    const body = z.object({
+      text: z.string().min(1).max(config.maxTurnOutputChars),
+    }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const c = db.select({ id: schema.chats.id }).from(schema.chats)
+      .where(and(eq(schema.chats.id, chatId), eq(schema.chats.userId, req.user!.id))).get();
+    if (!c) return reply.code(404).send({ error: '对话不存在' });
+    const msg = db.select().from(schema.messages)
+      .where(and(eq(schema.messages.id, messageId), eq(schema.messages.chatId, chatId))).get();
+    if (!msg || msg.role !== 'assistant') return reply.code(404).send({ error: '消息不存在' });
+    if (msg.status === 'streaming') {
+      return reply.code(409).send({ error: '正在生成中的消息不能编辑' });
+    }
+    const out: MessagePart[] = [];
+    let inserted = false;
+    for (const p of parseParts(msg.parts)) {
+      if (p.type === 'text') {
+        if (!inserted) { out.push({ type: 'text', text: body.data.text }); inserted = true; }
+        // later text parts were shown merged in the editor — drop them
+      } else {
+        out.push(p);
+      }
+    }
+    if (!inserted) out.push({ type: 'text', text: body.data.text });
+    db.update(schema.messages).set({ parts: JSON.stringify(out) })
+      .where(eq(schema.messages.id, messageId)).run();
+    db.update(schema.chats).set({ updatedAt: now() }).where(eq(schema.chats.id, chatId)).run();
+    const updated = db.select().from(schema.messages).where(eq(schema.messages.id, messageId)).get()!;
+    return { message: messageDto(updated) };
+  });
+
   // Fork the conversation: a brand-new chat carrying the message history and
   // every per-chat setting, titled 「原标题·分支」. The button lives on each
   // message, so `uptoMessageId` bounds the copy — everything up to and
@@ -1159,6 +1199,11 @@ export async function chatRoutes(app: FastifyInstance) {
       totalTokens: usage.total || null, durationMs, ttftMs: ttft,
     });
 
+    // 'done' goes out BEFORE the background tasks below (title, follow-ups):
+    // the client unblocks the moment the answer is complete, and their events
+    // simply arrive over the still-open SSE stream a moment later.
+    sse.send('done', { status });
+
     // auto-title on first successful exchange
     if (!chat.title && status === 'done' && !clientGone) {
       // text-only replay: the title never needs the pictures, and non-vision
@@ -1248,7 +1293,9 @@ export async function chatRoutes(app: FastifyInstance) {
               db.update(schema.messages)
                 .set({ parts: JSON.stringify([...finalParts, { type: 'followups', questions }]) })
                 .where(eq(schema.messages.id, assistantId)).run();
-              sse.send('followups', { questions });
+              // messageId because 'done' already fired — the client may have
+              // moved on, so it must target this reply by id, not "the last".
+              sse.send('followups', { messageId: assistantId, questions });
               break;
             }
             // nothing parseable — fall through to the next candidate
@@ -1257,7 +1304,6 @@ export async function chatRoutes(app: FastifyInstance) {
       }
     }
 
-    sse.send('done', { status });
     sse.end();
     } finally {
       contextMediaLease?.release();
