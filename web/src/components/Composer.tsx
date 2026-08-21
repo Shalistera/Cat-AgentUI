@@ -62,6 +62,10 @@ export function Composer(props: ComposerProps) {
   const [text, setText] = useState('');
   const [images, setImages] = useState<PendingImage[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  // dragenter/dragleave fire for every child the cursor crosses; only a
+  // depth counter can tell "left the window" apart from "moved over a div".
+  const dragDepth = useRef(0);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelView, setPanelView] = useState<ModelPanelView>('models');
   const [modelKind, setModelKind] = useState<ModelKind>('all');
@@ -150,6 +154,66 @@ export function Composer(props: ComposerProps) {
   const imageModels = filteredModels.filter((m) => m.imageGen);
   const imageMode = !!model?.imageGen;
   const canAttach = model?.vision || imageMode;
+  const attachFull = images.length >= 4;
+  // Why the drop target can't take files right now — the overlay says it out
+  // loud instead of silently swallowing the drop.
+  const dropBlocked = props.disabled ? '管理员尚未配置模型'
+    : !canAttach ? '当前模型不支持图片附件'
+    : attachFull ? '最多添加 4 张图片' : null;
+
+  // The whole window is the drop zone: listeners live on `window` so a file
+  // dragged anywhere over the app raises the overlay, which in turn shows
+  // where things will land. Only real file drags count — text selections and
+  // in-app drags (model reordering) carry no 'Files' type.
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    const onEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragging(true);
+    };
+    const onOver = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragging(false);
+    };
+    const reset = () => {
+      dragDepth.current = 0;
+      setDragging(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); // never let the browser navigate to the dropped file
+      reset();
+      if (dropBlocked) return; // the overlay already explained why
+      // Same whitelist as the server's upload route — filtering here turns a
+      // would-be 400 into an immediate, plain-language toast.
+      const files = Array.from(e.dataTransfer?.files ?? [])
+        .filter((f) => /^image\/(png|jpeg|webp|gif)$/.test(f.type));
+      if (!files.length) {
+        toast('仅支持图片文件(PNG / JPEG / WebP / GIF)', 'err');
+        return;
+      }
+      void pickFiles(files);
+    };
+    window.addEventListener('dragenter', onEnter);
+    window.addEventListener('dragover', onOver);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('drop', onDrop);
+    window.addEventListener('dragend', reset);
+    return () => {
+      window.removeEventListener('dragenter', onEnter);
+      window.removeEventListener('dragover', onOver);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('drop', onDrop);
+      window.removeEventListener('dragend', reset);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pickFiles is recreated per render
+  }, [dropBlocked, images.length]);
 
   // Personal model order: dragging a row rewrites the whole flat order and
   // saves it to the profile; the server then serves /api/models in that order
@@ -290,9 +354,29 @@ export function Composer(props: ComposerProps) {
 
   return (
     <div className="w-full">
+      {/* Raised the moment a file drag crosses the window: the scrim dims the
+          page and one dashed card names the outcome, so there is no guessing
+          where the image should be dropped — anywhere counts. */}
+      {dragging && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6 backdrop-blur-[2px]">
+          <div className={`pointer-events-none flex flex-col items-center gap-2.5 rounded-2xl border-2 border-dashed bg-bg1 px-14 py-10 text-center shadow-lg ${
+            dropBlocked ? 'border-err/60' : 'border-acc'
+          }`}>
+            <ImageIcon size={32} className={dropBlocked ? 'text-err' : 'text-acc'} />
+            <p className="text-sm font-semibold text-tx">
+              {dropBlocked ?? (imageMode ? '松开鼠标，添加参考图' : '松开鼠标，图片将随消息发送')}
+            </p>
+            <p className="text-xs text-tx3">
+              {dropBlocked ? '松开鼠标不会上传任何内容' : '支持 PNG / JPEG / WebP / GIF，最多 4 张'}
+            </p>
+          </div>
+        </div>
+      )}
       {/* No `overflow-hidden` here: it clipped every popover to the width of the
           composer. The inner bands round their own corners instead. */}
-      <div className="rounded-xl border border-line2 bg-bg1 shadow-md transition-[border-color,box-shadow] focus-within:border-tx3 focus-within:shadow-lg">
+      <div className={`rounded-xl border bg-bg1 shadow-md transition-[border-color,box-shadow] focus-within:shadow-lg ${
+        dragging && !dropBlocked ? 'border-acc shadow-lg' : 'border-line2 focus-within:border-tx3'
+      }`}>
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2 border-b border-line px-3 py-3">
             {images.map((img) => (
