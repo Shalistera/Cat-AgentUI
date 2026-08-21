@@ -26,8 +26,7 @@ export function ReleaseNotesButton({ className = '' }: { className?: string }) {
       <Modal
         open={open}
         onClose={() => setOpen(false)}
-        title="更新日志"
-        desc={`v${appVersion} · 根据近期 GitHub 提交整理`}
+        title={`更新日志 · v${appVersion}`}
         wide
       >
         <div className="space-y-6">
