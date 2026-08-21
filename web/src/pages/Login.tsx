@@ -1,18 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, Boxes, Wrench } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../store';
 import { CatLogo, CatMark } from '../components/Logo';
+import { ReleaseNotesButton } from '../components/ReleaseNotes';
 import { Button, Input, Field, toast } from '../components/ui';
 import type { User } from '../types';
-import { appVersionLabel, appVersionTitle } from '../version';
-
-const highlights = [
-  { icon: <Boxes size={15} />, title: '统一接入多家模型服务', desc: 'OpenAI、Gemini 等服务商在同一控制台内集中管理。' },
-  { icon: <Wrench size={15} />, title: 'MCP 工具编排', desc: '为每个对话按需挂载外部工具服务器。' },
-  { icon: <ShieldCheck size={15} />, title: '用量与权限可审计', desc: '按用户、模型、类型统计 Token 消耗与请求。' },
-];
 
 export default function Login() {
   const nav = useNavigate();
@@ -56,9 +49,9 @@ export default function Login() {
 
   return (
     <div className="flex h-full bg-bg1">
-      {/* Brand panel — an ink field is the one place the palette goes full
-          contrast, and it doubles as the product's value proposition. */}
-      <aside className="relative hidden w-[46%] max-w-xl shrink-0 flex-col justify-between overflow-hidden bg-brand p-10 lg:flex">
+      {/* A deliberately quiet brand rail: this is an internal sign-in screen,
+          not a product landing page. */}
+      <aside className="relative hidden w-[36%] max-w-sm shrink-0 flex-col justify-between overflow-hidden bg-brand p-8 lg:flex">
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 opacity-[0.05]"
@@ -78,27 +71,7 @@ export default function Login() {
         </div>
 
         <div className="relative">
-          <h2 className="max-w-md text-[26px] font-semibold leading-snug tracking-tight text-brandfg">
-            面向团队的<br />AI 对话与绘图工作台
-          </h2>
-          <ul className="mt-8 space-y-5">
-            {highlights.map((h) => (
-              <li key={h.title} className="flex gap-3">
-                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brandfg/10 text-brandfg ring-1 ring-brandfg/15">
-                  {h.icon}
-                </span>
-                <div>
-                  <div className="text-[13px] font-medium text-brandfg">{h.title}</div>
-                  <div className="mt-0.5 max-w-sm text-xs leading-relaxed text-brandfg/60">{h.desc}</div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="relative flex items-center justify-between gap-4 text-[11px] text-brandfg/55">
-          <span>自托管部署 · 数据留在你自己的服务器</span>
-          <span className="font-mono" title={appVersionTitle}>{appVersionLabel}</span>
+          <ReleaseNotesButton className="text-[11px] text-brandfg/55 hover:text-brandfg" />
         </div>
       </aside>
 
@@ -156,9 +129,9 @@ export default function Login() {
               </p>
             )}
           </form>
-          <p className="mt-8 text-center font-mono text-[11px] font-medium text-tx3" title={appVersionTitle}>
-            {appVersionLabel}
-          </p>
+          <div className="mt-8 text-center">
+            <ReleaseNotesButton className="text-[11px] font-medium text-tx3 hover:text-tx" />
+          </div>
         </div>
       </div>
     </div>

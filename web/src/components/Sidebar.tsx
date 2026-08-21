@@ -7,11 +7,11 @@ import {
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { api } from '../api';
-import { CatWordmark } from './Logo';
+import { CatMark } from './Logo';
 import { Button, Input, Modal, ModalActions, Popover, confirmDialog, toast } from './ui';
 import { CreateProjectModal } from './CreateProjectModal';
+import { ReleaseNotesButton } from './ReleaseNotes';
 import type { ChatSummary } from '../types';
-import { appVersionLabel, appVersionTitle } from '../version';
 
 function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
   const nav = useNavigate();
@@ -201,13 +201,24 @@ export function Sidebar() {
 
       {/* brand */}
       <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line px-3">
-        <button className="min-w-0 cursor-pointer" onClick={() => nav('/')} title={appVersionTitle}>
-          <CatWordmark
-            size={30}
-            label={bootstrap?.brand || 'Cat AgentUI'}
-            tagline={appVersionLabel}
-          />
-        </button>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <button type="button" className="cursor-pointer" onClick={() => nav('/')} title="返回首页">
+            <CatMark size={30} />
+          </button>
+          <div className="min-w-0 leading-tight">
+            <button
+              type="button"
+              className="block max-w-[156px] cursor-pointer truncate text-[13px] font-semibold tracking-tight text-tx"
+              onClick={() => nav('/')}
+              title="返回首页"
+            >
+              {bootstrap?.brand || 'Cat AgentUI'}
+            </button>
+            <div className="truncate text-[11px]">
+              <ReleaseNotesButton className="text-tx3 hover:text-tx" />
+            </div>
+          </div>
+        </div>
         <Button variant="ghost" size="iconSm" title="收起侧栏" onClick={() => setSidebarOpen(false)}>
           <PanelLeftClose size={15} />
         </Button>
