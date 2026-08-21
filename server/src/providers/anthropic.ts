@@ -40,6 +40,14 @@ function toMessages(messages: AdapterMessage[]): unknown[] {
             type: 'image',
             source: { type: 'base64', media_type: p.mime || 'image/png', data: p.dataBase64 },
           });
+        } else if (p.type === 'file' && p.dataBase64) {
+          // PDF attachment → native document block (text docs never reach
+          // adapters; they were flattened to text upstream).
+          content.push({
+            type: 'document',
+            source: { type: 'base64', media_type: p.mime || 'application/pdf', data: p.dataBase64 },
+            ...(p.name ? { title: p.name } : {}),
+          });
         }
       }
       if (content.length) out.push({ role: 'user', content });

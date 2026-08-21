@@ -24,10 +24,11 @@ import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
 } from '../admission.js';
 import {
-  getOwnedImageMedia, getOwnedUploadMedia, quotaErrorMessage, readMediaBase64,
+  getOwnedImageMedia, getOwnedUploadMedia, isTextDocMime, quotaErrorMessage, readMediaBase64,
   cleanupUnreferencedUploads, tryReserveStorage, uploadIdsFromPartsJson,
   type OwnedMedia, type StorageReservation,
 } from '../storage.js';
+import { extractDocText, wrapDocAttachment } from '../doc-text.js';
 import {
   allConfiguredSecretValues, redactSensitiveText, StreamingSecretRedactor,
 } from '../secrets.js';
@@ -164,10 +165,10 @@ async function normalizeIncomingParts(parts: MessagePart[], ownerId: string): Pr
       out.push(part);
       continue;
     }
-    if (part.type !== 'image' || !part.uploadId || seenUploads.has(part.uploadId)) continue;
+    if ((part.type !== 'image' && part.type !== 'file') || !part.uploadId || seenUploads.has(part.uploadId)) continue;
     seenUploads.add(part.uploadId);
     if (seenUploads.size > config.maxAttachmentsPerMessage) {
-      throw new InputBudgetError(`每条消息最多添加 ${config.maxAttachmentsPerMessage} 张图片`);
+      throw new InputBudgetError(`每条消息最多添加 ${config.maxAttachmentsPerMessage} 个附件`);
     }
     const media = await getOwnedUploadMedia(part.uploadId, ownerId);
     if (!media) throw new InputBudgetError('附件不存在或不属于当前账号', 400);
@@ -175,13 +176,21 @@ async function normalizeIncomingParts(parts: MessagePart[], ownerId: string): Pr
     if (imageBytes > config.maxMessageAttachmentBytes) {
       throw new InputBudgetError('本条消息的附件总大小超过限制');
     }
-    out.push({ type: 'image', uploadId: part.uploadId });
+    // The stored mime decides the part shape — the client's claimed type is
+    // only a hint. name/mime ride along so history renders without a lookup.
+    if (media.mime.startsWith('image/')) {
+      out.push({ type: 'image', uploadId: part.uploadId });
+    } else {
+      out.push({ type: 'file', uploadId: part.uploadId, name: media.name, mime: media.mime });
+    }
   }
   if (!out.length) throw new InputBudgetError('消息内容不能为空', 400);
   return out;
 }
 
-type PlannedPart = AdapterMessagePart | { type: 'pending_image'; media: OwnedMedia };
+// pending media resolves to base64 only after the whole window is chosen —
+// `as` keeps PDFs (native document blocks) apart from pictures.
+type PlannedPart = AdapterMessagePart | { type: 'pending_media'; as: 'image' | 'file'; media: OwnedMedia };
 
 function adapterTextCost(part: MessagePart): number {
   if (part.type === 'text') return part.text.length;
@@ -204,17 +213,31 @@ async function buildBoundedHistory(
   let imageBytes = 0;
   let imageCount = 0;
 
-  const getMedia = (part: Extract<MessagePart, { type: 'image' }>) => {
-    const key = part.uploadId ? `u:${part.uploadId}` : part.imageId ? `i:${part.imageId}` : '';
+  const getMedia = (part: Extract<MessagePart, { type: 'image' | 'file' }>) => {
+    const key = part.uploadId ? `u:${part.uploadId}` : 'imageId' in part && part.imageId ? `i:${part.imageId}` : '';
     if (!key) return { key, media: Promise.resolve(null) };
     let media = mediaCache.get(key);
     if (!media) {
       media = part.uploadId
         ? getOwnedUploadMedia(part.uploadId, ownerId)
-        : getOwnedImageMedia(part.imageId!, ownerId);
+        : getOwnedImageMedia((part as Extract<MessagePart, { type: 'image' }>).imageId!, ownerId);
       mediaCache.set(key, media);
     }
     return { key, media };
+  };
+
+  // A document referenced twice in the window is only parsed once.
+  const docTextCache = new Map<string, Promise<string>>();
+  const getDocText = (key: string, media: OwnedMedia) => {
+    let text = docTextCache.get(key);
+    if (!text) {
+      text = extractDocText(media).then(
+        (t) => wrapDocAttachment(media.name, t),
+        () => wrapDocAttachment(media.name, '(文档内容读取失败)'),
+      );
+      docTextCache.set(key, text);
+    }
+    return text;
   };
 
   for (let i = rows.length - 1; i >= 0; i--) {
@@ -234,10 +257,37 @@ async function buildBoundedHistory(
         if (!ref.key || seenMedia.has(ref.key) || localMediaKeys.includes(ref.key)) continue;
         const media = await ref.media;
         if (!media) continue;
-        planned.push({ type: 'pending_image', media });
+        planned.push({ type: 'pending_media', as: 'image', media });
         localMediaKeys.push(ref.key);
         rowImageBytes += media.size;
         rowImageCount++;
+        continue;
+      }
+      if (part.type === 'file') {
+        const ref = getMedia(part);
+        if (!ref.key || seenMedia.has(ref.key) || localMediaKeys.includes(ref.key)) continue;
+        const media = await ref.media;
+        if (!media) continue;
+        if (isTextDocMime(media.mime)) {
+          // Text-bearing docs are flattened to prompt text — works on every
+          // model, and shares the image budget with nothing.
+          const text = await getDocText(ref.key, media);
+          planned.push({ type: 'text', text });
+          localMediaKeys.push(ref.key);
+          rowText += text.length;
+        } else if (includeImages) {
+          // PDFs ride as native document blocks and share the media budget.
+          planned.push({ type: 'pending_media', as: 'file', media });
+          localMediaKeys.push(ref.key);
+          rowImageBytes += media.size;
+          rowImageCount++;
+        } else {
+          // Silently vanishing attachments confuse both model and user.
+          const note = `(附件「${media.name ?? 'PDF'}」是 PDF,当前模型不支持读取,已略过)`;
+          planned.push({ type: 'text', text: note });
+          localMediaKeys.push(ref.key);
+          rowText += note.length;
+        }
         continue;
       }
       rowText += adapterTextCost(part);
@@ -270,8 +320,12 @@ async function buildBoundedHistory(
     for (const message of chosen) {
       const parts: AdapterMessagePart[] = [];
       for (const part of message.parts) {
-        if (part.type === 'pending_image') {
-          parts.push({ type: 'image', ...(await readMediaBase64(part.media, config.maxContextImageBytes)) });
+        if (part.type === 'pending_media') {
+          parts.push({
+            type: part.as,
+            name: part.as === 'file' ? part.media.name : undefined,
+            ...(await readMediaBase64(part.media, config.maxContextImageBytes)),
+          });
         } else {
           parts.push(part);
         }
@@ -429,6 +483,9 @@ function buildImageTurn(history: AdapterMessage[]) {
 const partSchema = z.union([
   z.object({ type: z.literal('text'), text: z.string().min(1).max(config.maxMessageTextChars) }),
   z.object({ type: z.literal('image'), uploadId: z.string().min(1).max(64) }),
+  // The client's image/file split is advisory — normalizeIncomingParts
+  // re-derives the real kind from the stored mime.
+  z.object({ type: z.literal('file'), uploadId: z.string().min(1).max(64) }),
 ]);
 
 const streamBodySchema = z.object({

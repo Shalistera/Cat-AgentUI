@@ -7,6 +7,9 @@ export type MessagePart =
   | { type: 'reasoning'; text: string }
   // user attachment (uploadId) or model-generated image (imageId → images table)
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
+  // non-image attachment. name/mime are denormalized from the uploads row at
+  // send time so history renders without an extra fetch per chip.
+  | { type: 'file'; uploadId: string; name?: string; mime?: string }
   // sig: opaque per-call signature some vendors (Gemini 3 thought_signature)
   // require to be echoed verbatim when the call is replayed as history.
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string } // args = JSON string
@@ -60,8 +63,10 @@ export interface GroundingInfo {
 }
 
 // Normalized message fed into adapters. Attachments already resolved to base64.
+// 'file' parts are always PDFs: text-bearing documents (txt/md/docx/…) are
+// extracted server-side and arrive as plain text parts instead.
 export interface AdapterMessagePart {
-  type: 'text' | 'image' | 'tool_call' | 'tool_result';
+  type: 'text' | 'image' | 'file' | 'tool_call' | 'tool_result';
   text?: string;
   mime?: string;
   dataBase64?: string;

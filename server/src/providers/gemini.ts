@@ -80,7 +80,8 @@ function toContents(messages: AdapterMessage[]): any[] {
       const parts: any[] = [];
       for (const p of m.parts) {
         if (p.type === 'text' && p.text) parts.push({ text: p.text });
-        else if (p.type === 'image' && p.dataBase64) {
+        else if ((p.type === 'image' || p.type === 'file') && p.dataBase64) {
+          // Gemini takes PDFs through the same inlineData door as images.
           parts.push({ inlineData: { mimeType: p.mime || 'image/png', data: p.dataBase64 } });
         }
       }

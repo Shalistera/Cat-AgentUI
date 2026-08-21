@@ -7,7 +7,7 @@ import { api, fmtTime } from '../api';
 import {
   chatHandoff, LAST_MODEL_KEY, useChats, useMcp, useModels, useProjects, useUi,
 } from '../store';
-import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
+import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import {
   Button, Card, EmptyState, Field, Input, Modal, ModalActions, PageHeader, Spinner, Textarea,
   confirmDialog, toast,
@@ -95,10 +95,10 @@ export default function ProjectPage() {
       .catch(() => setFailed(true));
   }, [id]);
 
-  function startChat(text: string, images: PendingImage[]) {
+  function startChat(text: string, attachments: PendingAttachment[]) {
     if (!project) return;
     chatHandoff.payload = {
-      text, images, modelId: modelSel?.id ?? null, settings, webSearch, mcpSelected,
+      text, attachments, modelId: modelSel?.id ?? null, settings, webSearch, mcpSelected,
     };
     nav(`/?project=${project.id}`);
   }

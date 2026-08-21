@@ -188,6 +188,10 @@ export async function imageRoutes(app: FastifyInstance) {
         for (const uploadId of uniqueUploadIds) {
           const media = await getOwnedUploadMedia(uploadId, req.user!.id);
           if (!media) return reply.code(400).send({ error: '输入图片不存在' });
+          // Uploads may now be PDFs/docs too — reference slots take pictures only.
+          if (!media.mime.startsWith('image/')) {
+            return reply.code(400).send({ error: '参考图必须是图片文件' });
+          }
           inputBytes += media.size;
           if (inputBytes > config.maxMessageAttachmentBytes) {
             return reply.code(413).send({ error: '输入图片总大小超过限制' });

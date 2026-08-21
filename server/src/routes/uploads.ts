@@ -9,15 +9,8 @@ import { newId } from '../crypto.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth.js';
 import {
-  detectImageFileMime, quotaErrorMessage, tryReserveStorage, uploadIsReferenced,
+  quotaErrorMessage, sniffUpload, tryReserveStorage, uploadIsReferenced,
 } from '../storage.js';
-
-const EXT_BY_MIME: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-};
 
 export async function uploadRoutes(app: FastifyInstance) {
   await app.register(multipart, { limits: { fileSize: config.maxUploadBytes, files: 5 } });
@@ -26,10 +19,6 @@ export async function uploadRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     const file = await req.file();
     if (!file) return reply.code(400).send({ error: '未收到文件' });
-    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.mimetype)) {
-      file.file.resume();
-      return reply.code(400).send({ error: '仅支持 PNG / JPEG / WebP / GIF 图片' });
-    }
 
     const contentLength = Number(req.headers['content-length']);
     const reserveBytes = Number.isSafeInteger(contentLength) && contentLength > 0
@@ -42,9 +31,10 @@ export async function uploadRoutes(app: FastifyInstance) {
     }
 
     const id = newId();
-    const ext = EXT_BY_MIME[file.mimetype] ?? 'png';
-    const filename = `${id}.${ext}`;
-    const dest = path.join(config.dataDir, 'uploads', filename);
+    // The trustworthy extension comes from content sniffing, which needs the
+    // bytes on disk first — stage under a .part name, rename once classified.
+    let filename = `${id}.part`;
+    let dest = path.join(config.dataDir, 'uploads', filename);
 
     try {
       await pipeline(file.file, fs.createWriteStream(dest));
@@ -65,19 +55,24 @@ export async function uploadRoutes(app: FastifyInstance) {
       }
 
       const size = fs.statSync(dest).size;
-      const actualMime = await detectImageFileMime(dest);
-      if (!actualMime || actualMime !== file.mimetype) {
+      const origName = file.filename ? String(file.filename).slice(0, 300) : null;
+      const sniff = await sniffUpload(dest, origName);
+      if (!sniff.ok) {
         try { fs.unlinkSync(dest); } catch { /* ignore */ }
-        return reply.code(400).send({ error: '文件内容与图片类型不一致' });
+        return reply.code(400).send({ error: sniff.error });
       }
+      const finalName = `${id}.${sniff.ext}`;
+      fs.renameSync(dest, path.join(config.dataDir, 'uploads', finalName));
+      filename = finalName;
+      dest = path.join(config.dataDir, 'uploads', finalName);
 
       try {
         db.insert(schema.uploads).values({
           id,
           userId: req.user!.id,
           filename,
-          origName: file.filename ? String(file.filename).slice(0, 300) : null,
-          mime: actualMime,
+          origName,
+          mime: sniff.mime,
           size,
           createdAt: now(),
         }).run();
@@ -86,7 +81,7 @@ export async function uploadRoutes(app: FastifyInstance) {
         throw err;
       }
 
-      return { id, mime: actualMime, size };
+      return { id, mime: sniff.mime, size, name: origName };
     } finally {
       reserved.reservation.release();
     }
@@ -103,6 +98,10 @@ export async function uploadRoutes(app: FastifyInstance) {
     const filePath = path.join(config.dataDir, 'uploads', row.filename);
     if (!fs.existsSync(filePath)) return reply.code(404).send({ error: '文件不存在' });
     reply.header('content-type', row.mime);
+    if (row.origName) {
+      // Keep the human filename on view/download without risking header injection.
+      reply.header('content-disposition', `inline; filename*=UTF-8''${encodeURIComponent(row.origName)}`);
+    }
     reply.header('x-content-type-options', 'nosniff');
     reply.header('cache-control', 'private, max-age=86400');
     return reply.send(fs.createReadStream(filePath));

@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import {
-  BrainCircuit, Check, ChevronDown, ChevronRight, Copy, Clock, GitBranch, Globe,
+  BrainCircuit, Check, ChevronDown, ChevronRight, Copy, Clock, FileText, GitBranch, Globe,
   Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, Zap, CircleAlert, Ban,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo } from '../types';
@@ -310,6 +310,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   if (msg.role === 'user') {
     const text = partsToPlainText(msg.parts);
     const images = msg.parts.filter((p) => p.type === 'image');
+    const files = msg.parts.filter((p): p is Extract<MessagePart, { type: 'file' }> => p.type === 'file');
     return (
       <div className="flex flex-col items-end gap-1.5">
         {images.length > 0 && (
@@ -317,6 +318,19 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             {images.map((p, i) => p.type === 'image' && partSrc(p) && (
               <img key={i} src={partSrc(p)!} alt=""
                 className="max-h-40 rounded-lg border border-line object-cover" />
+            ))}
+          </div>
+        )}
+        {files.length > 0 && (
+          <div className="flex flex-wrap justify-end gap-2">
+            {files.map((p, i) => (
+              <a key={i} href={`/api/uploads/${p.uploadId}/file`} target="_blank" rel="noreferrer"
+                title="查看附件"
+                className="flex max-w-64 items-center gap-2 rounded-lg border border-line bg-bg1 px-3 py-2 text-xs text-tx transition-colors hover:bg-bg2">
+                <FileText size={15} className="shrink-0 text-tx2" />
+                <span className="truncate font-medium">{p.name || '附件文档'}</span>
+                {p.mime === 'application/pdf' && <span className="shrink-0 text-[10px] text-tx3">PDF</span>}
+              </a>
             ))}
           </div>
         )}

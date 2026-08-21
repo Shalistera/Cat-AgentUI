@@ -51,6 +51,11 @@ function toChatMessages(req: ChatRequest): unknown[] {
         if (p.type === 'text' && p.text) content.push({ type: 'text', text: p.text });
         else if (p.type === 'image' && p.dataBase64) {
           content.push({ type: 'image_url', image_url: { url: `data:${p.mime || 'image/png'};base64,${p.dataBase64}` } });
+        } else if (p.type === 'file' && p.dataBase64) {
+          content.push({
+            type: 'file',
+            file: { filename: p.name || 'document.pdf', file_data: `data:${p.mime || 'application/pdf'};base64,${p.dataBase64}` },
+          });
         }
       }
       if (content.length === 1 && (content[0] as { type: string }).type === 'text') {
@@ -181,6 +186,12 @@ function toResponsesInput(req: ChatRequest): unknown[] {
         if (p.type === 'text' && p.text) content.push({ type: 'input_text', text: p.text });
         else if (p.type === 'image' && p.dataBase64) {
           content.push({ type: 'input_image', image_url: `data:${p.mime || 'image/png'};base64,${p.dataBase64}` });
+        } else if (p.type === 'file' && p.dataBase64) {
+          content.push({
+            type: 'input_file',
+            filename: p.name || 'document.pdf',
+            file_data: `data:${p.mime || 'application/pdf'};base64,${p.dataBase64}`,
+          });
         }
       }
       if (content.length) out.push({ role: 'user', content });

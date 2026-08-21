@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { api } from './api';
 import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, Project, User } from './types';
-import type { ComposerSettings, PendingImage } from './components/Composer';
+import type { ComposerSettings, PendingAttachment } from './components/Composer';
 
 // ---- theme ----
 // Light is the product default; `html.dark` is the opt-in override. First-time
@@ -147,7 +147,7 @@ export const LAST_MODEL_KEY = 'cat-last-model';
 // Module-level (not router state) so back-navigation can never replay the send.
 export interface ChatHandoffPayload {
   text: string;
-  images: PendingImage[];
+  attachments: PendingAttachment[];
   modelId: string | null;
   settings: ComposerSettings;
   webSearch: boolean;

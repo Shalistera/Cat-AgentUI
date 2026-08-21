@@ -120,12 +120,58 @@ export async function detectImageFileMime(filePath: string): Promise<string | nu
   }
 }
 
+export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+/** Mimes whose content is fed to models as extracted plain text. */
+export function isTextDocMime(mime: string): boolean {
+  return mime.startsWith('text/') || mime === 'application/json' || mime === DOCX_MIME;
+}
+
+export type UploadSniff =
+  | { ok: true; mime: string; ext: string }
+  | { ok: false; error: string };
+
+/**
+ * Classify an uploaded file by content, never by the browser-claimed mimetype
+ * (drag-and-drop routinely delivers empty or generic types). Accepted shapes:
+ * images (magic bytes), PDF, docx (zip + .docx name), and any UTF-8 text file.
+ */
+export async function sniffUpload(filePath: string, origName: string | null): Promise<UploadSniff> {
+  const buf = await fs.promises.readFile(filePath);
+  const image = detectImageMime(buf);
+  if (image) return { ok: true, mime: image, ext: extForMime(image) };
+  if (buf.length >= 5 && buf.subarray(0, 5).toString('ascii') === '%PDF-') {
+    return { ok: true, mime: 'application/pdf', ext: 'pdf' };
+  }
+  const nameExt = (origName ?? '').split('.').pop()?.toLowerCase() ?? '';
+  if (buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && (buf[2] === 0x03 || buf[2] === 0x05)) {
+    if (nameExt === 'docx') return { ok: true, mime: DOCX_MIME, ext: 'docx' };
+    return { ok: false, error: '不支持该压缩格式文件(Word 请使用 .docx)' };
+  }
+  if (buf.length >= 4 && buf[0] === 0xd0 && buf[1] === 0xcf && buf[2] === 0x11 && buf[3] === 0xe0) {
+    return { ok: false, error: '旧版 Office 格式(.doc/.xls/.ppt)不支持,请另存为 .docx 或 PDF' };
+  }
+  // Everything else must be readable text: UTF-8 and free of NUL bytes.
+  if (buf.includes(0)) return { ok: false, error: '不支持的文件类型(仅图片、PDF、docx 及文本文件)' };
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return { ok: false, error: '文本文件必须是 UTF-8 编码' };
+  }
+  const isMd = nameExt === 'md' || nameExt === 'markdown';
+  // Store the real extension so the on-disk name stays meaningful; anything
+  // exotic falls back to .txt.
+  const ext = /^[a-z0-9]{1,8}$/.test(nameExt) ? nameExt : 'txt';
+  return { ok: true, mime: isMd ? 'text/markdown' : 'text/plain', ext };
+}
+
 export interface OwnedMedia {
   kind: StorageKind;
   id: string;
   mime: string;
   size: number;
   filePath: string;
+  name?: string; // original filename, for prompt labels and UI chips
 }
 
 export async function getOwnedUploadMedia(id: string, userId: string): Promise<OwnedMedia | null> {
@@ -137,7 +183,7 @@ export async function getOwnedUploadMedia(id: string, userId: string): Promise<O
     if (stat.size !== row.size) {
       db.update(schema.uploads).set({ size: stat.size }).where(eq(schema.uploads.id, id)).run();
     }
-    return { kind: 'upload', id, mime: row.mime, size: stat.size, filePath };
+    return { kind: 'upload', id, mime: row.mime, size: stat.size, filePath, name: row.origName ?? undefined };
   } catch {
     return null;
   }
@@ -163,9 +209,9 @@ export async function readMediaBase64(media: OwnedMedia, maxBytes: number): Prom
   mime: string;
   dataBase64: string;
 }> {
-  if (media.size > maxBytes) throw new Error('图片超过上下文大小限制');
+  if (media.size > maxBytes) throw new Error('附件超过上下文大小限制');
   const buf = await fs.promises.readFile(media.filePath);
-  if (buf.length > maxBytes) throw new Error('图片超过上下文大小限制');
+  if (buf.length > maxBytes) throw new Error('附件超过上下文大小限制');
   return { mime: media.mime, dataBase64: buf.toString('base64') };
 }
 
@@ -257,7 +303,7 @@ export function uploadIdsFromPartsJson(partsJson: string): string[] {
   try {
     const parts = JSON.parse(partsJson) as { type?: string; uploadId?: string }[];
     if (!Array.isArray(parts)) return [];
-    return parts.flatMap((p) => p.type === 'image' && p.uploadId ? [p.uploadId] : []);
+    return parts.flatMap((p) => (p.type === 'image' || p.type === 'file') && p.uploadId ? [p.uploadId] : []);
   } catch {
     return [];
   }

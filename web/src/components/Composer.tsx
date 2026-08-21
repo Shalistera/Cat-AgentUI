@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  ArrowLeft, ArrowUp, Check, ChevronDown, Gauge, Globe, Image as ImageIcon,
-  Loader2, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
+  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon,
+  Loader2, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAuth, useMcp, useModels, useUi } from '../store';
 import { api, errMsg, uploadFile } from '../api';
@@ -34,7 +34,25 @@ function effortHint(idx: number, total: number) {
   return '边想边答，兼顾速度与深度';
 }
 
-export interface PendingImage { uploadId: string; previewUrl: string }
+export interface PendingAttachment {
+  uploadId: string;
+  kind: 'image' | 'file';
+  name: string;
+  mime: string;
+  previewUrl?: string; // images only
+}
+
+// Broad but honest: the server accepts any UTF-8 text file, so the picker
+// lists the common ones and drag-and-drop covers the rest.
+const FILE_ACCEPT = [
+  'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf',
+  '.pdf', '.docx', '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonl',
+  '.yaml', '.yml', '.xml', '.html', '.log', '.py', '.js', '.ts', '.tsx', '.jsx',
+  '.java', '.c', '.cpp', '.h', '.cs', '.go', '.rs', '.rb', '.php', '.sh', '.sql', '.toml', '.ini',
+].join(',');
+
+const isImageFile = (f: File) => f.type.startsWith('image/');
+const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
 
 export interface ComposerSettings {
   systemPrompt: string;
@@ -52,7 +70,7 @@ interface ComposerProps {
   onMcpChange(ids: string[]): void;
   settings: ComposerSettings;
   onSettingsChange(s: ComposerSettings): void;
-  onSend(text: string, images: PendingImage[]): void;
+  onSend(text: string, attachments: PendingAttachment[]): void;
   onStop(): void;
   autoFocus?: boolean;
 }
@@ -60,7 +78,7 @@ interface ComposerProps {
 export function Composer(props: ComposerProps) {
   const { streaming, model } = props;
   const [text, setText] = useState('');
-  const [images, setImages] = useState<PendingImage[]>([]);
+  const [atts, setAtts] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   // dragenter/dragleave fire for every child the cursor crosses; only a
@@ -113,31 +131,53 @@ export function Composer(props: ComposerProps) {
 
   function send() {
     const t = text.trim();
-    if ((!t && images.length === 0) || streaming || props.disabled) return;
-    props.onSend(t, images);
+    if ((!t && atts.length === 0) || streaming || props.disabled) return;
+    props.onSend(t, atts);
     setText('');
-    setImages([]);
+    setAtts([]);
   }
 
   async function pickFiles(files: FileList | File[] | null) {
     if (!files?.length) return;
     setUploading(true);
     try {
-      for (const f of Array.from(files).slice(0, 4 - images.length)) {
-        const up = await uploadFile(f);
-        setImages((prev) => [...prev, { uploadId: up.id, previewUrl: `/api/uploads/${up.id}/file` }]);
+      let room = 4 - atts.length;
+      for (const f of Array.from(files)) {
+        if (room <= 0) { toast('每条消息最多 4 个附件', 'err'); break; }
+        // Per-file capability gate, so one wrong file in a batch doesn't
+        // block the rest — each rejection says which file and why.
+        if (imageMode && !isImageFile(f)) {
+          toast(`「${f.name}」未添加:绘图模型只接受参考图片`, 'err');
+          continue;
+        }
+        if ((isImageFile(f) || isPdfFile(f)) && !canAttachImages) {
+          toast(`「${f.name}」未添加:当前模型不支持读取图片/PDF`, 'err');
+          continue;
+        }
+        try {
+          const up = await uploadFile(f);
+          const kind = up.mime.startsWith('image/') ? 'image' : 'file';
+          setAtts((prev) => [...prev, {
+            uploadId: up.id,
+            kind,
+            name: f.name || (kind === 'image' ? '图片' : '文件'),
+            mime: up.mime,
+            previewUrl: kind === 'image' ? `/api/uploads/${up.id}/file` : undefined,
+          }]);
+          room--;
+        } catch (e) {
+          toast(`「${f.name}」${e instanceof Error ? e.message : '上传失败'}`, 'err');
+        }
       }
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '上传失败', 'err');
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
     }
   }
 
-  function removePendingImage(img: PendingImage) {
-    setImages((prev) => prev.filter((x) => x.uploadId !== img.uploadId));
-    api.del(`/api/uploads/${img.uploadId}`).catch((e) => {
+  function removeAttachment(att: PendingAttachment) {
+    setAtts((prev) => prev.filter((x) => x.uploadId !== att.uploadId));
+    api.del(`/api/uploads/${att.uploadId}`).catch((e) => {
       toast(e instanceof Error ? e.message : '清理附件失败', 'err');
     });
   }
@@ -153,13 +193,21 @@ export function Composer(props: ComposerProps) {
   const chatModels = filteredModels.filter((m) => !m.imageGen);
   const imageModels = filteredModels.filter((m) => m.imageGen);
   const imageMode = !!model?.imageGen;
-  const canAttach = model?.vision || imageMode;
-  const attachFull = images.length >= 4;
+  // Pictures and PDFs need a model that can see; text documents are flattened
+  // to prompt text server-side, so every chat model takes them.
+  const canAttachImages = !!model?.vision || imageMode;
+  const canAttach = !props.disabled;
+  const attachFull = atts.length >= 4;
   // Why the drop target can't take files right now — the overlay says it out
-  // loud instead of silently swallowing the drop.
+  // loud instead of silently swallowing the drop. Kind-specific limits are
+  // enforced per file inside pickFiles.
   const dropBlocked = props.disabled ? '管理员尚未配置模型'
-    : !canAttach ? '当前模型不支持图片附件'
-    : attachFull ? '最多添加 4 张图片' : null;
+    : attachFull ? '最多添加 4 个附件' : null;
+  const dropHint = imageMode
+    ? { title: '松开鼠标，添加参考图', sub: '支持 PNG / JPEG / WebP / GIF，最多 4 张' }
+    : canAttachImages
+      ? { title: '松开鼠标，附件将随消息发送', sub: '支持图片、PDF、Word(docx)与各类文本文件，最多 4 个' }
+      : { title: '松开鼠标，添加文档附件', sub: '当前模型不支持图片和 PDF；支持 txt / md / docx 等文本，最多 4 个' };
 
   // The whole window is the drop zone: listeners live on `window` so a file
   // dragged anywhere over the app raises the overlay, which in turn shows
@@ -190,15 +238,9 @@ export function Composer(props: ComposerProps) {
       e.preventDefault(); // never let the browser navigate to the dropped file
       reset();
       if (dropBlocked) return; // the overlay already explained why
-      // Same whitelist as the server's upload route — filtering here turns a
-      // would-be 400 into an immediate, plain-language toast.
-      const files = Array.from(e.dataTransfer?.files ?? [])
-        .filter((f) => /^image\/(png|jpeg|webp|gif)$/.test(f.type));
-      if (!files.length) {
-        toast('仅支持图片文件(PNG / JPEG / WebP / GIF)', 'err');
-        return;
-      }
-      void pickFiles(files);
+      // Type/capability rules live per-file in pickFiles, which also lets the
+      // server's content sniffing be the final word on odd files.
+      void pickFiles(Array.from(e.dataTransfer?.files ?? []));
     };
     window.addEventListener('dragenter', onEnter);
     window.addEventListener('dragover', onOver);
@@ -213,7 +255,7 @@ export function Composer(props: ComposerProps) {
       window.removeEventListener('dragend', reset);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pickFiles is recreated per render
-  }, [dropBlocked, images.length]);
+  }, [dropBlocked, atts.length]);
 
   // Personal model order: dragging a row rewrites the whole flat order and
   // saves it to the profile; the server then serves /api/models in that order
@@ -364,10 +406,10 @@ export function Composer(props: ComposerProps) {
           }`}>
             <ImageIcon size={32} className={dropBlocked ? 'text-err' : 'text-acc'} />
             <p className="text-sm font-semibold text-tx">
-              {dropBlocked ?? (imageMode ? '松开鼠标，添加参考图' : '松开鼠标，图片将随消息发送')}
+              {dropBlocked ?? dropHint.title}
             </p>
             <p className="text-xs text-tx3">
-              {dropBlocked ? '松开鼠标不会上传任何内容' : '支持 PNG / JPEG / WebP / GIF，最多 4 张'}
+              {dropBlocked ? '松开鼠标不会上传任何内容' : dropHint.sub}
             </p>
           </div>
         </div>
@@ -377,15 +419,31 @@ export function Composer(props: ComposerProps) {
       <div className={`rounded-xl border bg-bg1 shadow-md transition-[border-color,box-shadow] focus-within:shadow-lg ${
         dragging && !dropBlocked ? 'border-acc shadow-lg' : 'border-line2 focus-within:border-tx3'
       }`}>
-        {images.length > 0 && (
-          <div className="flex flex-wrap gap-2 border-b border-line px-3 py-3">
-            {images.map((img) => (
-              <div key={img.uploadId} className="group relative">
-                <img src={img.previewUrl} alt="" className="h-16 w-16 rounded-md border border-line object-cover" />
+        {(atts.length > 0 || uploading) && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-3">
+            {atts.map((att) => (
+              <div key={att.uploadId} className="group relative">
+                {att.kind === 'image' ? (
+                  <img src={att.previewUrl} alt={att.name}
+                    className="h-16 w-16 rounded-md border border-line object-cover" />
+                ) : (
+                  <div title={att.name}
+                    className="flex h-16 max-w-52 items-center gap-2 rounded-md border border-line bg-bg2/60 px-3">
+                    <FileText size={18} className="shrink-0 text-tx2" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs font-medium text-tx">{att.name}</span>
+                      <span className="block text-[10px] uppercase text-tx3">
+                        {att.mime === 'application/pdf' ? 'PDF'
+                          : att.mime.includes('wordprocessingml') ? 'DOCX'
+                          : att.mime === 'text/markdown' ? 'MD' : '文本'}
+                      </span>
+                    </span>
+                  </div>
+                )}
                 <button
-                  title="移除图片"
+                  title="移除附件"
                   className="absolute -right-1.5 -top-1.5 cursor-pointer rounded-full border border-line bg-bg1 p-0.5 text-tx2 opacity-0 shadow-sm transition-opacity hover:text-err group-focus-within:opacity-100 group-hover:opacity-100"
-                  onClick={() => removePendingImage(img)}
+                  onClick={() => removeAttachment(att)}
                 >
                   <X size={11} />
                 </button>
@@ -412,8 +470,8 @@ export function Composer(props: ComposerProps) {
           onCompositionStart={() => { composingRef.current = true; }}
           onCompositionEnd={() => { composingRef.current = false; }}
           onPaste={(e) => {
-            const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
-            if (!files.length || !canAttach || images.length >= 4) return;
+            const files = Array.from(e.clipboardData?.files ?? []);
+            if (!files.length || !canAttach || attachFull) return;
             e.preventDefault();
             void pickFiles(files);
           }}
@@ -427,15 +485,18 @@ export function Composer(props: ComposerProps) {
 
         <div className="flex items-center gap-1 rounded-b-xl border-t border-line bg-bg2/45 px-2 py-2">
           {/* left: attachments, then tools */}
-          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden
+          <input ref={fileRef} type="file" multiple hidden
+            accept={imageMode ? 'image/png,image/jpeg,image/webp,image/gif' : FILE_ACCEPT}
             onChange={(e) => pickFiles(e.target.files)} />
           <button
             className={toolBtn}
-            title={canAttach ? (imageMode ? '添加参考图' : '添加附件') : '当前模型不支持读图'}
+            title={imageMode ? '添加参考图'
+              : canAttachImages ? '添加附件:图片、PDF、Word(docx)或文本文件'
+              : '添加文档附件(当前模型不支持图片/PDF)'}
             onClick={() => fileRef.current?.click()}
-            disabled={!canAttach || images.length >= 4}
+            disabled={!canAttach || attachFull}
           >
-            <Plus size={15} />
+            {imageMode ? <Plus size={15} /> : <Paperclip size={14} />}
           </button>
 
           {searchAvailable && !imageMode && (
@@ -673,7 +734,7 @@ export function Composer(props: ComposerProps) {
           ) : (
             <button
               title="发送消息"
-              disabled={(!text.trim() && images.length === 0) || props.disabled}
+              disabled={(!text.trim() && atts.length === 0) || props.disabled}
               className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md bg-pri text-prifg shadow-xs transition-colors hover:bg-pri2 disabled:opacity-40 disabled:pointer-events-none"
               onClick={send}
             >

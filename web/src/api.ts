@@ -35,7 +35,7 @@ export const api = {
   del: <T>(path: string) => request<T>('DELETE', path),
 };
 
-export async function uploadFile(file: File): Promise<{ id: string; mime: string; size: number }> {
+export async function uploadFile(file: File): Promise<{ id: string; mime: string; size: number; name?: string | null }> {
   const form = new FormData();
   form.append('file', file);
   const res = await fetch('/api/uploads', {
@@ -48,7 +48,9 @@ export async function uploadFile(file: File): Promise<{ id: string; mime: string
 }
 
 export interface StreamPayload {
-  content?: ({ type: 'text'; text: string } | { type: 'image'; uploadId: string })[];
+  content?: ({ type: 'text'; text: string }
+    | { type: 'image'; uploadId: string }
+    | { type: 'file'; uploadId: string; name?: string; mime?: string })[];
   modelId?: string;
   regenerateMessageId?: string;
   editMessageId?: string;

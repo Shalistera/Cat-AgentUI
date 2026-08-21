@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowDown, FolderClosed, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
-import { Composer, type ComposerSettings, type PendingImage } from '../components/Composer';
+import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
 import { Button, PageHeader, confirmDialog, toast } from '../components/ui';
@@ -134,7 +134,7 @@ export default function Chat() {
     setSettings(h.settings);
     setWebSearch(h.webSearch);
     setMcpSelected(h.mcpSelected);
-    void send(h.text, h.images, {
+    void send(h.text, h.attachments, {
       modelId: m.id, settings: h.settings, webSearch: h.webSearch, mcpSelected: h.mcpSelected,
     });
   }, [routeId, modelsLoaded, models, modelSel, streaming]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -323,18 +323,22 @@ export default function Chat() {
       });
   }
 
-  async function send(text: string, images: PendingImage[], o?: SendOverrides) {
+  async function send(text: string, attachments: PendingAttachment[], o?: SendOverrides) {
     if (streaming) return;
     const sendModel = (o?.modelId ? models.find((m) => m.id === o.modelId) : null) ?? modelSel;
     try {
       const target = await ensureChat(o);
-      const content: ({ type: 'text'; text: string } | { type: 'image'; uploadId: string })[] = [];
-      for (const img of images) content.push({ type: 'image', uploadId: img.uploadId });
+      const content: ({ type: 'text'; text: string }
+        | { type: 'image'; uploadId: string }
+        | { type: 'file'; uploadId: string; name?: string; mime?: string })[] = [];
+      for (const att of attachments) {
+        content.push(att.kind === 'image'
+          ? { type: 'image', uploadId: att.uploadId }
+          : { type: 'file', uploadId: att.uploadId, name: att.name, mime: att.mime });
+      }
       if (text) content.push({ type: 'text', text });
       const nowTs = Date.now();
-      const parts = content.map((c) => (c.type === 'text'
-        ? { type: 'text' as const, text: c.text }
-        : { type: 'image' as const, uploadId: c.uploadId }));
+      const parts: MessagePart[] = content;
       setMessages((prev) => [
         ...prev,
         { id: 'tmp-u', role: 'user', parts, model: null, status: 'done', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs },
@@ -373,14 +377,21 @@ export default function Chat() {
     const idx = messages.findIndex((m) => m.id === msgId);
     if (idx < 0) return;
     const original = messages[idx];
-    const keepImages = original.parts.filter((p): p is Extract<MessagePart, { type: 'image' }> => p.type === 'image' && !!p.uploadId);
-    const content: ({ type: 'text'; text: string } | { type: 'image'; uploadId: string })[] = [
-      ...keepImages.map((p) => ({ type: 'image' as const, uploadId: p.uploadId! })),
+    // Editing rewrites the text but keeps every attachment (images and files).
+    const keepAtts = original.parts.filter((p): p is Extract<MessagePart, { type: 'image' | 'file' }> => (
+      (p.type === 'image' || p.type === 'file') && !!p.uploadId
+    ));
+    const content: ({ type: 'text'; text: string }
+      | { type: 'image'; uploadId: string }
+      | { type: 'file'; uploadId: string; name?: string; mime?: string })[] = [
+      ...keepAtts.map((p) => (p.type === 'image'
+        ? { type: 'image' as const, uploadId: p.uploadId! }
+        : { type: 'file' as const, uploadId: p.uploadId, name: p.name, mime: p.mime })),
       { type: 'text', text: newText },
     ];
     setMessages((prev) => [
       ...prev.slice(0, idx),
-      { ...original, parts: content.map((c) => c.type === 'text' ? { type: 'text' as const, text: c.text } : { type: 'image' as const, uploadId: c.uploadId }) },
+      { ...original, parts: content as MessagePart[] },
       { id: 'tmp-a', role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
     ]);
     runStream(chatRef.current.id, { editMessageId: msgId, content, modelId: modelSel?.id });
