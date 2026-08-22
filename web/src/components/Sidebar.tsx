@@ -11,7 +11,49 @@ import { CatMark } from './Logo';
 import { Button, Input, Modal, ModalActions, Popover, confirmDialog, toast } from './ui';
 import { CreateProjectModal } from './CreateProjectModal';
 import { ReleaseNotesButton } from './ReleaseNotes';
-import type { ChatSummary } from '../types';
+import type { ChatSummary, SearchResult } from '../types';
+
+/** Wrap the first occurrence of `q` (case-insensitive) in a highlight mark. */
+function highlightMatch(text: string, q: string) {
+  if (!q) return text;
+  const idx = text.toLowerCase().indexOf(q.toLowerCase());
+  if (idx < 0) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="rounded-[3px] bg-acc/25 px-px text-tx">{text.slice(idx, idx + q.length)}</mark>
+      {text.slice(idx + q.length)}
+    </>
+  );
+}
+
+/** 全文搜索结果行:标题 + 命中消息的上下文摘要。 */
+function SearchResultRow({ r, q, active, onOpen }: {
+  r: SearchResult; q: string; active: boolean; onOpen(): void;
+}) {
+  return (
+    <button
+      className={`block w-full cursor-pointer rounded-md border px-2.5 py-1.5 text-left transition-colors ${
+        active ? 'border-line bg-bg1 shadow-xs' : 'border-transparent hover:bg-bg2'}`}
+      onClick={onOpen}
+    >
+      <span className="flex items-center gap-1.5">
+        {r.pinned && <Pin size={10} className="shrink-0 text-acc" />}
+        <span className="min-w-0 flex-1 truncate text-[13px] text-tx">
+          {highlightMatch(r.title || '新对话', q)}
+        </span>
+        {r.matchCount > 1 && (
+          <span className="shrink-0 rounded-full bg-bg3 px-1.5 text-[10px] tabular-nums text-tx3">{r.matchCount}</span>
+        )}
+      </span>
+      {r.snippet && (
+        <span className="mt-0.5 line-clamp-2 block text-[11px] leading-relaxed text-tx3">
+          {highlightMatch(r.snippet, q)}
+        </span>
+      )}
+    </button>
+  );
+}
 
 function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
   const nav = useNavigate();
@@ -149,9 +191,25 @@ export function Sidebar() {
     if (user && !projectsStore.loaded) projectsStore.load().catch(() => { /* section just stays empty */ });
   }, [user, projectsStore]);
 
-  const q = query.trim().toLowerCase();
+  const q = query.trim();
   const searching = q.length > 0;
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  // Full-text search rides the server: titles AND message bodies, with
+  // `project:` / `pinned:` filters and a snippet per hit. Debounced so a
+  // keystroke burst costs one request.
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [highlightQ, setHighlightQ] = useState('');
+  useEffect(() => {
+    if (!searching) { setResults(null); return; }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api.get<{ results: SearchResult[]; query: string }>(`/api/search?q=${encodeURIComponent(q)}`)
+        .then((r) => { if (!cancelled) { setResults(r.results); setHighlightQ(r.query); } })
+        .catch(() => { if (!cancelled) setResults([]); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [q, searching]);
 
   // Chats inside a project live under that project's node only — never in
   // 置顶/最近 — so the rail always answers "does this chat belong to a project?".
@@ -160,7 +218,6 @@ export function Sidebar() {
     const byProject = new Map<string, ChatSummary[]>();
     const loose: ChatSummary[] = [];
     for (const c of chats) {
-      if (q && !(c.title || '新对话').toLowerCase().includes(q)) continue;
       if (c.projectId && known.has(c.projectId)) {
         if (!byProject.has(c.projectId)) byProject.set(c.projectId, []);
         byProject.get(c.projectId)!.push(c);
@@ -170,17 +227,14 @@ export function Sidebar() {
     }
     for (const list of byProject.values()) list.sort((a, b) => Number(b.pinned) - Number(a.pinned));
     return { pinned: loose.filter((c) => c.pinned), recent: loose.filter((c) => !c.pinned), byProject };
-  }, [chats, q, projectsStore.projects]);
+  }, [chats, projectsStore.projects]);
 
   const activeChatProjectId = useMemo(
     () => chats.find((c) => c.id === activeChatId)?.projectId ?? null,
     [chats, activeChatId],
   );
 
-  // While searching, a project stays visible only if it (or a chat in it) matches.
-  const visibleProjects = searching
-    ? projectsStore.projects.filter((p) => byProject.has(p.id) || p.name.toLowerCase().includes(q))
-    : projectsStore.projects;
+  const visibleProjects = searching ? [] : projectsStore.projects;
 
   const empty = pinned.length === 0 && recent.length === 0 && byProject.size === 0;
 
@@ -234,8 +288,9 @@ export function Sidebar() {
           {/* line2, not --color-field: this is rail navigation, not a form —
               a deliberately quieter edge than real inputs carry. */}
           <input
-            value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索对话"
-            aria-label="搜索对话"
+            value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索对话与消息"
+            aria-label="搜索对话与消息"
+            title={'搜索标题与消息正文。\n支持过滤:project:项目名、pinned:true'}
             className="h-8 w-full rounded-md border border-line2 bg-bg1 pl-8 pr-2 text-xs text-tx placeholder:text-tx3 transition-colors hover:border-field"
           />
         </div>
@@ -311,22 +366,35 @@ export function Sidebar() {
           </div>
         )}
 
-        {pinned.length > 0 && (
+        {searching && (
+          <div className="space-y-0.5">
+            <div className="eyebrow px-2 pb-1">搜索结果</div>
+            {(results ?? []).map((r) => (
+              <SearchResultRow key={r.id} r={r} q={highlightQ} active={r.id === activeChatId}
+                onOpen={() => { nav(`/chat/${r.id}`); if (window.innerWidth <= 900) setSidebarOpen(false); }} />
+            ))}
+            {results === null && (
+              <p className="px-2 py-4 text-center text-[11px] text-tx3">搜索中…</p>
+            )}
+            {results !== null && results.length === 0 && (
+              <p className="px-2 py-8 text-center text-xs leading-relaxed text-tx3">没有匹配的对话或消息</p>
+            )}
+          </div>
+        )}
+        {!searching && pinned.length > 0 && (
           <div className="space-y-0.5">
             <div className="eyebrow px-2 pb-1">置顶</div>
             {pinned.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
           </div>
         )}
-        {recent.length > 0 && (
+        {!searching && recent.length > 0 && (
           <div className="space-y-0.5">
             {(pinned.length > 0 || visibleProjects.length > 0) && <div className="eyebrow px-2 pb-1">最近</div>}
             {recent.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
           </div>
         )}
-        {loaded && empty && (
-          <p className="px-2 py-8 text-center text-xs leading-relaxed text-tx3">
-            {query ? '没有匹配的对话' : '还没有对话记录'}
-          </p>
+        {!searching && loaded && empty && (
+          <p className="px-2 py-8 text-center text-xs leading-relaxed text-tx3">还没有对话记录</p>
         )}
       </div>
 

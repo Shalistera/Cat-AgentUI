@@ -285,6 +285,7 @@ export default function ProjectPage() {
               onSettingsChange={setSettings}
               onSend={startChat}
               onStop={() => { /* nothing streams here */ }}
+              draftKey={`project:${project.id}`}
             />
 
             <Card title="项目内对话" flush>

@@ -139,6 +139,59 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 }));
 
+// ---- outgoing message queue (per chat) ----
+// While a reply streams, further sends queue instead of being blocked; the chat
+// page auto-dispatches the next item whenever the chat is open and idle. Held
+// in memory (module state) so switching conversations keeps every queue.
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  attachments: PendingAttachment[];
+}
+
+interface QueueState {
+  queues: Record<string, QueuedMessage[]>;
+  enqueue(chatId: string, text: string, attachments: PendingAttachment[]): void;
+  update(chatId: string, id: string, text: string): void;
+  remove(chatId: string, id: string): void;
+  /** Move one item to the front (used by 立即发送). */
+  promote(chatId: string, id: string): void;
+  shift(chatId: string): QueuedMessage | null;
+}
+
+export const useQueue = create<QueueState>((set, get) => {
+  const patch = (chatId: string, fn: (q: QueuedMessage[]) => QueuedMessage[]) => {
+    const queues = { ...get().queues };
+    const next = fn(queues[chatId] ?? []);
+    if (next.length) queues[chatId] = next; else delete queues[chatId];
+    set({ queues });
+  };
+  return {
+    queues: {},
+    enqueue(chatId, text, attachments) {
+      patch(chatId, (q) => [...q, { id: crypto.randomUUID(), text, attachments }]);
+    },
+    update(chatId, id, text) {
+      patch(chatId, (q) => q.map((x) => (x.id === id ? { ...x, text } : x)));
+    },
+    remove(chatId, id) {
+      patch(chatId, (q) => q.filter((x) => x.id !== id));
+    },
+    promote(chatId, id) {
+      patch(chatId, (q) => {
+        const item = q.find((x) => x.id === id);
+        return item ? [item, ...q.filter((x) => x.id !== id)] : q;
+      });
+    },
+    shift(chatId) {
+      const q = get().queues[chatId] ?? [];
+      if (!q.length) return null;
+      patch(chatId, (list) => list.slice(1));
+      return q[0];
+    },
+  };
+});
+
 // The composer remembers the last explicitly chosen model across pages.
 export const LAST_MODEL_KEY = 'cat-last-model';
 

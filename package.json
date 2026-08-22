@@ -1,6 +1,6 @@
 {
   "name": "cat-agentui",
-  "version": "0.6.5",
+  "version": "0.7.0",
   "private": true,
   "description": "Cat-AgentUI — a lightweight multi-user AI chat & image panel (OpenAI / Anthropic / Gemini, MCP)",
   "workspaces": [

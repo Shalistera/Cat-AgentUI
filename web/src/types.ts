@@ -26,6 +26,8 @@ export type MessagePart =
 
 export interface Message {
   id: string;
+  /** Tree link — the message this one replies to; null = conversation root. */
+  parentId: string | null;
   role: 'user' | 'assistant';
   parts: MessagePart[];
   model: string | null;
@@ -78,6 +80,14 @@ export interface ChatDetail extends ChatSummary {
   reasoningEffort: ReasoningEffort | null;
   webSearch: boolean;
   mcpServerIds: string[];
+  /** Leaf of the branch on screen; null = no messages yet. */
+  currentLeafId: string | null;
+}
+
+/** One row of /api/search — a chat plus why it matched. */
+export interface SearchResult {
+  id: string; title: string; pinned: boolean; projectId: string | null; updatedAt: number;
+  titleMatch: boolean; snippet: string | null; matchCount: number;
 }
 
 export interface ModelInfo {

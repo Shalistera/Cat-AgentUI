@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import {
-  BrainCircuit, Check, ChevronDown, ChevronRight, Copy, Clock, FileText, GitBranch, Globe,
+  BrainCircuit, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Clock, FileText, GitBranch, Globe,
   Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, Zap, CircleAlert, Ban,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo } from '../types';
@@ -101,6 +101,26 @@ function RegenerateMenu({ lastModel, onSame, onWith }: {
         </>
       )}
     </Popover>
+  );
+}
+
+/** 版本切换:同一位置的多个回复/编辑版本(树的兄弟节点)之间左右切换。 */
+function SiblingSwitch({ info, onPrev, onNext }: {
+  info: { index: number; total: number };
+  onPrev?: () => void;
+  onNext?: () => void;
+}) {
+  const arrow = 'flex h-5 w-5 cursor-pointer items-center justify-center rounded-sm text-tx3 transition-colors hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-35';
+  return (
+    <span className="flex items-center gap-0 text-[11px] tabular-nums text-tx3">
+      <button title="上一个版本" className={arrow} disabled={!onPrev} onClick={onPrev}>
+        <ChevronLeft size={13} />
+      </button>
+      <span className="px-0.5">{info.index + 1}/{info.total}</span>
+      <button title="下一个版本" className={arrow} disabled={!onNext} onClick={onNext}>
+        <ChevronRight size={13} />
+      </button>
+    </span>
   );
 }
 
@@ -301,9 +321,13 @@ interface Props {
   onFollowup?: (q: string) => void;
   /** Save an in-place correction of this reply's text (no regeneration). */
   onEditAssistant?: (text: string) => void;
+  /** Sibling versions at this position (regenerations / edits); shown when >1. */
+  siblingInfo?: { index: number; total: number };
+  onSiblingPrev?: () => void;
+  onSiblingNext?: () => void;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -358,6 +382,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         )}
         {!editing && (
           <div className="flex items-center gap-0.5">
+            {siblingInfo && <SiblingSwitch info={siblingInfo} onPrev={onSiblingPrev} onNext={onSiblingNext} />}
             <CopyBtn text={text} />
             {onEdit && (
               <button title="编辑并重新发送" className={iconBtn} onClick={() => { setDraft(text); setEditing(true); }}>
@@ -489,6 +514,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         {!isStreaming && !editing && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tx3">
             <span className="flex items-center gap-0.5">
+              {siblingInfo && <SiblingSwitch info={siblingInfo} onPrev={onSiblingPrev} onNext={onSiblingNext} />}
               <CopyBtn text={plain} />
               {onEditAssistant && !!plain && (
                 <button title="编辑回复内容(直接修改文字,不重新生成)" className={iconBtn}

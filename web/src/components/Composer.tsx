@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon,
-  Loader2, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
+  ListPlus, Loader2, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAuth, useMcp, useModels, useUi } from '../store';
 import { api, errMsg, uploadFile } from '../api';
@@ -59,6 +59,43 @@ export interface ComposerSettings {
   reasoningEffort: ReasoningEffort;
 }
 
+// ---- draft autosave ----
+// Unsent input (text + attachment refs) is kept per draftKey in localStorage,
+// so switching conversations or refreshing the page never loses a half-typed
+// message. Attachment previews are rebuilt from the uploadId on restore.
+const DRAFT_PREFIX = 'caui-draft:';
+
+function loadDraft(key: string): { text: string; atts: PendingAttachment[] } {
+  try {
+    const raw = localStorage.getItem(DRAFT_PREFIX + key);
+    if (!raw) return { text: '', atts: [] };
+    const d = JSON.parse(raw) as { text?: unknown; atts?: unknown };
+    const text = typeof d.text === 'string' ? d.text : '';
+    const atts = (Array.isArray(d.atts) ? d.atts : [])
+      .filter((a): a is PendingAttachment => !!a && typeof (a as PendingAttachment).uploadId === 'string')
+      .map((a) => ({
+        ...a,
+        previewUrl: a.kind === 'image' ? `/api/uploads/${a.uploadId}/file` : undefined,
+      }));
+    return { text, atts };
+  } catch { return { text: '', atts: [] }; }
+}
+
+function saveDraft(key: string, text: string, atts: PendingAttachment[]) {
+  try {
+    if (!text && atts.length === 0) {
+      localStorage.removeItem(DRAFT_PREFIX + key);
+    } else {
+      const slim = atts.map(({ previewUrl: _p, ...rest }) => rest);
+      localStorage.setItem(DRAFT_PREFIX + key, JSON.stringify({ text, atts: slim, ts: Date.now() }));
+    }
+  } catch { /* storage full — drafts are best-effort */ }
+}
+
+function clearDraft(key: string) {
+  try { localStorage.removeItem(DRAFT_PREFIX + key); } catch { /* ignore */ }
+}
+
 interface ComposerProps {
   streaming: boolean;
   disabled?: boolean;
@@ -71,7 +108,11 @@ interface ComposerProps {
   settings: ComposerSettings;
   onSettingsChange(s: ComposerSettings): void;
   onSend(text: string, attachments: PendingAttachment[]): void;
+  /** Present = sends during generation queue up instead of being blocked. */
+  onEnqueue?(text: string, attachments: PendingAttachment[]): void;
   onStop(): void;
+  /** Persist unsent input under this key (per chat); omit to disable drafts. */
+  draftKey?: string;
   autoFocus?: boolean;
 }
 
@@ -122,6 +163,27 @@ export function Composer(props: ComposerProps) {
     if (props.autoFocus) taRef.current?.focus();
   }, [props.autoFocus]);
 
+  // Draft restore: switching draftKey swaps the input to that conversation's
+  // saved draft. loadedDraftKeyRef gates the save effect so the OLD text can
+  // never be written under the NEW key during the swap.
+  const loadedDraftKeyRef = useRef<string | null>(null);
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!props.draftKey) { loadedDraftKeyRef.current = null; return; }
+    const d = loadDraft(props.draftKey);
+    setText(d.text);
+    setAtts(d.atts);
+    loadedDraftKeyRef.current = props.draftKey;
+  }, [props.draftKey]);
+
+  useEffect(() => {
+    const key = props.draftKey;
+    if (!key || loadedDraftKeyRef.current !== key) return;
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => saveDraft(key, text, atts), 300);
+    return () => { if (draftTimer.current) clearTimeout(draftTimer.current); };
+  }, [text, atts, props.draftKey]);
+
   useEffect(() => {
     if (panelOpen) return;
     setPanelView('models');
@@ -131,10 +193,18 @@ export function Composer(props: ComposerProps) {
 
   function send() {
     const t = text.trim();
-    if ((!t && atts.length === 0) || streaming || props.disabled) return;
-    props.onSend(t, atts);
+    if ((!t && atts.length === 0) || props.disabled) return;
+    if (streaming) {
+      // Generation in progress: queue the follow-up instead of dropping it.
+      if (!props.onEnqueue) return;
+      props.onEnqueue(t, atts);
+    } else {
+      props.onSend(t, atts);
+    }
     setText('');
     setAtts([]);
+    // Clear immediately — the debounced save must not race a navigation.
+    if (props.draftKey) clearDraft(props.draftKey);
   }
 
   async function pickFiles(files: FileList | File[] | null) {
@@ -724,13 +794,25 @@ export function Composer(props: ComposerProps) {
           )}
 
           {streaming ? (
-            <button
-              title="停止生成"
-              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx shadow-xs transition-colors hover:bg-bg2"
-              onClick={props.onStop}
-            >
-              <Square size={12} fill="currentColor" />
-            </button>
+            <>
+              {props.onEnqueue && (
+                <button
+                  title="加入队列:当前回复完成后自动发送"
+                  disabled={!text.trim() && atts.length === 0}
+                  className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx2 shadow-xs transition-colors hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none"
+                  onClick={send}
+                >
+                  <ListPlus size={15} />
+                </button>
+              )}
+              <button
+                title="停止生成"
+                className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx shadow-xs transition-colors hover:bg-bg2"
+                onClick={props.onStop}
+              >
+                <Square size={12} fill="currentColor" />
+              </button>
+            </>
           ) : (
             <button
               title="发送消息"

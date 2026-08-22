@@ -502,6 +502,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
 
       try {
         let seq = 0;
+        let prevMsgId: string | null = null; // parent link for the linear import chain
         let lastTs = chatCreated; // fallback for messages without a timestamp
         for (const m of branch) {
           const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : null;
@@ -586,6 +587,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
             id: mid,
             chatId: c.id,
             seq,
+            parentId: prevMsgId,
             role,
             parts: JSON.stringify(parts),
             model: typeof m.model === 'string' ? m.model : null,
@@ -599,6 +601,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
             ttftMs: null,
             createdAt: lastTs = toMs(m.timestamp ?? null, lastTs),
           });
+          prevMsgId = mid;
           added.messages++;
         }
 

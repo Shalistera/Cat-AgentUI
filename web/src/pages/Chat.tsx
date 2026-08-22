@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowDown, FolderClosed, PanelLeft, MessagesSquare, Wrench, Image as ImageIcon } from 'lucide-react';
+import {
+  ArrowDown, FolderClosed, ListOrdered, PanelLeft, MessagesSquare, Pencil, Send, Trash2,
+  Wrench, Image as ImageIcon,
+} from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
-import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useUi } from '../store';
+import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { CatMark } from '../components/Logo';
@@ -26,6 +29,100 @@ function draftToPatch(d: ComposerSettings) {
   };
 }
 
+// ---- message tree helpers ----
+// `all` holds every branch in (seq, createdAt) order; the visible conversation
+// is the root→leaf chain ending at leafId. Regenerated replies and edited user
+// messages are SIBLINGS (same parentId) switched with the version arrows.
+
+function computePath(all: Message[], leafId: string | null): Message[] {
+  if (!all.length) return [];
+  const byId = new Map(all.map((m) => [m.id, m]));
+  const leaf = (leafId && byId.get(leafId)) || all[all.length - 1];
+  const path: Message[] = [];
+  const seen = new Set<string>();
+  let cur: Message | undefined = leaf;
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    path.unshift(cur);
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  return path;
+}
+
+/** Walk down from a node always taking the newest child — the branch's tip. */
+function newestLeafUnder(all: Message[], id: string): string {
+  let cur = id;
+  for (;;) {
+    const kids = all.filter((m) => m.parentId === cur);
+    if (!kids.length) return cur;
+    cur = kids[kids.length - 1].id;
+  }
+}
+
+// ---- queued sends (generation-time message queue) ----
+
+function QueueBar({ items, streaming, onSendNow, onRemove, onUpdate }: {
+  items: QueuedMessage[];
+  streaming: boolean;
+  onSendNow(item: QueuedMessage): void;
+  onRemove(item: QueuedMessage): void;
+  onUpdate(item: QueuedMessage, text: string): void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  if (!items.length) return null;
+  const iconBtn = 'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-tx3 transition-colors hover:bg-bg2 hover:text-tx';
+  return (
+    <div className="mx-auto mb-2 w-full max-w-[48rem] overflow-hidden rounded-lg border border-line bg-bg1 shadow-xs">
+      <div className="flex items-center gap-1.5 border-b border-line bg-bg2/45 px-3 py-1.5 text-[11px] font-medium text-tx2">
+        <ListOrdered size={12} className="text-tx3" />
+        已排队 {items.length} 条消息{streaming ? '，将在当前回复完成后依次发送' : ''}
+      </div>
+      <div className="max-h-40 divide-y divide-line/70 overflow-y-auto">
+        {items.map((item) => (
+          <div key={item.id} className="px-3 py-1.5">
+            {editingId === item.id ? (
+              <div>
+                <textarea
+                  className="w-full resize-y rounded-md border border-field bg-bg1 px-2.5 py-1.5 text-[13px] leading-relaxed text-tx"
+                  rows={Math.min(6, Math.max(2, draft.split('\n').length))}
+                  value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus
+                />
+                <div className="mt-1.5 flex justify-end gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setEditingId(null)}>取消</Button>
+                  <Button variant="primary" size="sm" onClick={() => {
+                    if (draft.trim()) onUpdate(item, draft.trim());
+                    setEditingId(null);
+                  }}>保存</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[13px] text-tx2" title={item.text}>
+                  {item.text || '(仅附件)'}
+                  {item.attachments.length > 0 && (
+                    <span className="ml-1.5 text-[11px] text-tx3">📎{item.attachments.length}</span>
+                  )}
+                </span>
+                <button title="立即发送：打断当前生成并发送这条" className={iconBtn} onClick={() => onSendNow(item)}>
+                  <Send size={12} />
+                </button>
+                <button title="编辑" className={iconBtn}
+                  onClick={() => { setDraft(item.text); setEditingId(item.id); }}>
+                  <Pencil size={12} />
+                </button>
+                <button title="移出队列" className={`${iconBtn} hover:text-err`} onClick={() => onRemove(item)}>
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Chat() {
   const { id: routeId } = useParams();
   // `/?project=<id>` seeds a fresh chat into that project; once the chat is
@@ -42,9 +139,13 @@ export default function Chat() {
   const loadMcp = useMcp((s) => s.load);
   const mcpServers = useMcp((s) => s.servers);
   const chatsStore = useChats();
+  const queueStore = useQueue();
 
   const [chat, setChat] = useState<ChatDetail | null>(null);
+  // ALL messages of the chat — every branch. The rendered conversation is the
+  // chain ending at leafId (computed below as `path`).
   const [messages, setMessages] = useState<Message[]>([]);
+  const [leafId, setLeafId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [modelSel, setModelSel] = useState<ModelInfo | null>(null);
   const [webSearch, setWebSearch] = useState(false);
@@ -61,6 +162,13 @@ export default function Chat() {
   const settingsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatRef = useRef<ChatDetail | null>(null);
   chatRef.current = chat;
+  // The message currently receiving stream deltas ('tmp-a' until meta arrives).
+  const streamMsgIdRef = useRef<string | null>(null);
+  // True from the moment a send is committed until its stream finishes — the
+  // queue auto-dispatcher keys off this, not the async `streaming` state.
+  const sendingRef = useRef(false);
+
+  const path = useMemo(() => computePath(messages, leafId), [messages, leafId]);
 
   useEffect(() => { loadModels().catch(() => { /* toast below via disabled state */ }); loadMcp().catch(() => { /* optional */ }); }, [loadModels, loadMcp]);
 
@@ -87,16 +195,17 @@ export default function Chat() {
     if (skipLoadRef.current === routeId) { skipLoadRef.current = null; return; }
     abortRef.current?.abort();
     setStreaming(false);
+    sendingRef.current = false;
     if (!routeId) {
       handoffAppliedRef.current = false;
-      setChat(null); setMessages([]); setWebSearch(false); setMcpSelected([]); setSettings(draftFromChat(null));
+      setChat(null); setMessages([]); setLeafId(null); setWebSearch(false); setMcpSelected([]); setSettings(draftFromChat(null));
       return;
     }
     let cancelled = false;
     api.get<{ chat: ChatDetail; messages: Message[] }>(`/api/chats/${routeId}`)
       .then((r) => {
         if (cancelled) return;
-        setChat(r.chat); setMessages(r.messages);
+        setChat(r.chat); setMessages(r.messages); setLeafId(r.chat.currentLeafId);
         setWebSearch(r.chat.webSearch);
         setMcpSelected(r.chat.mcpServerIds); setSettings(draftFromChat(r.chat));
         setStick(true);
@@ -144,7 +253,7 @@ export default function Chat() {
     if (stick && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, stick]);
+  }, [path, stick]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -223,6 +332,8 @@ export default function Chat() {
   function runStream(chatId: string, payload: Parameters<typeof streamChat>[1]) {
     const controller = new AbortController();
     abortRef.current = controller;
+    sendingRef.current = true;
+    streamMsgIdRef.current = 'tmp-a';
     setStreaming(true);
     setStick(true);
 
@@ -232,13 +343,7 @@ export default function Chat() {
     let finished = false;
 
     const applyToAssistant = (fn: (m: Message) => Message) => {
-      setMessages((prev) => {
-        const idx = prev.map((m) => m.role).lastIndexOf('assistant');
-        if (idx < 0) return prev;
-        const next = [...prev];
-        next[idx] = fn(next[idx]);
-        return next;
-      });
+      setMessages((prev) => prev.map((m) => (m.id === streamMsgIdRef.current ? fn(m) : m)));
     };
 
     const appendPart = (type: 'text' | 'reasoning', text: string) => {
@@ -267,6 +372,7 @@ export default function Chat() {
       flush();
       applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status }));
       setStreaming(false);
+      sendingRef.current = false;
       // "stopped" is always user-initiated from this tab — no need to flag it.
       if (status !== 'stopped') tabAlert();
       chatsStore.load().catch(() => { /* ignore */ });
@@ -274,11 +380,15 @@ export default function Chat() {
 
     streamChat(chatId, payload, {
       onMeta(d) {
+        streamMsgIdRef.current = d.messageId;
         setMessages((prev) => prev.map((m) => {
-          if (m.id === 'tmp-a') return { ...m, id: d.messageId, model: d.model };
-          if (m.id === 'tmp-u' && d.userMessageId) return { ...m, id: d.userMessageId };
-          return m;
+          let next = m;
+          if (next.id === 'tmp-a') next = { ...next, id: d.messageId, model: d.model };
+          else if (next.id === 'tmp-u' && d.userMessageId) next = { ...next, id: d.userMessageId };
+          if (next.parentId === 'tmp-u' && d.userMessageId) next = { ...next, parentId: d.userMessageId };
+          return next;
         }));
+        setLeafId((l) => (l === 'tmp-a' ? d.messageId : l));
       },
       onDelta(t) { buf.text += t; },
       onReasoning(t) { buf.reasoning += t; },
@@ -311,11 +421,13 @@ export default function Chat() {
       .catch((e) => {
         if (controller.signal.aborted) { finalize('stopped'); return; }
         if (e instanceof ApiError) {
-          // request rejected before streaming started — drop placeholder
+          // request rejected before anything was persisted — drop placeholders
           finished = true;
           if (flushTimer) clearInterval(flushTimer);
-          setMessages((prev) => prev.filter((m) => m.id !== 'tmp-a'));
+          setMessages((prev) => prev.filter((m) => m.id !== 'tmp-a' && m.id !== 'tmp-u'));
+          setLeafId((l) => (l === 'tmp-a' || l === 'tmp-u' ? null : l));
           setStreaming(false);
+          sendingRef.current = false;
           toast(e.message, 'err');
           return;
         }
@@ -324,7 +436,8 @@ export default function Chat() {
   }
 
   async function send(text: string, attachments: PendingAttachment[], o?: SendOverrides) {
-    if (streaming) return;
+    if (sendingRef.current || streaming) return;
+    sendingRef.current = true;
     const sendModel = (o?.modelId ? models.find((m) => m.id === o.modelId) : null) ?? modelSel;
     try {
       const target = await ensureChat(o);
@@ -339,13 +452,18 @@ export default function Chat() {
       if (text) content.push({ type: 'text', text });
       const nowTs = Date.now();
       const parts: MessagePart[] = content;
+      // Parent = the leaf of the branch on screen, so a send while viewing an
+      // older version continues THAT branch.
+      const parentId = path.length ? path[path.length - 1].id : null;
       setMessages((prev) => [
         ...prev,
-        { id: 'tmp-u', role: 'user', parts, model: null, status: 'done', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs },
-        { id: 'tmp-a', role: 'assistant', parts: [], model: sendModel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
+        { id: 'tmp-u', parentId, role: 'user', parts, model: null, status: 'done', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs },
+        { id: 'tmp-a', parentId: 'tmp-u', role: 'assistant', parts: [], model: sendModel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
       ]);
-      runStream(target.id, { content, modelId: sendModel?.id });
+      setLeafId('tmp-a');
+      runStream(target.id, { content, modelId: sendModel?.id, parentMessageId: parentId ?? undefined });
     } catch (e) {
+      sendingRef.current = false;
       toast(e instanceof Error ? e.message : '发送失败', 'err');
     }
   }
@@ -354,10 +472,37 @@ export default function Chat() {
     abortRef.current?.abort();
   }
 
+  // Queue: sends fired while a reply streams wait here; whenever this chat is
+  // open and idle the next item goes out automatically (also right after the
+  // current reply finishes). Queues live per chat id and survive switching.
+  const queued = chat ? queueStore.queues[chat.id] ?? [] : [];
+  useEffect(() => {
+    if (!chat || streaming || sendingRef.current) return;
+    if (!(queueStore.queues[chat.id] ?? []).length) return;
+    const item = queueStore.shift(chat.id);
+    if (item) void send(item.text, item.attachments);
+  }, [chat, streaming, queueStore.queues]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function enqueue(text: string, attachments: PendingAttachment[]) {
+    const target = chatRef.current;
+    if (!target) return;
+    queueStore.enqueue(target.id, text, attachments);
+  }
+
+  function queueSendNow(item: QueuedMessage) {
+    const target = chatRef.current;
+    if (!target) return;
+    queueStore.promote(target.id, item.id);
+    // Aborting finalizes the current turn; the idle dispatcher then fires the
+    // promoted item. Not streaming (paused queue) → the dispatcher effect has
+    // already been re-armed by the promote() state change.
+    if (streaming) stop();
+  }
+
   function regenerate(msgId: string, withModel?: ModelInfo) {
-    if (streaming || !chatRef.current) return;
-    const idx = messages.findIndex((m) => m.id === msgId);
-    if (idx < 0) return;
+    if (streaming || sendingRef.current || !chatRef.current) return;
+    const target = messages.find((m) => m.id === msgId);
+    if (!target) return;
     const m = withModel ?? modelSel;
     if (withModel) {
       // 换模型重生成:选中的模型即刻成为本对话的默认模型(服务端随流保存
@@ -365,18 +510,20 @@ export default function Chat() {
       selectModel(withModel);
       setChat((c) => (c ? { ...c, modelId: withModel.id } : c));
     }
+    // Non-destructive: the new attempt is a SIBLING of the old reply — the old
+    // version (and everything under it) stays reachable via the arrows.
     setMessages((prev) => [
-      ...prev.slice(0, idx),
-      { id: 'tmp-a', role: 'assistant', parts: [], model: m?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
+      ...prev,
+      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: m?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
     ]);
+    setLeafId('tmp-a');
     runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: m?.id });
   }
 
   function editUser(msgId: string, newText: string) {
-    if (streaming || !chatRef.current) return;
-    const idx = messages.findIndex((m) => m.id === msgId);
-    if (idx < 0) return;
-    const original = messages[idx];
+    if (streaming || sendingRef.current || !chatRef.current) return;
+    const original = messages.find((m) => m.id === msgId);
+    if (!original) return;
     // Editing rewrites the text but keeps every attachment (images and files).
     const keepAtts = original.parts.filter((p): p is Extract<MessagePart, { type: 'image' | 'file' }> => (
       (p.type === 'image' || p.type === 'file') && !!p.uploadId
@@ -389,11 +536,15 @@ export default function Chat() {
         : { type: 'file' as const, uploadId: p.uploadId, name: p.name, mime: p.mime })),
       { type: 'text', text: newText },
     ];
+    const nowTs = Date.now();
+    // Non-destructive: the edited message is a SIBLING of the original — the
+    // old wording and its replies stay switchable.
     setMessages((prev) => [
-      ...prev.slice(0, idx),
-      { ...original, parts: content as MessagePart[] },
-      { id: 'tmp-a', role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
+      ...prev,
+      { ...original, id: 'tmp-u', parentId: original.parentId, parts: content as MessagePart[], createdAt: nowTs },
+      { id: 'tmp-a', parentId: 'tmp-u', role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
     ]);
+    setLeafId('tmp-a');
     runStream(chatRef.current.id, { editMessageId: msgId, content, modelId: modelSel?.id });
   }
 
@@ -415,10 +566,27 @@ export default function Chat() {
     if (!ok) return;
     try {
       await api.del(`/api/chats/${chatRef.current.id}/messages/${msgId}`);
-      setMessages((prev) => prev.filter((m) => m.id !== msgId));
+      const target = messages.find((m) => m.id === msgId);
+      // Splice the local tree the same way the server did: children reattach
+      // to the deleted message's parent.
+      setMessages((prev) => prev.filter((m) => m.id !== msgId)
+        .map((m) => (m.parentId === msgId ? { ...m, parentId: target?.parentId ?? null } : m)));
+      setLeafId((l) => (l === msgId ? (target?.parentId ?? null) : l));
     } catch (e) {
       toast(e instanceof Error ? e.message : '删除消息失败', 'err');
     }
+  }
+
+  function switchSibling(msg: Message, dir: -1 | 1) {
+    if (streaming || sendingRef.current || !chatRef.current) return;
+    const sibs = messages.filter((m) => m.parentId === msg.parentId);
+    const idx = sibs.findIndex((m) => m.id === msg.id);
+    const target = sibs[idx + dir];
+    if (!target) return;
+    const newLeaf = newestLeafUnder(messages, target.id);
+    setLeafId(newLeaf);
+    api.patch(`/api/chats/${chatRef.current.id}`, { currentLeafId: newLeaf })
+      .catch(() => { /* view already switched; persistence is best-effort */ });
   }
 
   const [branching, setBranching] = useState(false);
@@ -437,8 +605,9 @@ export default function Chat() {
     }
   }
 
-  const isEmpty = !routeId && messages.length === 0;
-  const lastAssistantIdx = messages.map((m) => m.role).lastIndexOf('assistant');
+  const isEmpty = !routeId && path.length === 0;
+  const lastAssistantIdx = path.map((m) => m.role).lastIndexOf('assistant');
+  const draftKey = routeId ? `chat:${routeId}` : projectParam ? `new:project:${projectParam}` : 'new';
 
   const composer = (
     <Composer
@@ -453,7 +622,9 @@ export default function Chat() {
       settings={settings}
       onSettingsChange={persistSettings}
       onSend={send}
+      onEnqueue={chat ? enqueue : undefined}
       onStop={stop}
+      draftKey={draftKey}
       autoFocus
     />
   );
@@ -557,25 +728,32 @@ export default function Chat() {
                 picks — change them in tandem with the composer wrappers below
                 and in the empty state. */}
             <div className="mx-auto flex w-full max-w-[54rem] flex-col gap-7 px-4 py-7 sm:px-6">
-              {messages.map((m, i) => (
-                <ChatMessage
-                  key={m.id}
-                  msg={m}
-                  isStreaming={streaming && i === messages.length - 1 && m.role === 'assistant'}
-                  pendingLabel={modelSel?.imageGen ? '正在生成图片,可能需要 1–3 分钟…' : undefined}
-                  onRegenerate={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? () => regenerate(m.id) : undefined}
-                  onRegenerateWith={m.role === 'assistant' && i === lastAssistantIdx && !streaming ? (pick) => regenerate(m.id, pick) : undefined}
-                  onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
-                  onEditAssistant={m.role === 'assistant' && m.status !== 'streaming' && !streaming && !!chat
-                    ? (t) => void editAssistant(m.id, t)
-                    : undefined}
-                  onDelete={!streaming && !!chat ? () => void deleteMessage(m.id) : undefined}
-                  onBranch={!streaming && !!chat ? () => void branchChat(m.id) : undefined}
-                  onFollowup={m.role === 'assistant' && i === lastAssistantIdx && i === messages.length - 1 && !streaming
-                    ? (q) => void send(q, [])
-                    : undefined}
-                />
-              ))}
+              {path.map((m, i) => {
+                const sibs = messages.filter((x) => x.parentId === m.parentId);
+                const sibIdx = sibs.findIndex((x) => x.id === m.id);
+                return (
+                  <ChatMessage
+                    key={m.id}
+                    msg={m}
+                    isStreaming={streaming && m.id === streamMsgIdRef.current}
+                    pendingLabel={modelSel?.imageGen ? '正在生成图片,可能需要 1–3 分钟…' : undefined}
+                    siblingInfo={sibs.length > 1 ? { index: sibIdx, total: sibs.length } : undefined}
+                    onSiblingPrev={!streaming && sibIdx > 0 ? () => switchSibling(m, -1) : undefined}
+                    onSiblingNext={!streaming && sibIdx < sibs.length - 1 ? () => switchSibling(m, 1) : undefined}
+                    onRegenerate={m.role === 'assistant' && !streaming && !!chat ? () => regenerate(m.id) : undefined}
+                    onRegenerateWith={m.role === 'assistant' && !streaming && !!chat ? (pick) => regenerate(m.id, pick) : undefined}
+                    onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
+                    onEditAssistant={m.role === 'assistant' && m.status !== 'streaming' && !streaming && !!chat
+                      ? (t) => void editAssistant(m.id, t)
+                      : undefined}
+                    onDelete={!streaming && !!chat ? () => void deleteMessage(m.id) : undefined}
+                    onBranch={!streaming && !!chat ? () => void branchChat(m.id) : undefined}
+                    onFollowup={m.role === 'assistant' && i === lastAssistantIdx && i === path.length - 1 && !streaming
+                      ? (q) => void send(q, [])
+                      : undefined}
+                  />
+                );
+              })}
               <div className="h-2" />
             </div>
           </div>
@@ -589,6 +767,13 @@ export default function Chat() {
                 <ArrowDown size={14} />
               </button>
             )}
+            <QueueBar
+              items={queued}
+              streaming={streaming}
+              onSendNow={queueSendNow}
+              onRemove={(item) => chat && queueStore.remove(chat.id, item.id)}
+              onUpdate={(item, t) => chat && queueStore.update(chat.id, item.id, t)}
+            />
             <div className="mx-auto max-w-[48rem]">{composer}</div>
             <p className="mt-2 text-center text-[11px] text-tx3">内容由 AI 生成,请自行核实关键信息。</p>
           </div>

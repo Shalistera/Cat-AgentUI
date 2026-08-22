@@ -129,6 +129,10 @@ export const chats = sqliteTable('chats', {
   // googleSearch tool; other providers can fall back to the designated MCP.
   webSearch: integer('web_search').notNull().default(0),
   mcpServerIds: text('mcp_server_ids').notNull().default('[]'), // JSON string[]
+  // The leaf message of the branch currently on screen. Messages form a tree
+  // (see messages.parentId); the visible conversation is the root→leaf chain
+  // ending here. null = fall back to the newest message.
+  currentLeafId: text('current_leaf_id'),
   pinned: integer('pinned').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
@@ -141,6 +145,11 @@ export const messages = sqliteTable('messages', {
   // collides between messages written in the same request, which makes it
   // unusable for "delete everything after message X".
   seq: integer('seq').notNull().default(0),
+  // Tree link: the message this one replies to (null = conversation root).
+  // Regenerating a reply or editing a user message inserts a SIBLING (same
+  // parentId) instead of deleting history — every version stays switchable.
+  // Kept loose (no FK) so legacy rows and imports can't fail the constraint.
+  parentId: text('parent_id'),
   role: text('role').notNull(), // 'user' | 'assistant'
   parts: text('parts').notNull().default('[]'), // JSON MessagePart[]
   model: text('model'),

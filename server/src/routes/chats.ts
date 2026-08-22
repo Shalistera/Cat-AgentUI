@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { and, asc, desc, eq, gt, gte, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { db, schema, now, getSetting } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
@@ -63,6 +63,37 @@ function nextSeq(chatId: string): number {
   const row = db.select({ max: sql<number | null>`max(${schema.messages.seq})` })
     .from(schema.messages).where(eq(schema.messages.chatId, chatId)).get();
   return (row?.max ?? 0) + 1;
+}
+
+type MessageRow = typeof schema.messages.$inferSelect;
+
+// Every message of a chat in display order — (seq, createdAt) is also the
+// sibling order inside the tree.
+function allChatMessages(chatId: string): MessageRow[] {
+  return db.select().from(schema.messages).where(eq(schema.messages.chatId, chatId))
+    .orderBy(asc(schema.messages.seq), asc(schema.messages.createdAt)).all();
+}
+
+/** Root→leaf chain for one branch of the message tree. [] if leafId is unknown. */
+function ancestorChain(rows: MessageRow[], leafId: string | null | undefined): MessageRow[] {
+  if (!leafId) return [];
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const chain: MessageRow[] = [];
+  const seen = new Set<string>();
+  let cur = byId.get(leafId);
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    chain.unshift(cur);
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  return chain;
+}
+
+// The branch on screen: the saved leaf while it still exists, else the newest
+// message (which is what pre-tree chats effectively showed).
+function resolveLeafId(rows: MessageRow[], savedLeafId: string | null): string | null {
+  if (savedLeafId && rows.some((r) => r.id === savedLeafId)) return savedLeafId;
+  return rows.length ? rows[rows.length - 1].id : null;
 }
 
 const EMPTY_TOOL_RESULT = '(工具没有返回内容)';
@@ -353,7 +384,7 @@ function ownsProject(projectId: string, userId: string): boolean {
 
 function messageDto(m: typeof schema.messages.$inferSelect) {
   return {
-    id: m.id, role: m.role, parts: parseParts(m.parts), model: m.model,
+    id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
     status: m.status, error: m.error,
     promptTokens: m.promptTokens, completionTokens: m.completionTokens, totalTokens: m.totalTokens,
     durationMs: m.durationMs, ttftMs: m.ttftMs, createdAt: m.createdAt,
@@ -493,6 +524,9 @@ const streamBodySchema = z.object({
   modelId: z.string().max(64).optional(),
   regenerateMessageId: z.string().max(64).optional(),
   editMessageId: z.string().max(64).optional(),
+  // Parent for a NEW message: the leaf of the branch the client is looking at.
+  // Omitted = the chat's saved currentLeafId (fallback: newest message).
+  parentMessageId: z.string().max(64).optional(),
 });
 
 const TITLE_PROMPT = '请为上面这段对话生成一个简短的标题(不超过16个字),直接输出标题文本,不要任何引号、句号或解释。';
@@ -554,7 +588,7 @@ export async function chatRoutes(app: FastifyInstance) {
       createdAt: t, updatedAt: t,
     }).run();
     const c = db.select().from(schema.chats).where(eq(schema.chats.id, id)).get()!;
-    return { chat: { ...chatSummary(c), systemPrompt: c.systemPrompt, temperature: c.temperature, maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort, webSearch: false, mcpServerIds: [] } };
+    return { chat: { ...chatSummary(c), systemPrompt: c.systemPrompt, temperature: c.temperature, maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort, webSearch: false, mcpServerIds: [], currentLeafId: null } };
   });
 
   app.get('/api/chats/:id', async (req, reply) => {
@@ -565,8 +599,9 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!c) return reply.code(404).send({ error: '对话不存在' });
     // seq is the ordering key (createdAt collides at ms/s granularity — see
     // schema); createdAt only breaks ties for pre-seq rows that are all 0.
-    const msgs = db.select().from(schema.messages).where(eq(schema.messages.chatId, id))
-      .orderBy(asc(schema.messages.seq), asc(schema.messages.createdAt)).all();
+    // ALL branches are returned — the client assembles the tree and shows the
+    // chain ending at currentLeafId.
+    const msgs = allChatMessages(id);
     let savedMcpServerIds: string[] = [];
     try { savedMcpServerIds = JSON.parse(c.mcpServerIds); } catch { /* ignore */ }
     const searchServerId = getSearchServerId();
@@ -580,6 +615,7 @@ export async function chatRoutes(app: FastifyInstance) {
         systemPrompt: c.systemPrompt, temperature: c.temperature,
         maxTokens: c.maxTokens, reasoningEffort: c.reasoningEffort,
         webSearch: !!c.webSearch || legacySearch, mcpServerIds,
+        currentLeafId: resolveLeafId(msgs, c.currentLeafId),
       },
       messages: msgs.map(messageDto),
     };
@@ -596,6 +632,7 @@ export async function chatRoutes(app: FastifyInstance) {
       reasoningEffort: z.string().max(32).nullish(),
       webSearch: z.boolean().optional(),
       mcpServerIds: z.array(z.string().max(64)).max(20).optional(),
+      currentLeafId: z.string().max(64).optional(),
       pinned: z.boolean().optional(),
       modelId: z.string().max(64).nullish(),
       projectId: z.string().max(64).nullish(),
@@ -629,6 +666,13 @@ export async function chatRoutes(app: FastifyInstance) {
       try { saved = JSON.parse(c.mcpServerIds); } catch { /* ignore */ }
       patch.mcpServerIds = JSON.stringify(saved.filter((serverId) => serverId !== searchServerId));
     }
+    if (d.currentLeafId !== undefined) {
+      // Branch switch: persist which leaf the user is looking at.
+      const leaf = db.select({ id: schema.messages.id }).from(schema.messages)
+        .where(and(eq(schema.messages.id, d.currentLeafId), eq(schema.messages.chatId, id))).get();
+      if (!leaf) return reply.code(404).send({ error: '消息不存在' });
+      patch.currentLeafId = d.currentLeafId;
+    }
     if (d.pinned !== undefined) patch.pinned = d.pinned ? 1 : 0;
     if (d.modelId !== undefined) patch.modelId = d.modelId;
     if (d.projectId !== undefined) {
@@ -645,7 +689,7 @@ export async function chatRoutes(app: FastifyInstance) {
     return { chat: {
       ...chatSummary(updated), systemPrompt: updated.systemPrompt, temperature: updated.temperature,
       maxTokens: updated.maxTokens, reasoningEffort: updated.reasoningEffort,
-      webSearch: !!updated.webSearch, mcpServerIds,
+      webSearch: !!updated.webSearch, mcpServerIds, currentLeafId: updated.currentLeafId,
     } };
   });
 
@@ -655,7 +699,7 @@ export async function chatRoutes(app: FastifyInstance) {
   app.delete('/api/chats/:id/messages/:messageId', async (req, reply) => {
     requireAuth(req, reply);
     const { id: chatId, messageId } = req.params as { id: string; messageId: string };
-    const c = db.select({ id: schema.chats.id }).from(schema.chats)
+    const c = db.select({ id: schema.chats.id, currentLeafId: schema.chats.currentLeafId }).from(schema.chats)
       .where(and(eq(schema.chats.id, chatId), eq(schema.chats.userId, req.user!.id))).get();
     if (!c) return reply.code(404).send({ error: '对话不存在' });
     const msg = db.select().from(schema.messages)
@@ -665,7 +709,14 @@ export async function chatRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: '正在生成中的消息不能删除' });
     }
     db.delete(schema.messages).where(eq(schema.messages.id, messageId)).run();
-    db.update(schema.chats).set({ updatedAt: now() }).where(eq(schema.chats.id, chatId)).run();
+    // Splice the tree: children (across every branch) reattach to the deleted
+    // message's parent, so no subtree is orphaned.
+    db.update(schema.messages).set({ parentId: msg.parentId })
+      .where(and(eq(schema.messages.chatId, chatId), eq(schema.messages.parentId, messageId))).run();
+    db.update(schema.chats).set({
+      updatedAt: now(),
+      ...(c.currentLeafId === messageId ? { currentLeafId: msg.parentId } : {}),
+    }).where(eq(schema.chats.id, chatId)).run();
     await cleanupUnreferencedUploads(req.user!.id, uploadIdsFromPartsJson(msg.parts));
     return { ok: true };
   });
@@ -722,13 +773,14 @@ export async function chatRoutes(app: FastifyInstance) {
     const c = db.select().from(schema.chats)
       .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
     if (!c) return reply.code(404).send({ error: '对话不存在' });
-    let msgs = db.select().from(schema.messages).where(eq(schema.messages.chatId, id))
-      .orderBy(asc(schema.messages.seq), asc(schema.messages.createdAt)).all();
-    if (body.data.uptoMessageId) {
-      const idx = msgs.findIndex((m) => m.id === body.data.uptoMessageId);
-      if (idx < 0) return reply.code(404).send({ error: '消息不存在' });
-      msgs = msgs.slice(0, idx + 1);
+    const rows = allChatMessages(id);
+    // The copy follows ONE branch: the ancestor chain of the named message, or
+    // of the currently displayed leaf — sibling versions stay behind.
+    const leafId = body.data.uptoMessageId ?? resolveLeafId(rows, c.currentLeafId);
+    if (body.data.uptoMessageId && !rows.some((m) => m.id === body.data.uptoMessageId)) {
+      return reply.code(404).send({ error: '消息不存在' });
     }
+    const msgs = ancestorChain(rows, leafId);
     const branchId = newId();
     const t = now();
     db.insert(schema.chats).values({
@@ -739,9 +791,12 @@ export async function chatRoutes(app: FastifyInstance) {
       reasoningEffort: c.reasoningEffort, webSearch: c.webSearch, mcpServerIds: c.mcpServerIds,
       createdAt: t, updatedAt: t,
     }).run();
+    const idMap = new Map<string, string>();
+    for (const m of msgs) idMap.set(m.id, newId());
     for (const m of msgs) {
       db.insert(schema.messages).values({
-        ...m, id: newId(), chatId: branchId,
+        ...m, id: idMap.get(m.id)!, chatId: branchId,
+        parentId: m.parentId ? idMap.get(m.parentId) ?? null : null,
         // A lingering 'streaming' row (crashed turn) must not fork as one — the
         // client would wait forever for output that is never coming.
         status: m.status === 'streaming' ? 'stopped' : m.status,
@@ -847,59 +902,60 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     // --- plan the mutation and context before touching saved history ---
+    // Nothing here deletes messages any more: regenerating a reply and editing
+    // a user message both insert a SIBLING node (same parentId), so the old
+    // branch stays reachable through the version arrows.
+    const rows = allChatMessages(chatId);
+    const usableHistory = (list: MessageRow[]) => list
+      .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0));
     let userMessageId: string | null = null;
-    let removedUploadIds: string[] = [];
+    let assistantParentId: string | null;
     let history: { role: string; parts: string }[];
     let applyHistoryMutation: () => void;
     if (body.regenerateMessageId) {
-      const target = db.select().from(schema.messages)
-        .where(and(eq(schema.messages.id, body.regenerateMessageId), eq(schema.messages.chatId, chatId))).get();
-      if (!target) return reply.code(404).send({ error: '消息不存在' });
-      removedUploadIds = db.select({ parts: schema.messages.parts }).from(schema.messages)
-        .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.seq, target.seq))).all()
-        .flatMap((m) => uploadIdsFromPartsJson(m.parts));
-      history = db.select().from(schema.messages)
-        .where(and(eq(schema.messages.chatId, chatId), lt(schema.messages.seq, target.seq)))
-        .orderBy(desc(schema.messages.seq)).limit(config.maxContextMessages).all().reverse()
-        .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0));
-      applyHistoryMutation = () => {
-        db.delete(schema.messages)
-          .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.seq, target.seq))).run();
-      };
+      const target = rows.find((m) => m.id === body.regenerateMessageId);
+      if (!target || target.role !== 'assistant') return reply.code(404).send({ error: '消息不存在' });
+      history = usableHistory(ancestorChain(rows, target.parentId).slice(-config.maxContextMessages));
+      assistantParentId = target.parentId;
+      applyHistoryMutation = () => { /* new sibling only — nothing to rewrite */ };
     } else if (body.editMessageId) {
       if (!normalizedContent) return reply.code(400).send({ error: '缺少消息内容' });
-      const target = db.select().from(schema.messages)
-        .where(and(eq(schema.messages.id, body.editMessageId), eq(schema.messages.chatId, chatId))).get();
+      const target = rows.find((m) => m.id === body.editMessageId);
       if (!target || target.role !== 'user') return reply.code(404).send({ error: '消息不存在' });
       const normalizedJson = JSON.stringify(normalizedContent);
-      removedUploadIds = db.select({ parts: schema.messages.parts }).from(schema.messages)
-        .where(and(eq(schema.messages.chatId, chatId), gte(schema.messages.seq, target.seq))).all()
-        .flatMap((m) => uploadIdsFromPartsJson(m.parts));
-      history = db.select().from(schema.messages)
-        .where(and(eq(schema.messages.chatId, chatId), lte(schema.messages.seq, target.seq)))
-        .orderBy(desc(schema.messages.seq)).limit(config.maxContextMessages).all().reverse()
-        .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0))
-        .map((m) => m.id === target.id ? { ...m, parts: normalizedJson } : m);
+      userMessageId = newId();
+      const seq = nextSeq(chatId);
+      const createdAt = now();
+      history = [
+        ...usableHistory(ancestorChain(rows, target.parentId).slice(-(config.maxContextMessages - 1))),
+        { role: 'user', parts: normalizedJson },
+      ];
+      assistantParentId = userMessageId;
       applyHistoryMutation = () => {
-        db.update(schema.messages).set({ parts: normalizedJson })
-          .where(eq(schema.messages.id, target.id)).run();
-        db.delete(schema.messages)
-          .where(and(eq(schema.messages.chatId, chatId), gt(schema.messages.seq, target.seq))).run();
+        db.insert(schema.messages).values({
+          id: userMessageId!, chatId, role: 'user', seq, parts: normalizedJson,
+          parentId: target.parentId, createdAt,
+        }).run();
       };
-      userMessageId = target.id;
     } else {
       if (!normalizedContent) return reply.code(400).send({ error: '缺少消息内容' });
+      if (body.parentMessageId && !rows.some((m) => m.id === body.parentMessageId)) {
+        return reply.code(404).send({ error: '消息不存在' });
+      }
+      const parentId = body.parentMessageId ?? resolveLeafId(rows, chat.currentLeafId);
       userMessageId = newId();
       const seq = nextSeq(chatId);
       const createdAt = now();
       const normalizedJson = JSON.stringify(normalizedContent);
-      history = db.select().from(schema.messages).where(eq(schema.messages.chatId, chatId))
-        .orderBy(desc(schema.messages.seq)).limit(config.maxContextMessages - 1).all().reverse()
-        .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0));
-      history.push({ role: 'user', parts: normalizedJson });
+      history = [
+        ...usableHistory(ancestorChain(rows, parentId).slice(-(config.maxContextMessages - 1))),
+        { role: 'user', parts: normalizedJson },
+      ];
+      assistantParentId = userMessageId;
       applyHistoryMutation = () => {
         db.insert(schema.messages).values({
-          id: userMessageId!, chatId, role: 'user', seq, parts: normalizedJson, createdAt,
+          id: userMessageId!, chatId, role: 'user', seq, parts: normalizedJson,
+          parentId, createdAt,
         }).run();
       };
     }
@@ -921,7 +977,6 @@ export async function chatRoutes(app: FastifyInstance) {
       throw err;
     }
     applyHistoryMutation();
-    if (removedUploadIds.length) await cleanupUnreferencedUploads(user.id, removedUploadIds);
 
     // Search is a provider-neutral chat preference. Vertex Gemini 2.5+ uses
     // googleSearch directly; other models can still fall back to the one
@@ -987,11 +1042,14 @@ export async function chatRoutes(app: FastifyInstance) {
     const assistantId = newId();
     db.insert(schema.messages).values({
       id: assistantId, chatId, role: 'assistant', parts: '[]', seq: nextSeq(chatId),
+      parentId: assistantParentId,
       model: model.modelId, providerId: provider.id, status: 'streaming', createdAt: now(),
     }).run();
-    if (body.modelId && body.modelId !== chat.modelId) {
-      db.update(schema.chats).set({ modelId: body.modelId }).where(eq(schema.chats.id, chatId)).run();
-    }
+    // The freshly generated reply becomes the visible branch.
+    db.update(schema.chats).set({
+      currentLeafId: assistantId,
+      ...(body.modelId && body.modelId !== chat.modelId ? { modelId: body.modelId } : {}),
+    }).where(eq(schema.chats.id, chatId)).run();
 
     sse.send('meta', { messageId: assistantId, userMessageId, model: model.modelId });
     if (downgradeNotice) sse.send('notice', { message: downgradeNotice });

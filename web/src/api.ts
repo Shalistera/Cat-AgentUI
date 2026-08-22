@@ -54,6 +54,8 @@ export interface StreamPayload {
   modelId?: string;
   regenerateMessageId?: string;
   editMessageId?: string;
+  /** Parent for a new message — the leaf of the branch being viewed. */
+  parentMessageId?: string;
 }
 
 // POST + parse SSE from response body.

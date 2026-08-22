@@ -18,6 +18,7 @@ import { mcpRoutes } from './routes/mcp.js';
 import { importRoutes } from './routes/import.js';
 import { projectRoutes } from './routes/projects.js';
 import { eventRoutes } from './routes/events.js';
+import { searchRoutes } from './routes/search.js';
 import { initKnowledgeIndex } from './knowledge.js';
 import { startRetentionSweeper } from './retention.js';
 import { reconcileStorageMetadata } from './storage.js';
@@ -101,6 +102,7 @@ async function main() {
   await app.register(importRoutes);
   await app.register(projectRoutes);
   await app.register(eventRoutes);
+  await app.register(searchRoutes);
 
   // static SPA
   const webDist = path.join(repoRoot, 'web', 'dist');
