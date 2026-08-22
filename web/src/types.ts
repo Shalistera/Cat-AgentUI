@@ -42,7 +42,10 @@ export interface Message {
 }
 
 export interface ChatSummary {
-  id: string; title: string; pinned: boolean; archived: boolean; modelId: string | null;
+  id: string; title: string; pinned: boolean; archived: boolean;
+  /** 临时对话 — not listed, not searchable, swept after idle TTL. */
+  temporary: boolean;
+  modelId: string | null;
   projectId: string | null;
   createdAt: number; updatedAt: number;
 }

@@ -372,7 +372,8 @@ async function buildBoundedHistory(
 
 function chatSummary(c: typeof schema.chats.$inferSelect) {
   return {
-    id: c.id, title: c.title, pinned: !!c.pinned, archived: !!c.archived, modelId: c.modelId,
+    id: c.id, title: c.title, pinned: !!c.pinned, archived: !!c.archived,
+    temporary: !!c.temporary, modelId: c.modelId,
     projectId: c.projectId, createdAt: c.createdAt, updatedAt: c.updatedAt,
   };
 }
@@ -565,7 +566,9 @@ const SEARCH_HINT = '你可以使用联网搜索工具。当问题涉及时效�
 export async function chatRoutes(app: FastifyInstance) {
   app.get('/api/chats', async (req, reply) => {
     requireAuth(req, reply);
-    const rows = db.select().from(schema.chats).where(eq(schema.chats.userId, req.user!.id)).all();
+    // 临时对话 never appear in the history list — that's their whole point.
+    const rows = db.select().from(schema.chats)
+      .where(and(eq(schema.chats.userId, req.user!.id), eq(schema.chats.temporary, 0))).all();
     rows.sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
     return { chats: rows.map(chatSummary) };
   });
@@ -575,6 +578,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const body = z.object({
       modelId: z.string().max(64).nullish(),
       projectId: z.string().max(64).nullish(),
+      temporary: z.boolean().optional(),
     }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     if (body.data.projectId && !ownsProject(body.data.projectId, req.user!.id)) {
@@ -584,7 +588,9 @@ export async function chatRoutes(app: FastifyInstance) {
     const t = now();
     db.insert(schema.chats).values({
       id, userId: req.user!.id, title: '', modelId: body.data.modelId ?? null,
-      projectId: body.data.projectId ?? null,
+      // 临时对话 never belong to a project — projects are for keeping things.
+      projectId: body.data.temporary ? null : body.data.projectId ?? null,
+      temporary: body.data.temporary ? 1 : 0,
       createdAt: t, updatedAt: t,
     }).run();
     const c = db.select().from(schema.chats).where(eq(schema.chats.id, id)).get()!;
@@ -635,6 +641,8 @@ export async function chatRoutes(app: FastifyInstance) {
       currentLeafId: z.string().max(64).optional(),
       pinned: z.boolean().optional(),
       archived: z.boolean().optional(),
+      // false = 保存为正式对话; re-marking a saved chat temporary is not allowed.
+      temporary: z.literal(false).optional(),
       modelId: z.string().max(64).nullish(),
       projectId: z.string().max(64).nullish(),
     }).safeParse(req.body);
@@ -676,6 +684,7 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     if (d.pinned !== undefined) patch.pinned = d.pinned ? 1 : 0;
     if (d.archived !== undefined) patch.archived = d.archived ? 1 : 0;
+    if (d.temporary !== undefined) patch.temporary = 0;
     if (d.modelId !== undefined) patch.modelId = d.modelId;
     if (d.projectId !== undefined) {
       if (d.projectId && !ownsProject(d.projectId, req.user!.id)) {

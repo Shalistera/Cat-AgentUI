@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Archive, ArchiveRestore, MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon,
+  Archive, ArchiveRestore, Ghost, MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon,
   Presentation, ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
   MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight,
 } from 'lucide-react';
@@ -299,9 +299,17 @@ export function Sidebar() {
 
       {/* actions */}
       <div className="space-y-2 px-3 pt-3">
-        <Button variant="primary" size="md" className="w-full" onClick={newChat}>
-          <MessageSquarePlus size={15} />新建对话
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="primary" size="md" className="flex-1" onClick={newChat}>
+            <MessageSquarePlus size={15} />新建对话
+          </Button>
+          <Button
+            variant="outline" size="icon" title="临时对话:不写入历史记录,闲置 24 小时后自动删除"
+            onClick={() => { nav('/?temp=1'); if (window.innerWidth <= 900) setSidebarOpen(false); }}
+          >
+            <Ghost size={15} />
+          </Button>
+        </div>
         <div className="relative">
           <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tx3" />
           {/* line2, not --color-field: this is rail navigation, not a form —

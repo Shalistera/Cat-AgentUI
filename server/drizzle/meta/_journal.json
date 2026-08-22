@@ -127,6 +127,13 @@
       "when": 1787389146806,
       "tag": "0017_chat_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1787391019062,
+      "tag": "0018_temporary_chats",
+      "breakpoints": true
     }
   ]
 }

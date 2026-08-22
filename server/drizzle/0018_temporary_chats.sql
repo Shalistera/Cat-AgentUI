@@ -1,0 +1,1 @@
+ALTER TABLE `chats` ADD `temporary` integer DEFAULT 0 NOT NULL;

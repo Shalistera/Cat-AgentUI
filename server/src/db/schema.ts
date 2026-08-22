@@ -137,6 +137,9 @@ export const chats = sqliteTable('chats', {
   // Archived chats leave the sidebar's normal sections for a collapsed 归档
   // shelf. New activity in the chat un-archives it automatically.
   archived: integer('archived').notNull().default(0),
+  // 临时对话: hidden from the chat list and search, swept (with uploads) after
+  // a TTL of inactivity. Clearing the flag "saves" it as a normal chat.
+  temporary: integer('temporary').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 }, (t) => [index('idx_chats_user').on(t.userId, t.updatedAt)]);

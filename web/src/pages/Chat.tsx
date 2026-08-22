@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Archive, ArrowDown, Check, FolderClosed, ListOrdered, PanelLeft, MessagesSquare, Pencil, Send,
-  Trash2, Wrench, Image as ImageIcon,
+  Archive, ArrowDown, Check, FolderClosed, Ghost, ListOrdered, PanelLeft, MessagesSquare, Pencil,
+  Send, Trash2, Wrench, Image as ImageIcon,
 } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
@@ -195,6 +195,9 @@ export default function Chat() {
   // created the association lives on the chat row itself.
   const [searchParams] = useSearchParams();
   const projectParam = routeId ? null : searchParams.get('project');
+  // `/?temp=1` starts a 临时对话: created with the temporary flag, so it never
+  // enters the sidebar/search and the server sweeps it after the idle TTL.
+  const tempMode = !routeId && !projectParam && searchParams.get('temp') === '1';
   const projects = useProjects((s) => s.projects);
   const nav = useNavigate();
   const { user, bootstrap } = useAuth();
@@ -375,6 +378,7 @@ export default function Chat() {
     const r = await api.post<{ chat: ChatDetail }>('/api/chats', {
       modelId: o?.modelId ?? modelSel?.id ?? null,
       projectId: projectParam,
+      temporary: tempMode || undefined,
     });
     let created = r.chat;
     const patch = draftToPatch(o?.settings ?? settings);
@@ -387,11 +391,15 @@ export default function Chat() {
       created = p.chat;
     }
     setChat(created);
-    chatsStore.upsert({
-      id: created.id, title: created.title, pinned: created.pinned, archived: created.archived,
-      modelId: created.modelId, projectId: created.projectId,
-      createdAt: created.createdAt, updatedAt: created.updatedAt,
-    });
+    // A 临时对话 must not surface in the sidebar list.
+    if (!created.temporary) {
+      chatsStore.upsert({
+        id: created.id, title: created.title, pinned: created.pinned, archived: created.archived,
+        temporary: created.temporary,
+        modelId: created.modelId, projectId: created.projectId,
+        createdAt: created.createdAt, updatedAt: created.updatedAt,
+      });
+    }
     skipLoadRef.current = created.id;
     nav(`/chat/${created.id}`);
     return created;
@@ -725,7 +733,27 @@ export default function Chat() {
 
   const isEmpty = !routeId && path.length === 0;
   const lastAssistantIdx = path.map((m) => m.role).lastIndexOf('assistant');
-  const draftKey = routeId ? `chat:${routeId}` : projectParam ? `new:project:${projectParam}` : 'new';
+  // 无痕 means no local traces either: temporary chats never persist drafts.
+  const draftKey = tempMode || chat?.temporary
+    ? undefined
+    : routeId ? `chat:${routeId}` : projectParam ? `new:project:${projectParam}` : 'new';
+
+  async function saveTemporary() {
+    const target = chatRef.current;
+    if (!target) return;
+    try {
+      const r = await api.patch<{ chat: ChatDetail }>(`/api/chats/${target.id}`, { temporary: false });
+      setChat(r.chat);
+      chatsStore.upsert({
+        id: r.chat.id, title: r.chat.title, pinned: r.chat.pinned, archived: r.chat.archived,
+        temporary: r.chat.temporary, modelId: r.chat.modelId, projectId: r.chat.projectId,
+        createdAt: r.chat.createdAt, updatedAt: r.chat.updatedAt,
+      });
+      toast('已保存为正式对话', 'ok');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '保存失败', 'err');
+    }
+  }
 
   const composer = (
     <Composer
@@ -764,7 +792,7 @@ export default function Chat() {
   return (
     <div className="flex h-full flex-col">
       <PageHeader
-        title={chat?.title || (routeId ? '对话' : '新建对话')}
+        title={chat?.title || (routeId ? '对话' : tempMode ? '临时对话' : '新建对话')}
         subtitle={modelSel?.displayName ? `当前模型 · ${modelSel.displayName}` : undefined}
         left={!sidebarOpen && (
           <Button variant="ghost" size="icon" title="打开侧栏" onClick={() => setSidebarOpen(true)}>
@@ -783,6 +811,17 @@ export default function Chat() {
             </Link>
           ) : null;
         })()}
+        {chat?.temporary && (
+          <div className="flex items-center gap-1.5">
+            <span title={'临时对话:不会出现在历史记录和搜索中,\n闲置 24 小时后自动删除(用量仍正常统计)'}
+              className="flex items-center gap-1.5 rounded-md border border-dashed border-line2 bg-bg2 px-2.5 py-1 text-xs font-medium text-tx2">
+              <Ghost size={12} className="shrink-0 text-tx3" />临时对话
+            </span>
+            <Button variant="outline" size="sm" title="将这段对话保存进历史记录" onClick={() => void saveTemporary()}>
+              保存为正式对话
+            </Button>
+          </div>
+        )}
         {chat?.archived && (
           <button
             title="此对话已归档,点击取消归档"
@@ -815,9 +854,29 @@ export default function Chat() {
             <div className="mb-8 flex flex-col items-center text-center">
               <CatMark size={56} />
               <h2 className="mt-4 text-xl font-semibold tracking-tight text-tx">
-                {bootstrap?.brand || 'Cat AgentUI'}
+                {tempMode ? '临时对话' : bootstrap?.brand || 'Cat AgentUI'}
               </h2>
-              <p className="mt-1.5 text-[13px] text-tx2">开始一段新对话,或从左侧继续此前的记录。</p>
+              <p className="mt-1.5 text-[13px] text-tx2">
+                {tempMode
+                  ? '这段对话不会写入历史记录,闲置 24 小时后自动删除;之后也可以随时保存为正式对话。'
+                  : '开始一段新对话,或从左侧继续此前的记录。'}
+              </p>
+              {!projectParam && (
+                <button
+                  type="button"
+                  aria-pressed={tempMode}
+                  title={tempMode ? '切回普通对话' : '开启临时对话:不写入历史记录'}
+                  onClick={() => nav(tempMode ? '/' : '/?temp=1', { replace: true })}
+                  className={`mt-3 flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    tempMode
+                      ? 'border-dashed border-line2 bg-bg2 text-tx shadow-xs'
+                      : 'border-line bg-bg1 text-tx3 hover:border-line2 hover:bg-bg2 hover:text-tx'
+                  }`}
+                >
+                  <Ghost size={13} />
+                  {tempMode ? '临时对话已开启' : '临时对话'}
+                </button>
+              )}
             </div>
 
             <div className="mx-auto max-w-[48rem]">{composer}</div>

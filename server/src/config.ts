@@ -66,6 +66,8 @@ export const config = {
   maxMessageAttachmentBytes: intEnv('MAX_MESSAGE_ATTACHMENT_MB', 20, 1, 100) * MIB,
   maxMessageTextChars: intEnv('MAX_MESSAGE_TEXT_CHARS', 64_000, 1_000, 500_000),
   maxContextMessages: intEnv('MAX_CONTEXT_MESSAGES', 40, 2, 500),
+  // 临时对话 idle lifetime before the sweeper deletes it (messages + uploads).
+  tempChatTtlMs: intEnv('TEMP_CHAT_TTL_HOURS', 24, 1, 720) * 3600_000,
   maxContextTextChars: intEnv('MAX_CONTEXT_TEXT_CHARS', 240_000, 10_000, 2_000_000),
   maxContextImageBytes: intEnv('MAX_CONTEXT_IMAGE_MB', 24, 1, 200) * MIB,
   maxContextImages: intEnv('MAX_CONTEXT_IMAGES', 6, 1, 20),

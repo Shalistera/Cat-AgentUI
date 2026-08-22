@@ -68,6 +68,8 @@ export async function searchRoutes(app: FastifyInstance) {
     const q = parseQuery(raw);
 
     let chats = db.select().from(schema.chats).where(eq(schema.chats.userId, userId)).all();
+    // 临时对话 are not part of history — never searchable.
+    chats = chats.filter((c) => !c.temporary);
     if (q.pinned !== null) chats = chats.filter((c) => !!c.pinned === q.pinned);
     // Archived chats are out of sight by default; `archived:true` flips the
     // search to exactly them.

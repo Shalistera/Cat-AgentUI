@@ -9,6 +9,7 @@ import path from 'node:path';
 import { and, eq, lt } from 'drizzle-orm';
 import { db, schema, getSetting } from './db/index.js';
 import { config } from './config.js';
+import { cleanupUnreferencedUploads, uploadIdsFromPartsJson } from './storage.js';
 
 export const IMAGE_RETENTION_KEY = 'image_retention_days'; // 绘图工坊
 export const CHAT_IMAGE_RETENTION_KEY = 'chat_image_retention_days'; // 对话中作图
@@ -45,9 +46,30 @@ export function sweepExpiredImages(): number {
     + sweepSource('chat', CHAT_IMAGE_RETENTION_KEY);
 }
 
+// 临时对话 past their idle TTL vanish for good — chat row, messages (via
+// cascade) and any uploads that no surviving message still references.
+async function sweepTemporaryChats(): Promise<number> {
+  const cutoff = Date.now() - config.tempChatTtlMs;
+  const rows = db.select({
+    id: schema.chats.id, userId: schema.chats.userId,
+  }).from(schema.chats)
+    .where(and(eq(schema.chats.temporary, 1), lt(schema.chats.updatedAt, cutoff)))
+    .all();
+  for (const chat of rows) {
+    const uploadIds = db.select({ parts: schema.messages.parts }).from(schema.messages)
+      .where(eq(schema.messages.chatId, chat.id)).all()
+      .flatMap((m) => uploadIdsFromPartsJson(m.parts));
+    db.delete(schema.chats).where(eq(schema.chats.id, chat.id)).run();
+    await cleanupUnreferencedUploads(chat.userId, uploadIds);
+  }
+  if (rows.length) console.log(`[retention] removed ${rows.length} temporary chat(s) idle beyond TTL`);
+  return rows.length;
+}
+
 export function startRetentionSweeper() {
   // First pass shortly after boot (not during it), then hourly. unref so the
   // timers never hold a shutdown open.
-  setTimeout(sweepExpiredImages, 30_000).unref();
-  setInterval(sweepExpiredImages, SWEEP_INTERVAL_MS).unref();
+  const sweep = () => { sweepExpiredImages(); void sweepTemporaryChats(); };
+  setTimeout(sweep, 30_000).unref();
+  setInterval(sweep, SWEEP_INTERVAL_MS).unref();
 }
