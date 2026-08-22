@@ -134,6 +134,9 @@ export const chats = sqliteTable('chats', {
   // ending here. null = fall back to the newest message.
   currentLeafId: text('current_leaf_id'),
   pinned: integer('pinned').notNull().default(0),
+  // Archived chats leave the sidebar's normal sections for a collapsed 归档
+  // shelf. New activity in the chat un-archives it automatically.
+  archived: integer('archived').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 }, (t) => [index('idx_chats_user').on(t.userId, t.updatedAt)]);

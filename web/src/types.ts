@@ -42,7 +42,7 @@ export interface Message {
 }
 
 export interface ChatSummary {
-  id: string; title: string; pinned: boolean; modelId: string | null;
+  id: string; title: string; pinned: boolean; archived: boolean; modelId: string | null;
   projectId: string | null;
   createdAt: number; updatedAt: number;
 }
@@ -86,7 +86,8 @@ export interface ChatDetail extends ChatSummary {
 
 /** One row of /api/search — a chat plus why it matched. */
 export interface SearchResult {
-  id: string; title: string; pinned: boolean; projectId: string | null; updatedAt: number;
+  id: string; title: string; pinned: boolean; archived: boolean;
+  projectId: string | null; updatedAt: number;
   titleMatch: boolean; snippet: string | null; matchCount: number;
 }
 

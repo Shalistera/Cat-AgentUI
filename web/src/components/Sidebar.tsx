@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon, Presentation,
-  ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose, MoreHorizontal,
-  FolderClosed, FolderOutput, Plus, ChevronRight,
+  Archive, ArchiveRestore, MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon,
+  Presentation, ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
+  MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { api } from '../api';
@@ -42,6 +42,9 @@ function SearchResultRow({ r, q, active, onOpen }: {
         <span className="min-w-0 flex-1 truncate text-[13px] text-tx">
           {highlightMatch(r.title || '新对话', q)}
         </span>
+        {r.archived && (
+          <span className="shrink-0 rounded-sm bg-bg3 px-1 py-px text-[10px] text-tx3">归档</span>
+        )}
         {r.matchCount > 1 && (
           <span className="shrink-0 rounded-full bg-bg3 px-1.5 text-[10px] tabular-nums text-tx3">{r.matchCount}</span>
         )}
@@ -80,6 +83,13 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
     setMenuOpen(false);
     await api.patch(`/api/chats/${chat.id}`, { pinned: !chat.pinned });
     patch(chat.id, { pinned: !chat.pinned });
+  }
+
+  async function toggleArchive() {
+    setMenuOpen(false);
+    await api.patch(`/api/chats/${chat.id}`, { archived: !chat.archived });
+    patch(chat.id, { archived: !chat.archived });
+    toast(chat.archived ? '已取消归档' : '已归档,可在侧栏底部或搜索 archived:true 找回', 'ok');
   }
 
   async function doRename() {
@@ -134,6 +144,10 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
             <button className={menuItem}
               onClick={() => { setMenuOpen(false); setTitle(chat.title); setRenaming(true); }}>
               <Pencil size={12} />重命名
+            </button>
+            <button className={menuItem} onClick={toggleArchive}>
+              {chat.archived ? <ArchiveRestore size={12} /> : <Archive size={12} />}
+              {chat.archived ? '取消归档' : '归档'}
             </button>
             {(moveTargets.length > 0 || chat.projectId) && (
               <>
@@ -213,12 +227,16 @@ export function Sidebar() {
 
   // Chats inside a project live under that project's node only — never in
   // 置顶/最近 — so the rail always answers "does this chat belong to a project?".
-  const { pinned, recent, byProject } = useMemo(() => {
+  // Archived chats leave every normal section for the collapsed shelf below.
+  const { pinned, recent, byProject, archived } = useMemo(() => {
     const known = new Set(projectsStore.projects.map((p) => p.id));
     const byProject = new Map<string, ChatSummary[]>();
     const loose: ChatSummary[] = [];
+    const archived: ChatSummary[] = [];
     for (const c of chats) {
-      if (c.projectId && known.has(c.projectId)) {
+      if (c.archived) {
+        archived.push(c);
+      } else if (c.projectId && known.has(c.projectId)) {
         if (!byProject.has(c.projectId)) byProject.set(c.projectId, []);
         byProject.get(c.projectId)!.push(c);
       } else {
@@ -226,8 +244,9 @@ export function Sidebar() {
       }
     }
     for (const list of byProject.values()) list.sort((a, b) => Number(b.pinned) - Number(a.pinned));
-    return { pinned: loose.filter((c) => c.pinned), recent: loose.filter((c) => !c.pinned), byProject };
+    return { pinned: loose.filter((c) => c.pinned), recent: loose.filter((c) => !c.pinned), byProject, archived };
   }, [chats, projectsStore.projects]);
+  const [showArchived, setShowArchived] = useState(false);
 
   const activeChatProjectId = useMemo(
     () => chats.find((c) => c.id === activeChatId)?.projectId ?? null,
@@ -290,7 +309,7 @@ export function Sidebar() {
           <input
             value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索对话与消息"
             aria-label="搜索对话与消息"
-            title={'搜索标题与消息正文。\n支持过滤:project:项目名、pinned:true'}
+            title={'搜索标题与消息正文。\n支持过滤:project:项目名、pinned:true、archived:true(默认不搜归档)'}
             className="h-8 w-full rounded-md border border-line2 bg-bg1 pl-8 pr-2 text-xs text-tx placeholder:text-tx3 transition-colors hover:border-field"
           />
         </div>
@@ -393,7 +412,20 @@ export function Sidebar() {
             {recent.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
           </div>
         )}
-        {!searching && loaded && empty && (
+        {!searching && archived.length > 0 && (
+          <div className="space-y-0.5">
+            <button
+              className="eyebrow flex cursor-pointer items-center gap-1 rounded-sm px-2 pb-1 transition-colors hover:text-tx"
+              onClick={() => setShowArchived((v) => !v)}
+              title={showArchived ? '收起归档对话' : '展开归档对话'}
+            >
+              <ChevronRight size={10} className={`transition-transform ${showArchived ? 'rotate-90' : ''}`} />
+              已归档 <span className="tabular-nums opacity-70">{archived.length}</span>
+            </button>
+            {showArchived && archived.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
+          </div>
+        )}
+        {!searching && loaded && empty && archived.length === 0 && (
           <p className="px-2 py-8 text-center text-xs leading-relaxed text-tx3">还没有对话记录</p>
         )}
       </div>

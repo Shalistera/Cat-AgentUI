@@ -372,7 +372,7 @@ async function buildBoundedHistory(
 
 function chatSummary(c: typeof schema.chats.$inferSelect) {
   return {
-    id: c.id, title: c.title, pinned: !!c.pinned, modelId: c.modelId,
+    id: c.id, title: c.title, pinned: !!c.pinned, archived: !!c.archived, modelId: c.modelId,
     projectId: c.projectId, createdAt: c.createdAt, updatedAt: c.updatedAt,
   };
 }
@@ -634,6 +634,7 @@ export async function chatRoutes(app: FastifyInstance) {
       mcpServerIds: z.array(z.string().max(64)).max(20).optional(),
       currentLeafId: z.string().max(64).optional(),
       pinned: z.boolean().optional(),
+      archived: z.boolean().optional(),
       modelId: z.string().max(64).nullish(),
       projectId: z.string().max(64).nullish(),
     }).safeParse(req.body);
@@ -674,6 +675,7 @@ export async function chatRoutes(app: FastifyInstance) {
       patch.currentLeafId = d.currentLeafId;
     }
     if (d.pinned !== undefined) patch.pinned = d.pinned ? 1 : 0;
+    if (d.archived !== undefined) patch.archived = d.archived ? 1 : 0;
     if (d.modelId !== undefined) patch.modelId = d.modelId;
     if (d.projectId !== undefined) {
       if (d.projectId && !ownsProject(d.projectId, req.user!.id)) {
@@ -1045,9 +1047,11 @@ export async function chatRoutes(app: FastifyInstance) {
       parentId: assistantParentId,
       model: model.modelId, providerId: provider.id, status: 'streaming', createdAt: now(),
     }).run();
-    // The freshly generated reply becomes the visible branch.
+    // The freshly generated reply becomes the visible branch. New activity in
+    // an archived chat also un-archives it — a talking chat isn't shelved.
     db.update(schema.chats).set({
       currentLeafId: assistantId,
+      archived: 0,
       ...(body.modelId && body.modelId !== chat.modelId ? { modelId: body.modelId } : {}),
     }).where(eq(schema.chats.id, chatId)).run();
 

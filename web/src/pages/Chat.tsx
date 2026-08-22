@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  ArrowDown, FolderClosed, ListOrdered, PanelLeft, MessagesSquare, Pencil, Send, Trash2,
-  Wrench, Image as ImageIcon,
+  Archive, ArrowDown, Check, FolderClosed, ListOrdered, PanelLeft, MessagesSquare, Pencil, Send,
+  Trash2, Wrench, Image as ImageIcon,
 } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
+import { ModelAvatar } from '../components/ModelAvatar';
 import { CatMark } from '../components/Logo';
 import { Button, PageHeader, confirmDialog, toast } from '../components/ui';
 import { tabAlert } from '../tabAlert';
@@ -57,6 +58,71 @@ function newestLeafUnder(all: Message[], id: string): string {
     if (!kids.length) return cur;
     cur = kids[kids.length - 1].id;
   }
+}
+
+// ---- model comparison (用其他模型对比生成) ----
+// Picking another model in the regenerate menu does NOT replace the reply:
+// the challenger streams as a hidden sibling and both render side by side
+// until the user keeps one. The loser stays reachable via the version arrows.
+
+interface CompareState {
+  originalId: string;
+  /** 'tmp-a' until the stream's meta event names the real row. */
+  challengerId: string;
+  /** Leaf before the compare started — restored when the original is kept. */
+  prevLeafId: string | null;
+  /** chat.modelId before the compare — the stream pins the challenger's. */
+  prevModelId: string | null;
+  challengerModel: ModelInfo;
+}
+
+function CompareView({ original, challenger, challengerModel, streaming, onKeep }: {
+  original: Message;
+  challenger: Message | null;
+  challengerModel: ModelInfo;
+  streaming: boolean;
+  onKeep(side: 'original' | 'challenger'): void;
+}) {
+  const card = 'flex min-w-0 flex-col overflow-hidden rounded-xl border bg-bg1';
+  const head = 'flex items-center gap-2 border-b border-line bg-bg2/45 px-3 py-2 text-xs font-medium text-tx';
+  const body = 'min-h-0 max-h-[32rem] flex-1 overflow-y-auto px-3.5 py-3';
+  const keepBtn = 'm-2.5 mt-0 flex cursor-pointer items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none';
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      <div className={`${card} border-line`}>
+        <div className={head}>
+          <span className="rounded-sm bg-bg3 px-1.5 py-0.5 text-[10px] text-tx2">当前回复</span>
+          {original.model && <span className="truncate font-mono text-[11px] text-tx3">{original.model}</span>}
+        </div>
+        <div className={body}>
+          <ChatMessage msg={original} isStreaming={false} />
+        </div>
+        <button className={`${keepBtn} border-line2 text-tx2 hover:bg-bg2 hover:text-tx`}
+          disabled={streaming} onClick={() => onKeep('original')}>
+          <Check size={13} />保留这个回复
+        </button>
+      </div>
+      <div className={`${card} border-acc/50`}>
+        <div className={head}>
+          <ModelAvatar info={challengerModel} size={16} tile={false} />
+          <span className="truncate">{challengerModel.displayName}</span>
+          {streaming && <span className="animate-pulse text-[11px] font-normal text-acc">生成中…</span>}
+        </div>
+        <div className={body}>
+          {challenger
+            ? <ChatMessage msg={challenger} isStreaming={streaming} />
+            : <p className="py-2 text-[13px] text-tx3">正在准备…</p>}
+        </div>
+        <button className={`${keepBtn} border-acc/50 text-acc hover:bg-acc/10`}
+          disabled={streaming} onClick={() => onKeep('challenger')}>
+          <Check size={13} />保留这个回复
+        </button>
+      </div>
+      <p className="text-[11px] leading-relaxed text-tx3 md:col-span-2">
+        选择保留后,另一个回复仍会作为历史版本保留,可随时用消息下方的左右箭头切换。
+      </p>
+    </div>
+  );
 }
 
 // ---- queued sends (generation-time message queue) ----
@@ -152,6 +218,7 @@ export default function Chat() {
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
   const [settings, setSettings] = useState<ComposerSettings>(draftFromChat(null));
   const [stick, setStick] = useState(true);
+  const [compare, setCompare] = useState<CompareState | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const skipLoadRef = useRef<string | null>(null);
@@ -196,6 +263,7 @@ export default function Chat() {
     abortRef.current?.abort();
     setStreaming(false);
     sendingRef.current = false;
+    setCompare(null);
     if (!routeId) {
       handoffAppliedRef.current = false;
       setChat(null); setMessages([]); setLeafId(null); setWebSearch(false); setMcpSelected([]); setSettings(draftFromChat(null));
@@ -320,7 +388,7 @@ export default function Chat() {
     }
     setChat(created);
     chatsStore.upsert({
-      id: created.id, title: created.title, pinned: created.pinned,
+      id: created.id, title: created.title, pinned: created.pinned, archived: created.archived,
       modelId: created.modelId, projectId: created.projectId,
       createdAt: created.createdAt, updatedAt: created.updatedAt,
     });
@@ -389,6 +457,10 @@ export default function Chat() {
           return next;
         }));
         setLeafId((l) => (l === 'tmp-a' ? d.messageId : l));
+        setCompare((c) => (c && c.challengerId === 'tmp-a' ? { ...c, challengerId: d.messageId } : c));
+        // The server un-archives a chat on new activity — mirror it locally.
+        setChat((c) => (c && c.archived ? { ...c, archived: false } : c));
+        chatsStore.patch(chatId, { archived: false });
       },
       onDelta(t) { buf.text += t; },
       onReasoning(t) { buf.reasoning += t; },
@@ -438,6 +510,9 @@ export default function Chat() {
   async function send(text: string, attachments: PendingAttachment[], o?: SendOverrides) {
     if (sendingRef.current || streaming) return;
     sendingRef.current = true;
+    // Sending while a comparison is open implicitly keeps the branch on screen
+    // (the original) — the panel closes, both versions stay as siblings.
+    setCompare(null);
     const sendModel = (o?.modelId ? models.find((m) => m.id === o.modelId) : null) ?? modelSel;
     try {
       const target = await ensureChat(o);
@@ -477,11 +552,13 @@ export default function Chat() {
   // current reply finishes). Queues live per chat id and survive switching.
   const queued = chat ? queueStore.queues[chat.id] ?? [] : [];
   useEffect(() => {
-    if (!chat || streaming || sendingRef.current) return;
+    // A pending model comparison also pauses the queue — dispatching would
+    // grow the conversation under a reply the user may not keep.
+    if (!chat || streaming || sendingRef.current || compare) return;
     if (!(queueStore.queues[chat.id] ?? []).length) return;
     const item = queueStore.shift(chat.id);
     if (item) void send(item.text, item.attachments);
-  }, [chat, streaming, queueStore.queues]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chat, streaming, compare, queueStore.queues]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function enqueue(text: string, attachments: PendingAttachment[]) {
     const target = chatRef.current;
@@ -499,31 +576,70 @@ export default function Chat() {
     if (streaming) stop();
   }
 
-  function regenerate(msgId: string, withModel?: ModelInfo) {
+  function regenerate(msgId: string) {
     if (streaming || sendingRef.current || !chatRef.current) return;
     const target = messages.find((m) => m.id === msgId);
     if (!target) return;
-    const m = withModel ?? modelSel;
-    if (withModel) {
-      // 换模型重生成:选中的模型即刻成为本对话的默认模型(服务端随流保存
-      // chat.modelId;本地 chat 也要同步,否则 chat 状态一变会把 modelSel 拽回旧值)。
-      selectModel(withModel);
-      setChat((c) => (c ? { ...c, modelId: withModel.id } : c));
-    }
+    setCompare(null);
     // Non-destructive: the new attempt is a SIBLING of the old reply — the old
     // version (and everything under it) stays reachable via the arrows.
     setMessages((prev) => [
       ...prev,
-      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: m?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
+      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
     ]);
     setLeafId('tmp-a');
-    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: m?.id });
+    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: modelSel?.id });
+  }
+
+  // 用其他模型对比生成:当前回复留在原位,挑战者作为隐藏兄弟并排流式输出,
+  // 完成后由用户选择保留哪个(未选中的仍是可切换的历史版本)。
+  function regenerateCompare(msgId: string, withModel: ModelInfo) {
+    if (streaming || sendingRef.current || !chatRef.current) return;
+    const target = messages.find((m) => m.id === msgId);
+    if (!target || target.role !== 'assistant') return;
+    setCompare({
+      originalId: msgId,
+      challengerId: 'tmp-a',
+      prevLeafId: leafId,
+      prevModelId: chatRef.current.modelId,
+      challengerModel: withModel,
+    });
+    setMessages((prev) => [
+      ...prev,
+      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: withModel.modelId, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
+    ]);
+    // Pin the view to the original: the compare panel renders in its place,
+    // its descendants stay hidden until a side is kept.
+    setLeafId(msgId);
+    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: withModel.id });
+  }
+
+  function keepCompare(side: 'original' | 'challenger') {
+    const c = compare;
+    if (!c || streaming || !chatRef.current) return;
+    setCompare(null);
+    if (side === 'original') {
+      // The stream pinned chat.modelId and currentLeafId to the challenger —
+      // put both back on the original branch.
+      const leaf = c.prevLeafId && messages.some((m) => m.id === c.prevLeafId) ? c.prevLeafId : c.originalId;
+      setLeafId(leaf);
+      setChat((cc) => (cc ? { ...cc, modelId: c.prevModelId } : cc));
+      api.patch(`/api/chats/${chatRef.current.id}`, { currentLeafId: leaf, modelId: c.prevModelId })
+        .catch(() => toast('保存分支选择失败', 'err'));
+    } else {
+      // Challenger wins: its branch is already the server-side leaf; its model
+      // becomes the conversation default.
+      setLeafId(c.challengerId);
+      selectModel(c.challengerModel);
+      setChat((cc) => (cc ? { ...cc, modelId: c.challengerModel.id } : cc));
+    }
   }
 
   function editUser(msgId: string, newText: string) {
     if (streaming || sendingRef.current || !chatRef.current) return;
     const original = messages.find((m) => m.id === msgId);
     if (!original) return;
+    setCompare(null);
     // Editing rewrites the text but keeps every attachment (images and files).
     const keepAtts = original.parts.filter((p): p is Extract<MessagePart, { type: 'image' | 'file' }> => (
       (p.type === 'image' || p.type === 'file') && !!p.uploadId
@@ -566,6 +682,7 @@ export default function Chat() {
     if (!ok) return;
     try {
       await api.del(`/api/chats/${chatRef.current.id}/messages/${msgId}`);
+      setCompare(null);
       const target = messages.find((m) => m.id === msgId);
       // Splice the local tree the same way the server did: children reattach
       // to the deleted message's parent.
@@ -579,6 +696,7 @@ export default function Chat() {
 
   function switchSibling(msg: Message, dir: -1 | 1) {
     if (streaming || sendingRef.current || !chatRef.current) return;
+    setCompare(null);
     const sibs = messages.filter((m) => m.parentId === msg.parentId);
     const idx = sibs.findIndex((m) => m.id === msg.id);
     const target = sibs[idx + dir];
@@ -665,6 +783,21 @@ export default function Chat() {
             </Link>
           ) : null;
         })()}
+        {chat?.archived && (
+          <button
+            title="此对话已归档,点击取消归档"
+            onClick={() => {
+              const target = chatRef.current;
+              if (!target) return;
+              api.patch(`/api/chats/${target.id}`, { archived: false })
+                .then(() => { setChat((c) => (c ? { ...c, archived: false } : c)); chatsStore.patch(target.id, { archived: false }); })
+                .catch(() => toast('取消归档失败', 'err'));
+            }}
+            className="flex cursor-pointer items-center gap-1.5 rounded-md border border-line bg-bg2 px-2.5 py-1 text-xs font-medium text-tx2 transition-colors hover:border-line2 hover:text-tx"
+          >
+            <Archive size={12} className="shrink-0 text-tx3" />已归档
+          </button>
+        )}
         {user?.role === 'admin' && models.length === 0 && modelsLoaded && (
           <Button variant="primary" size="sm" onClick={() => nav('/admin/providers')}>配置模型服务</Button>
         )}
@@ -729,6 +862,19 @@ export default function Chat() {
                 and in the empty state. */}
             <div className="mx-auto flex w-full max-w-[54rem] flex-col gap-7 px-4 py-7 sm:px-6">
               {path.map((m, i) => {
+                if (compare && m.id === compare.originalId) {
+                  const challenger = messages.find((x) => x.id === compare.challengerId) ?? null;
+                  return (
+                    <CompareView
+                      key={`compare-${m.id}`}
+                      original={m}
+                      challenger={challenger}
+                      challengerModel={compare.challengerModel}
+                      streaming={streaming}
+                      onKeep={keepCompare}
+                    />
+                  );
+                }
                 const sibs = messages.filter((x) => x.parentId === m.parentId);
                 const sibIdx = sibs.findIndex((x) => x.id === m.id);
                 return (
@@ -741,7 +887,7 @@ export default function Chat() {
                     onSiblingPrev={!streaming && sibIdx > 0 ? () => switchSibling(m, -1) : undefined}
                     onSiblingNext={!streaming && sibIdx < sibs.length - 1 ? () => switchSibling(m, 1) : undefined}
                     onRegenerate={m.role === 'assistant' && !streaming && !!chat ? () => regenerate(m.id) : undefined}
-                    onRegenerateWith={m.role === 'assistant' && !streaming && !!chat ? (pick) => regenerate(m.id, pick) : undefined}
+                    onRegenerateWith={m.role === 'assistant' && !streaming && !!chat ? (pick) => regenerateCompare(m.id, pick) : undefined}
                     onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
                     onEditAssistant={m.role === 'assistant' && m.status !== 'streaming' && !streaming && !!chat
                       ? (t) => void editAssistant(m.id, t)

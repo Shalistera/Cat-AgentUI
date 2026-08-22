@@ -27,7 +27,7 @@ function CopyBtn({ text, size = 12 }: { text: string; size?: number }) {
   );
 }
 
-/** 重新生成菜单:沿用上次的模型,或换一个模型(同时成为本对话的默认模型)。 */
+/** 重新生成菜单:沿用上次的模型直接重生成,或换一个模型并排对比生成。 */
 function RegenerateMenu({ lastModel, onSame, onWith }: {
   /** Provider model id of the message being regenerated — display only. */
   lastModel: string | null;
@@ -65,8 +65,8 @@ function RegenerateMenu({ lastModel, onSame, onWith }: {
           <button className={menuRow} onClick={() => setPicking(true)}>
             <Shuffle size={14} className="mt-0.5 shrink-0 text-tx3" />
             <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-medium text-tx">用其他模型重新生成</span>
-              <span className="mt-0.5 block text-[11px] text-tx3">选择的模型将成为本对话的默认模型</span>
+              <span className="block text-[13px] font-medium text-tx">用其他模型对比生成</span>
+              <span className="mt-0.5 block text-[11px] text-tx3">保留当前回复,并排生成新回复后选择保留哪个</span>
             </span>
             <ChevronRight size={13} className="mt-1 shrink-0 text-tx3" />
           </button>
@@ -310,7 +310,7 @@ interface Props {
   isStreaming: boolean; // this message is currently being generated
   pendingLabel?: string; // shown while waiting for the first output
   onRegenerate?: () => void;
-  /** Regenerate with a different model, which becomes the chat's default. */
+  /** Regenerate with a different model, side-by-side against this reply. */
   onRegenerateWith?: (m: ModelInfo) => void;
   onEdit?: (text: string) => void;
   /** Remove this message from the conversation (and from all later context). */

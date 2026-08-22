@@ -15,20 +15,24 @@ const SNIPPET_AFTER = 64;
 interface ParsedQuery {
   text: string;
   pinned: boolean | null;
+  /** null = search only non-archived (default); true/false = explicit filter. */
+  archived: boolean | null;
   project: string | null; // project name substring
 }
 
-// Open WebUI-style prefixes: `project:名称` / `folder:名称` / `pinned:true`.
-// Everything else is the literal text to look for.
+// Open WebUI-style prefixes: `project:名称` / `folder:名称` / `pinned:true` /
+// `archived:true`. Everything else is the literal text to look for.
 function parseQuery(raw: string): ParsedQuery {
-  const out: ParsedQuery = { text: '', pinned: null, project: null };
+  const out: ParsedQuery = { text: '', pinned: null, archived: null, project: null };
   const rest: string[] = [];
   for (const token of raw.trim().split(/\s+/)) {
-    const m = /^(project|folder|pinned)[:：](.*)$/i.exec(token);
+    const m = /^(project|folder|pinned|archived)[:：](.*)$/i.exec(token);
     if (!m) { rest.push(token); continue; }
     const value = m[2];
     if (/^pinned$/i.test(m[1])) {
       out.pinned = !/^(false|0|no|否)$/i.test(value);
+    } else if (/^archived$/i.test(m[1])) {
+      out.archived = !/^(false|0|no|否)$/i.test(value);
     } else if (value) {
       out.project = value.toLowerCase();
     }
@@ -65,6 +69,9 @@ export async function searchRoutes(app: FastifyInstance) {
 
     let chats = db.select().from(schema.chats).where(eq(schema.chats.userId, userId)).all();
     if (q.pinned !== null) chats = chats.filter((c) => !!c.pinned === q.pinned);
+    // Archived chats are out of sight by default; `archived:true` flips the
+    // search to exactly them.
+    chats = chats.filter((c) => !!c.archived === (q.archived ?? false));
     if (q.project !== null) {
       const projs = db.select({ id: schema.projects.id, name: schema.projects.name })
         .from(schema.projects).where(eq(schema.projects.userId, userId)).all();
@@ -135,7 +142,7 @@ export async function searchRoutes(app: FastifyInstance) {
       .sort((a, b) => (b.chat.pinned - a.chat.pinned) || (b.chat.updatedAt - a.chat.updatedAt))
       .slice(0, MAX_RESULTS)
       .map((h) => ({
-        id: h.chat.id, title: h.chat.title, pinned: !!h.chat.pinned,
+        id: h.chat.id, title: h.chat.title, pinned: !!h.chat.pinned, archived: !!h.chat.archived,
         projectId: h.chat.projectId, updatedAt: h.chat.updatedAt,
         titleMatch: h.titleMatch, snippet: h.snippet, matchCount: h.matchCount,
       }));
