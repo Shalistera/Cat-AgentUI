@@ -228,7 +228,8 @@ export function Sidebar() {
   // Chats inside a project live under that project's node only — never in
   // 置顶/最近 — so the rail always answers "does this chat belong to a project?".
   // Archived chats leave every normal section for the collapsed shelf below.
-  const { pinned, recent, byProject, archived } = useMemo(() => {
+  // Loose unpinned chats bucket by updatedAt into 今天/昨天/近一周/更早.
+  const { pinned, recentGroups, recentCount, byProject, archived } = useMemo(() => {
     const known = new Set(projectsStore.projects.map((p) => p.id));
     const byProject = new Map<string, ChatSummary[]>();
     const loose: ChatSummary[] = [];
@@ -244,7 +245,27 @@ export function Sidebar() {
       }
     }
     for (const list of byProject.values()) list.sort((a, b) => Number(b.pinned) - Number(a.pinned));
-    return { pinned: loose.filter((c) => c.pinned), recent: loose.filter((c) => !c.pinned), byProject, archived };
+    const recent = loose.filter((c) => !c.pinned);
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const todayStart = dayStart.getTime();
+    const yesterdayStart = todayStart - 86_400_000;
+    const weekStart = todayStart - 7 * 86_400_000;
+    const bucketOf = (c: ChatSummary) => (
+      c.updatedAt >= todayStart ? '今天'
+        : c.updatedAt >= yesterdayStart ? '昨天'
+        : c.updatedAt >= weekStart ? '近一周' : '更早'
+    );
+    // Fixed bucket order (not contiguous runs): local patches — un-pinning,
+    // renames — can leave the array slightly out of updatedAt order, and runs
+    // would then print a duplicate label.
+    const buckets = new Map<string, ChatSummary[]>([['今天', []], ['昨天', []], ['近一周', []], ['更早', []]]);
+    for (const c of recent) buckets.get(bucketOf(c))!.push(c);
+    return {
+      pinned: loose.filter((c) => c.pinned),
+      recentGroups: [...buckets].filter(([, list]) => list.length > 0),
+      recentCount: recent.length, byProject, archived,
+    };
   }, [chats, projectsStore.projects]);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -255,7 +276,7 @@ export function Sidebar() {
 
   const visibleProjects = searching ? [] : projectsStore.projects;
 
-  const empty = pinned.length === 0 && recent.length === 0 && byProject.size === 0;
+  const empty = pinned.length === 0 && recentCount === 0 && byProject.size === 0;
 
   function newChat() {
     nav('/');
@@ -414,12 +435,12 @@ export function Sidebar() {
             {pinned.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
           </div>
         )}
-        {!searching && recent.length > 0 && (
-          <div className="space-y-0.5">
-            {(pinned.length > 0 || visibleProjects.length > 0) && <div className="eyebrow px-2 pb-1">最近</div>}
-            {recent.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
+        {!searching && recentGroups.map(([label, list]) => (
+          <div key={label} className="space-y-0.5">
+            <div className="eyebrow px-2 pb-1">{label}</div>
+            {list.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
           </div>
-        )}
+        ))}
         {!searching && archived.length > 0 && (
           <div className="space-y-0.5">
             <button

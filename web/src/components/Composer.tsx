@@ -529,7 +529,7 @@ export function Composer(props: ComposerProps) {
 
         <textarea
           ref={taRef}
-          rows={1}
+          rows={2}
           value={text}
           placeholder={props.disabled ? '管理员尚未配置模型'
             : imageMode ? '描述你想生成的画面…'

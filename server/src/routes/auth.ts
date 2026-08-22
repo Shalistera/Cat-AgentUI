@@ -94,6 +94,18 @@ export async function authRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Full cookie reset for browsers migrated from a previous panel on the same
+  // domain: Open WebUI's `token` cookie is httpOnly, so the /error page cannot
+  // remove it client-side — expire every cookie the request carried instead.
+  app.post('/api/auth/reset', async (req, reply) => {
+    const token = req.cookies?.[COOKIE_NAME];
+    if (token) destroySession(token);
+    for (const name of Object.keys(req.cookies ?? {})) {
+      reply.clearCookie(name, { path: '/' });
+    }
+    return { ok: true };
+  });
+
   app.get('/api/auth/me', async (req, reply) => {
     requireAuth(req, reply);
     return { user: publicUser({ ...req.user!, settings: req.user!.settings }) };

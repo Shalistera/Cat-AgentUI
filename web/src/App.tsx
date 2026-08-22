@@ -7,6 +7,7 @@ import { Toaster, ConfirmHost, Spinner } from './components/ui';
 import { Sidebar } from './components/Sidebar';
 import { HtmlPreviewPanel } from './components/HtmlPreviewPanel';
 import Login from './pages/Login';
+import ErrorReset from './pages/ErrorReset';
 import Chat from './pages/Chat';
 import Images from './pages/Images';
 import Gallery from './pages/Gallery';
@@ -76,6 +77,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        {/* Outside Shell: must render even when stale cookies break auth. */}
+        <Route path="/error" element={<ErrorReset />} />
         <Route element={<Shell />}>
           <Route path="/" element={<Chat />} />
           <Route path="/chat/:id" element={<Chat />} />
