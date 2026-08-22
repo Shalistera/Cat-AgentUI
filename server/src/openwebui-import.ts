@@ -16,6 +16,7 @@ import Database from 'better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { db, schema, now } from './db/index.js';
 import { config } from './config.js';
+import { DOCX_MIME, detectImageMime } from './storage.js';
 import type { MessagePart } from './types.js';
 
 export interface OwuiImportOptions {
@@ -63,8 +64,12 @@ interface OwuiMessage {
 }
 
 interface OwuiMsgFile {
-  type?: string; url?: string; id?: string; name?: string;
-  file?: { id?: string; filename?: string; meta?: { content_type?: string } };
+  type?: string; url?: string; id?: string; name?: string; content_type?: string;
+  file?: {
+    id?: string; filename?: string; path?: string;
+    data?: { content?: unknown };
+    meta?: { content_type?: string; name?: string };
+  };
 }
 
 interface OwuiOutputItem {
@@ -179,6 +184,37 @@ function extractBranch(chatJson: Record<string, unknown>): OwuiMessage[] {
 const EXT_BY_MIME: Record<string, string> = {
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif',
 };
+
+interface ResolvedFile {
+  mime: string;
+  data: Buffer;
+  origName: string | null;
+  inlined: boolean;
+}
+
+function classifyAttachment(file: ResolvedFile): {
+  kind: 'image' | 'file'; mime: string; ext: string;
+} | null {
+  const imageMime = detectImageMime(file.data);
+  if (imageMime) return { kind: 'image', mime: imageMime, ext: EXT_BY_MIME[imageMime] };
+
+  if (file.data.length >= 5 && file.data.subarray(0, 5).toString('ascii') === '%PDF-') {
+    return { kind: 'file', mime: 'application/pdf', ext: 'pdf' };
+  }
+
+  const nameExt = (file.origName ?? '').split('.').pop()?.toLowerCase() ?? '';
+  const zip = file.data.length >= 4 && file.data[0] === 0x50 && file.data[1] === 0x4b
+    && (file.data[2] === 0x03 || file.data[2] === 0x05);
+  if (zip && nameExt === 'docx') return { kind: 'file', mime: DOCX_MIME, ext: 'docx' };
+
+  if (file.data.includes(0)) return null;
+  try { new TextDecoder('utf-8', { fatal: true }).decode(file.data); } catch { return null; }
+  const mime = file.mime === 'application/json' ? 'application/json'
+    : file.mime.startsWith('text/') ? file.mime : 'text/plain';
+  const ext = /^[a-z0-9]{1,8}$/.test(nameExt)
+    ? nameExt : mime === 'application/json' ? 'json' : 'txt';
+  return { kind: 'file', mime, ext };
+}
 
 // ---------- main ----------
 
@@ -306,14 +342,49 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
     //   data: URL (inline base64) → decode
     //   /api/v1/files/{id}/content → file table row → physical file under dataDir
     //   /cache/... (image generations) → dataDir/cache/...
-    function resolveFile(f: OwuiMsgFile): { mime: string; data: Buffer; origName: string | null } | null {
+    function resolveFile(f: OwuiMsgFile): ResolvedFile | null {
+      const embeddedName = f.name ?? f.file?.meta?.name ?? f.file?.filename ?? null;
+      const embeddedMime = f.content_type ?? f.file?.meta?.content_type ?? 'application/octet-stream';
+      const embeddedText = (): ResolvedFile | null => {
+        const content = f.file?.data?.content;
+        if (typeof content !== 'string') return null;
+        const alreadyText = embeddedMime.startsWith('text/') || embeddedMime === 'application/json';
+        const origName = alreadyText
+          ? embeddedName
+          : `${embeddedName || '附件'}.extracted.txt`;
+        return {
+          mime: alreadyText ? embeddedMime : 'text/plain',
+          data: Buffer.from(content, 'utf8'), origName, inlined: true,
+        };
+      };
+      const embeddedPath = (): ResolvedFile | null => {
+        const storedPath = f.file?.path;
+        if (!storedPath) return null;
+        const candidates = [storedPath];
+        if (dataDir) {
+          candidates.push(path.join(dataDir, storedPath.replace(/^.*?data\//, '')));
+          candidates.push(path.join(dataDir, 'uploads', path.basename(storedPath)));
+        }
+        for (const p of candidates) {
+          try {
+            if (p && fs.existsSync(p)) {
+              return {
+                mime: embeddedMime, data: fs.readFileSync(p),
+                origName: embeddedName, inlined: false,
+              };
+            }
+          } catch { /* try next */ }
+        }
+        return null;
+      };
+
       const url = f.url ?? '';
       if (url.startsWith('data:')) {
         const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(url);
         if (!m) return null;
         const mime = m[1] || 'application/octet-stream';
         const data = m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]), 'utf8');
-        return { mime, data, origName: f.name ?? null };
+        return { mime, data, origName: embeddedName, inlined: true };
       }
       const fileId = f.id ?? f.file?.id ?? /\/api\/v1\/files\/([^/]+)/.exec(url)?.[1];
       if (fileId) {
@@ -339,13 +410,18 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
                   mime: meta.content_type || 'application/octet-stream',
                   data: fs.readFileSync(p),
                   origName: meta.name ?? row.filename ?? null,
+                  inlined: false,
                 };
               }
             } catch { /* try next */ }
           }
+          const recovered = embeddedPath() ?? embeddedText();
+          if (recovered) return recovered;
           report.files.missing.push(fileId);
           return null;
         }
+        const recovered = embeddedPath() ?? embeddedText();
+        if (recovered) return recovered;
         report.files.missing.push(fileId);
         return null;
       }
@@ -354,11 +430,13 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
         if (fs.existsSync(p)) {
           const ext = path.extname(p).toLowerCase().replace('.', '');
           const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext || 'png'}`;
-          return { mime, data: fs.readFileSync(p), origName: path.basename(p) };
+          return { mime, data: fs.readFileSync(p), origName: path.basename(p), inlined: false };
         }
         report.files.missing.push(url);
         return null;
       }
+      const recovered = embeddedPath() ?? embeddedText();
+      if (recovered) return recovered;
       if (url) report.files.missing.push(url.slice(0, 80));
       return null;
     }
@@ -478,6 +556,8 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
       const chatCreated = toMs(c.created_at, now());
       const chatUpdated = toMs(c.updated_at, chatCreated);
       const params = (chatJson.params ?? {}) as Record<string, unknown>;
+      const rawReasoningEffort = typeof params.reasoning_effort === 'string'
+        ? params.reasoning_effort.trim() : '';
 
       const chatRow: typeof schema.chats.$inferInsert = {
         id: c.id,
@@ -487,9 +567,15 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
         systemPrompt: typeof params.system === 'string' && params.system.trim() ? params.system : null,
         temperature: typeof params.temperature === 'number' ? params.temperature : null,
         maxTokens: typeof params.max_tokens === 'number' ? params.max_tokens : null,
-        reasoningEffort: null,
+        // Open WebUI uses "none" while Cat-AgentUI calls the disabled level
+        // "off". Other values (minimal/low/medium/high/...) are provider level
+        // names and can be retained verbatim until the user selects a model.
+        reasoningEffort: rawReasoningEffort
+          ? (rawReasoningEffort === 'none' ? 'off' : rawReasoningEffort) : null,
         mcpServerIds: '[]',
+        currentLeafId: null,
         pinned: c.pinned ? 1 : 0,
+        archived: c.archived ? 1 : 0,
         createdAt: chatCreated,
         updatedAt: chatUpdated,
       };
@@ -518,8 +604,8 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
               if (f.name || f.file?.filename) pushText(parts, 'text', `(附件: ${f.name ?? f.file?.filename})\n`);
               continue;
             }
-            if (!EXT_BY_MIME[resolved.mime]) {
-              // 只支持图片附件;文档类附件降级为文字说明
+            const attachment = classifyAttachment(resolved);
+            if (!attachment) {
               report.files.nonImage.push(resolved.origName ?? resolved.mime);
               pushText(parts, 'text', `(附件: ${resolved.origName ?? '文件'},未随迁移导入)\n`);
               continue;
@@ -529,7 +615,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
               uploadId = crypto.randomUUID();
             }
             if (!existingUploadIds.has(uploadId)) {
-              const filename = `${uploadId}.${EXT_BY_MIME[resolved.mime]}`;
+              const filename = `${uploadId}.${attachment.ext}`;
               if (!dryRun) {
                 fs.writeFileSync(path.join(uploadsDir, filename), resolved.data);
                 writtenFiles.push(filename);
@@ -539,16 +625,23 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
                 userId: catUserId,
                 filename,
                 origName: resolved.origName,
-                mime: resolved.mime,
+                mime: attachment.mime,
                 size: resolved.data.length,
                 createdAt: now(),
               });
               existingUploadIds.add(uploadId);
               uploadOwner.set(uploadId, catUserId);
               addedUploadIds.push(uploadId);
-              added[f.url?.startsWith('data:') ? 'inlined' : 'copied']++;
+              added[resolved.inlined ? 'inlined' : 'copied']++;
             }
-            parts.push({ type: 'image', uploadId, mime: resolved.mime });
+            if (attachment.kind === 'image') {
+              parts.push({ type: 'image', uploadId, mime: attachment.mime });
+            } else {
+              parts.push({
+                type: 'file', uploadId,
+                name: resolved.origName ?? undefined, mime: attachment.mime,
+              });
+            }
           }
 
           // body
@@ -604,6 +697,9 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
           prevMsgId = mid;
           added.messages++;
         }
+        // The imported rows are the source chat's active branch, so its final
+        // message is also the branch leaf that should open in Cat-AgentUI.
+        chatRow.currentLeafId = prevMsgId;
 
         if (!dryRun) {
           db.transaction((tx) => {

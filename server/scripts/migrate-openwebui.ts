@@ -9,6 +9,7 @@
 //   --dry-run            只报告将要迁移的内容,不写入
 //   --skip-archived      跳过已归档的会话(默认全部迁入)
 import { importOpenwebui } from '../src/openwebui-import.js';
+import { runMigrations } from '../src/db/index.js';
 
 function parseArgs(argv: string[]) {
   const out: { db?: string; dataDir?: string; dryRun: boolean; skipArchived: boolean } = {
@@ -35,6 +36,10 @@ console.log(`源库: ${args.db}`);
 
 let report;
 try {
+  // The CLI is commonly the first command run against a fresh Cat-AgentUI
+  // data directory. The HTTP import route is initialized by server startup,
+  // but the standalone command must create/upgrade the target schema itself.
+  runMigrations();
   report = importOpenwebui({
     dbPath: args.db, dataDir: args.dataDir, dryRun: args.dryRun, skipArchived: args.skipArchived,
   });
