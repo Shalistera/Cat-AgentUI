@@ -275,6 +275,7 @@ export function Popover({ trigger, children, open, setOpen, align = 'left', widt
   align?: 'left' | 'right'; width?: string;
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<CSSProperties | null>(null);
 
   useLayoutEffect(() => {
@@ -290,9 +291,13 @@ export function Popover({ trigger, children, open, setOpen, align = 'left', widt
       const below = window.innerHeight - rect.bottom - edge - gap;
       const placeAbove = above >= 300 || above >= below;
       const maxHeight = Math.max(160, Math.min(placeAbove ? above : below, 544));
+      // Shift (not shrink) so the far edge never leaves the viewport — on
+      // narrow screens the anchored edge alone can push the panel off-screen.
+      const panelW = panelRef.current?.offsetWidth ?? 0;
+      const slack = Math.max(edge, window.innerWidth - edge - panelW);
       const horizontal = align === 'right'
-        ? { right: Math.max(edge, window.innerWidth - rect.right) }
-        : { left: Math.max(edge, rect.left) };
+        ? { right: Math.min(Math.max(edge, window.innerWidth - rect.right), slack) }
+        : { left: Math.min(Math.max(edge, rect.left), slack) };
 
       setPosition(placeAbove
         ? { ...horizontal, bottom: window.innerHeight - rect.top + gap, maxHeight }
@@ -315,6 +320,7 @@ export function Popover({ trigger, children, open, setOpen, align = 'left', widt
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
+            ref={panelRef}
             style={position ?? { visibility: 'hidden' }}
             className={`fade-up fixed z-50 ${width} max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-line bg-bg1 shadow-lg`}
           >

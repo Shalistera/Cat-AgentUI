@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Archive, ArrowDown, Check, FolderClosed, Ghost, ListOrdered, PanelLeft, MessagesSquare, Pencil,
-  Send, Trash2, Wrench, Image as ImageIcon,
+  Archive, ArrowDown, Check, FolderClosed, Ghost, ListOrdered, PanelLeft, Pencil,
+  Send, Trash2,
 } from 'lucide-react';
 import { api, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
@@ -775,12 +775,6 @@ export default function Chat() {
     />
   );
 
-  const capabilities = [
-    { icon: <MessagesSquare size={15} />, title: '多模型对话', desc: '在同一界面切换不同服务商的模型' },
-    { icon: <Wrench size={15} />, title: 'MCP 工具', desc: '接入外部工具服务器,扩展模型能力' },
-    { icon: <ImageIcon size={15} />, title: '图像理解与生成', desc: '读图分析,或直接在对话中作图' },
-  ];
-
   // Click-to-send starters: the fastest first message a new user can have.
   const examplePrompts = [
     '最近一周有哪些值得关注的 AI 进展?',
@@ -897,19 +891,6 @@ export default function Chat() {
               </div>
             )}
 
-            {/* Recessed bg0 (the ToggleRow treatment) keeps static info quiet —
-                surface + shadow + hover stays reserved for clickable cards. */}
-            <div className="mt-8 grid gap-3 sm:grid-cols-3">
-              {capabilities.map((c) => (
-                <div key={c.title} className="rounded-lg border border-line bg-bg0 px-3.5 py-3">
-                  <div className="flex items-center gap-2 text-tx">
-                    <span className="text-tx3">{c.icon}</span>
-                    <span className="text-[13px] font-medium">{c.title}</span>
-                  </div>
-                  <p className="mt-1 text-[11px] leading-relaxed text-tx3">{c.desc}</p>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       ) : (
