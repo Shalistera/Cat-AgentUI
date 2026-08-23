@@ -299,7 +299,7 @@ function GroundingBlock({ part }: { part: GroundingPart }) {
 function Timestamp({ ts }: { ts: number }) {
   if (!ts) return null;
   return (
-    <span className="text-[11px] tabular-nums text-tx3" title={new Date(ts).toLocaleString()}>
+    <span className="text-[11px] font-semibold tabular-nums text-tx3" title={new Date(ts).toLocaleString()}>
       {fmtTime(ts)}
     </span>
   );
@@ -554,7 +554,6 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
               )}
             </span>
             {msg.model && <span className="font-mono text-tx2">{msg.model}</span>}
-            <Timestamp ts={msg.createdAt} />
             {hasStats && (
               <>
                 <span className="flex items-center gap-1 tabular-nums" title="总耗时"><Clock size={11} />{fmtDuration(msg.durationMs)}</span>
@@ -569,6 +568,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
                 {tps != null && tps > 0 && <span className="tabular-nums" title="输出速度">{tps.toFixed(1)} tok/s</span>}
               </>
             )}
+            {/* Always the row's last item — the send time outranks the stats. */}
+            <Timestamp ts={msg.createdAt} />
           </div>
         )}
         {/* 快速追问 — only under the latest reply (onFollowup gates it), so
