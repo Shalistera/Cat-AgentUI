@@ -340,6 +340,7 @@ interface Props {
 export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [statsOpen, setStatsOpen] = useState(false);
 
   if (msg.role === 'user') {
     const text = partsToPlainText(msg.parts);
@@ -563,9 +564,13 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             </span>
             {msg.model && <span className="font-mono text-tx2">{msg.model}</span>}
             {statsTip && (
-              <span className="flex cursor-help items-center text-tx3 transition-colors hover:text-tx" title={statsTip}>
-                <Info size={12} />
-              </span>
+              <Popover open={statsOpen} setOpen={setStatsOpen} width="w-60" trigger={
+                <button title="查看生成信息" className={iconBtn}><Info size={12} /></button>
+              }>
+                <div className="whitespace-pre-line px-3.5 py-2.5 text-xs leading-relaxed tabular-nums text-tx2">
+                  {statsTip}
+                </div>
+              </Popover>
             )}
             {/* ml-auto pins the send time to the row's right edge — it must
                 never be shoved onto a wrapped line by the stats. */}
