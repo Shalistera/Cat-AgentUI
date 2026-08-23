@@ -4,7 +4,7 @@ import {
   Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, Zap, CircleAlert, Ban,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo } from '../types';
-import { fmtDuration, fmtTokens } from '../api';
+import { fmtDuration, fmtTime, fmtTokens } from '../api';
 import { useModels } from '../store';
 import { Markdown } from './Markdown';
 import { ModelAvatar } from './ModelAvatar';
@@ -295,6 +295,16 @@ function GroundingBlock({ part }: { part: GroundingPart }) {
   );
 }
 
+/** Compact send time; hover carries the full date for older messages. */
+function Timestamp({ ts }: { ts: number }) {
+  if (!ts) return null;
+  return (
+    <span className="text-[11px] tabular-nums text-tx3" title={new Date(ts).toLocaleString()}>
+      {fmtTime(ts)}
+    </span>
+  );
+}
+
 function partsToPlainText(parts: MessagePart[]): string {
   return parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 }
@@ -382,6 +392,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         )}
         {!editing && (
           <div className="flex items-center gap-0.5">
+            <span className="mr-1"><Timestamp ts={msg.createdAt} /></span>
             {siblingInfo && <SiblingSwitch info={siblingInfo} onPrev={onSiblingPrev} onNext={onSiblingNext} />}
             <CopyBtn text={text} />
             {onEdit && (
@@ -543,6 +554,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
               )}
             </span>
             {msg.model && <span className="font-mono text-tx2">{msg.model}</span>}
+            <Timestamp ts={msg.createdAt} />
             {hasStats && (
               <>
                 <span className="flex items-center gap-1 tabular-nums" title="总耗时"><Clock size={11} />{fmtDuration(msg.durationMs)}</span>
