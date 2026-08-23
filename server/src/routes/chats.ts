@@ -540,7 +540,11 @@ function wantsTitleEmoji(settingsJson: string): boolean {
   catch { return false; }
 }
 
-const FOLLOWUP_PROMPT = '基于上面这轮问答,站在提问者的角度,提出 3 个对方接下来最可能继续问的简短追问。要求:每行输出一个问题,共 3 行;直接输出问题本身,不要编号、引号或任何解释;每个问题不超过 25 个字;使用与对话相同的语言。';
+// Anchored to the QUESTION, not the answer: for tasks like translation the
+// answer is (a) in another language and (b) much longer, and a small model
+// left to itself will follow the answer — asking about the translated content,
+// in the translated language. Both rules below exist to counter that pull.
+const FOLLOWUP_PROMPT = '基于上面这轮问答,站在提问者的角度,提出 3 个对方接下来最可能继续问的简短追问。要求:追问必须延续提问者的意图和任务——如果对方是在让你执行任务(如翻译、改写、总结),追问应围绕任务本身(如调整风格、继续处理更多内容),而不是就产出内容提新问题;必须使用提问者提问时所用的语言,即使回答用了别的语言(比如翻译结果);每行输出一个问题,共 3 行;直接输出问题本身,不要编号、引号或任何解释;每个问题不超过 25 个字。';
 // Follow-ups only need the latest exchange, truncated — resending the whole
 // conversation would be wasted input tokens on a job this small.
 const FOLLOWUP_QUESTION_CHARS = 2000;
