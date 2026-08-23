@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import {
-  BrainCircuit, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Clock, FileText, GitBranch, Globe,
-  Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, Zap, CircleAlert, Ban,
+  BrainCircuit, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, GitBranch, Globe,
+  Info, Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, CircleAlert, Ban,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo } from '../types';
 import { fmtDuration, fmtTime, fmtTokens } from '../api';
@@ -475,10 +475,18 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
 
   const plain = partsToPlainText(msg.parts);
   const followups = msg.parts.flatMap((p) => (p.type === 'followups' ? p.questions : []));
-  const hasStats = msg.durationMs != null || msg.totalTokens != null;
   const tps = msg.completionTokens && msg.durationMs && msg.durationMs > (msg.ttftMs ?? 0)
     ? msg.completionTokens / ((msg.durationMs - (msg.ttftMs ?? 0)) / 1000)
     : null;
+  // Debug-grade stats fold into one hover tooltip behind an info icon.
+  const statsTip = [
+    msg.durationMs != null ? `总耗时 ${fmtDuration(msg.durationMs)}` : null,
+    msg.ttftMs != null ? `首字延迟 ${fmtDuration(msg.ttftMs)}` : null,
+    msg.totalTokens != null && msg.totalTokens > 0
+      ? `输入 ${fmtTokens(msg.promptTokens)} · 输出 ${fmtTokens(msg.completionTokens)} · 共 ${fmtTokens(msg.totalTokens)} tokens`
+      : null,
+    tps != null && tps > 0 ? `输出速度 ${tps.toFixed(1)} tok/s` : null,
+  ].filter(Boolean).join('\n');
 
   return (
     // sm:pr mirrors the avatar column (30px + gap-3) so the text block sits
@@ -554,22 +562,14 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
               )}
             </span>
             {msg.model && <span className="font-mono text-tx2">{msg.model}</span>}
-            {hasStats && (
-              <>
-                <span className="flex items-center gap-1 tabular-nums" title="总耗时"><Clock size={11} />{fmtDuration(msg.durationMs)}</span>
-                {msg.ttftMs != null && (
-                  <span className="flex items-center gap-1 tabular-nums" title="首字延迟"><Zap size={11} />{fmtDuration(msg.ttftMs)}</span>
-                )}
-                {msg.totalTokens != null && msg.totalTokens > 0 && (
-                  <span className="tabular-nums" title={`输入 ${msg.promptTokens ?? '?'} tokens · 输出 ${msg.completionTokens ?? '?'} tokens`}>
-                    ↑{fmtTokens(msg.promptTokens)} ↓{fmtTokens(msg.completionTokens)} · 共 {fmtTokens(msg.totalTokens)} tokens
-                  </span>
-                )}
-                {tps != null && tps > 0 && <span className="tabular-nums" title="输出速度">{tps.toFixed(1)} tok/s</span>}
-              </>
+            {statsTip && (
+              <span className="flex cursor-help items-center text-tx3 transition-colors hover:text-tx" title={statsTip}>
+                <Info size={12} />
+              </span>
             )}
-            {/* Always the row's last item — the send time outranks the stats. */}
-            <Timestamp ts={msg.createdAt} />
+            {/* ml-auto pins the send time to the row's right edge — it must
+                never be shoved onto a wrapped line by the stats. */}
+            <span className="ml-auto self-end"><Timestamp ts={msg.createdAt} /></span>
           </div>
         )}
         {/* 快速追问 — only under the latest reply (onFollowup gates it), so
