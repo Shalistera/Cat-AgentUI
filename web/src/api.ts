@@ -120,6 +120,54 @@ export async function streamChat(
   dispatch();
 }
 
+/**
+ * POST a JSON body and feed back every SSE event (name + parsed data). The
+ * building block behind streamChat; other streaming endpoints (OCR) reuse it.
+ */
+export async function streamSse(
+  path: string, payload: unknown, onEvent: (event: string, data: any) => void, signal: AbortSignal,
+): Promise<void> {
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', 'x-csrf': '1' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (res.status === 401) onUnauthorized.handler?.();
+  if (!res.ok || !res.body) {
+    const json = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, json.error || `请求失败 (${res.status})`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let event: string | null = null;
+  let dataLines: string[] = [];
+  const dispatch = () => {
+    if (!dataLines.length) return;
+    let data: any = {};
+    try { data = JSON.parse(dataLines.join('\n')); } catch { /* ignore */ }
+    if (event) onEvent(event, data);
+    event = null; dataLines = [];
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      let line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      if (line === '') dispatch();
+      else if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+    }
+  }
+  dispatch();
+}
+
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null) return '—';
   if (ms < 1000) return `${ms}ms`;

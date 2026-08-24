@@ -15,6 +15,7 @@ import Gallery from './pages/Gallery';
 import ProjectPage from './pages/Project';
 import ProjectsPage from './pages/Projects';
 import Ppt from './pages/Ppt';
+import Ocr from './pages/Ocr';
 import Settings from './pages/Settings';
 import Admin from './pages/admin/Admin';
 
@@ -108,6 +109,7 @@ export default function App() {
           <Route path="/images" element={<Images />} />
           <Route path="/images/gallery" element={<Gallery />} />
           <Route path="/ppt" element={<Ppt />} />
+          <Route path="/ocr" element={<Ocr />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/admin/*" element={<AdminGate />} />
         </Route>

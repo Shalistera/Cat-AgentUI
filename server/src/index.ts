@@ -19,6 +19,7 @@ import { importRoutes } from './routes/import.js';
 import { projectRoutes } from './routes/projects.js';
 import { eventRoutes } from './routes/events.js';
 import { searchRoutes } from './routes/search.js';
+import { ocrRoutes } from './routes/ocr.js';
 import { initKnowledgeIndex } from './knowledge.js';
 import { startRetentionSweeper } from './retention.js';
 import { startBackupScheduler } from './backup.js';
@@ -105,6 +106,7 @@ async function main() {
   await app.register(projectRoutes);
   await app.register(eventRoutes);
   await app.register(searchRoutes);
+  await app.register(ocrRoutes);
 
   // static SPA
   const webDist = path.join(repoRoot, 'web', 'dist');

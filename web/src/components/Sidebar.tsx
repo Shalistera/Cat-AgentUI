@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Archive, ArchiveRestore, Ghost, MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon,
   Presentation, ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
-  MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson,
+  MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson, ScanText,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { api } from '../api';
@@ -480,6 +480,9 @@ export function Sidebar() {
         <nav className="space-y-0.5">
           <NavLink to="/images" className={navClass}>
             <ImageIcon size={15} />绘图工坊
+          </NavLink>
+          <NavLink to="/ocr" className={navClass}>
+            <ScanText size={15} />OCR 工坊
           </NavLink>
           <NavLink to="/ppt" className={navClass}>
             <Presentation size={15} />PPT 工坊

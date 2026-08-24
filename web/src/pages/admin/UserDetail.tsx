@@ -17,6 +17,7 @@ const KIND_LABELS: Record<string, string> = {
   image: '绘图',
   title: '标题生成',
   followup: '快速追问',
+  ocr: 'OCR 工坊',
   ppt: 'PPT 工坊',
 };
 
