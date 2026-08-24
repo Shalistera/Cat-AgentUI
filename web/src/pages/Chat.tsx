@@ -846,11 +846,21 @@ export default function Chat() {
               message lands. */}
           <div className="fade-up m-auto w-full max-w-[54rem]">
             <div className="mb-8 flex flex-col items-center text-center">
-              <CatMark size={56} />
+              {/* The mark and title follow the selected model, so the empty
+                  page answers "who am I about to talk to" — the cat only
+                  fronts it while no model is available. */}
+              {!tempMode && modelSel
+                ? <ModelAvatar info={modelSel} size={56} />
+                : <CatMark size={56} />}
               <h2 className="mt-4 text-xl font-semibold tracking-tight text-tx">
-                {tempMode ? '临时对话' : bootstrap?.brand || 'Cat AgentUI'}
+                {tempMode
+                  ? '临时对话'
+                  : modelSel?.displayName || bootstrap?.brand || 'Cat AgentUI'}
               </h2>
-              <p className="mt-1.5 text-[13px] text-tx2">
+              {!tempMode && modelSel?.description && (
+                <p className="mt-1.5 max-w-md text-[13px] leading-relaxed text-tx2">{modelSel.description}</p>
+              )}
+              <p className="mt-1.5 text-[13px] text-tx3">
                 {tempMode
                   ? '这段对话不会写入历史记录,闲置 24 小时后自动删除;之后也可以随时保存为正式对话。'
                   : '开始一段新对话,或从左侧继续此前的记录。'}

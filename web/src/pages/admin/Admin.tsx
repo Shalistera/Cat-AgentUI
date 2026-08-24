@@ -6,6 +6,7 @@ import Dashboard from './Dashboard';
 import Users from './Users';
 import Providers from './Providers';
 import Models from './Models';
+import ModelDetail from './ModelDetail';
 import ModelOrder from './ModelOrder';
 import Mcp from './Mcp';
 import AppSettings from './AppSettings';
@@ -62,6 +63,7 @@ export default function Admin() {
           <Route path="users" element={<Users />} />
           <Route path="providers" element={<Providers />} />
           <Route path="models" element={<Models />} />
+          <Route path="models/:id" element={<ModelDetail />} />
           <Route path="model-order" element={<ModelOrder />} />
           <Route path="mcp" element={<Mcp />} />
           <Route path="settings" element={<AppSettings />} />

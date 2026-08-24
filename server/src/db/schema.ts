@@ -53,6 +53,9 @@ export const models = sqliteTable('models', {
   providerId: text('provider_id').notNull().references(() => providers.id, { onDelete: 'cascade' }),
   modelId: text('model_id').notNull(), // API model name, e.g. gpt-4o
   displayName: text('display_name'),
+  // Admin-written blurb shown to users under the model name on the new-chat
+  // page, e.g. “现在世界上最强的模型,但是很贵”. null = say nothing.
+  description: text('description'),
   vision: integer('vision').notNull().default(1),
   tools: integer('tools').notNull().default(1),
   imageGen: integer('image_gen').notNull().default(0),

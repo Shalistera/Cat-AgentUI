@@ -32,6 +32,7 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
     providerId: m.providerId,
     modelId: m.modelId,
     displayName: m.displayName,
+    description: m.description,
     vision: !!m.vision,
     tools: !!m.tools,
     imageGen: !!m.imageGen,
@@ -149,6 +150,7 @@ const modelsAddSchema = z.object({
 
 const modelPatchSchema = z.object({
   displayName: z.string().max(200).nullish(),
+  description: z.string().max(500).nullish(),
   vision: z.boolean().optional(),
   tools: z.boolean().optional(),
   imageGen: z.boolean().optional(),
@@ -496,6 +498,7 @@ export async function providerRoutes(app: FastifyInstance) {
     }
     const patch: Partial<typeof schema.models.$inferInsert> = {};
     if (d.displayName !== undefined) patch.displayName = d.displayName || null;
+    if (d.description !== undefined) patch.description = d.description?.trim() || null;
     if (d.vision !== undefined) patch.vision = d.vision ? 1 : 0;
     if (d.tools !== undefined) patch.tools = d.tools ? 1 : 0;
     if (d.imageGen !== undefined) patch.imageGen = d.imageGen ? 1 : 0;
@@ -544,6 +547,7 @@ export async function providerRoutes(app: FastifyInstance) {
       id: schema.models.id,
       modelId: schema.models.modelId,
       displayName: schema.models.displayName,
+      description: schema.models.description,
       vision: schema.models.vision,
       tools: schema.models.tools,
       imageGen: schema.models.imageGen,
@@ -567,6 +571,7 @@ export async function providerRoutes(app: FastifyInstance) {
       id: r.id,
       modelId: r.modelId,
       displayName: r.displayName || r.modelId,
+      description: r.description,
       vision: !!r.vision,
       tools: !!r.tools,
       imageGen: !!r.imageGen,

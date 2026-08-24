@@ -96,6 +96,8 @@ export interface SearchResult {
 
 export interface ModelInfo {
   id: string; modelId: string; displayName: string;
+  /** Admin-written blurb shown under the model name on the new-chat page. */
+  description: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; nativeSearch: boolean; isDefault: boolean;
   /** Admin default for the 联网搜索 toggle on new chats with this model. */
   defaultWebSearch: boolean;
@@ -194,6 +196,8 @@ export type ModelAccessMode = 'shared' | 'restricted';
 
 export interface AdminModel {
   id: string; providerId: string; modelId: string; displayName: string | null;
+  /** Blurb shown to users on the new-chat page; null = not set. */
+  description: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; enabled: boolean;
   isDefault: boolean; sortOrder: number;
   defaultWebSearch: boolean;
