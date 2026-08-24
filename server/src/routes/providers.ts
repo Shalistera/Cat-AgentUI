@@ -50,6 +50,8 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
     isDefault: !!m.isDefault,
     sortOrder: m.sortOrder,
     defaultWebSearch: !!m.defaultWebSearch,
+    inputPrice: m.inputPrice,
+    outputPrice: m.outputPrice,
   };
 }
 
@@ -189,6 +191,9 @@ const modelPatchSchema = z.object({
   defaultWebSearch: z.boolean().optional(),
   accessMode: z.enum(['shared', 'restricted']).optional(),
   allowedUserIds: z.array(z.string().max(64)).max(500).optional(),
+  // Per-1M-token prices in the site currency; null = unknown (no cost shown)
+  inputPrice: z.number().min(0).max(1e6).nullish(),
+  outputPrice: z.number().min(0).max(1e6).nullish(),
 });
 
 // Full desired ordering, first item on top. Ids that no longer exist are
@@ -566,6 +571,8 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.sortOrder !== undefined) patch.sortOrder = d.sortOrder;
     if (d.defaultWebSearch !== undefined) patch.defaultWebSearch = d.defaultWebSearch ? 1 : 0;
     if (d.accessMode !== undefined) patch.accessMode = d.accessMode;
+    if (d.inputPrice !== undefined) patch.inputPrice = d.inputPrice;
+    if (d.outputPrice !== undefined) patch.outputPrice = d.outputPrice;
 
     if (Object.keys(patch).length) {
       db.update(schema.models).set(patch).where(eq(schema.models.id, id)).run();

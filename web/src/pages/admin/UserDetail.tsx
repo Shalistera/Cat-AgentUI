@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import { api, errMsg, fmtDate, fmtTokens } from '../../api';
+import { api, errMsg, fmtCost, fmtDate, fmtTokens } from '../../api';
 import { Badge, Button, Card, EmptyState, SegmentedControl, Spinner, Stat, toast } from '../../components/ui';
 import { TokensBarChart } from '../../components/TokensBarChart';
 import type { AdminUser, AdminUserUsage } from '../../types';
@@ -105,8 +105,9 @@ export default function UserDetail() {
     );
   }
 
-  const { totals, byDay, byModel, byKind } = usage;
+  const { totals, byDay, byModel, byKind, currency } = usage;
   const activeDays = byDay.filter((d) => d.requests > 0).length;
+  const showCost = totals.cost != null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
@@ -141,9 +142,12 @@ export default function UserDetail() {
 
       {/* hold previous render at reduced opacity while refetching */}
       <div className={`space-y-5 transition-opacity ${busy ? 'opacity-60' : ''}`}>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className={`grid grid-cols-2 gap-3 ${showCost ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
           <Stat label="总 Tokens" value={fmtTokens(totals.totalTokens)}
             hint={`输入 ${fmtTokens(totals.promptTokens)} · 输出 ${fmtTokens(totals.completionTokens)}`} />
+          {showCost && (
+            <Stat label="折算成本" value={fmtCost(totals.cost, currency)} hint="按各模型当前单价估算" />
+          )}
           <Stat label="请求次数" value={totals.requests.toLocaleString()} />
           <Stat label="生成图片" value={totals.images.toLocaleString()} />
           <Stat label="活跃天数" value={`${activeDays} / ${days}`} />
@@ -162,7 +166,8 @@ export default function UserDetail() {
                 label: m.model,
                 mono: true,
                 tokens: m.totalTokens,
-                detail: `${m.requests.toLocaleString()} 次请求`,
+                detail: `${m.requests.toLocaleString()} 次请求${
+                  showCost && m.cost != null ? ` · ${fmtCost(m.cost, currency)}` : ''}`,
               }))}
             />
           </Card>

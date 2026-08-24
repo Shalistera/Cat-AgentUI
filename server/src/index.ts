@@ -21,6 +21,7 @@ import { eventRoutes } from './routes/events.js';
 import { searchRoutes } from './routes/search.js';
 import { initKnowledgeIndex } from './knowledge.js';
 import { startRetentionSweeper } from './retention.js';
+import { startBackupScheduler } from './backup.js';
 import { reconcileStorageMetadata } from './storage.js';
 import { PasswordQueueFullError } from './crypto.js';
 import {
@@ -134,6 +135,7 @@ async function main() {
   await app.listen({ port: config.port, host: config.host });
   console.log(`🐈‍⬛ Cat-AgentUI listening on http://${config.host}:${config.port}`);
   startRetentionSweeper();
+  startBackupScheduler();
 
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     process.on(sig, async () => {

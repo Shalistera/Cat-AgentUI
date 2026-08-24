@@ -79,6 +79,10 @@ export const models = sqliteTable('models', {
   enabled: integer('enabled').notNull().default(1),
   isDefault: integer('is_default').notNull().default(0),
   sortOrder: integer('sort_order').notNull().default(0),
+  // Admin-set price per 1M tokens, in the site's display currency (see the
+  // usage_currency app setting). null = not priced → usage shows tokens only.
+  inputPrice: real('input_price'),
+  outputPrice: real('output_price'),
   // Admin-set default for the composer's 联网搜索 toggle on NEW chats with this
   // model. Only takes effect when search is actually available to the model
   // (Vertex native search or the designated search MCP).

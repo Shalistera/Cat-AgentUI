@@ -133,6 +133,13 @@ export function fmtTokens(n: number | null | undefined): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
+/** Money from the usage endpoints — precision follows magnitude. */
+export function fmtCost(n: number | null | undefined, currency: string): string {
+  if (n == null) return '—';
+  const digits = n >= 100 ? 1 : n >= 1 ? 2 : 4;
+  return `${currency}${n.toFixed(digits)}`;
+}
+
 export function fmtTime(ts: number): string {
   const d = new Date(ts);
   const today = new Date();

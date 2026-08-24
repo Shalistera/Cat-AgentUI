@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Archive, ArchiveRestore, Ghost, MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon,
   Presentation, ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
-  MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight,
+  MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { api } from '../api';
@@ -92,6 +92,16 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
     toast(chat.archived ? '已取消归档' : '已归档,可在侧栏底部或搜索 archived:true 找回', 'ok');
   }
 
+  function exportChat(format: 'markdown' | 'json') {
+    setMenuOpen(false);
+    // Plain navigation download: the attachment disposition keeps the page put.
+    const a = document.createElement('a');
+    a.href = `/api/chats/${chat.id}/export?format=${format}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   async function doRename() {
     const t = title.trim();
     setRenaming(false);
@@ -148,6 +158,12 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
             <button className={menuItem} onClick={toggleArchive}>
               {chat.archived ? <ArchiveRestore size={12} /> : <Archive size={12} />}
               {chat.archived ? '取消归档' : '归档'}
+            </button>
+            <button className={menuItem} onClick={() => exportChat('markdown')}>
+              <FileDown size={12} />导出 Markdown
+            </button>
+            <button className={menuItem} onClick={() => exportChat('json')}>
+              <FileJson size={12} />导出 JSON
             </button>
             {(moveTargets.length > 0 || chat.projectId) && (
               <>

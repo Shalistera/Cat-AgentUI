@@ -631,6 +631,90 @@ export async function chatRoutes(app: FastifyInstance) {
     };
   });
 
+  // Download a conversation as a file. Markdown renders the branch currently
+  // on screen (what the user thinks of as "the conversation"); JSON dumps the
+  // whole tree so nothing is lost to branch switching.
+  app.get('/api/chats/:id/export', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const format = (req.query as { format?: string }).format === 'json' ? 'json' : 'markdown';
+    const c = db.select().from(schema.chats)
+      .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+    if (!c) return reply.code(404).send({ error: '对话不存在' });
+    const msgs = allChatMessages(id);
+
+    const title = c.title.trim() || '未命名对话';
+    const safeName = title.replace(/[\\/:*?"<>| -]/g, '_').slice(0, 60) || 'chat';
+    const stamp = new Date(c.updatedAt);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fmtTs = (t: number) => {
+      const d = new Date(t);
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+
+    if (format === 'json') {
+      const payload = {
+        exportedAt: now(),
+        chat: {
+          ...chatSummary(c),
+          systemPrompt: c.systemPrompt,
+          currentLeafId: resolveLeafId(msgs, c.currentLeafId),
+        },
+        messages: msgs.map(messageDto),
+      };
+      reply.header('content-type', 'application/json; charset=utf-8');
+      reply.header('content-disposition',
+        `attachment; filename="chat.json"; filename*=UTF-8''${encodeURIComponent(`${safeName}.json`)}`);
+      return reply.send(JSON.stringify(payload, null, 2));
+    }
+
+    const chain = ancestorChain(msgs, resolveLeafId(msgs, c.currentLeafId));
+    const lines: string[] = [`# ${title}`, ''];
+    lines.push(`> 导出自 Cat-AgentUI · ${fmtTs(stamp.getTime())}`);
+    if (c.systemPrompt?.trim()) {
+      lines.push('', '## 系统提示', '', c.systemPrompt.trim());
+    }
+    for (const m of chain) {
+      const who = m.role === 'user' ? '用户' : `助手${m.model ? ` · ${m.model}` : ''}`;
+      lines.push('', '---', '', `## ${who}(${fmtTs(m.createdAt)})`, '');
+      for (const p of parseParts(m.parts)) {
+        switch (p.type) {
+          case 'text':
+            if (p.text.trim()) lines.push(p.text.trim(), '');
+            break;
+          case 'reasoning':
+            if (p.text.trim()) {
+              lines.push('<details><summary>思考过程</summary>', '', p.text.trim(), '', '</details>', '');
+            }
+            break;
+          case 'image':
+            lines.push(`*[图片${p.imageId ? '(模型生成)' : '(附件)'}]*`, '');
+            break;
+          case 'file':
+            lines.push(`*[附件: ${p.name ?? p.uploadId}]*`, '');
+            break;
+          case 'tool_call':
+            lines.push(`<details><summary>工具调用: ${p.name}</summary>`, '', '```json', p.args, '```', '', '</details>', '');
+            break;
+          case 'tool_result':
+            lines.push(`<details><summary>工具结果: ${p.name}${p.isError ? '(出错)' : ''}</summary>`, '', '```', p.result, '```', '', '</details>', '');
+            break;
+          case 'grounding':
+            if (p.sources.length) {
+              lines.push('搜索来源:', ...p.sources.map((s) => `- [${s.title || s.uri}](${s.uri})`), '');
+            }
+            break;
+          default:
+            break; // followups are UI sugar, not conversation content
+        }
+      }
+    }
+    reply.header('content-type', 'text/markdown; charset=utf-8');
+    reply.header('content-disposition',
+      `attachment; filename="chat.md"; filename*=UTF-8''${encodeURIComponent(`${safeName}.md`)}`);
+    return reply.send(lines.join('\n'));
+  });
+
   app.patch('/api/chats/:id', async (req, reply) => {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };

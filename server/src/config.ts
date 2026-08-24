@@ -96,6 +96,10 @@ export const config = {
   passwordQueueMax: intEnv('PASSWORD_QUEUE_MAX', 32, 1, 500),
 
   maxToolIterations: intEnv('MAX_TOOL_ITERATIONS', 10, 1, 50),
+
+  // Scheduled SQLite snapshots (see backup.ts). 0 hours = disabled.
+  backupIntervalHours: intEnv('BACKUP_INTERVAL_HOURS', 24, 0, 720),
+  backupKeep: intEnv('BACKUP_KEEP', 14, 1, 365),
 };
 
 for (const d of ['', 'uploads', 'images']) {

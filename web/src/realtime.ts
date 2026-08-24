@@ -1,4 +1,4 @@
-import { useModels } from './store';
+import { useAnnouncement, useModels } from './store';
 
 // A single long-lived /api/events stream per signed-in session. The server
 // sends bare invalidation events (no payload); we answer by refetching the
@@ -29,6 +29,8 @@ function dispatch(event: string) {
     const s = useModels.getState();
     // Not loaded yet = nothing stale; the first consumer will fetch fresh.
     if (s.loaded) void s.load(true).catch(() => { /* next event retries */ });
+  } else if (event === 'announcement-updated') {
+    void useAnnouncement.getState().load(true).catch(() => { /* next event retries */ });
   }
 }
 

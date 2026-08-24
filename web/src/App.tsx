@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth, useHtmlPreview, useUi } from './store';
+import { Megaphone, X } from 'lucide-react';
+import { useAnnouncement, useAuth, useHtmlPreview, useUi } from './store';
 import { onUnauthorized } from './api';
 import { startRealtime, stopRealtime } from './realtime';
 import { Toaster, ConfirmHost, Spinner } from './components/ui';
@@ -16,6 +17,25 @@ import ProjectsPage from './pages/Projects';
 import Ppt from './pages/Ppt';
 import Settings from './pages/Settings';
 import Admin from './pages/admin/Admin';
+
+function AnnouncementBanner() {
+  const { text, updatedAt, dismissedAt, load, dismiss } = useAnnouncement();
+  useEffect(() => { void load().catch(() => { /* banner just stays hidden */ }); }, [load]);
+  if (!text || updatedAt === dismissedAt) return null;
+  return (
+    <div className="flex items-start gap-2 border-b border-line bg-acc/10 px-4 py-2 text-[13px] text-tx">
+      <Megaphone size={15} className="mt-0.5 shrink-0 text-acc" />
+      <p className="min-w-0 flex-1 whitespace-pre-wrap leading-relaxed">{text}</p>
+      <button
+        title="关闭公告(内容更新后会再次显示)"
+        className="shrink-0 cursor-pointer rounded-sm p-0.5 text-tx3 transition-colors hover:bg-bg2 hover:text-tx"
+        onClick={dismiss}
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
 
 function Shell() {
   const { user, loaded } = useAuth();
@@ -49,6 +69,7 @@ function Shell() {
       {/* Content sits on the raised white surface; the grey canvas stays behind
           the rail, which is what separates navigation from work. */}
       <main className="relative flex min-w-0 flex-1 flex-col bg-bg1">
+        <AnnouncementBanner />
         <Outlet />
       </main>
       <HtmlPreviewPanel />

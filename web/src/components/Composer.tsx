@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon,
-  ListPlus, Loader2, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
+  ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAuth, useMcp, useModels, useUi } from '../store';
 import { api, errMsg, uploadFile } from '../api';
@@ -9,6 +9,7 @@ import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
 import { SortableList } from './SortableList';
 import { Button, Field, Popover, toast, Toggle } from './ui';
+import { sttSupported, startDictation, type SpeechRecognitionLike } from '../speech';
 import type { ModelInfo, ReasoningEffort, ReasoningLevel, User } from '../types';
 
 /* Active tool buttons build their palette on top of the colourless shape base,
@@ -119,6 +120,24 @@ interface ComposerProps {
 export function Composer(props: ComposerProps) {
   const { streaming, model } = props;
   const [text, setText] = useState('');
+
+  // —— 语音输入 —— dictation is all in-browser (Chrome/Edge); the transcript
+  // appends to whatever was already typed when the mic went live.
+  const [listening, setListening] = useState(false);
+  const dictationRef = useRef<SpeechRecognitionLike | null>(null);
+  const dictationBaseRef = useRef('');
+  function toggleDictation() {
+    if (listening) { dictationRef.current?.stop(); return; }
+    dictationBaseRef.current = text;
+    const rec = startDictation(
+      (t) => setText(dictationBaseRef.current + t),
+      () => setListening(false),
+    );
+    if (!rec) { toast('当前浏览器不支持语音输入,请使用 Chrome / Edge', 'err'); return; }
+    dictationRef.current = rec;
+    setListening(true);
+  }
+  useEffect(() => () => { dictationRef.current?.stop(); }, []);
   const [atts, setAtts] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -793,6 +812,18 @@ export function Composer(props: ComposerProps) {
             </Popover>
           )}
 
+          {sttSupported() && !props.disabled && (
+            <button
+              title={listening ? '停止语音输入' : '语音输入(浏览器本地识别,无服务器开销)'}
+              className={`flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border shadow-xs transition-colors ${
+                listening
+                  ? 'animate-pulse border-err/40 bg-err/10 text-err'
+                  : 'border-line2 bg-bg1 text-tx2 hover:bg-bg2 hover:text-tx'}`}
+              onClick={toggleDictation}
+            >
+              <Mic size={15} />
+            </button>
+          )}
           {streaming ? (
             <>
               {props.onEnqueue && (

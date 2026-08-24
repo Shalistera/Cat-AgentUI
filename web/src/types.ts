@@ -170,6 +170,8 @@ export interface DeckDetail extends DeckSummary { spec: DeckSpec }
 export interface UsageTotals {
   promptTokens: number; completionTokens: number; totalTokens: number;
   images: number; requests: number; activeUsers?: number;
+  /** 按当前模型单价折算的成本;null = 未配置任何单价。 */
+  cost?: number | null;
 }
 export interface UsageByDay {
   day: string; promptTokens: number; completionTokens: number;
@@ -178,13 +180,19 @@ export interface UsageByDay {
 export interface UsageByUser {
   userId: string; username: string; promptTokens: number; completionTokens: number;
   totalTokens: number; images: number; requests: number;
+  /** null = 没有任何模型配置了单价,前端隐藏成本列。 */
+  cost?: number | null;
 }
-export interface UsageByModel { model: string; totalTokens: number; requests: number }
+export interface UsageByModel {
+  model: string; totalTokens: number; requests: number;
+  cost?: number | null;
+}
 export interface UsageByKind { kind: string; totalTokens: number; requests: number; images: number }
 
 export interface AdminUsage {
   byDay: UsageByDay[]; byUser: UsageByUser[]; byModel: UsageByModel[];
   byKind: UsageByKind[]; totals: UsageTotals;
+  currency: string;
 }
 /** /api/admin/usage/user/:id — one user's usage over the selected window. */
 export interface AdminUserUsage {
@@ -193,10 +201,12 @@ export interface AdminUserUsage {
   byModel: UsageByModel[];
   byKind: UsageByKind[];
   totals: UsageTotals;
+  currency: string;
 }
 
 export interface MyUsage {
   byDay: UsageByDay[]; byModel: UsageByModel[]; totals: UsageTotals;
+  currency: string;
   /** limit null = 不限额;used 为本月已用 tokens。 */
   quota: { limit: number | null; used: number };
 }
@@ -224,6 +234,9 @@ export interface AdminModel {
   defaultWebSearch: boolean;
   accessMode: ModelAccessMode;
   allowedUserIds: string[];
+  /** 每 100 万 token 的单价(站点货币);null = 未配置,不计成本。 */
+  inputPrice: number | null;
+  outputPrice: number | null;
   reasoning: {
     mode: ReasoningMode;
     /** What the model offers right now, under the current mode. */
@@ -277,6 +290,10 @@ export interface AppSettings {
   followupEnabled: boolean;
   /** 快速追问生成模型(models.id),null = 跟随当前对话的模型。 */
   followupModelId: string | null;
+  /** 站内公告,空字符串 = 不显示横幅。 */
+  announcement: string;
+  /** 成本显示所用的货币符号,默认 $。 */
+  usageCurrency: string;
 }
 
 // SSE stream handler callbacks

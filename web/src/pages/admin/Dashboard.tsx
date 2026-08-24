@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, fmtTokens } from '../../api';
+import { api, fmtCost, fmtTokens } from '../../api';
 import { Spinner, Card, Stat, SegmentedControl, Td, Th, toast } from '../../components/ui';
 import { TokensBarChart } from '../../components/TokensBarChart';
 import type { AdminUsage } from '../../types';
@@ -37,7 +37,9 @@ export default function Dashboard() {
     return <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>;
   }
 
-  const { totals, byDay, byUser, byModel, byKind } = usage;
+  const { totals, byDay, byUser, byModel, byKind, currency } = usage;
+  // Cost columns only exist once at least one model has a configured price.
+  const showCost = totals.cost != null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
@@ -56,8 +58,11 @@ export default function Dashboard() {
 
       {/* hold previous render at reduced opacity while refetching */}
       <div className={`space-y-5 transition-opacity ${busy ? 'opacity-60' : ''}`}>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className={`grid grid-cols-2 gap-3 ${showCost ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
           <Stat label="总 Tokens" value={fmtTokens(totals.totalTokens)} />
+          {showCost && (
+            <Stat label="折算成本" value={fmtCost(totals.cost, currency)} hint="按各模型当前单价估算" />
+          )}
           <Stat label="请求次数" value={totals.requests.toLocaleString()} />
           <Stat label="生成图片" value={totals.images.toLocaleString()} />
           <Stat label="活跃用户" value={(totals.activeUsers ?? 0).toLocaleString()} />
@@ -77,6 +82,7 @@ export default function Dashboard() {
                   <tr>
                     <Th>用户</Th>
                     <Th className="text-right">Tokens</Th>
+                    {showCost && <Th className="text-right">成本</Th>}
                     <Th className="text-right">请求</Th>
                     <Th className="text-right">图片</Th>
                   </tr>
@@ -86,6 +92,7 @@ export default function Dashboard() {
                     <tr key={u.userId} className="group transition-colors hover:bg-bg2/60">
                       <Td className="font-medium text-tx">{u.username}</Td>
                       <Td className="text-right tabular-nums">{fmtTokens(u.totalTokens)}</Td>
+                      {showCost && <Td className="text-right tabular-nums">{fmtCost(u.cost, currency)}</Td>}
                       <Td className="text-right tabular-nums">{u.requests.toLocaleString()}</Td>
                       <Td className="text-right tabular-nums">{u.images.toLocaleString()}</Td>
                     </tr>
@@ -106,6 +113,7 @@ export default function Dashboard() {
                   <tr>
                     <Th>模型</Th>
                     <Th className="text-right">Tokens</Th>
+                    {showCost && <Th className="text-right">成本</Th>}
                     <Th className="text-right">次数</Th>
                   </tr>
                 </thead>
@@ -116,6 +124,7 @@ export default function Dashboard() {
                         <div className="max-w-[200px] truncate font-mono text-tx" title={m.model}>{m.model}</div>
                       </Td>
                       <Td className="text-right tabular-nums">{fmtTokens(m.totalTokens)}</Td>
+                      {showCost && <Td className="text-right tabular-nums">{fmtCost(m.cost, currency)}</Td>}
                       <Td className="text-right tabular-nums">{m.requests.toLocaleString()}</Td>
                     </tr>
                   ))}

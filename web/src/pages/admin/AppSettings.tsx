@@ -1,8 +1,85 @@
 import { useEffect, useState } from 'react';
-import { api } from '../../api';
+import { api, fmtTime } from '../../api';
 import { useAuth } from '../../store';
-import { Button, Card, Field, Input, Select, Spinner, ToggleRow, toast } from '../../components/ui';
+import { Button, Card, Field, Input, Select, Spinner, Textarea, ToggleRow, toast } from '../../components/ui';
 import type { AppSettings as AppSettingsDto, ModelInfo } from '../../types';
+
+interface BackupInfo { filename: string; size: number; createdAt: number }
+interface BackupsDto { backups: BackupInfo[]; intervalHours: number; keep: number }
+
+function fmtBytes(n: number): string {
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function BackupsCard() {
+  const [data, setData] = useState<BackupsDto | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get<BackupsDto>('/api/admin/backups')
+      .then(setData)
+      .catch((e) => toast(e instanceof Error ? e.message : '加载备份列表失败', 'err'));
+  }, []);
+
+  async function backupNow() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await api.post<{ backup: BackupInfo; backups: BackupInfo[] }>('/api/admin/backups');
+      setData((d) => (d ? { ...d, backups: r.backups } : d));
+      toast(`已生成快照 ${r.backup.filename}`, 'ok');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '备份失败', 'err');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const schedule = data
+    ? data.intervalHours > 0
+      ? `每 ${data.intervalHours} 小时自动快照一次,保留最近 ${data.keep} 份(BACKUP_INTERVAL_HOURS / BACKUP_KEEP)。`
+      : '自动快照已通过 BACKUP_INTERVAL_HOURS=0 停用,仅可手动备份。'
+    : '';
+
+  return (
+    <Card
+      title="数据库备份"
+      desc={`SQLite 在线快照,存放于 data/backups/,不影响服务运行。${schedule}`}
+    >
+      <div className="space-y-4">
+        <p className="text-xs text-tx3">
+          快照只包含数据库(对话、设置、加密后的密钥)。附件与生成图片在 data/uploads 与
+          data/images 目录,请连同 .env(SECRET_KEY)一起做整目录备份;缺少对应的
+          SECRET_KEY 时快照中的密钥无法解密。
+        </p>
+        {data && data.backups.length > 0 ? (
+          <ul className="divide-y divide-line rounded-lg border border-line">
+            {data.backups.map((b) => (
+              <li key={b.filename} className="flex items-center gap-3 px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-tx2">{b.filename}</span>
+                <span className="shrink-0 text-xs text-tx3">{fmtBytes(b.size)}</span>
+                <span className="shrink-0 text-xs text-tx3">{fmtTime(b.createdAt)}</span>
+                <a
+                  className="shrink-0 text-xs text-acc hover:underline"
+                  href={`/api/admin/backups/${encodeURIComponent(b.filename)}`}
+                >下载</a>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-tx3">{data ? '还没有任何快照。' : '加载中…'}</p>
+        )}
+        <div className="flex justify-end border-t border-line pt-4">
+          <Button variant="primary" disabled={busy || !data} onClick={backupNow}>
+            {busy && <Spinner className="h-3.5 w-3.5" />}立即备份
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 export default function AppSettings() {
   const [loaded, setLoaded] = useState(false);
@@ -17,6 +94,8 @@ export default function AppSettings() {
   const [titleModel, setTitleModel] = useState('');
   const [followupEnabled, setFollowupEnabled] = useState(true);
   const [followupModel, setFollowupModel] = useState('');
+  const [announcement, setAnnouncement] = useState('');
+  const [usageCurrency, setUsageCurrency] = useState('$');
   const [textModels, setTextModels] = useState<ModelInfo[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -30,6 +109,8 @@ export default function AppSettings() {
     setTitleModel(r.titleModelId ?? '');
     setFollowupEnabled(r.followupEnabled ?? true);
     setFollowupModel(r.followupModelId ?? '');
+    setAnnouncement(r.announcement ?? '');
+    setUsageCurrency(r.usageCurrency ?? '$');
   }
 
   useEffect(() => {
@@ -64,6 +145,8 @@ export default function AppSettings() {
         titleModelId: titleModel || null,
         followupEnabled,
         followupModelId: followupModel || null,
+        announcement: announcement.trim(),
+        usageCurrency: usageCurrency.trim() || '$',
       });
       apply(r);
       toast('已保存', 'ok');
@@ -96,6 +179,17 @@ export default function AppSettings() {
             label="开放注册" desc="关闭后仅管理员可创建账号"
             checked={signupEnabled} onChange={setSignupEnabled}
           />
+
+          <Field
+            label="站内公告"
+            hint="留空则不显示。保存后所有已登录用户的页面顶部会立即出现横幅;用户可自行关闭,公告内容再次修改后会重新弹出。"
+          >
+            <Textarea
+              rows={3} maxLength={4000} value={announcement}
+              onChange={(e) => setAnnouncement(e.target.value)}
+              placeholder="例如:今晚 23:00-23:30 系统维护,期间服务暂不可用。"
+            />
+          </Field>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
@@ -140,6 +234,16 @@ export default function AppSettings() {
               type="number" min={0} step={1} inputMode="numeric"
               value={quotaTokens} onChange={(e) => setQuotaTokens(e.target.value)}
               placeholder="0"
+            />
+          </Field>
+
+          <Field
+            label="成本货币符号"
+            hint="用量看板成本列显示的货币符号(如 ¥、$)。单价在各模型详情页配置;没有任何模型配置单价时不显示成本。"
+          >
+            <Input
+              className="max-w-24" value={usageCurrency} maxLength={8}
+              onChange={(e) => setUsageCurrency(e.target.value)} placeholder="$"
             />
           </Field>
 
@@ -199,6 +303,8 @@ export default function AppSettings() {
           </div>
         </div>
       </Card>
+
+      <BackupsCard />
     </div>
   );
 }

@@ -208,6 +208,39 @@ export interface ChatHandoffPayload {
 }
 export const chatHandoff: { payload: ChatHandoffPayload | null } = { payload: null };
 
+// ---- announcement banner ----
+// Server-set notice shown to every signed-in user. Dismissal is per content
+// version: localStorage remembers the updatedAt that was dismissed, so an
+// edited announcement re-surfaces for everyone.
+const ANNOUNCEMENT_DISMISS_KEY = 'cat-announcement-dismissed';
+
+interface AnnouncementState {
+  text: string;
+  updatedAt: number;
+  loaded: boolean;
+  load(force?: boolean): Promise<void>;
+  dismiss(): void;
+  /** Visible = non-empty and this version not yet dismissed. */
+  dismissedAt: number;
+}
+
+export const useAnnouncement = create<AnnouncementState>((set, get) => ({
+  text: '',
+  updatedAt: 0,
+  loaded: false,
+  dismissedAt: Number(localStorage.getItem(ANNOUNCEMENT_DISMISS_KEY) ?? 0),
+  async load(force) {
+    if (get().loaded && !force) return;
+    const r = await api.get<{ text: string; updatedAt: number }>('/api/announcement');
+    set({ text: r.text, updatedAt: r.updatedAt, loaded: true });
+  },
+  dismiss() {
+    const at = get().updatedAt;
+    localStorage.setItem(ANNOUNCEMENT_DISMISS_KEY, String(at));
+    set({ dismissedAt: at });
+  },
+}));
+
 // ---- models & mcp servers (shared caches) ----
 interface ModelsState {
   models: ModelInfo[];

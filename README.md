@@ -21,6 +21,12 @@
 - **多用户**:首个注册用户自动成为管理员;管理端可建用户、停用、重置密码;可关闭开放注册
 - **用量看板**:管理员可查看每用户/每模型/每日的 tokens、请求数与绘图量;用户可见自己的用量
 - **高级聊天体验**:Markdown、代码高亮 + 一键复制、KaTeX 公式、GFM 表格、图片理解(视觉模型)、编辑重发、重新生成、自动标题
+- **对话导出**:侧栏菜单一键导出为 Markdown(当前分支)或 JSON(完整消息树)
+- **语音**:语音输入(Chrome/Edge)与回复朗读,全部使用浏览器本地能力,零服务器开销
+- **站内公告**:管理员发布横幅公告,所有登录用户实时可见,可自行关闭
+- **成本折算**:按模型配置每百万 tokens 单价后,用量看板与个人用量页显示折算费用
+- **自动备份**:内置 SQLite 在线快照定时任务 + 轮转,管理后台可手动备份与下载
+- **PWA**:附带清单与全套图标,手机可「添加到主屏幕」
 - **安全**:异步有界 scrypt 队列、HttpOnly 会话 Cookie、CSRF 防护、登录限速、MCP capability ACL、API Key AES-256-GCM 加密存储且永不回传前端
 - **资源保护**:附件/上下文硬预算、按用户与全局存储配额、对话/绘图并发闸门、Provider 图片响应大小与格式校验
 
@@ -84,6 +90,8 @@ npx pm2 save
 | `PASSWORD_CONCURRENCY` | scrypt 同时执行数 | `2` |
 | `PASSWORD_QUEUE_MAX` | scrypt 等待队列长度 | `32` |
 | `MAX_TOOL_ITERATIONS` | 单次回复最多 MCP 工具轮数 | `10` |
+| `BACKUP_INTERVAL_HOURS` | 数据库自动快照间隔(0 = 关闭自动备份) | `24` |
+| `BACKUP_KEEP` | 快照保留份数,超出自动轮转删除 | `14` |
 
 ### Vertex Gemini 原生联网搜索
 
@@ -121,7 +129,7 @@ node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即
 ## 🗄️ 数据与迁移
 
 - 数据库为 SQLite(WAL 模式),文件在 `data/cat-agentui.db`,10-20 人并发完全够用;schema 由 [Drizzle ORM](https://orm.drizzle.team) 管理,迁移文件在 `server/drizzle/`
-- 备份:直接备份 `data/` 目录 + `.env`(密钥用 `SECRET_KEY` 加密,两者需成对保存)
+- 备份:服务每 24 小时自动做一次 SQLite 在线快照到 `data/backups/`(保留最近 14 份,可在管理后台手动备份/下载);快照只含数据库,附件与生成图片仍需连同 `.env` 一起做 `data/` 整目录备份(密钥用 `SECRET_KEY` 加密,两者需成对保存)
 - 导出:`npm run db:export -w server` 生成全量 JSON,便于日后迁移到 PostgreSQL 等
 
 ### 从 Open WebUI 迁移

@@ -1,10 +1,11 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   BrainCircuit, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, GitBranch, Globe,
-  Info, Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, CircleAlert, Ban,
+  Info, Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo } from '../types';
 import { fmtDuration, fmtTime, fmtTokens } from '../api';
+import { speak, stopSpeaking, ttsSupported } from '../speech';
 import { useModels } from '../store';
 import { Markdown } from './Markdown';
 import { ModelAvatar } from './ModelAvatar';
@@ -23,6 +24,28 @@ function CopyBtn({ text, size = 12 }: { text: string; size?: number }) {
       })}
     >
       {copied ? <Check size={size} className="text-ok" /> : <Copy size={size} />}
+    </button>
+  );
+}
+
+/** 朗读回复 — browser speechSynthesis, so it costs nothing and works offline. */
+function SpeakBtn({ text }: { text: string }) {
+  const [speaking, setSpeaking] = useState(false);
+  const speakingRef = useRef(false);
+  speakingRef.current = speaking;
+  // Leaving the page mid-read should stop the voice, not orphan it.
+  useEffect(() => () => { if (speakingRef.current) stopSpeaking(); }, []);
+  if (!ttsSupported() || !text) return null;
+  return (
+    <button
+      title={speaking ? '停止朗读' : '朗读回复(使用浏览器语音)'}
+      className={`${iconBtn} ${speaking ? 'text-acc' : ''}`}
+      onClick={() => {
+        if (speaking) { stopSpeaking(); setSpeaking(false); }
+        else { setSpeaking(true); speak(text, () => setSpeaking(false)); }
+      }}
+    >
+      {speaking ? <VolumeX size={12} /> : <Volume2 size={12} />}
     </button>
   );
 }
@@ -536,6 +559,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             <span className="flex items-center gap-0.5">
               {siblingInfo && <SiblingSwitch info={siblingInfo} onPrev={onSiblingPrev} onNext={onSiblingNext} />}
               <CopyBtn text={plain} />
+              <SpeakBtn text={plain} />
               {onEditAssistant && !!plain && (
                 <button title="编辑回复内容(直接修改文字,不重新生成)" className={iconBtn}
                   onClick={() => { setDraft(plain); setEditing(true); }}>

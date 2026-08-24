@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { PanelLeft, Check } from 'lucide-react';
-import { api, fmtTokens } from '../api';
+import { api, fmtCost, fmtTokens } from '../api';
 import { useAuth, useUi } from '../store';
 import { Button, Input, Field, Spinner, Card, PageHeader, Stat, ToggleRow, toast } from '../components/ui';
 import { TokensBarChart } from '../components/TokensBarChart';
@@ -198,8 +198,11 @@ export default function Settings() {
               </div>
             ) : (
               <div className="space-y-6">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className={`grid grid-cols-1 gap-3 ${usage.totals.cost != null ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
                   <Stat label="总 Tokens" value={fmtTokens(usage.totals.totalTokens)} />
+                  {usage.totals.cost != null && (
+                    <Stat label="折算成本" value={fmtCost(usage.totals.cost, usage.currency)} hint="按各模型当前单价估算" />
+                  )}
                   <Stat label="请求次数" value={usage.totals.requests.toLocaleString()} />
                   <Stat label="生成图片" value={usage.totals.images.toLocaleString()} />
                 </div>

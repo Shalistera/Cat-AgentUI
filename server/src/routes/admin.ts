@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { and, asc, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
@@ -9,6 +11,9 @@ import {
   effectiveQuota, monthStartDay, monthTokens, quotaSettings,
 } from '../quota.js';
 import { CHAT_IMAGE_RETENTION_KEY, IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
+import { backupDir, isBackupFilename, listBackups, runBackup } from '../backup.js';
+import { config } from '../config.js';
+import { broadcast } from './events.js';
 import { FOLLOWUP_ENABLED_KEY, FOLLOWUP_MODEL_KEY, TITLE_MODEL_KEY } from './chats.js';
 import { unlinkStoredFiles } from '../storage.js';
 
@@ -22,6 +27,57 @@ const sums = {
   images: sql<number>`coalesce(sum(${schema.usageLog.images}), 0)`,
   requests: sql<number>`count(*)`,
 };
+
+const USAGE_CURRENCY_KEY = 'usage_currency';
+
+/**
+ * Money spent per user/model over the filtered usage rows, from the admin-set
+ * per-1M-token model prices. Returns null when no model is priced at all, so
+ * the UI can hide cost columns instead of showing a misleading 0. Uses the
+ * CURRENT prices — historical rows are revalued, not snapshotted.
+ */
+function usageCosts(where: SQL | undefined) {
+  const priced = db.select({
+    providerId: schema.models.providerId,
+    modelId: schema.models.modelId,
+    inputPrice: schema.models.inputPrice,
+    outputPrice: schema.models.outputPrice,
+  }).from(schema.models).all()
+    .filter((r) => r.inputPrice != null || r.outputPrice != null);
+  if (!priced.length) return null;
+
+  const prices = new Map<string, { input: number; output: number }>();
+  for (const r of priced) {
+    const v = { input: r.inputPrice ?? 0, output: r.outputPrice ?? 0 };
+    prices.set(`${r.providerId}:${r.modelId}`, v);
+    // Bare-name fallback for usage rows whose provider was deleted/renamed.
+    if (!prices.has(r.modelId)) prices.set(r.modelId, v);
+  }
+
+  const rows = db.select({
+    userId: schema.usageLog.userId,
+    providerId: schema.usageLog.providerId,
+    model: schema.usageLog.model,
+    promptTokens: sums.promptTokens,
+    completionTokens: sums.completionTokens,
+  }).from(schema.usageLog).where(where)
+    .groupBy(schema.usageLog.userId, schema.usageLog.providerId, schema.usageLog.model)
+    .all();
+
+  let total = 0;
+  const byModel = new Map<string, number>();
+  const byUser = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.model) continue;
+    const p = prices.get(`${r.providerId}:${r.model}`) ?? prices.get(r.model);
+    if (!p) continue;
+    const cost = (r.promptTokens * p.input + r.completionTokens * p.output) / 1e6;
+    total += cost;
+    byModel.set(r.model, (byModel.get(r.model) ?? 0) + cost);
+    byUser.set(r.userId, (byUser.get(r.userId) ?? 0) + cost);
+  }
+  return { total, byModel, byUser };
+}
 
 function parseDays(query: unknown): number {
   const raw = Number((query as Record<string, unknown> | undefined)?.days);
@@ -101,7 +157,12 @@ const settingsSchema = z.object({
   titleModelId: z.string().max(64).nullish(), // 对话标题生成模型,空 = 跟随对话模型
   followupEnabled: z.boolean().optional(), // 回答后自动生成快速追问
   followupModelId: z.string().max(64).nullish(), // 快速追问生成模型,空 = 跟随对话模型
+  announcement: z.string().max(4000).optional(), // 站内公告,空 = 不显示
+  usageCurrency: z.string().max(8).optional(), // 成本显示的货币符号,如 ¥ / $
 });
+
+const ANNOUNCEMENT_KEY = 'announcement';
+const ANNOUNCEMENT_AT_KEY = 'announcement_updated_at';
 
 export async function adminRoutes(app: FastifyInstance) {
   app.get('/api/admin/users', async (req, reply) => {
@@ -249,7 +310,15 @@ export async function adminRoutes(app: FastifyInstance) {
     }).from(schema.usageLog).where(where)
       .groupBy(schema.usageLog.kind).all();
 
-    return { days, byDay, byUser, byModel, byKind, totals };
+    const costs = usageCosts(where);
+    return {
+      days, byKind,
+      byDay,
+      byUser: byUser.map((u) => ({ ...u, cost: costs ? costs.byUser.get(u.userId) ?? 0 : null })),
+      byModel: byModel.map((m) => ({ ...m, cost: costs ? costs.byModel.get(m.model) ?? 0 : null })),
+      totals: { ...totals, cost: costs ? costs.total : null },
+      currency: getSetting(USAGE_CURRENCY_KEY, '$'),
+    };
   });
 
   app.get('/api/admin/usage/user/:id', async (req, reply) => {
@@ -267,7 +336,13 @@ export async function adminRoutes(app: FastifyInstance) {
     }).from(schema.usageLog).where(where)
       .groupBy(schema.usageLog.kind)
       .orderBy(desc(sums.totalTokens)).all();
-    return { days, byDay, byModel, byKind, totals };
+    const costs = usageCosts(where);
+    return {
+      days, byDay, byKind,
+      byModel: byModel.map((m) => ({ ...m, cost: costs ? costs.byModel.get(m.model) ?? 0 : null })),
+      totals: { ...totals, cost: costs ? costs.total : null },
+      currency: getSetting(USAGE_CURRENCY_KEY, '$'),
+    };
   });
 
   const settingsView = () => {
@@ -283,6 +358,8 @@ export async function adminRoutes(app: FastifyInstance) {
       titleModelId: getSetting(TITLE_MODEL_KEY, '') || null,
       followupEnabled: getSetting(FOLLOWUP_ENABLED_KEY, true),
       followupModelId: getSetting(FOLLOWUP_MODEL_KEY, '') || null,
+      announcement: getSetting(ANNOUNCEMENT_KEY, ''),
+      usageCurrency: getSetting(USAGE_CURRENCY_KEY, '$'),
     };
   };
 
@@ -319,6 +396,19 @@ export async function adminRoutes(app: FastifyInstance) {
       }
       setSetting(TITLE_MODEL_KEY, id ?? '');
     }
+    if (body.data.announcement !== undefined) {
+      const text = body.data.announcement.trim();
+      if (text !== getSetting(ANNOUNCEMENT_KEY, '')) {
+        setSetting(ANNOUNCEMENT_KEY, text);
+        // A fresh timestamp re-surfaces the banner for users who dismissed the
+        // previous announcement; connected tabs pick it up immediately.
+        setSetting(ANNOUNCEMENT_AT_KEY, now());
+        broadcast('announcement-updated');
+      }
+    }
+    if (body.data.usageCurrency !== undefined) {
+      setSetting(USAGE_CURRENCY_KEY, body.data.usageCurrency.trim() || '$');
+    }
     if (body.data.followupEnabled !== undefined) setSetting(FOLLOWUP_ENABLED_KEY, body.data.followupEnabled);
     if (body.data.followupModelId !== undefined) {
       const id = body.data.followupModelId;
@@ -336,6 +426,51 @@ export async function adminRoutes(app: FastifyInstance) {
     return settingsView();
   });
 
+  // --- database backups ---
+  app.get('/api/admin/backups', async (req, reply) => {
+    requireAdmin(req, reply);
+    return {
+      backups: listBackups(),
+      intervalHours: config.backupIntervalHours,
+      keep: config.backupKeep,
+    };
+  });
+
+  app.post('/api/admin/backups', async (req, reply) => {
+    requireAdmin(req, reply);
+    try {
+      const backup = await runBackup();
+      return { backup, backups: listBackups() };
+    } catch (err) {
+      req.log.error({ err }, 'manual backup failed');
+      return reply.code(500).send({ error: '备份失败,请查看服务日志' });
+    }
+  });
+
+  app.get('/api/admin/backups/:filename', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { filename } = req.params as { filename: string };
+    // isBackupFilename doubles as the traversal gate: our names never contain
+    // separators, so a passing name cannot escape backupDir.
+    if (!isBackupFilename(filename)) return reply.code(404).send({ error: '备份不存在' });
+    const file = path.join(backupDir, filename);
+    let size: number;
+    try { size = fs.statSync(file).size; } catch { return reply.code(404).send({ error: '备份不存在' }); }
+    reply.header('content-type', 'application/octet-stream');
+    reply.header('content-length', size);
+    reply.header('content-disposition', `attachment; filename="${filename}"`);
+    return reply.send(fs.createReadStream(file));
+  });
+
+  // Announcement the signed-in banner shows — user-facing, not admin-only.
+  app.get('/api/announcement', async (req, reply) => {
+    requireAuth(req, reply);
+    return {
+      text: getSetting(ANNOUNCEMENT_KEY, ''),
+      updatedAt: getSetting(ANNOUNCEMENT_AT_KEY, 0),
+    };
+  });
+
   app.get('/api/usage/me', async (req, reply) => {
     requireAuth(req, reply);
     const cutoff = now() - 30 * DAY_MS;
@@ -344,8 +479,12 @@ export async function adminRoutes(app: FastifyInstance) {
     const me = db.select({ role: schema.users.role, monthlyTokenQuota: schema.users.monthlyTokenQuota })
       .from(schema.users).where(eq(schema.users.id, req.user!.id)).get();
     const limit = me ? effectiveQuota(me) : null;
+    const costs = usageCosts(where);
     return {
-      days: 30, byDay, byModel, totals,
+      days: 30, byDay,
+      byModel: byModel.map((m) => ({ ...m, cost: costs ? costs.byModel.get(m.model) ?? 0 : null })),
+      totals: { ...totals, cost: costs ? costs.total : null },
+      currency: getSetting(USAGE_CURRENCY_KEY, '$'),
       quota: { limit, used: limit !== null ? monthTokens(req.user!.id) : 0 },
     };
   });

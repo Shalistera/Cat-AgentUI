@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronUp, Plus, Upload, X } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
-  Badge, Button, Card, EmptyState, Input, SegmentedControl, Spinner, Textarea, toast,
+  Badge, Button, Card, EmptyState, Field, Input, SegmentedControl, Spinner, Textarea, toast,
 } from '../../components/ui';
 import { ProviderAvatar } from '../../components/ModelAvatar';
 import type { AdminModel, AdminProvider, ReasoningLevel, ReasoningMode } from '../../types';
@@ -136,6 +136,69 @@ function DescriptionCard({ model, reload }: { model: AdminModel; reload(): Promi
           <span className="text-[11px] tabular-nums text-tx3">{text.length}/{DESCRIPTION_MAX}</span>
           <Button variant="primary" size="sm" disabled={busy || !dirty} onClick={save}>
             {busy && <Spinner className="h-3.5 w-3.5" />}保存描述
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------- 单价 ----------
+/** Per-1M-token prices powering the 用量看板 cost columns. Empty = not priced. */
+function PricingCard({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
+  const [input, setInput] = useState(model.inputPrice != null ? String(model.inputPrice) : '');
+  const [output, setOutput] = useState(model.outputPrice != null ? String(model.outputPrice) : '');
+  const [busy, setBusy] = useState(false);
+
+  const parse = (v: string): number | null | undefined => {
+    const t = v.trim();
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) && n >= 0 ? n : undefined; // undefined = invalid
+  };
+  const dirty = (parse(input) ?? null) !== (model.inputPrice ?? null)
+    || (parse(output) ?? null) !== (model.outputPrice ?? null);
+
+  async function save() {
+    if (busy) return;
+    const inputPrice = parse(input);
+    const outputPrice = parse(output);
+    if (inputPrice === undefined || outputPrice === undefined) {
+      toast('单价必须是不小于 0 的数字,留空表示未配置', 'err');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.patch(`/api/admin/models/${model.id}`, { inputPrice, outputPrice });
+      await reload();
+      toast('已更新模型单价', 'ok');
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Card
+      title="模型单价"
+      desc="每 100 万 tokens 的价格,用于用量看板的成本折算(按当前单价估算历史用量)。货币符号在「应用设置 → 成本治理」配置。两项都留空 = 不参与成本统计。"
+    >
+      <div className="space-y-3">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="输入单价 / 1M tokens">
+            <Input
+              inputMode="decimal" value={input} placeholder="未配置"
+              onChange={(e) => setInput(e.target.value)}
+            />
+          </Field>
+          <Field label="输出单价 / 1M tokens">
+            <Input
+              inputMode="decimal" value={output} placeholder="未配置"
+              onChange={(e) => setOutput(e.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="flex justify-end">
+          <Button variant="primary" size="sm" disabled={busy || !dirty} onClick={save}>
+            {busy && <Spinner className="h-3.5 w-3.5" />}保存单价
           </Button>
         </div>
       </div>
@@ -339,6 +402,7 @@ export default function ModelDetail() {
 
       <IconCard provider={provider} model={model} reload={load} />
       <DescriptionCard model={model} reload={load} />
+      <PricingCard model={model} reload={load} />
       <ReasoningCard model={model} reload={load} />
     </div>
   );
