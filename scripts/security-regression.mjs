@@ -490,6 +490,14 @@ async function run() {
   assert(overTextTurn.status === 400, 'per-message text budget');
 
   const imageBody = { modelId: imageModel.id, prompt: 'a cat', n: 1 };
+  // Image access is default-deny per user; the gate below only makes sense
+  // after an explicit admin grant.
+  const ungrantedImage = await jsonReq('POST', '/api/images/generate', imageBody, userCookie);
+  assert(ungrantedImage.status === 403, 'image generation denied without grant');
+  const grantImages = await jsonReq('PATCH', `/api/admin/users/${userId}`, {
+    allowImages: true, allowImageModels: true,
+  }, adminCookie);
+  assert(grantImages.status === 200, 'grant image permissions');
   const imageResults = await Promise.all([
     jsonReq('POST', '/api/images/generate', imageBody, userCookie),
     jsonReq('POST', '/api/images/generate', imageBody, userCookie),
