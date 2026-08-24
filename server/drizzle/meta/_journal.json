@@ -148,6 +148,13 @@
       "when": 1787555494551,
       "tag": "0020_image_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1787556192309,
+      "tag": "0021_model_avatar",
+      "breakpoints": true
     }
   ]
 }

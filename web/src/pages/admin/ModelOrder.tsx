@@ -13,6 +13,7 @@ interface OrderModel {
   enabled: boolean; imageGen: boolean;
   providerId: string; providerName: string; providerType: string;
   providerBaseUrl: string | null; providerEnabled: boolean;
+  avatarUrl: string | null;
   providerAvatarUrl: string | null;
 }
 
@@ -113,7 +114,7 @@ export default function ModelOrder() {
                     {index + 1}
                   </span>
                   <ProviderAvatar name={m.providerName} type={m.providerType}
-                    baseUrl={m.providerBaseUrl} avatarUrl={m.providerAvatarUrl} size={22} />
+                    baseUrl={m.providerBaseUrl} avatarUrl={m.avatarUrl ?? m.providerAvatarUrl} size={22} />
                   <div className="min-w-0 flex-1">
                     <span className="text-xs font-medium text-tx">{m.displayName}</span>
                     <span className="ml-2 truncate font-mono text-[11px] text-tx3 max-sm:hidden">{m.modelId}</span>

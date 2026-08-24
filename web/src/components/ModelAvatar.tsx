@@ -141,7 +141,7 @@ export function ModelAvatar({ model, info, size = 30, tile = true }: {
       tile={tile}
       title={resolved?.displayName ?? name ?? '模型'}
       brand={brandOf(name, resolved?.providerType)}
-      custom={resolved?.providerAvatarUrl ?? null}
+      custom={resolved?.avatarUrl ?? resolved?.providerAvatarUrl ?? null}
       fallback={initialOf(resolved?.providerName ?? name)}
     />
   );

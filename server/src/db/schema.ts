@@ -61,6 +61,10 @@ export const models = sqliteTable('models', {
   // Admin-written blurb shown to users under the model name on the new-chat
   // page, e.g. “现在世界上最强的模型,但是很贵”. null = say nothing.
   description: text('description'),
+  // Optional custom icon as a data URI (SVG/PNG/…). Wins over the provider
+  // avatar and the built-in brand mark everywhere the model is shown.
+  // null = fall back to those.
+  avatar: text('avatar'),
   vision: integer('vision').notNull().default(1),
   tools: integer('tools').notNull().default(1),
   imageGen: integer('image_gen').notNull().default(0),

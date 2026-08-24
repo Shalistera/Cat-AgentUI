@@ -108,6 +108,8 @@ export interface ModelInfo {
   /** Admin default for the 联网搜索 toggle on new chats with this model. */
   defaultWebSearch: boolean;
   providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini';
+  /** Content-addressed URL of this model's own icon; wins over the provider avatar. */
+  avatarUrl: string | null;
   /** Content-addressed URL of the provider's custom avatar; null = built-in mark. */
   providerAvatarUrl: string | null;
   /** Ordered reasoning levels, weakest first. Empty = no reasoning control. */
@@ -215,6 +217,8 @@ export interface AdminModel {
   id: string; providerId: string; modelId: string; displayName: string | null;
   /** Blurb shown to users on the new-chat page; null = not set. */
   description: string | null;
+  /** Content-addressed URL of the model's custom icon; null = provider avatar / brand mark. */
+  avatarUrl: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; enabled: boolean;
   isDefault: boolean; sortOrder: number;
   defaultWebSearch: boolean;

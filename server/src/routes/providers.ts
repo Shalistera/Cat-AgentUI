@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { and, asc, eq } from 'drizzle-orm';
@@ -36,6 +36,8 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
     vision: !!m.vision,
     tools: !!m.tools,
     imageGen: !!m.imageGen,
+    // Like the provider avatar, only the content-addressed URL is inlined.
+    avatarUrl: m.avatar ? modelAvatarUrl(m.id, m.avatar) : null,
     accessMode: m.accessMode === 'restricted' ? 'restricted' : 'shared',
     allowedUserIds: allowedUserIds ?? accessUserIds(m.id),
     reasoning: {
@@ -102,6 +104,26 @@ function parseAvatarDataUri(uri: string): { mime: string; buf: Buffer } | null {
 function avatarUrl(id: string, dataUri: string): string {
   const tag = createHash('sha256').update(dataUri).digest('hex').slice(0, 12);
   return `/api/providers/${id}/avatar?v=${tag}`;
+}
+
+/** Same content-addressing for per-model icons. */
+function modelAvatarUrl(id: string, dataUri: string): string {
+  const tag = createHash('sha256').update(dataUri).digest('hex').slice(0, 12);
+  return `/api/models/${id}/avatar?v=${tag}`;
+}
+
+/** Shared response shape for serving avatar bytes (provider or model). */
+function sendAvatar(reply: FastifyReply, parsed: { mime: string; buf: Buffer }) {
+  reply.header('content-type', parsed.mime);
+  // Uploaded SVG can carry scripts, which would run in our origin if the URL
+  // is opened directly. Lock the document down and forbid sniffing so the
+  // response can only ever behave as an image.
+  reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  reply.header('x-content-type-options', 'nosniff');
+  reply.header('content-disposition', 'inline');
+  // The URL is content-addressed (?v=<hash>), so this can be immutable.
+  reply.header('cache-control', 'private, max-age=31536000, immutable');
+  return reply.send(parsed.buf);
 }
 
 // Optional text fields accept null as well as '' — both mean "not set / clear it".
@@ -313,6 +335,7 @@ export async function providerRoutes(app: FastifyInstance) {
       id: schema.models.id,
       modelId: schema.models.modelId,
       displayName: schema.models.displayName,
+      avatar: schema.models.avatar,
       enabled: schema.models.enabled,
       imageGen: schema.models.imageGen,
       providerId: schema.providers.id,
@@ -329,6 +352,7 @@ export async function providerRoutes(app: FastifyInstance) {
       id: r.id,
       modelId: r.modelId,
       displayName: r.displayName || r.modelId,
+      avatarUrl: r.avatar ? modelAvatarUrl(r.id, r.avatar) : null,
       enabled: !!r.enabled,
       imageGen: !!r.imageGen,
       providerId: r.providerId,
@@ -400,17 +424,41 @@ export async function providerRoutes(app: FastifyInstance) {
     if (!row?.avatar) return reply.code(404).send({ error: '未设置头像' });
     const parsed = parseAvatarDataUri(row.avatar);
     if (!parsed) return reply.code(404).send({ error: '未设置头像' });
+    return sendAvatar(reply, parsed);
+  });
 
-    reply.header('content-type', parsed.mime);
-    // Uploaded SVG can carry scripts, which would run in our origin if the URL
-    // is opened directly. Lock the document down and forbid sniffing so the
-    // response can only ever behave as an image.
-    reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
-    reply.header('x-content-type-options', 'nosniff');
-    reply.header('content-disposition', 'inline');
-    // The URL is content-addressed (?v=<hash>), so this can be immutable.
-    reply.header('cache-control', 'private, max-age=31536000, immutable');
-    return reply.send(parsed.buf);
+  // Custom model icon: same contract as the provider avatar — `{ avatar:
+  // <data URI> }` replaces it, `{ avatar: null }` falls back to the provider
+  // avatar / built-in brand mark.
+  app.put('/api/admin/models/:id/avatar', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const body = z.object({ avatar: z.string().max(200_000).nullable() }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const row = db.select().from(schema.models).where(eq(schema.models.id, id)).get();
+    if (!row) return reply.code(404).send({ error: '模型不存在' });
+
+    let avatar: string | null = null;
+    if (body.data.avatar) {
+      const parsed = parseAvatarDataUri(body.data.avatar);
+      if (!parsed) {
+        return reply.code(400).send({ error: '图标无效:仅支持 SVG / PNG / JPEG / WebP / GIF,且不超过 128 KB' });
+      }
+      avatar = body.data.avatar;
+    }
+    db.update(schema.models).set({ avatar }).where(eq(schema.models.id, id)).run();
+    broadcast('models-updated');
+    return { ok: true, avatarUrl: avatar ? modelAvatarUrl(id, avatar) : null };
+  });
+
+  app.get('/api/models/:id/avatar', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const row = db.select({ avatar: schema.models.avatar })
+      .from(schema.models).where(eq(schema.models.id, id)).get();
+    const parsed = row?.avatar ? parseAvatarDataUri(row.avatar) : null;
+    if (!parsed) return reply.code(404).send({ error: '未设置图标' });
+    return sendAvatar(reply, parsed);
   });
 
   app.post('/api/admin/providers/:id/fetch-models', async (req, reply) => {
@@ -548,6 +596,7 @@ export async function providerRoutes(app: FastifyInstance) {
       modelId: schema.models.modelId,
       displayName: schema.models.displayName,
       description: schema.models.description,
+      avatar: schema.models.avatar,
       vision: schema.models.vision,
       tools: schema.models.tools,
       imageGen: schema.models.imageGen,
@@ -574,6 +623,7 @@ export async function providerRoutes(app: FastifyInstance) {
       modelId: r.modelId,
       displayName: r.displayName || r.modelId,
       description: r.description,
+      avatarUrl: r.avatar ? modelAvatarUrl(r.id, r.avatar) : null,
       vision: !!r.vision,
       tools: !!r.tools,
       imageGen: !!r.imageGen,

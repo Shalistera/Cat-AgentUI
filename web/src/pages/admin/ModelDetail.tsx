@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, Plus, Upload, X } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
   Badge, Button, Card, EmptyState, Input, SegmentedControl, Spinner, Textarea, toast,
@@ -15,6 +15,94 @@ import { TYPE_LABELS } from './provider-common';
 
 const MODE_LABELS: Record<ReasoningMode, string> = { auto: '默认', custom: '自定义', off: '关闭' };
 const DESCRIPTION_MAX = 500;
+
+// ---------- 模型图标 ----------
+const ICON_MIMES = ['image/svg+xml', 'image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const ICON_MAX_BYTES = 128 * 1024;
+
+function readAsDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error('读取文件失败'));
+    r.readAsDataURL(file);
+  });
+}
+
+/** The model's own icon when set, else the provider avatar / brand mark. */
+function ModelIcon({ provider, model, size }: {
+  provider: AdminProvider; model: AdminModel; size: number;
+}) {
+  if (!model.avatarUrl) {
+    return <ProviderAvatar name={provider.name} type={provider.type} baseUrl={provider.baseUrl}
+      avatarUrl={provider.avatarUrl} size={size} />;
+  }
+  const inner = Math.round(size * 0.62);
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-line2 bg-bg2 shadow-xs"
+      style={{ width: size, height: size }}
+    >
+      {/* <img>, never inlined — an uploaded SVG must not get a script context. */}
+      <img src={model.avatarUrl} alt="" className="object-contain" style={{ width: inner, height: inner }} />
+    </span>
+  );
+}
+
+function IconCard({ provider, model, reload }: {
+  provider: AdminProvider; model: AdminModel; reload(): Promise<void>;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save(avatar: string | null) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.put(`/api/admin/models/${model.id}/avatar`, { avatar });
+      toast(avatar ? '模型图标已更新' : '已恢复默认图标', 'ok');
+      await reload();
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  async function pick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!ICON_MIMES.includes(file.type)) { toast('仅支持 SVG / PNG / JPEG / WebP / GIF', 'err'); return; }
+    if (file.size > ICON_MAX_BYTES) { toast('图标不能超过 128 KB', 'err'); return; }
+    try {
+      await save(await readAsDataUri(file));
+    } catch (err) { toast(errMsg(err), 'err'); }
+  }
+
+  return (
+    <Card title="模型图标"
+      desc="推荐 SVG(也支持 PNG / JPEG / WebP / GIF,不超过 128 KB)。上传后模型选择器、对话页与新对话首页都优先显示它;未上传时沿用 Provider 头像或内置品牌图标。">
+      <div className="flex items-center gap-4">
+        {busy ? (
+          <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-line2 bg-bg2 text-tx3">
+            <Spinner className="h-4 w-4" />
+          </span>
+        ) : (
+          <ModelIcon provider={provider} model={model} size={56} />
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => fileRef.current?.click()}>
+            <Upload size={13} />上传图标
+          </Button>
+          {model.avatarUrl && (
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => save(null)}>
+              <X size={13} />恢复默认
+            </Button>
+          )}
+        </div>
+      </div>
+      <input ref={fileRef} type="file" hidden accept={ICON_MIMES.join(',')} onChange={pick} />
+    </Card>
+  );
+}
 
 // ---------- 模型描述 ----------
 /** The blurb users see under the model name when starting a new chat. */
@@ -233,8 +321,7 @@ export default function ModelDetail() {
           <ArrowLeft size={13} />返回模型设置
         </Link>
         <div className="flex flex-wrap items-center gap-3">
-          <ProviderAvatar name={provider.name} type={provider.type} baseUrl={provider.baseUrl}
-            avatarUrl={provider.avatarUrl} size={40} />
+          <ModelIcon provider={provider} model={model} size={40} />
           <div className="min-w-0">
             <h1 className="truncate font-mono text-base font-semibold tracking-tight text-tx">{model.modelId}</h1>
             <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-tx3">
@@ -250,6 +337,7 @@ export default function ModelDetail() {
         </p>
       </div>
 
+      <IconCard provider={provider} model={model} reload={load} />
       <DescriptionCard model={model} reload={load} />
       <ReasoningCard model={model} reload={load} />
     </div>
