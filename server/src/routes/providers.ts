@@ -8,7 +8,7 @@ import { requireAuth, requireAdmin } from '../auth.js';
 import {
   allConfiguredSecretValues, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
 } from '../secrets.js';
-import { accessUserIds, accessibleOnly, replaceModelAccess } from '../model-access.js';
+import { accessUserIds, accessibleOnly, imageModelsAllowed, replaceModelAccess } from '../model-access.js';
 import { broadcast } from './events.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
@@ -567,7 +567,9 @@ export async function providerRoutes(app: FastifyInstance) {
       // Global admin order, no provider grouping — providers can interleave.
       .orderBy(asc(schema.models.sortOrder), asc(schema.models.modelId))
       .all();
-    const list = accessibleOnly(rows, req.user!).map((r) => ({
+    const list = accessibleOnly(rows, req.user!)
+      .filter((r) => !r.imageGen || imageModelsAllowed(req.user!))
+      .map((r) => ({
       id: r.id,
       modelId: r.modelId,
       displayName: r.displayName || r.modelId,

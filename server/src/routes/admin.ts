@@ -59,6 +59,8 @@ function adminUser(u: typeof schema.users.$inferSelect) {
     displayName: u.displayName,
     role: u.role,
     disabled: !!u.disabled,
+    allowImages: !!u.allowImages,
+    allowImageModels: !!u.allowImageModels,
     monthlyTokenQuota: u.monthlyTokenQuota,
     createdAt: u.createdAt,
     lastActiveAt: u.lastActiveAt,
@@ -84,6 +86,8 @@ const patchUserSchema = z.object({
   displayName: z.string().max(64).optional(),
   // null = follow the app default, 0 = unlimited, >0 = monthly cap
   monthlyTokenQuota: z.number().int().min(0).max(1e15).nullish(),
+  allowImages: z.boolean().optional(),
+  allowImageModels: z.boolean().optional(),
 });
 
 const settingsSchema = z.object({
@@ -174,6 +178,8 @@ export async function adminRoutes(app: FastifyInstance) {
     if (data.password !== undefined) patch.passwordHash = await hashPassword(data.password);
     if (data.displayName !== undefined) patch.displayName = data.displayName;
     if (data.monthlyTokenQuota !== undefined) patch.monthlyTokenQuota = data.monthlyTokenQuota;
+    if (data.allowImages !== undefined) patch.allowImages = data.allowImages ? 1 : 0;
+    if (data.allowImageModels !== undefined) patch.allowImageModels = data.allowImageModels ? 1 : 0;
 
     if (Object.keys(patch).length) {
       db.update(schema.users).set(patch).where(eq(schema.users.id, id)).run();

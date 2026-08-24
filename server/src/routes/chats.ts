@@ -12,7 +12,7 @@ import { validateMcpSelection } from '../mcp/access.js';
 import { getSearchServerId } from './mcp.js';
 import { saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
-import { canUseModel, grantedModelIds } from '../model-access.js';
+import { canUseModel, grantedModelIds, imageModelsAllowed } from '../model-access.js';
 import { checkQuota, quotaBlockMessage } from '../quota.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
@@ -854,6 +854,9 @@ export async function chatRoutes(app: FastifyInstance) {
     let { model, provider } = picked;
     if (!canUseModel(user, model.id)) {
       return reply.code(403).send({ error: '该模型未对你开放,请选择其他模型' });
+    }
+    if (model.imageGen && !imageModelsAllowed(user)) {
+      return reply.code(403).send({ error: '没有图像模型使用权限,请联系管理员开通' });
     }
 
     // Monthly token quota. Over-quota text turns can be downgraded to the

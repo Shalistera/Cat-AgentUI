@@ -7,9 +7,10 @@ import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth.js';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
-import { accessibleOnly, canUseModel } from '../model-access.js';
+import { accessibleOnly, canUseModel, imageModelsAllowed, imageWorkshopAllowed } from '../model-access.js';
 import { checkQuota, quotaBlockMessage } from '../quota.js';
 import type { GeneratedImage } from '../types.js';
 import { tryAcquireImageJob } from '../admission.js';
@@ -108,9 +109,20 @@ async function rollbackSavedImages(saved: SavedImage[]): Promise<void> {
   }
 }
 
+/**
+ * 绘图工坊 feature surface (model list, generate, jobs, gallery). Serving and
+ * deleting a single image stays on plain requireAuth — chat-generated images
+ * render through /api/images/:id/file and must survive this gate being off.
+ */
+function requireWorkshop(req: FastifyRequest, reply?: FastifyReply): void {
+  requireAuth(req, reply);
+  if (!imageWorkshopAllowed(req.user!)) throw new Error('no-images-access');
+}
+
 export async function imageRoutes(app: FastifyInstance) {
   app.get('/api/images/models', async (req, reply) => {
-    requireAuth(req, reply);
+    requireWorkshop(req, reply);
+    if (!imageModelsAllowed(req.user!)) return [];
     const rows = db.select({
       id: schema.models.id,
       modelId: schema.models.modelId,
@@ -131,7 +143,10 @@ export async function imageRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/images/generate', async (req, reply) => {
-    requireAuth(req, reply);
+    requireWorkshop(req, reply);
+    if (!imageModelsAllowed(req.user!)) {
+      return reply.code(403).send({ error: '没有图像模型使用权限,请联系管理员开通' });
+    }
     const body = generateSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const { modelId, prompt, size, quality, n, inputUploadIds } = body.data;
@@ -280,7 +295,7 @@ export async function imageRoutes(app: FastifyInstance) {
   // reload) while the job keeps running here — this lets it re-attach. All of
   // the user's running jobs are listed: several models can be in flight.
   app.get('/api/images/jobs/active', async (req, reply) => {
-    requireAuth(req, reply);
+    requireWorkshop(req, reply);
     const running = [...jobs.values()]
       .filter((j) => j.userId === req.user!.id && j.status === 'running')
       .sort((a, b) => a.createdAt - b.createdAt)
@@ -289,7 +304,7 @@ export async function imageRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/images/jobs/:id', async (req, reply) => {
-    requireAuth(req, reply);
+    requireWorkshop(req, reply);
     const { id } = req.params as { id: string };
     const job = jobs.get(id);
     if (!job || job.userId !== req.user!.id) {
@@ -299,7 +314,7 @@ export async function imageRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/images', async (req, reply) => {
-    requireAuth(req, reply);
+    requireWorkshop(req, reply);
     const q = req.query as { limit?: string; offset?: string };
     const limit = Math.min(Math.max(Number(q.limit) || 40, 1), 100);
     const offset = Math.max(Number(q.offset) || 0, 0);
@@ -353,7 +368,7 @@ export async function imageRoutes(app: FastifyInstance) {
   // Batch delete for the gallery's manage mode. Silently skips ids that don't
   // exist or belong to someone else — the caller learns the real count.
   app.post('/api/images/batch-delete', async (req, reply) => {
-    requireAuth(req, reply);
+    requireWorkshop(req, reply);
     const { ids } = (req.body ?? {}) as { ids?: unknown };
     if (!Array.isArray(ids) || ids.length === 0 || ids.some((x) => typeof x !== 'string')) {
       return reply.code(400).send({ error: '参数错误' });

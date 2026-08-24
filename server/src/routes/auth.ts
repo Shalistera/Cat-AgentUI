@@ -13,10 +13,19 @@ const credentialsSchema = z.object({
   password: z.string().min(8).max(128),
 });
 
-function publicUser(u: { id: string; username: string; role: string; displayName: string | null; settings: string }) {
+function publicUser(u: {
+  id: string; username: string; role: string; displayName: string | null;
+  allowImages: number; allowImageModels: number; settings: string;
+}) {
   let settings: unknown = {};
   try { settings = JSON.parse(u.settings); } catch { /* ignore */ }
-  return { id: u.id, username: u.username, role: u.role, displayName: u.displayName, settings };
+  return {
+    id: u.id, username: u.username, role: u.role, displayName: u.displayName,
+    // Resolved for the UI: admins always pass both gates.
+    allowImages: u.role === 'admin' || !!u.allowImages,
+    allowImageModels: u.role === 'admin' || !!u.allowImageModels,
+    settings,
+  };
 }
 
 export async function authRoutes(app: FastifyInstance) {

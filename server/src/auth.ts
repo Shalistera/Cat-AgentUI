@@ -9,6 +9,8 @@ export interface SessionUser {
   username: string;
   role: string;
   displayName: string | null;
+  allowImages: number;
+  allowImageModels: number;
   settings: string;
 }
 
@@ -99,6 +101,8 @@ export async function authPlugin(app: FastifyInstance) {
       username: schema.users.username,
       role: schema.users.role,
       displayName: schema.users.displayName,
+      allowImages: schema.users.allowImages,
+      allowImageModels: schema.users.allowImageModels,
       settings: schema.users.settings,
       disabled: schema.users.disabled,
     }).from(schema.sessions)
@@ -119,6 +123,7 @@ export async function authPlugin(app: FastifyInstance) {
     req.user = {
       id: row.id, username: row.username, role: row.role,
       displayName: row.displayName, settings: row.settings,
+      allowImages: row.allowImages, allowImageModels: row.allowImageModels,
     };
     // Opportunistic cleanup of expired sessions (at most hourly)
     if (now() - lastPurge > 3600_000) {

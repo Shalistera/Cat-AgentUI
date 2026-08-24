@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom';
 import {
   ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Image as ImageIcon, ListChecks, Sparkles, Trash2,
 } from 'lucide-react';
-import { useUi } from '../store';
+import { useUi, useAuth } from '../store';
 import { api } from '../api';
 import { Button, EmptyState, PageHeader, Spinner, btnClass, confirmDialog, toast } from '../components/ui';
 import { ImageLightbox, ImageTile } from '../components/ImageGallery';
+import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import type { ImageRecord } from '../types';
 
 const PAGE_SIZE = 24;
@@ -15,6 +16,12 @@ const PAGE_SIZE = 24;
 // most recent handful and links here. Paged, so a huge archive never puts
 // thousands of <img> in the DOM at once.
 export default function Gallery() {
+  const user = useAuth((s) => s.user);
+  if (user && !user.allowImages) return <NoWorkshopAccess />;
+  return <GalleryInner />;
+}
+
+function GalleryInner() {
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const setSidebarOpen = useUi((s) => s.setSidebarOpen);
 

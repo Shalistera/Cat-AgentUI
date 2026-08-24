@@ -12,6 +12,7 @@ import {
   toast, EmptyState, btnClass,
 } from '../components/ui';
 import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGallery';
+import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import type { ImageModel, ImageRecord } from '../types';
 
 const PAGE_SIZE = 24;
@@ -48,6 +49,12 @@ function normalizeQuick(raw: unknown): QuickPrompt[] {
 }
 
 export default function Images() {
+  const user = useAuth((s) => s.user);
+  if (user && !user.allowImages) return <NoWorkshopAccess />;
+  return <ImagesInner />;
+}
+
+function ImagesInner() {
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const setSidebarOpen = useUi((s) => s.setSidebarOpen);
   const user = useAuth((s) => s.user);
@@ -379,11 +386,19 @@ export default function Images() {
             {models === null ? (
               <div className="flex justify-center py-10 text-tx3"><Spinner className="h-5 w-5" /></div>
             ) : models.length === 0 ? (
-              <EmptyState
-                icon={<ImageIcon size={22} />}
-                title="管理员尚未配置图像模型"
-                hint="请联系管理员在后台添加支持图像生成的模型后再来创作。"
-              />
+              user && !user.allowImageModels ? (
+                <EmptyState
+                  icon={<ImageIcon size={22} />}
+                  title="没有图像模型使用权限"
+                  hint="请联系管理员为你的账号开启图像模型使用权限后再来创作。"
+                />
+              ) : (
+                <EmptyState
+                  icon={<ImageIcon size={22} />}
+                  title="管理员尚未配置图像模型"
+                  hint="请联系管理员在后台添加支持图像生成的模型后再来创作。"
+                />
+              )
             ) : (
               <div className="space-y-4">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

@@ -10,6 +10,11 @@ export const users = sqliteTable('users', {
   // Monthly token ceiling: null = follow the app-wide default, 0 = unlimited
   // for this user, >0 = hard cap. Admins are always exempt (see quota.ts).
   monthlyTokenQuota: integer('monthly_token_quota'),
+  // Feature gates, default off. Admins are always exempt (see model-access.ts):
+  // allow_images = the 绘图工坊 pages, allow_image_models = seeing/using
+  // image-generation models anywhere (picker, workshop, chat).
+  allowImages: integer('allow_images').notNull().default(0),
+  allowImageModels: integer('allow_image_models').notNull().default(0),
   settings: text('settings').notNull().default('{}'), // JSON: { theme, lang, ... }
   createdAt: integer('created_at').notNull(),
   lastActiveAt: integer('last_active_at'),

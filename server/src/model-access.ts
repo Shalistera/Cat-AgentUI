@@ -6,6 +6,16 @@ export interface ModelAccessUser {
   role: string;
 }
 
+/** 图像模型使用权限 — gates seeing/using imageGen models anywhere. */
+export function imageModelsAllowed(user: { role: string; allowImageModels: number }): boolean {
+  return user.role === 'admin' || !!user.allowImageModels;
+}
+
+/** 绘图工坊访问权限 — gates the /api/images feature surface. */
+export function imageWorkshopAllowed(user: { role: string; allowImages: number }): boolean {
+  return user.role === 'admin' || !!user.allowImages;
+}
+
 /** Model db-ids explicitly granted to this user. */
 export function grantedModelIds(userId: string): Set<string> {
   return new Set(db.select({ modelId: schema.modelAccess.modelId })

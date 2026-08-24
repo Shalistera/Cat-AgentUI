@@ -141,6 +141,13 @@
       "when": 1787553567516,
       "tag": "0019_model_description",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1787555494551,
+      "tag": "0020_image_permissions",
+      "breakpoints": true
     }
   ]
 }

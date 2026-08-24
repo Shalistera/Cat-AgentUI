@@ -70,6 +70,7 @@ async function main() {
     if (reply.sent) return;
     if (err.message === 'unauthorized') return reply.code(401).send({ error: '请先登录' });
     if (err.message === 'forbidden') return reply.code(403).send({ error: '需要管理员权限' });
+    if (err.message === 'no-images-access') return reply.code(403).send({ error: '没有绘图工坊访问权限,请联系管理员开通' });
     if (err instanceof PasswordQueueFullError) return reply.code(503).send({ error: err.message });
     const secretValues = allConfiguredSecretValues();
     const safeMessage = redactSensitiveText(err.message, secretValues);

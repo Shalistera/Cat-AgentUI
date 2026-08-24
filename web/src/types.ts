@@ -5,6 +5,10 @@ export interface Bootstrap { needsSetup: boolean; signupEnabled: boolean; brand:
 export interface User {
   id: string; username: string; role: 'admin' | 'user';
   displayName: string | null;
+  /** 绘图工坊访问权限(服务端已折算,管理员恒为 true)。 */
+  allowImages: boolean;
+  /** 图像模型使用权限(服务端已折算,管理员恒为 true)。 */
+  allowImageModels: boolean;
   settings: {
     theme?: 'dark' | 'light'; lang?: 'zh' | 'en'; titleEmoji?: boolean;
     /** Personal model-picker order (model row ids); null/absent = admin order. */
@@ -198,6 +202,8 @@ export interface MyUsage {
 export interface AdminUser {
   id: string; username: string; displayName: string | null; role: 'admin' | 'user';
   disabled: boolean; createdAt: number; lastActiveAt: number | null;
+  /** Raw grants (admins are exempt regardless). */
+  allowImages: boolean; allowImageModels: boolean;
   /** null = 跟随全局默认,0 = 不限,>0 = 每月上限。 */
   monthlyTokenQuota: number | null;
   usage: { totalTokens: number; requests: number; images: number; monthTokens: number };

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Ban, BarChart3, CircleCheck, KeyRound, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { Ban, BarChart3, CircleCheck, Image as ImageIcon, KeyRound, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { api, errMsg, fmtDate, fmtTokens } from '../../api';
-import { Badge, Button, Field, Input, Modal, ModalActions, Select, Spinner, Td, Th, confirmDialog, toast } from '../../components/ui';
+import { Badge, Button, Field, Input, Modal, ModalActions, Select, Spinner, Td, Th, ToggleRow, confirmDialog, toast } from '../../components/ui';
 import type { AdminUser } from '../../types';
 
 function userLabel(u: AdminUser): string {
@@ -31,6 +31,8 @@ export default function Users() {
   // quota modal
   const [quotaTarget, setQuotaTarget] = useState<AdminUser | null>(null);
   const [quotaValue, setQuotaValue] = useState('');
+  // image-permission modal
+  const [permTarget, setPermTarget] = useState<AdminUser | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -89,6 +91,20 @@ export default function Users() {
       await api.patch(`/api/admin/users/${quotaTarget.id}`, { monthlyTokenQuota: quota });
       toast('已更新月度配额', 'ok');
       setQuotaTarget(null);
+      await load();
+    } catch (e) {
+      toast(errMsg(e), 'err');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePerm(patch: { allowImages?: boolean; allowImageModels?: boolean }) {
+    if (!permTarget || busy) return;
+    setBusy(true);
+    try {
+      await api.patch(`/api/admin/users/${permTarget.id}`, patch);
+      setPermTarget((cur) => (cur ? { ...cur, ...patch } : cur));
       await load();
     } catch (e) {
       toast(errMsg(e), 'err');
@@ -215,6 +231,10 @@ export default function Users() {
                       className="inline-flex h-7 w-7 items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg3 hover:text-tx">
                       <BarChart3 size={14} />
                     </Link>
+                    <Button variant="ghost" size="iconSm" title="绘图权限"
+                      onClick={() => setPermTarget(u)}>
+                      <ImageIcon size={14} className={u.allowImages || u.allowImageModels ? 'text-acc' : ''} />
+                    </Button>
                     <Button variant="ghost" size="iconSm" title="重置密码"
                       onClick={() => { setNewPassword(''); setResetTarget(u); }}>
                       <KeyRound size={14} />
@@ -290,6 +310,34 @@ export default function Users() {
             </Button>
           </ModalActions>
         </form>
+      </Modal>
+
+      <Modal open={!!permTarget} onClose={() => setPermTarget(null)}
+        title={`绘图权限${permTarget ? ` — ${userLabel(permTarget)}` : ''}`}>
+        <div className="space-y-4">
+          {permTarget?.role === 'admin' && (
+            <p className="rounded-md border border-line bg-bg2/50 px-3 py-2 text-xs leading-relaxed text-tx3">
+              管理员始终拥有全部权限,此处的设置仅在该账号转为普通用户后生效。
+            </p>
+          )}
+          <ToggleRow
+            label="绘图工坊访问权限"
+            desc="关闭时打开绘图工坊会提示没有权限"
+            checked={!!permTarget?.allowImages}
+            onChange={(v) => void savePerm({ allowImages: v })}
+            disabled={busy}
+          />
+          <ToggleRow
+            label="图像模型使用权限"
+            desc="关闭时在模型列表中看不到图像模型,也无法生成图片"
+            checked={!!permTarget?.allowImageModels}
+            onChange={(v) => void savePerm({ allowImageModels: v })}
+            disabled={busy}
+          />
+          <ModalActions>
+            <Button variant="outline" onClick={() => setPermTarget(null)}>完成</Button>
+          </ModalActions>
+        </div>
       </Modal>
 
       <Modal open={!!resetTarget} onClose={() => setResetTarget(null)}
