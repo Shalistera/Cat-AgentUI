@@ -154,6 +154,15 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: '参数错误' });
       }
     }
+    // quickPrompts renders as clickable cards on the new-chat page — keep it a
+    // short bounded list (or null to fall back to the built-in default).
+    {
+      const v = body.data.settings?.quickPrompts;
+      if (v !== undefined && v !== null
+        && !(Array.isArray(v) && v.length <= 6 && v.every((x) => typeof x === 'string' && x.length <= 300))) {
+        return reply.code(400).send({ error: '参数错误' });
+      }
+    }
     const patch: Record<string, unknown> = {};
     if (body.data.displayName !== undefined) patch.displayName = body.data.displayName;
     if (body.data.settings !== undefined) {

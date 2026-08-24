@@ -11,6 +11,8 @@ export interface User {
     modelOrder?: string[] | null;
     /** Starred models (model row ids) — always hoisted to the top of the picker. */
     favoriteModels?: string[] | null;
+    /** 快捷指令 cards on the new-chat page (max 6); null/absent = built-in default. */
+    quickPrompts?: string[] | null;
   };
 }
 

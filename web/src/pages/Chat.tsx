@@ -2,17 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Archive, ArrowDown, Check, FolderClosed, Ghost, ListOrdered, PanelLeft, Pencil,
-  Send, Trash2,
+  Plus, Send, Trash2,
 } from 'lucide-react';
-import { api, streamChat, ApiError } from '../api';
+import { api, errMsg, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { ModelAvatar } from '../components/ModelAvatar';
 import { CatMark } from '../components/Logo';
-import { Button, PageHeader, confirmDialog, toast } from '../components/ui';
+import { Button, Modal, ModalActions, PageHeader, Textarea, confirmDialog, toast } from '../components/ui';
 import { tabAlert } from '../tabAlert';
-import type { ChatDetail, ChatSummary, Message, MessagePart, ModelInfo } from '../types';
+import type { ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, User } from '../types';
 
 function draftFromChat(c: ChatDetail | null): ComposerSettings {
   return {
@@ -185,6 +185,104 @@ function QueueBar({ items, streaming, onSendNow, onRemove, onUpdate }: {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ---- 快捷指令 (new-chat page) ----
+// User-owned one-click prompts stored in settings.quickPrompts. null/absent
+// falls back to the single built-in example; an emptied list stays empty —
+// deleting the default is a choice, not a reset.
+
+const DEFAULT_QUICK_PROMPTS = ['用通俗的比喻解释一下大语言模型是怎么工作的'];
+const MAX_QUICK_PROMPTS = 6;
+const QUICK_PROMPT_MAX_CHARS = 300;
+
+function QuickPrompts({ onSend }: { onSend(q: string): void }) {
+  const user = useAuth((s) => s.user);
+  const prompts = user?.settings.quickPrompts ?? DEFAULT_QUICK_PROMPTS;
+  const [editor, setEditor] = useState<{ index: number | null; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save(next: string[]): Promise<boolean> {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { quickPrompts: next } });
+      useAuth.getState().setUser(r.user);
+      return true;
+    } catch (e) { toast(errMsg(e), 'err'); return false; }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+      {prompts.map((q, i) => (
+        <div key={`${i}-${q}`} className="group/qp relative">
+          <button
+            type="button"
+            title="点击直接发送"
+            onClick={() => onSend(q)}
+            className="h-full w-full cursor-pointer rounded-lg border border-line bg-bg1 px-3.5 py-2.5 text-left text-[13px] leading-relaxed text-tx2 shadow-xs transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
+          >
+            {q}
+          </button>
+          <div className="absolute right-1.5 top-1.5 flex rounded-md bg-bg1/90 opacity-0 shadow-xs backdrop-blur-[2px] transition-opacity group-hover/qp:opacity-100 group-focus-within/qp:opacity-100">
+            <Button variant="ghost" size="iconXs" title="编辑快捷指令"
+              onClick={() => setEditor({ index: i, text: q })}>
+              <Pencil size={12} />
+            </Button>
+            <Button variant="dangerGhost" size="iconXs" title="删除快捷指令" disabled={busy}
+              onClick={() => void save(prompts.filter((_, j) => j !== i))}>
+              <Trash2 size={12} />
+            </Button>
+          </div>
+        </div>
+      ))}
+
+      {prompts.length < MAX_QUICK_PROMPTS && (
+        <button
+          type="button"
+          title={`自定义快捷指令,最多 ${MAX_QUICK_PROMPTS} 条`}
+          onClick={() => setEditor({ index: null, text: '' })}
+          className="flex min-h-[2.75rem] cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-dashed border-line px-3.5 py-2.5 text-[13px] text-tx3 transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
+        >
+          <Plus size={14} />添加快捷指令
+        </button>
+      )}
+
+      {editor && (
+        <Modal open onClose={() => setEditor(null)}
+          title={editor.index === null ? '添加快捷指令' : '编辑快捷指令'}
+          desc="显示在新对话首页,点击卡片即直接发送这段内容。">
+          <div className="space-y-3">
+            <Textarea
+              rows={3}
+              maxLength={QUICK_PROMPT_MAX_CHARS}
+              autoFocus
+              value={editor.text}
+              onChange={(e) => setEditor({ ...editor, text: e.target.value })}
+              placeholder="例如:把下面的内容翻译成英文"
+            />
+            <div className="text-right text-[11px] tabular-nums text-tx3">
+              {editor.text.length}/{QUICK_PROMPT_MAX_CHARS}
+            </div>
+            <ModalActions>
+              <Button variant="outline" onClick={() => setEditor(null)}>取消</Button>
+              <Button variant="primary" disabled={busy || !editor.text.trim()}
+                onClick={async () => {
+                  const text = editor.text.trim();
+                  const next = editor.index === null
+                    ? [...prompts, text]
+                    : prompts.map((p, j) => (j === editor.index ? text : p));
+                  if (await save(next)) setEditor(null);
+                }}>
+                保存
+              </Button>
+            </ModalActions>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -776,13 +874,6 @@ export default function Chat() {
   );
 
   // Click-to-send starters: the fastest first message a new user can have.
-  const examplePrompts = [
-    '最近一周有哪些值得关注的 AI 进展?',
-    '用通俗的比喻解释一下大语言模型是怎么工作的',
-    '帮我拟一份周报模板:本周进展、遇到的风险、下周计划',
-    '写一个 Python 脚本,把文件夹里的图片按日期批量重命名',
-  ];
-
   return (
     <div className="flex h-full flex-col">
       <PageHeader
@@ -886,19 +977,7 @@ export default function Chat() {
             <div className="mx-auto max-w-[48rem]">{composer}</div>
 
             {modelSel && !streaming && (
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                {examplePrompts.map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    title="点击直接发送"
-                    onClick={() => void send(q, [])}
-                    className="cursor-pointer rounded-lg border border-line bg-bg1 px-3.5 py-2.5 text-left text-[13px] leading-relaxed text-tx2 shadow-xs transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
+              <QuickPrompts onSend={(q) => void send(q, [])} />
             )}
 
           </div>
