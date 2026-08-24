@@ -253,7 +253,15 @@ export async function adminRoutes(app: FastifyInstance) {
     const cutoff = now() - days * DAY_MS;
     const where = and(eq(schema.usageLog.userId, id), gte(schema.usageLog.createdAt, cutoff));
     const { byDay, byModel, totals } = usageAggregates(where, 20);
-    return { days, byDay, byModel, totals };
+    const byKind = db.select({
+      kind: schema.usageLog.kind,
+      totalTokens: sums.totalTokens,
+      requests: sums.requests,
+      images: sums.images,
+    }).from(schema.usageLog).where(where)
+      .groupBy(schema.usageLog.kind)
+      .orderBy(desc(sums.totalTokens)).all();
+    return { days, byDay, byModel, byKind, totals };
   });
 
   const settingsView = () => {

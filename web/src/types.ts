@@ -180,6 +180,15 @@ export interface AdminUsage {
   byDay: UsageByDay[]; byUser: UsageByUser[]; byModel: UsageByModel[];
   byKind: UsageByKind[]; totals: UsageTotals;
 }
+/** /api/admin/usage/user/:id — one user's usage over the selected window. */
+export interface AdminUserUsage {
+  days: number;
+  byDay: UsageByDay[];
+  byModel: UsageByModel[];
+  byKind: UsageByKind[];
+  totals: UsageTotals;
+}
+
 export interface MyUsage {
   byDay: UsageByDay[]; byModel: UsageByModel[]; totals: UsageTotals;
   /** limit null = 不限额;used 为本月已用 tokens。 */

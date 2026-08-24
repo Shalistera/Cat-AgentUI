@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Ban, CircleCheck, KeyRound, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Ban, BarChart3, CircleCheck, KeyRound, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { api, errMsg, fmtDate, fmtTokens } from '../../api';
 import { Badge, Button, Field, Input, Modal, ModalActions, Select, Spinner, Td, Th, confirmDialog, toast } from '../../components/ui';
 import type { AdminUser } from '../../types';
@@ -176,7 +177,12 @@ export default function Users() {
           <tbody>
             {users.map((u) => (
               <tr key={u.id} className="group transition-colors hover:bg-bg2/60">
-                <Td className="font-medium text-tx">{userLabel(u)}</Td>
+                <Td>
+                  <Link to={`/admin/users/${u.id}`} title="查看用量详情"
+                    className="font-medium text-tx hover:underline">
+                    {userLabel(u)}
+                  </Link>
+                </Td>
                 <Td>
                   <Badge tone={u.role === 'admin' ? 'acc' : 'default'}>{u.role === 'admin' ? '管理员' : '用户'}</Badge>
                 </Td>
@@ -205,6 +211,10 @@ export default function Users() {
                 <Td className="tabular-nums">{fmtDate(u.createdAt)}</Td>
                 <Td>
                   <div className="flex items-center justify-end gap-0.5">
+                    <Link to={`/admin/users/${u.id}`} title="用量详情"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg3 hover:text-tx">
+                      <BarChart3 size={14} />
+                    </Link>
                     <Button variant="ghost" size="iconSm" title="重置密码"
                       onClick={() => { setNewPassword(''); setResetTarget(u); }}>
                       <KeyRound size={14} />
