@@ -8,6 +8,7 @@ import {
   allConfiguredSecretValues, decryptSecretRecord, encryptSecretRecord, redactSensitiveText,
 } from '../secrets.js';
 import { invalidateServer, testServer } from '../mcp/manager.js';
+import { installPreset, presetStatuses } from '../mcp/presets.js';
 import {
   accessibleMcpServers, accessUserIds, replaceMcpAccess,
 } from '../mcp/access.js';
@@ -208,6 +209,29 @@ export async function mcpRoutes(app: FastifyInstance) {
     }
     setSetting(SEARCH_SETTING_KEY, serverId);
     return { ok: true };
+  });
+
+  // One-click presets: install a known npm MCP server locally and wire it up.
+  app.get('/api/admin/mcp/presets', async (req, reply) => {
+    requireAdmin(req, reply);
+    return presetStatuses();
+  });
+
+  app.post('/api/admin/mcp/presets/:presetId/install', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { presetId } = req.params as { presetId: string };
+    const body = z.object({
+      apiKey: z.string().trim().min(1).max(512).optional(),
+      reinstall: z.boolean().optional(),
+      setAsSearch: z.boolean().optional(),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    try {
+      return await installPreset(presetId, body.data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(message === '未知的预设' ? 404 : 500).send({ error: message });
+    }
   });
 
   app.post('/api/admin/mcp/:id/test', async (req, reply) => {

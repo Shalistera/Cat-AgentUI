@@ -271,6 +271,13 @@ export interface AdminMcpServer {
   toolsCache?: { name: string; description: string }[];
 }
 
+export interface McpPresetStatus {
+  id: string; name: string; description: string; pkg: string;
+  apiKeyEnv: string; keyUrl: string; search: boolean;
+  installedVersion: string | null;
+  serverId: string | null;
+}
+
 export interface AppSettings {
   signupEnabled: boolean;
   brand: string;

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Globe, Pencil, Plus, PlugZap, Server, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Download, ExternalLink, Globe, Pencil, Plus, PlugZap, Server, Trash2 } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
   Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select, Spinner, Textarea,
   StatusDot, Toggle, ToggleRow, confirmDialog, toast,
 } from '../../components/ui';
 import { KeyValueEditor, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
-import type { AdminMcpServer, AdminUser } from '../../types';
+import type { AdminMcpServer, AdminUser, McpPresetStatus } from '../../types';
 
 type Transport = AdminMcpServer['transport'];
 type AccessMode = AdminMcpServer['accessMode'];
@@ -289,22 +289,96 @@ function ServerCard({ server, reload, onEdit }: {
   );
 }
 
+// ---------- one-click presets ----------
+function PresetCard({ preset, servers, reload }: {
+  preset: McpPresetStatus; servers: AdminMcpServer[]; reload(): Promise<void>;
+}) {
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const linked = preset.serverId ? servers.find((s) => s.id === preset.serverId) ?? null : null;
+  const deployed = !!linked;
+
+  async function run(reinstall: boolean) {
+    if (busy) return;
+    const key = apiKey.trim();
+    if (!deployed && !key) { toast('请先填写 API Key', 'err'); return; }
+    setBusy(true);
+    try {
+      const r = await api.post<{ serverId: string; version: string; test: { ok: boolean; tools?: unknown[]; error?: string } }>(
+        `/api/admin/mcp/presets/${preset.id}/install`,
+        { apiKey: key || undefined, reinstall },
+      );
+      if (r.test.ok) {
+        toast(`${preset.name} v${r.version} 已就绪,发现 ${r.test.tools?.length ?? 0} 个工具`, 'ok');
+      } else {
+        toast(`已安装 v${r.version},但连接失败:${r.test.error ?? '未知错误'}`, 'err');
+      }
+      setApiKey('');
+      await reload();
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-dashed border-acc/40 bg-acc/5 p-4">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+        <Globe size={14} className="text-acc" />
+        <span className="text-[13px] font-semibold text-tx">一键部署 {preset.name}</span>
+        {preset.installedVersion && <Badge mono>v{preset.installedVersion}</Badge>}
+        {deployed
+          ? <Badge tone={linked.lastStatus === 'ok' ? 'ok' : linked.lastStatus === 'error' ? 'err' : 'default'}>
+            {linked.lastStatus === 'ok' ? '已部署 · 连接正常' : linked.lastStatus === 'error' ? '已部署 · 连接异常' : '已部署'}
+          </Badge>
+          : <Badge>未部署</Badge>}
+        <a href={preset.keyUrl} target="_blank" rel="noreferrer"
+          className="ml-auto inline-flex items-center gap-1 text-xs text-acc hover:underline">
+          获取 API Key <ExternalLink size={11} />
+        </a>
+      </div>
+      <p className="text-xs leading-relaxed text-tx3">
+        {preset.description} 服务器包会下载到本机数据目录,启动时不依赖网络;API Key 加密保存,不回显。
+        {preset.search && !deployed && ' 部署后会自动设为联网搜索源。'}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="password" uiSize="sm" className="min-w-0 flex-1 font-mono"
+          value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+          placeholder={deployed ? `更换 ${preset.apiKeyEnv}(留空则保持不变)` : preset.apiKeyEnv}
+          autoComplete="off"
+        />
+        <Button variant="primary" size="sm" disabled={busy} onClick={() => run(false)}>
+          {busy ? <Spinner className="h-3.5 w-3.5" /> : <Download size={13} />}
+          {deployed ? (apiKey.trim() ? '更新 Key 并重连' : '重新连接') : '下载并部署'}
+        </Button>
+        {deployed && (
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => run(true)} title="重新执行 npm install 升级到最新版本">
+            升级到最新版
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------- page ----------
 export default function Mcp() {
   const [servers, setServers] = useState<AdminMcpServer[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [presets, setPresets] = useState<McpPresetStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<AdminMcpServer | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [r, allUsers] = await Promise.all([
+      const [r, allUsers, presetList] = await Promise.all([
         api.get<AdminMcpServer[] | { servers?: AdminMcpServer[] }>('/api/admin/mcp'),
         api.get<AdminUser[]>('/api/admin/users'),
+        api.get<McpPresetStatus[]>('/api/admin/mcp/presets'),
       ]);
       setServers(Array.isArray(r) ? r : r.servers ?? []);
       setUsers(allUsers.filter((u) => u.role === 'user'));
+      setPresets(presetList);
     } catch (e) {
       toast(errMsg(e), 'err');
     } finally {
@@ -327,6 +401,10 @@ export default function Mcp() {
           <Plus size={15} />添加服务器
         </Button>
       </div>
+
+      {!loading && presets.map((p) => (
+        <PresetCard key={p.id} preset={p} servers={servers} reload={load} />
+      ))}
 
       {loading ? (
         <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>
