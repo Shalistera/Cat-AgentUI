@@ -50,16 +50,42 @@ hljs.registerAliases(['kt'], { languageName: 'kotlin' });
 hljs.registerAliases(['toml'], { languageName: 'ini' });
 hljs.registerAliases(['text', 'txt', 'plain'], { languageName: 'plaintext' });
 
-// Convert \[...\] / \(...\) LaTeX delimiters to $$...$$ / $...$ outside code spans & fences.
+// Currency-looking dollars: "$0.0770", "$1,234.56", "$5" — a "$" directly followed by a
+// number that is NOT itself closed by another "$" (so "$5$" stays math). Escaping them keeps
+// remark-math from pairing two prices in one line into a bogus inline formula.
+const CURRENCY_RE = /(^|[^\\$\w])\$(?=\d[\d,]*(?:\.\d+)?(?![\d,.]*\$))/g;
+
+// Outside code spans & fences: convert \[...\] / \(...\) LaTeX delimiters to $$...$$ / $...$,
+// and escape currency "$" so remark-math leaves it alone.
 function normalizeMath(src: string): string {
-  if (!src.includes('\\[') && !src.includes('\\(')) return src;
+  if (!src.includes('$') && !src.includes('\\[') && !src.includes('\\(')) return src;
   const segments = src.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/g);
   return segments.map((seg, i) => {
     if (i % 2 === 1) return seg; // code segment
     return seg
       .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `$$${m}$$`)
-      .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`);
+      .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`)
+      .replace(CURRENCY_RE, '$1\\$');
   }).join('');
+}
+
+// react-markdown escapes raw HTML (no rehype-raw on purpose), so a model's "<br>" — common
+// inside table cells, where Markdown has no other way to break a line — would show literally.
+// Turn just those nodes into proper line breaks.
+type MdNode = { type: string; value?: string; children?: MdNode[] };
+function remarkBrToBreak() {
+  return (tree: MdNode) => {
+    const walk = (node: MdNode) => {
+      if (!node.children) return;
+      for (const child of node.children) {
+        if (child.type === 'html' && /^<br\s*\/?>$/i.test((child.value ?? '').trim())) {
+          child.type = 'break';
+          delete child.value;
+        } else walk(child);
+      }
+    };
+    walk(tree);
+  };
 }
 
 const headBtn = 'flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] text-tx2 transition-colors hover:bg-bg3 hover:text-tx';
@@ -144,8 +170,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkBrToBreak]}
+        rehypePlugins={[[rehypeKatex, { strict: false }]]}
         components={{
           pre({ children }) {
             const child = Array.isArray(children) ? children[0] : children;

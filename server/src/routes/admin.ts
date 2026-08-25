@@ -11,8 +11,11 @@ import {
   effectiveQuota, monthStartDay, monthTokens, quotaSettings,
 } from '../quota.js';
 import { CHAT_IMAGE_RETENTION_KEY, IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
-import { backupDir, isBackupFilename, listBackups, runBackup } from '../backup.js';
-import { config } from '../config.js';
+import {
+  BACKUP_INTERVAL_MAX, BACKUP_INTERVAL_MIN, BACKUP_KEEP_MAX, BACKUP_KEEP_MIN,
+  backupDir, backupStatus, deleteBackup, getBackupSettings, isBackupFilename, listBackups,
+  runBackup, updateBackupSettings,
+} from '../backup.js';
 import { broadcast } from './events.js';
 import { FOLLOWUP_ENABLED_KEY, FOLLOWUP_MODEL_KEY, TITLE_MODEL_KEY } from './chats.js';
 import { unlinkStoredFiles } from '../storage.js';
@@ -427,24 +430,46 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   // --- database backups ---
-  app.get('/api/admin/backups', async (req, reply) => {
-    requireAdmin(req, reply);
-    return {
-      backups: listBackups(),
-      intervalHours: config.backupIntervalHours,
-      keep: config.backupKeep,
-    };
+  const backupsView = () => ({
+    backups: listBackups(),
+    settings: getBackupSettings(),
+    status: backupStatus(),
   });
 
+  app.get('/api/admin/backups', async (req, reply) => {
+    requireAdmin(req, reply);
+    return backupsView();
+  });
+
+  const backupSettingsSchema = z.object({
+    enabled: z.boolean().optional(),
+    intervalHours: z.number().int().min(BACKUP_INTERVAL_MIN).max(BACKUP_INTERVAL_MAX).optional(),
+    keep: z.number().int().min(BACKUP_KEEP_MIN).max(BACKUP_KEEP_MAX).optional(),
+  });
+
+  app.put('/api/admin/backups/settings', async (req, reply) => {
+    requireAdmin(req, reply);
+    const body = backupSettingsSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    updateBackupSettings(body.data);
+    return backupsView();
+  });
+
+  // Starts a snapshot and returns at once: a large DB can take minutes, longer
+  // than any reverse proxy is willing to keep one request open. The UI polls
+  // GET /api/admin/backups until status.running clears.
   app.post('/api/admin/backups', async (req, reply) => {
     requireAdmin(req, reply);
-    try {
-      const backup = await runBackup();
-      return { backup, backups: listBackups() };
-    } catch (err) {
-      req.log.error({ err }, 'manual backup failed');
-      return reply.code(500).send({ error: '备份失败,请查看服务日志' });
-    }
+    const already = backupStatus().running;
+    runBackup().catch((err) => req.log.error({ err }, 'manual backup failed'));
+    return reply.code(202).send({ started: !already, ...backupsView() });
+  });
+
+  app.delete('/api/admin/backups/:filename', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { filename } = req.params as { filename: string };
+    if (!deleteBackup(filename)) return reply.code(404).send({ error: '备份不存在' });
+    return backupsView();
   });
 
   app.get('/api/admin/backups/:filename', async (req, reply) => {

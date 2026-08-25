@@ -5,7 +5,12 @@ import { Button, Card, Field, Input, Select, Spinner, Textarea, ToggleRow, toast
 import type { AppSettings as AppSettingsDto, ModelInfo } from '../../types';
 
 interface BackupInfo { filename: string; size: number; createdAt: number }
-interface BackupsDto { backups: BackupInfo[]; intervalHours: number; keep: number }
+interface BackupSettings { enabled: boolean; intervalHours: number; keep: number }
+interface BackupStatus {
+  running: boolean; nextRunAt: number | null; lastError: string | null;
+  dbSize: number; freeSpace: number | null;
+}
+interface BackupsDto { backups: BackupInfo[]; settings: BackupSettings; status: BackupStatus }
 
 function fmtBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
@@ -15,21 +20,44 @@ function fmtBytes(n: number): string {
 
 function BackupsCard() {
   const [data, setData] = useState<BackupsDto | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Policy form; raw strings so fields can be emptied while typing.
+  const [enabled, setEnabled] = useState(true);
+  const [interval, setInterval_] = useState('24');
+  const [keep, setKeep] = useState('7');
+  const [dirty, setDirty] = useState(false);
+
+  function applySettings(s: BackupSettings) {
+    setEnabled(s.enabled); setInterval_(String(s.intervalHours)); setKeep(String(s.keep));
+    setDirty(false);
+  }
+
+  function load() {
+    return api.get<BackupsDto>('/api/admin/backups')
+      .then((r) => { setData(r); setLoadError(null); return r; })
+      .catch((e) => { setLoadError(e instanceof Error ? e.message : '加载备份列表失败'); return null; });
+  }
 
   useEffect(() => {
-    api.get<BackupsDto>('/api/admin/backups')
-      .then(setData)
-      .catch((e) => toast(e instanceof Error ? e.message : '加载备份列表失败', 'err'));
+    load().then((r) => { if (r) applySettings(r.settings); });
   }, []);
 
+  // While a snapshot is in flight, poll until it lands (or fails).
+  const running = data?.status.running ?? false;
+  useEffect(() => {
+    if (!running) return;
+    const t = window.setInterval(() => { load(); }, 2000);
+    return () => window.clearInterval(t);
+  }, [running]);
+
   async function backupNow() {
-    if (busy) return;
+    if (busy || running) return;
     setBusy(true);
     try {
-      const r = await api.post<{ backup: BackupInfo; backups: BackupInfo[] }>('/api/admin/backups');
-      setData((d) => (d ? { ...d, backups: r.backups } : d));
-      toast(`已生成快照 ${r.backup.filename}`, 'ok');
+      const r = await api.post<BackupsDto & { started: boolean }>('/api/admin/backups');
+      setData(r);
+      toast(r.started ? '快照已开始,完成后会出现在列表中' : '已有备份在进行中', 'ok');
     } catch (e) {
       toast(e instanceof Error ? e.message : '备份失败', 'err');
     } finally {
@@ -37,16 +65,41 @@ function BackupsCard() {
     }
   }
 
-  const schedule = data
-    ? data.intervalHours > 0
-      ? `每 ${data.intervalHours} 小时自动快照一次,保留最近 ${data.keep} 份(BACKUP_INTERVAL_HOURS / BACKUP_KEEP)。`
-      : '自动快照已通过 BACKUP_INTERVAL_HOURS=0 停用,仅可手动备份。'
-    : '';
+  async function saveSettings() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await api.put<BackupsDto>('/api/admin/backups/settings', {
+        enabled,
+        intervalHours: Math.min(720, Math.max(1, Math.round(Number(interval)) || 24)),
+        keep: Math.min(365, Math.max(1, Math.round(Number(keep)) || 7)),
+      });
+      setData(r); applySettings(r.settings);
+      toast('备份策略已保存', 'ok');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '保存失败', 'err');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(b: BackupInfo) {
+    if (!window.confirm(`删除快照 ${b.filename}?此操作不可恢复。`)) return;
+    try {
+      setData(await api.del<BackupsDto>(`/api/admin/backups/${encodeURIComponent(b.filename)}`));
+      toast('已删除', 'ok');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '删除失败', 'err');
+    }
+  }
+
+  const st = data?.status;
+  const totalSize = data ? data.backups.reduce((n, b) => n + b.size, 0) : 0;
 
   return (
     <Card
       title="数据库备份"
-      desc={`SQLite 在线快照,存放于 data/backups/,不影响服务运行。${schedule}`}
+      desc="SQLite 在线快照,存放于 data/backups/,不影响服务运行。策略在此设置并立即生效。"
     >
       <div className="space-y-4">
         <p className="text-xs text-tx3">
@@ -54,7 +107,44 @@ function BackupsCard() {
           data/images 目录,请连同 .env(SECRET_KEY)一起做整目录备份;缺少对应的
           SECRET_KEY 时快照中的密钥无法解密。
         </p>
-        {data && data.backups.length > 0 ? (
+
+        <ToggleRow
+          label="自动定时备份"
+          desc="关闭后只能手动备份;已有的快照不会被删除。"
+          checked={enabled} onChange={(v) => { setEnabled(v); setDirty(true); }}
+        />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="备份间隔(小时)" hint="1–720。从最近一份快照的时间起算。">
+            <Input
+              type="number" min={1} max={720} step={1} inputMode="numeric"
+              value={interval} disabled={!enabled}
+              onChange={(e) => { setInterval_(e.target.value); setDirty(true); }}
+            />
+          </Field>
+          <Field label="保留份数" hint="1–365。超出的旧快照会在下次备份或保存策略时删除;数据库大时请按磁盘空间设置。">
+            <Input
+              type="number" min={1} max={365} step={1} inputMode="numeric"
+              value={keep}
+              onChange={(e) => { setKeep(e.target.value); setDirty(true); }}
+            />
+          </Field>
+        </div>
+
+        {st && (
+          <div className="grid gap-x-6 gap-y-1 rounded-lg bg-bg0 px-3.5 py-3 text-xs text-tx3 sm:grid-cols-2">
+            <div>当前数据库:<span className="text-tx2">{fmtBytes(st.dbSize)}</span>(每份快照约此大小)</div>
+            <div>快照合计:<span className="text-tx2">{fmtBytes(totalSize)}</span>({data!.backups.length} 份)</div>
+            <div>磁盘剩余:<span className="text-tx2">{st.freeSpace === null ? '未知' : fmtBytes(st.freeSpace)}</span></div>
+            <div>下次自动备份:<span className="text-tx2">
+              {st.running ? '进行中…' : st.nextRunAt ? fmtTime(st.nextRunAt) : '已停用'}
+            </span></div>
+            {st.lastError && <div className="text-err sm:col-span-2">上次备份失败:{st.lastError}</div>}
+          </div>
+        )}
+
+        {loadError ? (
+          <p className="text-sm text-err">{loadError}(服务端可能还是旧版本,请重新构建并重启)</p>
+        ) : data && data.backups.length > 0 ? (
           <ul className="divide-y divide-line rounded-lg border border-line">
             {data.backups.map((b) => (
               <li key={b.filename} className="flex items-center gap-3 px-3 py-2 text-sm">
@@ -65,15 +155,24 @@ function BackupsCard() {
                   className="shrink-0 text-xs text-acc hover:underline"
                   href={`/api/admin/backups/${encodeURIComponent(b.filename)}`}
                 >下载</a>
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer text-xs text-tx3 hover:text-err"
+                  onClick={() => remove(b)}
+                >删除</button>
               </li>
             ))}
           </ul>
         ) : (
           <p className="text-sm text-tx3">{data ? '还没有任何快照。' : '加载中…'}</p>
         )}
-        <div className="flex justify-end border-t border-line pt-4">
-          <Button variant="primary" disabled={busy || !data} onClick={backupNow}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}立即备份
+
+        <div className="flex justify-end gap-2 border-t border-line pt-4">
+          <Button disabled={busy || !data || running} onClick={backupNow}>
+            {running && <Spinner className="h-3.5 w-3.5" />}{running ? '备份进行中…' : '立即备份'}
+          </Button>
+          <Button variant="primary" disabled={busy || !data || !dirty} onClick={saveSettings}>
+            {busy && <Spinner className="h-3.5 w-3.5" />}保存备份策略
           </Button>
         </div>
       </div>

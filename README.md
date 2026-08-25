@@ -91,8 +91,8 @@ npx pm2 save
 | `PASSWORD_CONCURRENCY` | scrypt 同时执行数 | `2` |
 | `PASSWORD_QUEUE_MAX` | scrypt 等待队列长度 | `32` |
 | `MAX_TOOL_ITERATIONS` | 单次回复最多 MCP 工具轮数 | `10` |
-| `BACKUP_INTERVAL_HOURS` | 数据库自动快照间隔(0 = 关闭自动备份) | `24` |
-| `BACKUP_KEEP` | 快照保留份数,超出自动轮转删除 | `14` |
+| `BACKUP_INTERVAL_HOURS` | 数据库自动快照间隔的初始默认值(0 = 默认关闭);实际策略在后台「应用设置 → 数据库备份」中设置并存库 | `24` |
+| `BACKUP_KEEP` | 快照保留份数的初始默认值,后台可改 | `14` |
 
 ### Vertex Gemini 原生联网搜索
 
