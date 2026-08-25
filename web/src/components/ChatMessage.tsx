@@ -285,6 +285,17 @@ function sourceHost(uri: string): string {
   try { return new URL(uri).hostname.replace(/^www\./, ''); } catch { return uri; }
 }
 
+/** Gemini grounding links are vertexaisearch.cloud.google.com redirects and the
+ * chunk "title" is usually just the real domain, so the host line would either
+ * repeat the title or show the meaningless redirect host. Only show it when it
+ * adds a real site address. */
+function sourceSubline(source: { uri: string; title: string }): string | null {
+  const host = sourceHost(source.uri);
+  if (/(^|\.)vertexaisearch\.cloud\.google\.com$/i.test(host)) return null;
+  if (host.toLowerCase() === source.title.replace(/^www\./, '').toLowerCase()) return null;
+  return host;
+}
+
 function GroundingBlock({ part }: { part: GroundingPart }) {
   const [open, setOpen] = useState(false);
   const count = part.sources.length;
@@ -308,7 +319,9 @@ function GroundingBlock({ part }: { part: GroundingPart }) {
               <a key={`${source.uri}-${i}`} href={source.uri} target="_blank" rel="noreferrer"
                 className="block rounded-md px-2 py-1.5 transition-colors hover:bg-bg2">
                 <span className="block truncate text-xs font-medium text-tx hover:text-acc">{source.title}</span>
-                <span className="mt-0.5 block truncate text-[10px] text-tx3">{sourceHost(source.uri)}</span>
+                {sourceSubline(source) && (
+                  <span className="mt-0.5 block truncate text-[10px] text-tx3">{sourceSubline(source)}</span>
+                )}
               </a>
             ))}
           </div>

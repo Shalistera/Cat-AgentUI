@@ -193,7 +193,12 @@ function groundingOf(metadata: any): GroundingInfo | null {
     ? metadata.groundingChunks.flatMap((chunk: any) => {
       const web = chunk?.web;
       return typeof web?.uri === 'string' && web.uri
-        ? [{ uri: web.uri, title: typeof web.title === 'string' && web.title ? web.title : web.uri }]
+        ? [{
+          uri: web.uri,
+          title: typeof web.title === 'string' && web.title ? web.title
+            : typeof web.domain === 'string' && web.domain ? web.domain
+            : web.uri,
+        }]
         : [];
     })
     : [];
