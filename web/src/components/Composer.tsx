@@ -559,6 +559,7 @@ export function Composer(props: ComposerProps) {
           rows={1}
           value={text}
           placeholder={props.disabled ? '管理员尚未配置模型'
+            : compact ? '输入消息…'
             : imageMode ? '描述你想生成的画面…'
             : '输入消息,Enter 发送,Shift + Enter 换行'}
           disabled={props.disabled}
