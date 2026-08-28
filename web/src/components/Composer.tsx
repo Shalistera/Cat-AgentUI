@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import {
   ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon,
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
@@ -115,10 +115,11 @@ interface ComposerProps {
   /** Persist unsent input under this key (per chat); omit to disable drafts. */
   draftKey?: string;
   autoFocus?: boolean;
-  /** Mobile: fold to a single row (input + model name) after the user scrolls
-      up through the conversation; tapping the input calls onExpand. */
+  /** Mobile: fold to a single row (input + model name). Tapping the input
+      calls onExpand; sending, or leaving an empty input, calls onCollapse. */
   compact?: boolean;
   onExpand?(): void;
+  onCollapse?(): void;
 }
 
 export function Composer(props: ComposerProps) {
@@ -183,8 +184,9 @@ export function Composer(props: ComposerProps) {
   }, [text, props.compact]);
 
   useEffect(() => {
-    if (props.autoFocus) taRef.current?.focus();
-  }, [props.autoFocus]);
+    // A folded composer must not grab focus on mount: focusing is what unfolds it.
+    if (props.autoFocus && !compact) taRef.current?.focus();
+  }, [props.autoFocus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Draft restore: switching draftKey swaps the input to that conversation's
   // saved draft. loadedDraftKeyRef gates the save effect so the OLD text can
@@ -228,6 +230,21 @@ export function Composer(props: ComposerProps) {
     setAtts([]);
     // Clear immediately — the debounced save must not race a navigation.
     if (props.draftKey) clearDraft(props.draftKey);
+    taRef.current?.blur();
+    props.onCollapse?.();
+  }
+
+  // Blur-to-collapse must not fire for taps inside the composer itself —
+  // toolbar buttons steal focus before their click lands, and on iOS they
+  // never become relatedTarget, so a capture-phase pointerdown flag is the
+  // only reliable tell.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const innerTap = useRef(false);
+  function onTextBlur(e: FocusEvent<HTMLTextAreaElement>) {
+    if (!props.onCollapse) return;
+    if (innerTap.current || rootRef.current?.contains(e.relatedTarget as Node | null)) return;
+    if (text.trim() || atts.length > 0 || uploading) return;
+    props.onCollapse();
   }
 
   async function pickFiles(files: FileList | File[] | null) {
@@ -488,7 +505,14 @@ export function Composer(props: ComposerProps) {
   const popField = 'w-full rounded-md border border-field bg-bg1 px-2.5 py-1.5 text-xs text-tx placeholder:text-tx3 transition-colors hover:border-tx3';
 
   return (
-    <div className="w-full">
+    <div
+      ref={rootRef}
+      className="w-full"
+      onPointerDownCapture={() => {
+        innerTap.current = true;
+        setTimeout(() => { innerTap.current = false; }, 300);
+      }}
+    >
       {/* Raised the moment a file drag crosses the window: the scrim dims the
           page and one dashed card names the outcome, so there is no guessing
           where the image should be dropped — anywhere counts. */}
@@ -566,6 +590,7 @@ export function Composer(props: ComposerProps) {
           className={`max-h-[220px] w-full resize-none bg-transparent px-4 text-[15px] leading-relaxed text-tx outline-none focus-visible:outline-none placeholder:text-tx3 ${
             compact ? 'min-w-0 flex-1 py-2.5' : 'pb-2 pt-3.5'}`}
           onFocus={() => { if (compact) props.onExpand?.(); }}
+          onBlur={onTextBlur}
           onChange={(e) => setText(e.target.value)}
           onCompositionStart={() => { composingRef.current = true; }}
           onCompositionEnd={() => { composingRef.current = false; }}
@@ -587,7 +612,12 @@ export function Composer(props: ComposerProps) {
             <button
               className="flex shrink-0 cursor-pointer items-center gap-1 text-xs text-tx2"
               title="展开输入区"
-              onClick={() => { props.onExpand?.(); taRef.current?.focus(); }}
+              onClick={() => {
+                props.onExpand?.();
+                // The picker's trigger lives in the toolbar that is about to
+                // unhide; open it once it has a real position to anchor to.
+                setTimeout(() => setPanelOpen(true), 0);
+              }}
             >
               <ModelAvatar info={model} size={14} tile={false} />
               <span className="max-w-[6.5rem] truncate">{model.displayName}</span>

@@ -424,21 +424,19 @@ export default function Chat() {
     }
   }, [path, stick]);
 
-  // Mobile: scrolling back up through the conversation folds the composer to
-  // one row so more of the transcript fits; tapping the input unfolds it.
-  const [composerCompact, setComposerCompact] = useState(false);
-  const lastScrollTop = useRef(0);
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
-    const dy = el.scrollTop - lastScrollTop.current;
-    lastScrollTop.current = el.scrollTop;
-    // Threshold filters out the jitter from the on-screen keyboard resizing
-    // the viewport, which would otherwise fold the input mid-typing.
-    if (dy < -12 && window.innerWidth < 640) setComposerCompact(true);
   }, []);
-  useEffect(() => { setComposerCompact(false); }, [routeId]);
+
+  // Mobile: the composer rests folded to one row (input + model name) and
+  // only unfolds while the person is actually composing — tap to open, and
+  // it closes again after a send or when an empty input loses focus. The
+  // empty state keeps the full composer: there's nothing else on screen.
+  const narrow = () => window.innerWidth < 640;
+  const [composerCompact, setComposerCompact] = useState(narrow);
+  useEffect(() => { setComposerCompact(narrow()); }, [routeId]);
 
   function persistSettings(next: ComposerSettings, mcp?: string[]) {
     setSettings(next);
@@ -880,8 +878,9 @@ export default function Chat() {
       onStop={stop}
       draftKey={draftKey}
       autoFocus
-      compact={composerCompact}
+      compact={composerCompact && path.length > 0}
       onExpand={() => setComposerCompact(false)}
+      onCollapse={() => { if (narrow()) setComposerCompact(true); }}
     />
   );
 
