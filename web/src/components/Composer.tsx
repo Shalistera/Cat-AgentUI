@@ -115,10 +115,14 @@ interface ComposerProps {
   /** Persist unsent input under this key (per chat); omit to disable drafts. */
   draftKey?: string;
   autoFocus?: boolean;
+  /** Mobile: fold to a single row (input + model name) after the user scrolls
+      up through the conversation; tapping the input calls onExpand. */
+  compact?: boolean;
+  onExpand?(): void;
 }
 
 export function Composer(props: ComposerProps) {
-  const { streaming, model } = props;
+  const { streaming, model, compact = false } = props;
   const [text, setText] = useState('');
 
   // —— 语音输入 —— dictation is all in-browser (Chrome/Edge); the transcript
@@ -176,7 +180,7 @@ export function Composer(props: ComposerProps) {
     if (!ta) return;
     ta.style.height = 'auto';
     ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`;
-  }, [text]);
+  }, [text, props.compact]);
 
   useEffect(() => {
     if (props.autoFocus) taRef.current?.focus();
@@ -546,15 +550,21 @@ export function Composer(props: ComposerProps) {
           </div>
         )}
 
+        {/* Collapsed (mobile, after scrolling up): one row — the input plus the
+            current model's name as a reminder. Focusing the input unfolds the
+            full toolbar again. */}
+        <div className={compact ? 'flex items-center gap-2 pr-3' : 'contents'}>
         <textarea
           ref={taRef}
-          rows={2}
+          rows={1}
           value={text}
           placeholder={props.disabled ? '管理员尚未配置模型'
             : imageMode ? '描述你想生成的画面…'
             : '输入消息,Enter 发送,Shift + Enter 换行'}
           disabled={props.disabled}
-          className="max-h-[220px] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-[15px] leading-relaxed text-tx outline-none focus-visible:outline-none placeholder:text-tx3"
+          className={`max-h-[220px] w-full resize-none bg-transparent px-4 text-[15px] leading-relaxed text-tx outline-none focus-visible:outline-none placeholder:text-tx3 ${
+            compact ? 'min-w-0 flex-1 py-2.5' : 'pb-2 pt-3.5'}`}
+          onFocus={() => { if (compact) props.onExpand?.(); }}
           onChange={(e) => setText(e.target.value)}
           onCompositionStart={() => { composingRef.current = true; }}
           onCompositionEnd={() => { composingRef.current = false; }}
@@ -572,7 +582,19 @@ export function Composer(props: ComposerProps) {
           }}
         />
 
-        <div className="flex items-center gap-1 rounded-b-xl border-t border-line bg-bg2/45 px-2 py-2">
+          {compact && model && (
+            <button
+              className="flex shrink-0 cursor-pointer items-center gap-1 text-xs text-tx2"
+              title="展开输入区"
+              onClick={() => { props.onExpand?.(); taRef.current?.focus(); }}
+            >
+              <ModelAvatar info={model} size={14} tile={false} />
+              <span className="max-w-[6.5rem] truncate">{model.displayName}</span>
+            </button>
+          )}
+        </div>
+
+        <div className={`flex items-center gap-1 rounded-b-xl border-t border-line bg-bg2/45 px-2 py-2 ${compact ? 'hidden' : ''}`}>
           {/* left: attachments, then tools */}
           <input ref={fileRef} type="file" multiple hidden
             accept={imageMode ? 'image/png,image/jpeg,image/webp,image/gif' : FILE_ACCEPT}

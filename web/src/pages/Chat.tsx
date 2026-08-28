@@ -424,11 +424,21 @@ export default function Chat() {
     }
   }, [path, stick]);
 
+  // Mobile: scrolling back up through the conversation folds the composer to
+  // one row so more of the transcript fits; tapping the input unfolds it.
+  const [composerCompact, setComposerCompact] = useState(false);
+  const lastScrollTop = useRef(0);
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+    const dy = el.scrollTop - lastScrollTop.current;
+    lastScrollTop.current = el.scrollTop;
+    // Threshold filters out the jitter from the on-screen keyboard resizing
+    // the viewport, which would otherwise fold the input mid-typing.
+    if (dy < -12 && window.innerWidth < 640) setComposerCompact(true);
   }, []);
+  useEffect(() => { setComposerCompact(false); }, [routeId]);
 
   function persistSettings(next: ComposerSettings, mcp?: string[]) {
     setSettings(next);
@@ -870,6 +880,8 @@ export default function Chat() {
       onStop={stop}
       draftKey={draftKey}
       autoFocus
+      compact={composerCompact}
+      onExpand={() => setComposerCompact(false)}
     />
   );
 
@@ -1050,7 +1062,7 @@ export default function Chat() {
               onUpdate={(item, t) => chat && queueStore.update(chat.id, item.id, t)}
             />
             <div className="mx-auto max-w-[48rem]">{composer}</div>
-            <p className="mt-2 text-center text-[11px] text-tx3">内容由 AI 生成,请自行核实关键信息。</p>
+            {!composerCompact && <p className="mt-2 text-center text-[11px] text-tx3">内容由 AI 生成,请自行核实关键信息。</p>}
           </div>
         </>
       )}
