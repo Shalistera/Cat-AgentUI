@@ -144,7 +144,7 @@ export default function ProjectPage() {
     if (!project) return;
     const ok = await confirmDialog(
       '删除项目',
-      `将删除项目「${project.name}」及其全部资料。项目内的对话会保留,只是不再携带项目上下文。`,
+      `将删除项目「${project.name}」及其全部资料。项目里的对话会保留,只是以后不再自动带上项目的要求和资料。`,
     );
     if (!ok) return;
     try {
@@ -307,7 +307,7 @@ export default function ProjectPage() {
           </div>
 
           <div className="space-y-5">
-            <Card title="项目指令" desc="项目内每个对话自动携带。">
+            <Card title="项目指令" desc="写给 AI 的固定要求,项目里的每个对话都会自动遵守,不用每次重复说。">
               <Textarea rows={7} value={instrDraft} onChange={(e) => setInstrDraft(e.target.value)}
                 maxLength={limits?.maxInstructionsChars} className="text-[13px]"
                 placeholder="例如:回答一律用中文,代码示例用 TypeScript,引用资料时注明文档名…" />

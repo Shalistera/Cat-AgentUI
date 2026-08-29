@@ -533,7 +533,7 @@ export function Sidebar() {
               );
             })}
             {projectsStore.loaded && projectsStore.projects.length === 0 && (
-              <p className="px-2 pb-1 text-[11px] leading-relaxed text-tx3">用项目沉淀指令与资料,项目内的对话自动携带它们。</p>
+              <p className="px-2 pb-1 text-[11px] leading-relaxed text-tx3">把常用的要求和资料放进项目,项目里的对话会自动用上。</p>
             )}
           </div>
         )}
@@ -624,6 +624,8 @@ export function Sidebar() {
           </div>
         </Popover>
       </div>
+
+      <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} />
     </aside>
   );
 }
