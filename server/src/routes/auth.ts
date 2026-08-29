@@ -172,6 +172,27 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: '参数错误' });
       }
     }
+    // workshopPins is the sidebar's icon row (workshop ids, ordered); null =
+    // show everything in the built-in order.
+    {
+      const v = body.data.settings?.workshopPins;
+      if (v !== undefined && v !== null
+        && !(Array.isArray(v) && v.length <= 12 && v.every((x) => typeof x === 'string' && x.length <= 32))) {
+        return reply.code(400).send({ error: '参数错误' });
+      }
+    }
+    // translateScenes are the user's own style presets on the 翻译工坊 page —
+    // a short name plus the sentence that lands in the prompt's style slot.
+    {
+      const v = body.data.settings?.translateScenes;
+      const okScene = (x: unknown) => !!x && typeof x === 'object'
+        && typeof (x as { name?: unknown }).name === 'string' && (x as { name: string }).name.trim().length > 0
+        && (x as { name: string }).name.length <= 20
+        && typeof (x as { text?: unknown }).text === 'string' && (x as { text: string }).text.length <= 300;
+      if (v !== undefined && v !== null && !(Array.isArray(v) && v.length <= 4 && v.every(okScene))) {
+        return reply.code(400).send({ error: '参数错误' });
+      }
+    }
     const patch: Record<string, unknown> = {};
     if (body.data.displayName !== undefined) patch.displayName = body.data.displayName;
     if (body.data.settings !== undefined) {

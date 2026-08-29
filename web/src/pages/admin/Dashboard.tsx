@@ -12,6 +12,7 @@ const KIND_LABELS: Record<string, string> = {
   title: '标题生成',
   followup: '快速追问',
   ocr: 'OCR 工坊',
+  translate: '翻译工坊',
 };
 
 /** One empty-table placeholder, one voice — every card says it the same way. */

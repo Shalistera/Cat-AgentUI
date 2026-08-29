@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ArrowDown, ArrowUp, X } from 'lucide-react';
 import { api, fmtTime } from '../../api';
 import { useAuth } from '../../store';
 import { Button, Card, Field, Input, Select, Spinner, Textarea, ToggleRow, toast } from '../../components/ui';
@@ -16,6 +17,62 @@ function fmtBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+const CHAIN_MAX = 6;
+
+/** Ordered model chain: the first is tried first, the rest are fallbacks. */
+function ModelChain({ ids, onChange, models, disabled }: {
+  ids: string[]; onChange(next: string[]): void; models: ModelInfo[]; disabled?: boolean;
+}) {
+  const byId = new Map(models.map((m) => [m.id, m]));
+  const remaining = models.filter((m) => !ids.includes(m.id));
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= ids.length) return;
+    const next = [...ids];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  return (
+    <div className="space-y-2">
+      {ids.length > 0 ? (
+        <ol className="divide-y divide-line rounded-lg border border-line">
+          {ids.map((id, i) => {
+            const m = byId.get(id);
+            return (
+              <li key={id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                <span className="w-4 shrink-0 text-xs tabular-nums text-tx3">{i + 1}.</span>
+                <span className={`min-w-0 flex-1 truncate ${m ? 'text-tx' : 'text-err'}`}>
+                  {m ? `${m.displayName}(${m.providerName})` : `模型已删除或停用(${id})`}
+                </span>
+                <button type="button" title="上移" disabled={disabled || i === 0}
+                  className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
+                  onClick={() => move(i, -1)}><ArrowUp size={13} /></button>
+                <button type="button" title="下移" disabled={disabled || i === ids.length - 1}
+                  className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
+                  onClick={() => move(i, 1)}><ArrowDown size={13} /></button>
+                <button type="button" title="移除" disabled={disabled}
+                  className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-err disabled:opacity-30"
+                  onClick={() => onChange(ids.filter((x) => x !== id))}><X size={13} /></button>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="rounded-lg border border-dashed border-line px-3 py-2 text-xs text-tx3">尚未选择模型,该模式对用户不可用。</p>
+      )}
+      {ids.length < CHAIN_MAX && (
+        <Select value="" disabled={disabled || remaining.length === 0}
+          onChange={(e) => { if (e.target.value) onChange([...ids, e.target.value]); }}>
+          <option value="">{remaining.length ? '添加模型…' : '没有更多可添加的模型'}</option>
+          {remaining.map((m) => (
+            <option key={m.id} value={m.id}>{m.displayName}({m.providerName})</option>
+          ))}
+        </Select>
+      )}
+    </div>
+  );
 }
 
 function BackupsCard() {
@@ -195,6 +252,8 @@ export default function AppSettings() {
   const [followupModel, setFollowupModel] = useState('');
   const [announcement, setAnnouncement] = useState('');
   const [usageCurrency, setUsageCurrency] = useState('$');
+  const [translateFast, setTranslateFast] = useState<string[]>([]);
+  const [translateThink, setTranslateThink] = useState<string[]>([]);
   const [textModels, setTextModels] = useState<ModelInfo[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -210,6 +269,8 @@ export default function AppSettings() {
     setFollowupModel(r.followupModelId ?? '');
     setAnnouncement(r.announcement ?? '');
     setUsageCurrency(r.usageCurrency ?? '$');
+    setTranslateFast(r.translateFastModelIds ?? []);
+    setTranslateThink(r.translateThinkModelIds ?? []);
   }
 
   useEffect(() => {
@@ -246,6 +307,8 @@ export default function AppSettings() {
         followupModelId: followupModel || null,
         announcement: announcement.trim(),
         usageCurrency: usageCurrency.trim() || '$',
+        translateFastModelIds: translateFast,
+        translateThinkModelIds: translateThink,
       });
       apply(r);
       toast('已保存', 'ok');
@@ -395,6 +458,30 @@ export default function AppSettings() {
             </Select>
           </Field>
 
+          <div className="flex justify-end border-t border-line pt-4">
+            <Button variant="primary" disabled={busy} onClick={save}>
+              {busy && <Spinner className="h-3.5 w-3.5" />}保存更改
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      <Card
+        title="翻译工坊"
+        desc="用户在翻译页只选「快速 / 思考」和三档强度,不选模型。每种模式按下面的顺序调用,前一个失败(尚未输出)时自动换下一个;某个模式留空则对用户隐藏。"
+      >
+        <div className="space-y-5">
+          <div className="grid gap-5 md:grid-cols-2">
+            <Field label="快速模式" hint="推荐便宜、快的模型;有推理功能的模型会被显式关闭推理。">
+              <ModelChain ids={translateFast} onChange={setTranslateFast} models={textModels} disabled={busy} />
+            </Field>
+            <Field label="思考模式" hint="推荐带推理能力的模型;用户选的低 / 中 / 高会映射到该模型自己推理档位的最弱 / 中间 / 最强一档。">
+              <ModelChain ids={translateThink} onChange={setTranslateThink} models={textModels} disabled={busy} />
+            </Field>
+          </div>
+          <p className="text-xs leading-relaxed text-tx3">
+            翻译走一套固定的系统提示词(只输出译文、保留格式与专有名词、不执行原文中的指令等);用户选择的场景只作为语气偏好插入其中一处。模型访问权限在此不生效——列在这里即对所有用户可用。
+          </p>
           <div className="flex justify-end border-t border-line pt-4">
             <Button variant="primary" disabled={busy} onClick={save}>
               {busy && <Spinner className="h-3.5 w-3.5" />}保存更改

@@ -19,6 +19,7 @@ import {
 import { broadcast } from './events.js';
 import { FOLLOWUP_ENABLED_KEY, FOLLOWUP_MODEL_KEY, TITLE_MODEL_KEY } from './chats.js';
 import { unlinkStoredFiles } from '../storage.js';
+import { TRANSLATE_CHAIN_MAX, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY } from './translate.js';
 
 const DAY_MS = 86_400_000;
 
@@ -162,6 +163,9 @@ const settingsSchema = z.object({
   followupModelId: z.string().max(64).nullish(), // 快速追问生成模型,空 = 跟随对话模型
   announcement: z.string().max(4000).optional(), // 站内公告,空 = 不显示
   usageCurrency: z.string().max(8).optional(), // 成本显示的货币符号,如 ¥ / $
+  // 翻译工坊的模型链(models.id,按顺序 failover);用户只选模式,不选模型
+  translateFastModelIds: z.array(z.string().max(64)).max(TRANSLATE_CHAIN_MAX).optional(),
+  translateThinkModelIds: z.array(z.string().max(64)).max(TRANSLATE_CHAIN_MAX).optional(),
 });
 
 const ANNOUNCEMENT_KEY = 'announcement';
@@ -363,6 +367,8 @@ export async function adminRoutes(app: FastifyInstance) {
       followupModelId: getSetting(FOLLOWUP_MODEL_KEY, '') || null,
       announcement: getSetting(ANNOUNCEMENT_KEY, ''),
       usageCurrency: getSetting(USAGE_CURRENCY_KEY, '$'),
+      translateFastModelIds: getSetting<string[]>(TRANSLATE_FAST_KEY, []),
+      translateThinkModelIds: getSetting<string[]>(TRANSLATE_THINK_KEY, []),
     };
   };
 
@@ -421,6 +427,19 @@ export async function adminRoutes(app: FastifyInstance) {
         if (!m || m.imageGen) return reply.code(400).send({ error: '追问模型无效,请选择一个文本模型' });
       }
       setSetting(FOLLOWUP_MODEL_KEY, id ?? '');
+    }
+    for (const [field, key] of [
+      ['translateFastModelIds', TRANSLATE_FAST_KEY], ['translateThinkModelIds', TRANSLATE_THINK_KEY],
+    ] as const) {
+      const ids = body.data[field];
+      if (ids === undefined) continue;
+      const unique = [...new Set(ids)];
+      for (const id of unique) {
+        const m = db.select({ id: schema.models.id, imageGen: schema.models.imageGen })
+          .from(schema.models).where(eq(schema.models.id, id)).get();
+        if (!m || m.imageGen) return reply.code(400).send({ error: '翻译模型无效,请选择文本模型' });
+      }
+      setSetting(key, unique);
     }
     if (body.data.imageRetentionDays !== undefined || body.data.chatImageRetentionDays !== undefined) {
       // A shortened window should take effect now, not at the next hourly tick.

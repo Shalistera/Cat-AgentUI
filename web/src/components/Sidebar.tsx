@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Archive, ArchiveRestore, Ghost, MessageSquarePlus, Search, Image as ImageIcon, Settings as SettingsIcon,
-  Presentation, ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
-  MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson, ScanText,
+  Archive, ArchiveRestore, Ghost, MessageSquarePlus, Search, Settings as SettingsIcon,
+  ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
+  MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson, ChevronsUpDown,
+  LayoutGrid,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { api } from '../api';
@@ -11,7 +12,8 @@ import { CatMark } from './Logo';
 import { Button, Input, Modal, ModalActions, Popover, confirmDialog, toast } from './ui';
 import { CreateProjectModal } from './CreateProjectModal';
 import { ReleaseNotesButton } from './ReleaseNotes';
-import type { ChatSummary, SearchResult } from '../types';
+import { WORKSHOPS, pinnedWorkshops } from '../workshops';
+import type { ChatSummary, SearchResult, User } from '../types';
 
 /** Wrap the first occurrence of `q` (case-insensitive) in a highlight mark. */
 function highlightMatch(text: string, q: string) {
@@ -202,6 +204,110 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
   );
 }
 
+/** The workshops as an icon row. Which ones show — and in what order — is the
+    user's own (settings.workshopPins); the rest, plus pin toggles, live behind
+    the grid button. One row costs the same height as one text item did, so
+    adding a workshop no longer pushes the chat list up. */
+function WorkshopRail({ onNavigate }: { onNavigate(): void }) {
+  const nav = useNavigate();
+  const pathname = useLocation().pathname;
+  const user = useAuth((s) => s.user);
+  const setUser = useAuth((s) => s.setUser);
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const pins = user?.settings.workshopPins ?? null;
+  const pinned = pinnedWorkshops(pins);
+  const pinnedIds = pinned.map((w) => w.id);
+  const isActive = (to: string) => pathname === to || pathname.startsWith(`${to}/`);
+
+  async function savePins(next: string[]) {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { workshopPins: next } });
+      setUser(r.user);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '保存失败', 'err');
+    } finally {
+      setSaving(false);
+    }
+  }
+  const togglePin = (id: string) => savePins(
+    pinnedIds.includes(id) ? pinnedIds.filter((x) => x !== id) : [...pinnedIds, id],
+  );
+  const move = (id: string, dir: -1 | 1) => {
+    const i = pinnedIds.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= pinnedIds.length) return;
+    const next = [...pinnedIds];
+    [next[i], next[j]] = [next[j], next[i]];
+    void savePins(next);
+  };
+
+  const iconBtn = (active: boolean) =>
+    `flex h-9 flex-1 cursor-pointer items-center justify-center rounded-md border transition-colors ${
+      active ? 'border-line bg-bg1 text-tx shadow-xs' : 'border-transparent text-tx2 hover:bg-bg2 hover:text-tx'}`;
+  const menuItem = 'flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-tx2 transition-colors hover:bg-bg2 hover:text-tx';
+
+  return (
+    <div className="flex items-center gap-1">
+      {pinned.map((w) => (
+        <button key={w.id} type="button" title={w.label} aria-label={w.label}
+          className={iconBtn(isActive(w.to))}
+          onClick={() => { nav(w.to); onNavigate(); }}>
+          <w.Icon size={16} />
+        </button>
+      ))}
+      <Popover open={open} setOpen={setOpen} align="right" width="w-56" trigger={
+        <button type="button" title="全部工坊 / 钉选" aria-label="全部工坊"
+          className={`${iconBtn(open)} ${pinned.length ? 'max-w-9 px-2' : ''}`}>
+          <LayoutGrid size={16} />
+          {!pinned.length && <span className="ml-1.5 text-[13px] font-medium">工坊</span>}
+        </button>
+      }>
+        <div className="p-1">
+          <div className="eyebrow px-2 py-1">工坊</div>
+          {WORKSHOPS.map((w) => {
+            const isPinned = pinnedIds.includes(w.id);
+            const order = pinnedIds.indexOf(w.id);
+            return (
+              <div key={w.id} className="group flex items-center gap-1">
+                <button className={`${menuItem} min-w-0 flex-1`}
+                  onClick={() => { setOpen(false); nav(w.to); onNavigate(); }}>
+                  <w.Icon size={13} className="shrink-0" />
+                  <span className="truncate">{w.label}</span>
+                </button>
+                {isPinned && (
+                  <span className="flex shrink-0 items-center">
+                    <button title="前移" disabled={saving || order <= 0}
+                      className="cursor-pointer rounded-sm p-0.5 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
+                      onClick={() => move(w.id, -1)}>
+                      <ChevronRight size={11} className="-rotate-90" />
+                    </button>
+                    <button title="后移" disabled={saving || order >= pinnedIds.length - 1}
+                      className="cursor-pointer rounded-sm p-0.5 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
+                      onClick={() => move(w.id, 1)}>
+                      <ChevronRight size={11} className="rotate-90" />
+                    </button>
+                  </span>
+                )}
+                <button title={isPinned ? '从图标栏移除' : '钉到图标栏'} disabled={saving}
+                  className={`shrink-0 cursor-pointer rounded-sm p-1 transition-colors hover:bg-bg2 ${isPinned ? 'text-acc' : 'text-tx3 hover:text-tx'}`}
+                  onClick={() => togglePin(w.id)}>
+                  {isPinned ? <Pin size={12} /> : <PinOff size={12} />}
+                </button>
+              </div>
+            );
+          })}
+          <p className="px-2 pb-1 pt-1.5 text-[11px] leading-relaxed text-tx3">
+            钉选的工坊显示在侧栏图标栏,按这里的顺序排列。
+          </p>
+        </div>
+      </Popover>
+    </div>
+  );
+}
+
 export function Sidebar() {
   const nav = useNavigate();
   // The rail lives in a pathless layout route, so `useParams` never sees the
@@ -215,6 +321,8 @@ export function Sidebar() {
   const { theme, setTheme, sidebarOpen, setSidebarOpen } = useUi();
   const [query, setQuery] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const menuItem = 'flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-tx2 transition-colors hover:bg-bg2 hover:text-tx';
 
   useEffect(() => { if (user && !loaded) load().catch(() => toast('加载对话列表失败', 'err')); }, [user, loaded, load]);
   useEffect(() => {
@@ -475,50 +583,47 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* utility nav + account */}
+      {/* workshops + account */}
       <div className="shrink-0 border-t border-line p-3">
-        <nav className="space-y-0.5">
-          <NavLink to="/images" className={navClass}>
-            <ImageIcon size={15} />绘图工坊
-          </NavLink>
-          <NavLink to="/ocr" className={navClass}>
-            <ScanText size={15} />OCR 工坊
-          </NavLink>
-          <NavLink to="/ppt" className={navClass}>
-            <Presentation size={15} />PPT 工坊
-          </NavLink>
-          {user?.role === 'admin' && (
-            <NavLink to="/admin" className={navClass}>
-              <ShieldCheck size={15} />管理后台
-            </NavLink>
-          )}
-          <NavLink to="/settings" className={navClass}>
-            <SettingsIcon size={15} />设置
-          </NavLink>
-        </nav>
+        <WorkshopRail onNavigate={() => { if (window.innerWidth <= 900) setSidebarOpen(false); }} />
 
-        <div className="mt-3 flex items-center gap-2.5 rounded-md border border-line bg-bg1 px-2.5 py-2 shadow-xs">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pri text-[11px] font-semibold text-prifg">
-            {initial}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-xs font-medium text-tx">{user?.displayName || user?.username}</div>
-            <div className="text-[11px] text-tx3">{user?.role === 'admin' ? '管理员' : '用户'}</div>
+        <Popover open={accountOpen} setOpen={setAccountOpen} align="left" width="w-[244px]" trigger={
+          <button
+            type="button"
+            title="账号菜单"
+            className={`mt-3 flex w-full cursor-pointer items-center gap-2.5 rounded-md border px-2.5 py-2 text-left transition-colors ${
+              accountOpen ? 'border-line bg-bg2' : 'border-line bg-bg1 shadow-xs hover:bg-bg2'}`}
+          >
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pri text-[11px] font-semibold text-prifg">
+              {initial}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-medium text-tx">{user?.displayName || user?.username}</span>
+              <span className="block text-[11px] text-tx3">{user?.role === 'admin' ? '管理员' : '用户'}</span>
+            </span>
+            <ChevronsUpDown size={14} className="shrink-0 text-tx3" />
+          </button>
+        }>
+          <div className="p-1">
+            <button className={menuItem} onClick={() => { setAccountOpen(false); nav('/settings'); if (window.innerWidth <= 900) setSidebarOpen(false); }}>
+              <SettingsIcon size={13} />设置
+            </button>
+            {user?.role === 'admin' && (
+              <button className={menuItem} onClick={() => { setAccountOpen(false); nav('/admin'); if (window.innerWidth <= 900) setSidebarOpen(false); }}>
+                <ShieldCheck size={13} />管理后台
+              </button>
+            )}
+            <button className={menuItem} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+              {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
+              {theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
+            </button>
+            <div className="my-1 border-t border-line" />
+            <button className={menuItem} onClick={async () => { setAccountOpen(false); await logout(); nav('/login'); }}>
+              <LogOut size={13} />退出登录
+            </button>
           </div>
-          <div className="flex items-center">
-            <Button variant="ghost" size="iconSm" title={theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-            </Button>
-            <Button variant="ghost" size="iconSm" title="退出登录"
-              onClick={async () => { await logout(); nav('/login'); }}>
-              <LogOut size={14} />
-            </Button>
-          </div>
-        </div>
+        </Popover>
       </div>
-
-      <CreateProjectModal open={creatingProject} onClose={() => setCreatingProject(false)} />
     </aside>
   );
 }

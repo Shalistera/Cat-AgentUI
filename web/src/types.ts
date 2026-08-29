@@ -17,7 +17,20 @@ export interface User {
     favoriteModels?: string[] | null;
     /** 快捷指令 cards on the new-chat page (max 6); null/absent = built-in default. */
     quickPrompts?: string[] | null;
+    /** Workshops pinned to the sidebar icon row (ids, ordered); null/absent = all. */
+    workshopPins?: string[] | null;
+    /** Personal style presets on the 翻译工坊 page (max 4). */
+    translateScenes?: TranslateScene[] | null;
   };
+}
+
+export interface TranslateScene { name: string; text: string }
+
+/** /api/translate/config — which modes the admin has wired up. */
+export interface TranslateConfig {
+  fast: boolean; think: boolean;
+  languages: Record<string, string>;
+  maxChars: number; maxSceneChars: number;
 }
 
 export type MessagePart =
@@ -301,6 +314,9 @@ export interface AppSettings {
   announcement: string;
   /** 成本显示所用的货币符号,默认 $。 */
   usageCurrency: string;
+  /** 翻译工坊 快速 / 思考 两条模型链(models.id,按顺序 failover)。 */
+  translateFastModelIds: string[];
+  translateThinkModelIds: string[];
 }
 
 // SSE stream handler callbacks
