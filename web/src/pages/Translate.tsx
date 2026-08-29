@@ -13,14 +13,13 @@ import type { TranslateConfig, TranslateScene, User } from '../types';
 /* 翻译工坊 — a Google-Translate-shaped pair of boxes. The user picks languages,
    快速/思考, a 3-rung intensity for 思考, and a 场景 (a style sentence that
    lands in one slot of the server's fixed prompt). Models are the admin's
-   business: see server/src/routes/translate.ts. 快速 translates on its own
-   as you type; 思考 waits for the button, since it costs real money. */
+   business: see server/src/routes/translate.ts. Nothing runs until the user
+   presses 翻译 — every call costs tokens. */
 
 type Mode = 'fast' | 'think';
 type Level = 1 | 2 | 3;
 
 const PREFS_KEY = 'cat-translate-prefs';
-const AUTO_DELAY_MS = 900;
 const MAX_CUSTOM_SCENES = 4;
 
 interface Prefs { source: string; target: string; mode: Mode; level: Level; scene: string }
@@ -139,9 +138,6 @@ export default function Translate() {
   const [stats, setStats] = useState<{ totalTokens: number; durationMs: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  // What the current 译文 was produced from — auto mode skips a re-run when
-  // nothing that matters changed (e.g. a level tweak while in 快速).
-  const lastKeyRef = useRef('');
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const modeAvailable = cfg ? (prefs.mode === 'fast' ? cfg.fast : cfg.think) : false;
@@ -149,10 +145,9 @@ export default function Translate() {
   const run = useCallback(async (input: string) => {
     const body = input.trim();
     abortRef.current?.abort();
-    if (!body || !cfg) { setResult(''); setDetected(null); setError(null); setStats(null); lastKeyRef.current = ''; return; }
+    if (!body || !cfg) { setResult(''); setDetected(null); setError(null); setStats(null); return; }
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    lastKeyRef.current = JSON.stringify([body, prefs.source, prefs.target, prefs.mode, prefs.level, activeScene.text]);
     setRunning(true); setResult(''); setDetected(null); setError(null); setStats(null); setThinking(false);
     try {
       let out = '';
@@ -175,17 +170,6 @@ export default function Translate() {
       if (abortRef.current === ctrl) { setRunning(false); abortRef.current = null; }
     }
   }, [cfg, prefs.source, prefs.target, prefs.mode, prefs.level, activeScene.text]);
-
-  // 快速 mode translates by itself once typing pauses; 思考 mode waits for the button.
-  useEffect(() => {
-    if (!cfg || prefs.mode !== 'fast' || !cfg.fast) return;
-    const body = text.trim();
-    if (!body) { abortRef.current?.abort(); setResult(''); setDetected(null); setError(null); setStats(null); lastKeyRef.current = ''; return; }
-    const key = JSON.stringify([body, prefs.source, prefs.target, prefs.mode, prefs.level, activeScene.text]);
-    if (key === lastKeyRef.current) return;
-    const t = setTimeout(() => { void run(text); }, AUTO_DELAY_MS);
-    return () => clearTimeout(t);
-  }, [text, cfg, prefs.mode, prefs.source, prefs.target, prefs.level, activeScene.text, run]);
 
   function stop() { abortRef.current?.abort(); setRunning(false); abortRef.current = null; }
 
@@ -221,7 +205,7 @@ export default function Translate() {
     <div className="contents">
       <PageHeader
         title="翻译工坊"
-        subtitle="左边输入,右边出译文;快速模式边输入边翻译"
+        subtitle="左边输入,点「翻译」,右边出译文"
         left={!sidebarOpen && (
           <Button variant="ghost" size="icon" title="展开侧栏" onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
@@ -253,21 +237,21 @@ export default function Translate() {
             <>
               {/* toolbar */}
               <div className="space-y-3 rounded-xl border border-line bg-bg1 px-4 py-3 shadow-xs">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none">
-                    <div className="w-36"><Select value={prefs.source} onChange={(e) => patchPrefs({ source: e.target.value })}>
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <div className="min-w-0 flex-1 sm:w-36 sm:flex-none"><Select value={prefs.source} onChange={(e) => patchPrefs({ source: e.target.value })}>
                       <option value="auto">{detectedLabel && prefs.source === 'auto' ? `检测到:${detectedLabel}` : '自动检测'}</option>
                       {langEntries.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
                     </Select></div>
                     <Button variant="ghost" size="iconSm" title="交换语言(译文回填为原文)" onClick={swap}>
                       <ArrowRightLeft size={14} />
                     </Button>
-                    <div className="w-36"><Select value={prefs.target} onChange={(e) => patchPrefs({ target: e.target.value })}>
+                    <div className="min-w-0 flex-1 sm:w-36 sm:flex-none"><Select value={prefs.target} onChange={(e) => patchPrefs({ target: e.target.value })}>
                       {langEntries.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
                     </Select></div>
                   </div>
 
-                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
                     <SegmentedControl<Mode>
                       value={prefs.mode}
                       onChange={(m) => {
@@ -276,8 +260,8 @@ export default function Translate() {
                         patchPrefs({ mode: m });
                       }}
                       options={[
-                        { value: 'fast', label: '⚡ 快速' },
-                        { value: 'think', label: '🧠 思考' },
+                        { value: 'fast', label: '快速' },
+                        { value: 'think', label: '思考' },
                       ]}
                     />
                     <div
@@ -330,11 +314,22 @@ export default function Translate() {
                 <Card
                   title="原文"
                   flush
-                  actions={text ? (
-                    <Button variant="ghost" size="sm" title="清空" onClick={() => { setText(''); stop(); setResult(''); setDetected(null); setError(null); setStats(null); lastKeyRef.current = ''; }}>
-                      <X size={14} />
-                    </Button>
-                  ) : undefined}
+                  actions={(
+                    <>
+                      {text && (
+                        <Button variant="ghost" size="sm" title="清空" onClick={() => { setText(''); stop(); setResult(''); setDetected(null); setError(null); setStats(null); }}>
+                          <X size={14} />
+                        </Button>
+                      )}
+                      {running ? (
+                        <Button variant="outline" size="sm" onClick={stop}><Square size={11} fill="currentColor" />停止</Button>
+                      ) : (
+                        <Button variant="primary" size="sm" disabled={!canRun} onClick={() => void run(text)}>
+                          {prefs.mode === 'fast' ? <Zap size={13} /> : <Brain size={13} />}翻译
+                        </Button>
+                      )}
+                    </>
+                  )}
                 >
                   <textarea
                     value={text}
@@ -342,20 +337,13 @@ export default function Translate() {
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); if (canRun) void run(text); }
                     }}
-                    placeholder={prefs.mode === 'fast' ? '输入或粘贴文本,停顿后自动翻译…' : '输入或粘贴文本,然后点「翻译」(Ctrl + Enter)…'}
+                    placeholder="输入或粘贴文本,然后点上方「翻译」(Ctrl + Enter)…"
                     rows={12}
                     className="block min-h-[16rem] w-full resize-y bg-transparent px-4 py-3 text-[15px] leading-relaxed text-tx outline-none placeholder:text-tx3"
                     autoFocus
                   />
-                  <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-2">
+                  <div className="flex h-10 items-center justify-end border-t border-line px-4">
                     <span className="text-xs tabular-nums text-tx3">{text.length.toLocaleString()} / {maxChars.toLocaleString()}</span>
-                    {running ? (
-                      <Button variant="outline" size="sm" onClick={stop}><Square size={11} fill="currentColor" />停止</Button>
-                    ) : (
-                      <Button variant="primary" size="sm" disabled={!canRun} onClick={() => void run(text)}>
-                        {prefs.mode === 'fast' ? <Zap size={13} /> : <Brain size={13} />}翻译
-                      </Button>
-                    )}
                   </div>
                 </Card>
 
