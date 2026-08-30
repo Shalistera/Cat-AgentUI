@@ -1,7 +1,7 @@
 import type {
   AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
-import { sseMessages, readErrorBody } from './sse.js';
+import { sseMessages, providerError } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
 
 const DEFAULT_BASE = 'https://api.anthropic.com';
@@ -143,7 +143,7 @@ async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): As
   const res = await fetch(`${base(cfg)}/v1/messages`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
   });
-  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await readErrorBody(res)}`);
+  if (!res.ok) throw await providerError('Anthropic', res);
 
   // track tool_use blocks by content index
   const toolBlocks = new Map<number, { id: string; name: string; argsJson: string }>();
@@ -207,7 +207,7 @@ export const anthropicAdapter: ChatAdapter = {
 
   async listModels(cfg) {
     const res = await fetch(`${base(cfg)}/v1/models?limit=200`, { headers: headers(cfg, false) });
-    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await readErrorBody(res)}`);
+    if (!res.ok) throw await providerError('Anthropic', res);
     const j: any = await res.json();
     const list = Array.isArray(j?.data) ? j.data : [];
     return list.map((m: any) => ({ id: String(m.id), name: m.display_name }));

@@ -2,7 +2,7 @@ import type {
   AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage,
   ImageGenRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
-import { sseMessages, readBodyLimited, readErrorBody, readJsonLimited } from './sse.js';
+import { sseMessages, readBodyLimited, providerError, readJsonLimited } from './sse.js';
 import { isBareOrigin, stripEndpointSuffix, trimUrl } from './base-url.js';
 import { config } from '../config.js';
 
@@ -122,7 +122,7 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
   const res = await fetch(`${base(cfg)}/chat/completions`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
   });
-  if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await readErrorBody(res)}`);
+  if (!res.ok) throw await providerError('OpenAI', res);
 
   // accumulate tool calls by index
   const calls = new Map<number, { id: string; name: string; args: string }>();
@@ -239,7 +239,7 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
   const res = await fetch(`${base(cfg)}/responses`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
   });
-  if (!res.ok) throw new Error(`OpenAI(Responses) ${res.status}: ${await readErrorBody(res)}`);
+  if (!res.ok) throw await providerError('OpenAI(Responses)', res);
 
   let sawToolCall = false;
   let incomplete = false;
@@ -287,7 +287,7 @@ export const openaiAdapter: ChatAdapter = {
 
   async listModels(cfg) {
     const res = await fetch(`${base(cfg)}/models`, { headers: headers(cfg, false) });
-    if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await readErrorBody(res)}`);
+    if (!res.ok) throw await providerError('OpenAI', res);
     const j: any = await readJsonLimited(res, 5 * 1024 * 1024);
     const list = Array.isArray(j?.data) ? j.data : [];
     return list.map((m: any) => ({ id: String(m.id) })).sort((a: any, b: any) => a.id.localeCompare(b.id));
@@ -325,7 +325,7 @@ export const openaiAdapter: ChatAdapter = {
         method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
       });
     }
-    if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await readErrorBody(res)}`);
+    if (!res.ok) throw await providerError('OpenAI', res);
     const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * (req.n || 1) * 4 / 3) + 1024 * 1024;
     const j: any = await readJsonLimited(res, maxJsonBytes);
     const usage = j?.usage

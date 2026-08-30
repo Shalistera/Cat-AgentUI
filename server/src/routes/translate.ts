@@ -170,7 +170,9 @@ export async function translateRoutes(app: FastifyInstance) {
     const sse = createSse(reply);
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), config.chatTurnTimeoutMs);
-    req.raw.on('close', () => abort.abort());
+    // Node ≥16 emits 'close' on the request as soon as its body is consumed, so
+    // a client-gone check has to watch the response side.
+    reply.raw.on('close', () => { if (!reply.raw.writableFinished) abort.abort(); });
     const secretValues = allConfiguredSecretValues();
     const system = translatePrompt(source, target, scene);
     const t0 = Date.now();

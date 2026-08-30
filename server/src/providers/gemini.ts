@@ -4,7 +4,7 @@ import type {
   AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, GroundingInfo,
   ImageGenRequest, ProviderRuntimeConfig, UsageInfo,
 } from '../types.js';
-import { sseMessages, readErrorBody, readJsonLimited } from './sse.js';
+import { sseMessages, providerError, readJsonLimited } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
 import { config } from '../config.js';
 
@@ -219,7 +219,7 @@ export const geminiAdapter: ChatAdapter = {
     const res = await fetch(url, {
       method: 'POST', headers, body: JSON.stringify(buildChatBody(req)), signal: req.signal,
     });
-    if (!res.ok) throw new Error(`Gemini ${res.status}: ${await readErrorBody(res)}`);
+    if (!res.ok) throw await providerError('Gemini', res);
 
     let usage: any = null;
     let finishReason: string | null = null;
@@ -279,7 +279,7 @@ export const geminiAdapter: ChatAdapter = {
           const url = `${origin}/v1beta1/publishers/google/models?pageSize=100${
             pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
           const res = await fetch(url, { headers: { ...cfg.extraHeaders, authorization: `Bearer ${token}` } });
-          if (!res.ok) throw new Error(`Gemini ${res.status}: ${await readErrorBody(res)}`);
+          if (!res.ok) throw await providerError('Gemini', res);
           const j: any = await res.json();
           for (const m of j.publisherModels ?? []) {
             names.push(String(m.name).replace(/^publishers\/google\/models\//, ''));
@@ -299,7 +299,7 @@ export const geminiAdapter: ChatAdapter = {
     const h: Record<string, string> = { ...cfg.extraHeaders };
     if (cfg.apiKey) h['x-goog-api-key'] = cfg.apiKey;
     const res = await fetch(`${studioOrigin(cfg)}/v1beta/models?pageSize=1000`, { headers: h });
-    if (!res.ok) throw new Error(`Gemini ${res.status}: ${await readErrorBody(res)}`);
+    if (!res.ok) throw await providerError('Gemini', res);
     const j: any = await res.json();
     const list = Array.isArray(j?.models) ? j.models : [];
     return list
@@ -337,7 +337,7 @@ export const geminiAdapter: ChatAdapter = {
       const res = await fetch(url, {
         method: 'POST', headers, body: JSON.stringify(body), signal: req.signal,
       });
-      if (!res.ok) throw new Error(`Gemini ${res.status}: ${await readErrorBody(res)}`);
+      if (!res.ok) throw await providerError('Gemini', res);
       const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * 4 / 3) + 1024 * 1024;
       const j: any = await readJsonLimited(res, maxJsonBytes);
       const usage = j?.usageMetadata ? toUsage(j.usageMetadata) : undefined;

@@ -46,6 +46,34 @@ export async function* sseMessages(res: Response): AsyncGenerator<SseMessage> {
   }
 }
 
+// Gateway-class failures (Cloudflare 52x, nginx 502/504) usually arrive as an
+// HTML error page. Nobody wants to read that in a toast, so those collapse to a
+// plain-language message; real API errors keep the provider's own wording.
+const GATEWAY_STATUS: Record<number, string> = {
+  502: '服务暂时不可用,请过一会再试',
+  503: '服务暂时不可用,请过一会再试',
+  504: '请求超时,请过一会再试',
+  520: '服务暂时不可用,请过一会再试',
+  521: '服务暂时不可用,请过一会再试',
+  522: '连接超时,请过一会再试',
+  523: '服务暂时不可用,请过一会再试',
+  524: '生成超时,请过一会再试',
+  529: '服务繁忙,请过一会再试',
+};
+
+function looksLikeHtml(text: string): boolean {
+  return /^\s*<(!doctype|html|head|body)/i.test(text);
+}
+
+export async function providerError(name: string, res: Response): Promise<Error> {
+  const body = await readErrorBody(res);
+  const gateway = GATEWAY_STATUS[res.status];
+  if (gateway) return new Error(`${name}: ${gateway} (${res.status})`);
+  if (res.status === 429) return new Error(`${name}: 请求过于频繁或额度不足,请稍后再试 (429)`);
+  if (looksLikeHtml(body) || !body.trim()) return new Error(`${name}: 上游返回了错误 (${res.status}),请稍后再试`);
+  return new Error(`${name} ${res.status}: ${body}`);
+}
+
 export async function readErrorBody(res: Response): Promise<string> {
   let text = '';
   try { text = (await readBodyLimited(res, 64 * 1024)).toString('utf8'); } catch { /* ignore */ }
