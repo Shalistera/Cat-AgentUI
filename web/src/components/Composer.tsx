@@ -623,6 +623,17 @@ export function Composer(props: ComposerProps) {
               <span className="max-w-[6.5rem] truncate">{model.displayName}</span>
             </button>
           )}
+          {/* The toolbar (and its stop button) is hidden while collapsed, but a
+              reply in flight must stay stoppable without unfolding first. */}
+          {compact && streaming && (
+            <button
+              title="停止生成"
+              className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx shadow-xs transition-colors hover:bg-bg2"
+              onClick={props.onStop}
+            >
+              <Square size={12} fill="currentColor" />
+            </button>
+          )}
         </div>
 
         <div className={`flex items-center gap-1 rounded-b-xl border-t border-line bg-bg2/45 px-2 py-2 ${compact ? 'hidden' : ''}`}>
