@@ -547,12 +547,12 @@ export default function Chat() {
     };
     flushTimer = setInterval(flush, 80);
 
-    const finalize = (status: Message['status']) => {
+    const finalize = (status: Message['status'], finishReason: string | null = null) => {
       if (finished) return;
       finished = true;
       if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
       flush();
-      applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status }));
+      applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status, finishReason }));
       setStreaming(false);
       sendingRef.current = false;
       // "stopped" is always user-initiated from this tab — no need to flag it.
@@ -601,7 +601,7 @@ export default function Chat() {
           : m)));
       },
       onError(message) { applyToAssistant((m) => ({ ...m, status: 'error', error: message })); },
-      onDone(status) { finalize(status); },
+      onDone(status, finishReason) { finalize(status, finishReason); },
     }, controller.signal)
       .then(() => finalize('done'))
       .catch((e) => {
@@ -646,8 +646,8 @@ export default function Chat() {
       const parentId = path.length ? path[path.length - 1].id : null;
       setMessages((prev) => [
         ...prev,
-        { id: 'tmp-u', parentId, role: 'user', parts, model: null, status: 'done', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs },
-        { id: 'tmp-a', parentId: 'tmp-u', role: 'assistant', parts: [], model: sendModel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
+        { id: 'tmp-u', parentId, role: 'user', parts, model: null, status: 'done', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs },
+        { id: 'tmp-a', parentId: 'tmp-u', role: 'assistant', parts: [], model: sendModel?.modelId ?? null, status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
       ]);
       setLeafId('tmp-a');
       runStream(target.id, { content, modelId: sendModel?.id, parentMessageId: parentId ?? undefined });
@@ -699,7 +699,7 @@ export default function Chat() {
     // version (and everything under it) stays reachable via the arrows.
     setMessages((prev) => [
       ...prev,
-      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
+      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
     ]);
     setLeafId('tmp-a');
     runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: modelSel?.id });
@@ -720,7 +720,7 @@ export default function Chat() {
     });
     setMessages((prev) => [
       ...prev,
-      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: withModel.modelId, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
+      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: withModel.modelId, status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
     ]);
     // Pin the view to the original: the compare panel renders in its place,
     // its descendants stay hidden until a side is kept.
@@ -772,7 +772,7 @@ export default function Chat() {
     setMessages((prev) => [
       ...prev,
       { ...original, id: 'tmp-u', parentId: original.parentId, parts: content as MessagePart[], createdAt: nowTs },
-      { id: 'tmp-a', parentId: 'tmp-u', role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
+      { id: 'tmp-a', parentId: 'tmp-u', role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
     ]);
     setLeafId('tmp-a');
     runStream(chatRef.current.id, { editMessageId: msgId, content, modelId: modelSel?.id });

@@ -98,7 +98,7 @@ export async function streamChat(
       case 'title': handlers.onTitle?.(data.title ?? ''); break;
       case 'followups': handlers.onFollowups?.(data); break;
       case 'error': handlers.onError?.(data.message ?? '发生错误'); break;
-      case 'done': handlers.onDone?.(data.status ?? 'done'); break;
+      case 'done': handlers.onDone?.(data.status ?? 'done', data.finishReason ?? null); break;
     }
     event = null; dataLines = [];
   };

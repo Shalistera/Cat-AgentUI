@@ -18,7 +18,7 @@ import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
 import type {
-  AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, ToolDef,
+  AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
 } from '../types.js';
 import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
@@ -386,7 +386,7 @@ function ownsProject(projectId: string, userId: string): boolean {
 function messageDto(m: typeof schema.messages.$inferSelect) {
   return {
     id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
-    status: m.status, error: m.error,
+    status: m.status, finishReason: m.finishReason ?? null, error: m.error,
     promptTokens: m.promptTokens, completionTokens: m.completionTokens, totalTokens: m.totalTokens,
     durationMs: m.durationMs, ttftMs: m.ttftMs, createdAt: m.createdAt,
   };
@@ -1008,8 +1008,21 @@ export async function chatRoutes(app: FastifyInstance) {
     // a user message both insert a SIBLING node (same parentId), so the old
     // branch stays reachable through the version arrows.
     const rows = allChatMessages(chatId);
+    // Replies that were cut short (stopped, errored mid-way, or ended on a
+    // length / content-filter stop) are replayed with an explicit marker, so
+    // the model doesn't treat the half-answer as something it finished saying.
     const usableHistory = (list: MessageRow[]) => list
-      .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0));
+      .filter((m) => !(m.role === 'assistant' && m.status === 'error' && parseParts(m.parts).length === 0))
+      .map((m) => {
+        if (m.role !== 'assistant') return m;
+        const cut = m.status === 'stopped' || m.status === 'error'
+          || m.finishReason === 'length' || m.finishReason === 'content_filter';
+        if (!cut) return m;
+        const parts = parseParts(m.parts);
+        if (!parts.some((p) => p.type === 'text' && p.text.trim())) return m;
+        appendText(parts, 'text', '\n\n[此回复在这里被中断,并未完成]');
+        return { ...m, parts: JSON.stringify(parts) };
+      });
     let userMessageId: string | null = null;
     let assistantParentId: string | null;
     let history: { role: string; parts: string }[];
@@ -1172,6 +1185,7 @@ export async function chatRoutes(app: FastifyInstance) {
     let ttft: number | null = null;
     const t0 = Date.now();
     let status: 'done' | 'error' | 'stopped' = 'done';
+    let finishReason: StopReason | null = null;
     let errMsg: string | null = null;
     let imageCount = 0;
     let outputChars = 0;
@@ -1327,6 +1341,7 @@ export async function chatRoutes(app: FastifyInstance) {
                 usage.total += ev.usage.totalTokens ?? ((ev.usage.promptTokens ?? 0) + (ev.usage.completionTokens ?? 0));
               } else if (ev.type === 'stop') {
                 stopReason = ev.reason;
+                finishReason = ev.reason;
               }
             }
           } finally {
@@ -1397,7 +1412,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const durationMs = Date.now() - t0;
     db.update(schema.messages).set({
       parts: JSON.stringify(finalParts),
-      status, error: errMsg,
+      status, finishReason, error: errMsg,
       promptTokens: usage.prompt || null,
       completionTokens: usage.completion || null,
       totalTokens: usage.total || null,
@@ -1421,7 +1436,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // 'done' goes out BEFORE the background tasks below (title, follow-ups):
     // the client unblocks the moment the answer is complete, and their events
     // simply arrive over the still-open SSE stream a moment later.
-    sse.send('done', { status });
+    sse.send('done', { status, finishReason });
 
     // auto-title on first successful exchange
     if (!chat.title && status === 'done' && !clientGone) {

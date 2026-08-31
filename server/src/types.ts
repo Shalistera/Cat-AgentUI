@@ -2,6 +2,11 @@
 // An assistant turn is ONE message whose parts may interleave
 // text / reasoning / tool_call / tool_result in stream order.
 
+/** Why the model stopped. 'length' (max output tokens) and 'content_filter'
+    (provider safety / refusal) mean the reply is cut short — the chat route
+    persists them so the UI can flag "输出可能不完整". */
+export type StopReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'other';
+
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
@@ -111,7 +116,7 @@ export type AdapterEvent =
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'grounding'; grounding: GroundingInfo }
   | { type: 'usage'; usage: UsageInfo }
-  | { type: 'stop'; reason: 'stop' | 'tool_calls' | 'length' | 'other' };
+  | { type: 'stop'; reason: StopReason };
 
 export interface ImageGenRequest {
   model: string;

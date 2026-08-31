@@ -172,6 +172,7 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
   }
   const reason = finish === 'tool_calls' || calls.size ? 'tool_calls'
     : finish === 'length' ? 'length'
+    : finish === 'content_filter' ? 'content_filter'
     : finish === 'stop' ? 'stop' : 'other';
   yield { type: 'stop', reason };
 }
@@ -242,7 +243,7 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
   if (!res.ok) throw await providerError('OpenAI(Responses)', res);
 
   let sawToolCall = false;
-  let incomplete = false;
+  let incomplete: 'length' | 'content_filter' | null = null;
 
   for await (const msg of sseMessages(res)) {
     let ev: any;
@@ -269,14 +270,16 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
           usage: { promptTokens: u.input_tokens, completionTokens: u.output_tokens, totalTokens: u.total_tokens },
         };
       }
-      if (t === 'response.incomplete') incomplete = true;
+      if (t === 'response.incomplete') {
+        incomplete = ev.response?.incomplete_details?.reason === 'content_filter' ? 'content_filter' : 'length';
+      }
     } else if (t === 'response.failed') {
       throw new Error(`OpenAI(Responses): ${ev.response?.error?.message || 'response failed'}`);
     } else if (t === 'error') {
       throw new Error(`OpenAI(Responses): ${ev.message || 'stream error'}`);
     }
   }
-  yield { type: 'stop', reason: sawToolCall ? 'tool_calls' : incomplete ? 'length' : 'stop' };
+  yield { type: 'stop', reason: sawToolCall ? 'tool_calls' : incomplete ?? 'stop' };
 }
 
 export const openaiAdapter: ChatAdapter = {

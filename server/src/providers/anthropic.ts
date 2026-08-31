@@ -195,8 +195,9 @@ async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): As
     };
   }
   const reason = stopReason === 'tool_use' ? 'tool_calls'
-    : stopReason === 'end_turn' ? 'stop'
-    : stopReason === 'max_tokens' ? 'length' : 'other';
+    : stopReason === 'end_turn' || stopReason === 'stop_sequence' ? 'stop'
+    : stopReason === 'max_tokens' ? 'length'
+    : stopReason === 'refusal' ? 'content_filter' : 'other';
   yield { type: 'stop', reason };
 }
 

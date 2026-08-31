@@ -39,6 +39,10 @@ setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000 })
 
 async function main() {
   runMigrations();
+  // A reply still marked 'streaming' after a restart was cut off by the crash
+  // or restart itself; mark it so the UI can say so and offer 重新生成.
+  rawDb.prepare("UPDATE messages SET status = 'error', error = ? WHERE status = 'streaming'")
+    .run('服务重启,回复中断');
   const secretsMigrated = migrateLegacyProviderHeaders();
   const secretEchoesScrubbed = scrubPersistedSecretEchoes();
   if (secretsMigrated || secretEchoesScrubbed) {

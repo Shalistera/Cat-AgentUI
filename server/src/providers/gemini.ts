@@ -257,7 +257,9 @@ export const geminiAdapter: ChatAdapter = {
     if (usage) yield { type: 'usage', usage: toUsage(usage) };
     const reason = sawToolCall ? 'tool_calls'
       : finishReason === 'MAX_TOKENS' ? 'length'
-      : finishReason === 'STOP' ? 'stop' : 'other';
+      : finishReason === 'STOP' ? 'stop'
+      : finishReason && ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII'].includes(finishReason) ? 'content_filter'
+      : 'other';
     yield { type: 'stop', reason };
   },
 

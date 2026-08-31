@@ -51,6 +51,8 @@ export interface Message {
   parts: MessagePart[];
   model: string | null;
   status: 'done' | 'error' | 'stopped' | 'streaming';
+  /** Provider stop reason; 'length' / 'content_filter' on a done reply = cut short. */
+  finishReason: string | null;
   error: string | null;
   promptTokens: number | null;
   completionTokens: number | null;
@@ -333,5 +335,5 @@ export interface StreamHandlers {
   onTitle?(title: string): void;
   onFollowups?(d: { messageId?: string; questions: string[] }): void;
   onError?(message: string): void;
-  onDone?(status: 'done' | 'error' | 'stopped'): void;
+  onDone?(status: 'done' | 'error' | 'stopped', finishReason: string | null): void;
 }

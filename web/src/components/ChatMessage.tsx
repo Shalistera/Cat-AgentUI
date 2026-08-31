@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
   BrainCircuit, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, GitBranch, Globe,
-  Info, Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX,
+  Info, Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo } from '../types';
 import { fmtDuration, fmtTime, fmtTokens } from '../api';
@@ -525,6 +525,21 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
     tps != null && tps > 0 ? `输出速度 ${tps.toFixed(1)} tok/s` : null,
   ].filter(Boolean).join('\n');
 
+  // A finished reply that the provider cut short (max output tokens, safety
+  // filter) — and errors that interrupted a partial answer — get a banner with
+  // an inline 重新生成 so the user doesn't have to hunt for the hover action.
+  const hasBody = msg.parts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image');
+  const cutShort = !isStreaming && msg.status === 'done'
+    && (msg.finishReason === 'length' || msg.finishReason === 'content_filter');
+  const regenerateCta = onRegenerate && !isStreaming ? (
+    <button
+      type="button"
+      onClick={onRegenerate}
+      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-current/30 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-bg1/60"
+    >
+      <RefreshCw size={11} />重新生成
+    </button>
+  ) : null;
   return (
     // sm:pr mirrors the avatar column (30px + gap-3) so the text block sits
     // centered in the column and the composer overhangs it equally per side.
@@ -561,7 +576,20 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         {msg.status === 'error' && msg.error && (
           <div className="my-2 flex items-start gap-2 rounded-lg border border-err/30 bg-err/10 px-3.5 py-2.5 text-[13px] leading-relaxed text-err">
             <CircleAlert size={15} className="mt-0.5 shrink-0" />
-            <span className="min-w-0 break-words">{msg.error}</span>
+            <span className="min-w-0 flex-1 break-words">
+              {msg.error}
+              {hasBody && <span className="mt-0.5 block text-xs opacity-80">上面的内容可能不完整。</span>}
+            </span>
+            {regenerateCta}
+          </div>
+        )}
+        {cutShort && (
+          <div className="my-2 flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-2.5 text-[13px] leading-relaxed text-warn">
+            <TriangleAlert size={15} className="mt-0.5 shrink-0" />
+            <span className="min-w-0 flex-1 break-words">
+              输出可能不完整:{msg.finishReason === 'length' ? '已达到模型单次输出长度上限。' : '模型或服务商的内容策略中止了输出。'}
+            </span>
+            {regenerateCta}
           </div>
         )}
         {msg.status === 'stopped' && (

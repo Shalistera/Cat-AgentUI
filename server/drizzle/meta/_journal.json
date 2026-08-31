@@ -162,6 +162,13 @@
       "when": 1787614454950,
       "tag": "0022_model_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1788151865822,
+      "tag": "0023_message_finish_reason",
+      "breakpoints": true
     }
   ]
 }
