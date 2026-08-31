@@ -2,6 +2,7 @@ import { memo, useMemo, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+import remarkCjkFriendly from 'remark-cjk-friendly';
 import rehypeKatex from 'rehype-katex';
 import { Check, Code, Copy, Eye, PanelRight } from 'lucide-react';
 import hljs from 'highlight.js/lib/core';
@@ -170,7 +171,10 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath, remarkBrToBreak]}
+        // remark-cjk-friendly: CommonMark's flanking rule treats CJK quotes/brackets as punctuation, so
+        // `执行**“先说”**的动作` (no spaces around **) never becomes <strong>. Models write it that way
+        // all the time; the plugin relaxes the rule for CJK text without touching Latin behaviour.
+        remarkPlugins={[remarkGfm, remarkMath, remarkCjkFriendly, remarkBrToBreak]}
         rehypePlugins={[[rehypeKatex, { strict: false }]]}
         components={{
           pre({ children }) {
