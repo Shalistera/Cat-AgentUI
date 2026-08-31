@@ -435,7 +435,6 @@ export default function Translate() {
                   className="hidden md:block"
                   actions={(
                     <>
-                      {runControl}
                       {copyBtn}
                       <Button variant="ghost" size="sm" title="返回左右分栏,可继续编辑原文" onClick={() => patchPrefs({ compare: false })}>
                         <Columns2 size={14} />分栏
