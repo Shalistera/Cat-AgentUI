@@ -23,8 +23,8 @@ type Level = 1 | 2 | 3;
 const PREFS_KEY = 'cat-translate-prefs';
 const MAX_CUSTOM_SCENES = 4;
 
-interface Prefs { source: string; target: string; mode: Mode; level: Level; scene: string; compare: boolean }
-const DEFAULT_PREFS: Prefs = { source: 'auto', target: 'zh-CN', mode: 'fast', level: 2, scene: 'general', compare: false };
+interface Prefs { source: string; target: string; mode: Mode; level: Level; scene: string }
+const DEFAULT_PREFS: Prefs = { source: 'auto', target: 'zh-CN', mode: 'fast', level: 2, scene: 'general' };
 
 function loadPrefs(): Prefs {
   try {
@@ -157,6 +157,8 @@ export default function Translate() {
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<{ totalTokens: number; durationMs: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  // 对照阅读 is opt-in per result: never remembered, reset by every new run.
+  const [compare, setCompare] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -168,7 +170,7 @@ export default function Translate() {
     if (!body || !cfg) { setResult(''); setDetected(null); setError(null); setStats(null); return; }
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    setRunning(true); setResult(''); setDetected(null); setError(null); setStats(null); setThinking(false);
+    setRunning(true); setResult(''); setDetected(null); setError(null); setStats(null); setThinking(false); setCompare(false);
     try {
       let out = '';
       let status = 'done';
@@ -220,7 +222,7 @@ export default function Translate() {
   // 对照阅读 is desktop-only: on phones the panes stack vertically anyway, so
   // the normal view stays and the compare card is hidden via CSS.
   const compareData = useMemo(() => pairParagraphs(text, result), [text, result]);
-  const showCompare = prefs.compare && !!result;
+  const showCompare = compare && !!result;
 
   const runControl = running ? (
     <Button variant="outline" size="sm" onClick={stop}><Square size={11} fill="currentColor" />停止</Button>
@@ -394,7 +396,7 @@ export default function Translate() {
                     <>
                       {copyBtn}
                       <span className="max-md:hidden">
-                        <Button variant="ghost" size="sm" title="逐段对照阅读原文与译文" onClick={() => patchPrefs({ compare: true })}>
+                        <Button variant="ghost" size="sm" title="逐段对照阅读原文与译文" onClick={() => setCompare(true)}>
                           <BookOpenText size={14} />对照
                         </Button>
                       </span>
@@ -436,7 +438,7 @@ export default function Translate() {
                   actions={(
                     <>
                       {copyBtn}
-                      <Button variant="ghost" size="sm" title="返回左右分栏,可继续编辑原文" onClick={() => patchPrefs({ compare: false })}>
+                      <Button variant="ghost" size="sm" title="返回左右分栏,可继续编辑原文" onClick={() => setCompare(false)}>
                         <Columns2 size={14} />分栏
                       </Button>
                     </>
