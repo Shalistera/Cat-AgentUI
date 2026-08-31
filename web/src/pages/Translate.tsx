@@ -392,12 +392,12 @@ export default function Translate() {
                   flush
                   actions={result ? (
                     <>
+                      {copyBtn}
                       <span className="max-md:hidden">
                         <Button variant="ghost" size="sm" title="逐段对照阅读原文与译文" onClick={() => patchPrefs({ compare: true })}>
                           <BookOpenText size={14} />对照
                         </Button>
                       </span>
-                      {copyBtn}
                     </>
                   ) : undefined}
                 >
