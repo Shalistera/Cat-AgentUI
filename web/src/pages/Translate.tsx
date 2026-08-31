@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PanelLeft, Languages, ArrowRightLeft, Copy, Check, X, Square, Pencil, Plus, Zap, Brain,
+  BookOpenText, Columns2,
 } from 'lucide-react';
 import { api, streamSse, fmtDuration, fmtTokens } from '../api';
 import { useAuth, useUi } from '../store';
@@ -22,8 +23,8 @@ type Level = 1 | 2 | 3;
 const PREFS_KEY = 'cat-translate-prefs';
 const MAX_CUSTOM_SCENES = 4;
 
-interface Prefs { source: string; target: string; mode: Mode; level: Level; scene: string }
-const DEFAULT_PREFS: Prefs = { source: 'auto', target: 'zh-CN', mode: 'fast', level: 2, scene: 'general' };
+interface Prefs { source: string; target: string; mode: Mode; level: Level; scene: string; compare: boolean }
+const DEFAULT_PREFS: Prefs = { source: 'auto', target: 'zh-CN', mode: 'fast', level: 2, scene: 'general', compare: false };
 
 function loadPrefs(): Prefs {
   try {
@@ -52,6 +53,25 @@ function normalizeDetected(code: string, languages: Record<string, string>, targ
   }
   const base = c.split('-')[0];
   return languages[base] ? base : c;
+}
+
+/** Pair up 原文/译文 paragraphs for 对照阅读. Blank-line blocks when both sides
+    agree on them; single lines as a fallback. Counts can still diverge (the
+    model merged or split a paragraph) — the caller shows a hint then. */
+function pairParagraphs(src: string, dst: string): { rows: [string, string][]; aligned: boolean } {
+  const blocks = (s: string, re: RegExp) => s.split(re).map((p) => p.trim()).filter(Boolean);
+  let a = blocks(src, /\n\s*\n+/);
+  let b = blocks(dst, /\n\s*\n+/);
+  if (a.length !== b.length || a.length <= 1) {
+    const a2 = blocks(src, /\n+/);
+    const b2 = blocks(dst, /\n+/);
+    if (a2.length === b2.length && a2.length > 1) { a = a2; b = b2; }
+  }
+  const n = Math.max(a.length, b.length);
+  return {
+    rows: Array.from({ length: n }, (_, i) => [a[i] ?? '', b[i] ?? ''] as [string, string]),
+    aligned: a.length === b.length,
+  };
 }
 
 export default function Translate() {
@@ -197,6 +217,30 @@ export default function Translate() {
   const canRun = !!text.trim() && modeAvailable && !running;
   const maxChars = cfg?.maxChars ?? 20_000;
 
+  // 对照阅读 is desktop-only: on phones the panes stack vertically anyway, so
+  // the normal view stays and the compare card is hidden via CSS.
+  const compareData = useMemo(() => pairParagraphs(text, result), [text, result]);
+  const showCompare = prefs.compare && !!result;
+
+  const runControl = running ? (
+    <Button variant="outline" size="sm" onClick={stop}><Square size={11} fill="currentColor" />停止</Button>
+  ) : (
+    <Button variant="primary" size="sm" disabled={!canRun} onClick={() => void run(text)}>
+      {prefs.mode === 'fast' ? <Zap size={13} /> : <Brain size={13} />}翻译
+    </Button>
+  );
+  const copyBtn = (
+    <Button variant="ghost" size="sm" title="复制译文" onClick={copy}>
+      {copied ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
+    </Button>
+  );
+  const statsLine = (
+    <>
+      <span>{prefs.mode === 'fast' ? '快速模式' : `思考模式 · 强度${['', '低', '中', '高'][prefs.level]}`}{activeScene.id !== 'general' ? ` · ${activeScene.name}` : ''}</span>
+      {stats && <span className="tabular-nums">{fmtTokens(stats.totalTokens)} tokens · {fmtDuration(stats.durationMs)}</span>}
+    </>
+  );
+
   const chip = (active: boolean) =>
     `inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border px-2.5 text-xs font-medium transition-colors ${
       active ? 'border-acc bg-acc/10 text-acc' : 'border-line bg-bg1 text-tx2 hover:border-line2 hover:text-tx'}`;
@@ -309,8 +353,10 @@ export default function Translate() {
                 </div>
               </div>
 
-              {/* panes */}
-              <div className="grid gap-4 md:grid-cols-2">
+              {/* panes — on desktop both sides share one fixed height (each
+                  scrolls itself), so a long 译文 never towers over the 原文.
+                  Phones keep the stacked, auto-growing layout. */}
+              <div className={`grid gap-4 md:grid-cols-2 ${showCompare ? 'md:hidden' : ''}`}>
                 <Card
                   title="原文"
                   flush
@@ -321,13 +367,7 @@ export default function Translate() {
                           <X size={14} />
                         </Button>
                       )}
-                      {running ? (
-                        <Button variant="outline" size="sm" onClick={stop}><Square size={11} fill="currentColor" />停止</Button>
-                      ) : (
-                        <Button variant="primary" size="sm" disabled={!canRun} onClick={() => void run(text)}>
-                          {prefs.mode === 'fast' ? <Zap size={13} /> : <Brain size={13} />}翻译
-                        </Button>
-                      )}
+                      {runControl}
                     </>
                   )}
                 >
@@ -339,7 +379,7 @@ export default function Translate() {
                     }}
                     placeholder="输入或粘贴文本,然后点上方「翻译」(Ctrl + Enter)…"
                     rows={12}
-                    className="block min-h-[16rem] w-full resize-y bg-transparent px-4 py-3 text-[15px] leading-relaxed text-tx outline-none placeholder:text-tx3"
+                    className="block min-h-[16rem] w-full resize-y bg-transparent px-4 py-3 text-[15px] leading-relaxed text-tx outline-none placeholder:text-tx3 md:h-[calc(100dvh-26rem)] md:min-h-[18rem] md:resize-none"
                     autoFocus
                   />
                   <div className="flex h-10 items-center justify-end border-t border-line px-4">
@@ -349,15 +389,19 @@ export default function Translate() {
 
                 <Card
                   title="译文"
-                  desc={detectedLabel && prefs.source === 'auto' ? `检测到源语言:${detectedLabel}` : undefined}
                   flush
                   actions={result ? (
-                    <Button variant="ghost" size="sm" title="复制译文" onClick={copy}>
-                      {copied ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
-                    </Button>
+                    <>
+                      <span className="max-md:hidden">
+                        <Button variant="ghost" size="sm" title="逐段对照阅读原文与译文" onClick={() => patchPrefs({ compare: true })}>
+                          <BookOpenText size={14} />对照
+                        </Button>
+                      </span>
+                      {copyBtn}
+                    </>
                   ) : undefined}
                 >
-                  <div className="min-h-[16rem] px-4 py-3">
+                  <div className="min-h-[16rem] px-4 py-3 md:h-[calc(100dvh-26rem)] md:min-h-[18rem] md:overflow-y-auto">
                     {error && (
                       <div className="mb-3 whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
                         翻译失败:{error}
@@ -376,11 +420,52 @@ export default function Translate() {
                     )}
                   </div>
                   <div className="flex h-10 items-center justify-between gap-3 border-t border-line px-4 text-xs text-tx3">
-                    <span>{prefs.mode === 'fast' ? '快速模式' : `思考模式 · 强度${['', '低', '中', '高'][prefs.level]}`}{activeScene.id !== 'general' ? ` · ${activeScene.name}` : ''}</span>
-                    {stats && <span className="tabular-nums">{fmtTokens(stats.totalTokens)} tokens · {fmtDuration(stats.durationMs)}</span>}
+                    {statsLine}
                   </div>
                 </Card>
               </div>
+
+              {/* 对照阅读 — desktop only; paragraph i of the 原文 sits beside
+                  paragraph i of the 译文, hover highlights the pair. */}
+              {showCompare && (
+                <Card
+                  title="对照阅读"
+                  desc={detectedLabel && prefs.source === 'auto' ? `检测到源语言:${detectedLabel}` : undefined}
+                  flush
+                  className="hidden md:block"
+                  actions={(
+                    <>
+                      {runControl}
+                      {copyBtn}
+                      <Button variant="ghost" size="sm" title="返回左右分栏,可继续编辑原文" onClick={() => patchPrefs({ compare: false })}>
+                        <Columns2 size={14} />分栏
+                      </Button>
+                    </>
+                  )}
+                >
+                  {error && (
+                    <div className="mx-4 mt-3 whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
+                      翻译失败:{error}
+                    </div>
+                  )}
+                  {!compareData.aligned && !running && (
+                    <div className="border-b border-line px-4 py-1.5 text-xs text-tx3">
+                      原文与译文的段落数不一致,逐段对照可能错位;悬停高亮仅供参考。
+                    </div>
+                  )}
+                  <div className="py-1">
+                    {compareData.rows.map(([src, dst], i) => (
+                      <div key={i} className="grid grid-cols-2 transition-colors hover:bg-acc/[0.08]">
+                        <div className="whitespace-pre-wrap break-words px-4 py-2 text-[15px] leading-relaxed text-tx2">{src}</div>
+                        <div className="whitespace-pre-wrap break-words border-l border-line px-4 py-2 text-[15px] leading-relaxed text-tx">{dst}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex h-10 items-center justify-between gap-3 border-t border-line px-4 text-xs text-tx3">
+                    {statsLine}
+                  </div>
+                </Card>
+              )}
 
               <p className="text-xs leading-relaxed text-tx3">
                 场景只影响译文的语气和用词,不改变翻译规则。翻译用量计入你的 token 配额;思考模式更准确但更慢、更贵。
