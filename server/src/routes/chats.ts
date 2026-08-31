@@ -644,7 +644,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const msgs = allChatMessages(id);
 
     const title = c.title.trim() || '未命名对话';
-    const safeName = title.replace(/[\\/:*?"<>| -]/g, '_').slice(0, 60) || 'chat';
+    const safeName = title.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 60) || 'chat';
     const stamp = new Date(c.updatedAt);
     const pad = (n: number) => String(n).padStart(2, '0');
     const fmtTs = (t: number) => {
@@ -1225,9 +1225,9 @@ export async function chatRoutes(app: FastifyInstance) {
         // ---- image-generation turn ----
         if (!adapter.generateImages) throw new Error(`Provider「${provider.name}」不支持图像生成`);
         const { prompt, request, refImages } = buildImageTurn(baseHistory);
-        let generated;
+        let result;
         try {
-          generated = await adapter.generateImages(cfg, {
+          result = await adapter.generateImages(cfg, {
             model: model.modelId,
             prompt,
             n: 1,
@@ -1243,7 +1243,12 @@ export async function chatRoutes(app: FastifyInstance) {
           throw e;
         }
         const elapsed = Date.now() - t0;
-        if (generated.length !== 1) throw new Error('Provider 返回的图片数量异常');
+        // Zero pictures is fine when the model answered in words instead — a
+        // question, options to choose from — the user just replies in the chat.
+        const generated = result.images;
+        if (generated.length > 1 || (!generated.length && !result.text)) {
+          throw new Error('Provider 返回的图片数量异常');
+        }
         for (const g of generated) {
           const saved = await saveGeneratedImage({
             userId: user.id, providerId: provider.id, model: model.modelId,
@@ -1255,15 +1260,15 @@ export async function chatRoutes(app: FastifyInstance) {
           };
           parts.push(part);
           sse.send('image', part);
-          if (g.text) {
-            consumeOutput(g.text.length);
-            const safeText = redactSensitiveText(g.text, secretValues);
-            appendText(parts, 'text', safeText);
-            sse.send('delta', { text: safeText });
-          }
+        }
+        if (result.text) {
+          consumeOutput(result.text.length);
+          const safeText = redactSensitiveText(result.text, secretValues);
+          appendText(parts, 'text', safeText);
+          sse.send('delta', { text: safeText });
         }
         // one response can carry several images with the same usage object — count it once
-        const u = generated[0]?.usage;
+        const u = generated[0]?.usage ?? result.usage;
         usage.prompt += u?.promptTokens ?? 0;
         usage.completion += u?.completionTokens ?? 0;
         usage.total += u?.totalTokens ?? ((u?.promptTokens ?? 0) + (u?.completionTokens ?? 0));

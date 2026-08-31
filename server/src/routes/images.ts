@@ -12,13 +12,16 @@ import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
 import { accessibleOnly, canUseModel, imageModelsAllowed, imageWorkshopAllowed } from '../model-access.js';
 import { checkQuota, quotaBlockMessage } from '../quota.js';
-import type { GeneratedImage } from '../types.js';
+import type { AdapterMessage, GeneratedImage } from '../types.js';
 import { tryAcquireImageJob } from '../admission.js';
 import {
   decodeGeneratedImage, extForMime, getOwnedUploadMedia,
   MIME_BY_EXT, quotaErrorMessage, readMediaBase64, tryReserveStorage,
 } from '../storage.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
+
+const MAX_HISTORY_TURNS = 12;
+type ConvoTurn = { role: 'user' | 'assistant'; text: string };
 
 const generateSchema = z.object({
   modelId: z.string(),
@@ -27,7 +30,20 @@ const generateSchema = z.object({
   quality: z.string().max(20).optional(),
   n: z.number().int().min(1).max(4).optional(),
   inputUploadIds: z.array(z.string().min(1).max(64)).max(config.maxAttachmentsPerMessage).optional(),
+  // Earlier turns of a workshop conversation: a conversational image model
+  // (Gemini) may answer a prompt with text — "here are two options, which
+  // one?" — and the follow-up ("方案一") only makes sense with that exchange
+  // replayed. Strictly alternating user/assistant, ending on the assistant.
+  history: z.array(z.object({
+    role: z.enum(['user', 'assistant']),
+    text: z.string().min(1).max(8000),
+  })).max(MAX_HISTORY_TURNS).optional(),
 });
+
+function validHistory(h: ConvoTurn[]): boolean {
+  return h.every((t, i) => t.role === (i % 2 === 0 ? 'user' : 'assistant'))
+    && h[h.length - 1]?.role === 'assistant';
+}
 
 // Generation runs as a background job and the client polls for the result.
 // A synchronous response can't work in production: Cloudflare cuts any
@@ -45,6 +61,10 @@ interface ImageJob {
   createdAt: number;
   status: 'running' | 'done' | 'error';
   images?: SavedImage[];
+  /** The model answered in words instead of (or besides) pictures. */
+  reply?: string;
+  /** Whole exchange so far, prompt included — the client continues from it. */
+  turns: ConvoTurn[];
   error?: string;
 }
 
@@ -149,7 +169,8 @@ export async function imageRoutes(app: FastifyInstance) {
     }
     const body = generateSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
-    const { modelId, prompt, size, quality, n, inputUploadIds } = body.data;
+    const { modelId, prompt, size, quality, n, inputUploadIds, history = [] } = body.data;
+    if (history.length && !validHistory(history)) return reply.code(400).send({ error: '参数错误' });
 
     const model = db.select().from(schema.models)
       .where(and(
@@ -216,34 +237,56 @@ export async function imageRoutes(app: FastifyInstance) {
       }
 
       const userId = req.user!.id;
+      const turns: ConvoTurn[] = [...history, { role: 'user', text: prompt }];
       const job: ImageJob = {
-        id: newId(), userId, modelId: model.id, prompt,
+        id: newId(), userId, modelId: model.id, prompt, turns,
         createdAt: Date.now(), status: 'running',
       };
       jobs.set(job.id, job);
       cleanupJobs();
       handedOff = true;
-      console.log(`[img] job ${job.id} start model=${model.modelId} n=${requestedN} refs=${inputImages?.length ?? 0}`);
+      console.log(`[img] job ${job.id} start model=${model.modelId} n=${requestedN} refs=${inputImages?.length ?? 0} turns=${turns.length}`);
+
+      // Replay the exchange for multi-turn providers. Reference images ride on
+      // the opening turn, where the model first saw them. Adapters that can't
+      // take context (OpenAI) fall back to prompt + inputImages on their own.
+      let context: AdapterMessage[] | undefined;
+      if (history.length) {
+        context = turns.map((t, i) => ({
+          role: t.role,
+          parts: [
+            { type: 'text' as const, text: t.text },
+            ...(i === 0 ? (inputImages ?? []).map((img) => ({ type: 'image' as const, ...img })) : []),
+          ],
+        }));
+      }
+      // The gallery shows one prompt per picture; for a follow-up that is the
+      // whole user side of the conversation, not just "方案一".
+      const galleryPrompt = turns.filter((t) => t.role === 'user').map((t) => t.text).join('\n→ ');
 
       void (async () => {
         const t0 = Date.now();
         const saved: SavedImage[] = [];
         const secretValues = allConfiguredSecretValues();
         try {
-          const generated = await adapter.generateImages!(toRuntimeConfig(provider), {
+          const result = await adapter.generateImages!(toRuntimeConfig(provider), {
             model: model.modelId, prompt, size, quality, n: requestedN,
-            signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS), inputImages,
+            signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS), inputImages, context,
           });
           const durationMs = Date.now() - t0;
-          if (!generated.length || generated.length > requestedN) {
-            throw new Error('Provider 返回的图片数量异常');
+          if (!result.images.length && !result.text) throw new Error('Provider 返回的图片数量异常');
+          // A follow-up like "两个方案各一张" can legitimately bring back more
+          // pictures than were asked for; storage was reserved for n, so keep n.
+          const generated = result.images.slice(0, requestedN);
+          if (generated.length < result.images.length) {
+            console.log(`[img] job ${job.id}: provider returned ${result.images.length} images, keeping ${requestedN}`);
           }
           for (const img of generated) {
             saved.push(await saveGeneratedImage({
               userId,
               providerId: provider.id,
               model: model.modelId,
-              prompt,
+              prompt: galleryPrompt,
               size: size ?? null,
               durationMs,
               img,
@@ -251,7 +294,7 @@ export async function imageRoutes(app: FastifyInstance) {
             }));
           }
 
-          const usage = generated[0]?.usage;
+          const usage = generated[0]?.usage ?? result.usage;
           recordUsage({
             userId,
             providerId: provider.id,
@@ -266,8 +309,13 @@ export async function imageRoutes(app: FastifyInstance) {
           });
 
           job.images = saved;
+          if (result.text) {
+            job.reply = redactSensitiveText(result.text, secretValues);
+            job.turns = [...job.turns, { role: 'assistant', text: job.reply }];
+          }
           job.status = 'done';
-          console.log(`[img] job ${job.id} done in ${(durationMs / 1000).toFixed(1)}s, ${saved.length} image(s)`);
+          console.log(`[img] job ${job.id} done in ${(durationMs / 1000).toFixed(1)}s, ${saved.length} image(s)${
+            result.text ? `, text reply ${result.text.length} chars` : ''}`);
         } catch (err) {
           if (saved.length) await rollbackSavedImages(saved);
           const rawError = err instanceof Error && err.name === 'TimeoutError'
@@ -310,7 +358,7 @@ export async function imageRoutes(app: FastifyInstance) {
     if (!job || job.userId !== req.user!.id) {
       return reply.code(404).send({ error: '任务不存在(服务可能已重启)' });
     }
-    return { status: job.status, images: job.images, error: job.error };
+    return { status: job.status, images: job.images, reply: job.reply, turns: job.turns, error: job.error };
   });
 
   app.get('/api/images', async (req, reply) => {

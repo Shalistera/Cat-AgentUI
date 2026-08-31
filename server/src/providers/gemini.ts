@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { GoogleAuth } from 'google-auth-library';
 import type {
-  AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, GroundingInfo,
-  ImageGenRequest, ProviderRuntimeConfig, UsageInfo,
+  AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, GroundingInfo, ImageGenRequest, ImageGenResult,
+  ProviderRuntimeConfig, UsageInfo,
 } from '../types.js';
 import { sseMessages, providerError, readJsonLimited } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
@@ -309,7 +309,7 @@ export const geminiAdapter: ChatAdapter = {
       .map((m: any) => ({ id: String(m.name).replace(/^models\//, ''), name: m.displayName }));
   },
 
-  async generateImages(cfg, req: ImageGenRequest): Promise<GeneratedImage[]> {
+  async generateImages(cfg, req: ImageGenRequest): Promise<ImageGenResult> {
     // Gemini image models are ordinary generateContent models, so a chat turn can
     // hand over the whole conversation and get context-aware edits ("make it blue").
     let contents: any[];
@@ -332,8 +332,10 @@ export const geminiAdapter: ChatAdapter = {
     if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
     const { url, headers } = await endpoint(cfg, req.model, 'generateContent');
 
-    const out: GeneratedImage[] = [];
-    let text = '';
+    const images: GeneratedImage[] = [];
+    // n calls with the same prompt tend to repeat the same commentary — keep distinct ones.
+    const texts: string[] = [];
+    let lastUsage: UsageInfo | undefined;
     const n = Math.min(req.n || 1, 4);
     for (let i = 0; i < n; i++) {
       const res = await fetch(url, {
@@ -343,19 +345,26 @@ export const geminiAdapter: ChatAdapter = {
       const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * 4 / 3) + 1024 * 1024;
       const j: any = await readJsonLimited(res, maxJsonBytes);
       const usage = j?.usageMetadata ? toUsage(j.usageMetadata) : undefined;
+      lastUsage = usage ?? lastUsage;
+      let gotImage = false;
+      let text = '';
       for (const part of j?.candidates?.[0]?.content?.parts ?? []) {
         if (part.inlineData?.data) {
-          out.push({ mime: part.inlineData.mimeType || 'image/png', dataBase64: part.inlineData.data, usage });
+          gotImage = true;
+          images.push({ mime: part.inlineData.mimeType || 'image/png', dataBase64: part.inlineData.data, usage });
         } else if (typeof part.text === 'string' && part.text && part.thought !== true) {
           text += part.text;
         }
       }
+      text = text.trim();
+      if (text && !texts.includes(text)) texts.push(text);
+      // The model chose to talk instead of draw (a question, options to pick
+      // from, a refusal). Asking again with the same prompt would only get the
+      // same answer n times over — hand the text back and let the user reply.
+      if (!gotImage) break;
     }
-    if (!out.length) {
-      // A refusal/clarification comes back as text only — surface it instead of a generic error.
-      throw new Error(text.trim() ? `Gemini: ${text.trim().slice(0, 500)}` : 'Gemini 未返回图片数据');
-    }
-    if (text.trim()) out[0].text = text.trim();
-    return out;
+    const text = texts.join('\n\n');
+    if (!images.length && !text) throw new Error('Gemini 未返回图片数据');
+    return { images, text: text || undefined, usage: lastUsage };
   },
 };

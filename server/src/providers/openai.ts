@@ -1,5 +1,5 @@
 import type {
-  AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage,
+  AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, ImageGenResult,
   ImageGenRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
 import { sseMessages, readBodyLimited, providerError, readJsonLimited } from './sse.js';
@@ -296,7 +296,7 @@ export const openaiAdapter: ChatAdapter = {
     return list.map((m: any) => ({ id: String(m.id) })).sort((a: any, b: any) => a.id.localeCompare(b.id));
   },
 
-  async generateImages(cfg, req: ImageGenRequest): Promise<GeneratedImage[]> {
+  async generateImages(cfg, req: ImageGenRequest): Promise<ImageGenResult> {
     const isDallE = req.model.startsWith('dall-e');
     // The images API takes a single prompt — a chat turn folds its context into it.
     const prompt = req.system ? `${req.system}\n\n${req.prompt}` : req.prompt;
@@ -345,6 +345,6 @@ export const openaiAdapter: ChatAdapter = {
       }
     }
     if (!out.length) throw new Error('图像生成接口未返回图片数据');
-    return out;
+    return { images: out };
   },
 };

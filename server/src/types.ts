@@ -137,11 +137,21 @@ export interface GeneratedImage {
   mime: string;
   dataBase64: string;
   usage?: UsageInfo;
-  text?: string; // commentary returned alongside the image (Gemini)
+}
+
+// What an image model answered. Conversational image models (Gemini) may reply
+// with text next to the pictures, or with text *only* — asking a question,
+// offering options to pick from, declining. That is a legitimate answer, not a
+// failure, so it travels as `text` and callers decide how to show it.
+export interface ImageGenResult {
+  images: GeneratedImage[];
+  text?: string;
+  /** Usage for a text-only reply, when there is no image to hang it on. */
+  usage?: UsageInfo;
 }
 
 export interface ChatAdapter {
   streamChat(cfg: ProviderRuntimeConfig, req: ChatRequest): AsyncGenerator<AdapterEvent>;
   listModels(cfg: ProviderRuntimeConfig): Promise<{ id: string; name?: string }[]>;
-  generateImages?(cfg: ProviderRuntimeConfig, req: ImageGenRequest): Promise<GeneratedImage[]>;
+  generateImages?(cfg: ProviderRuntimeConfig, req: ImageGenRequest): Promise<ImageGenResult>;
 }

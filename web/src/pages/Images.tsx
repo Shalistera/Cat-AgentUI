@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   PanelLeft, ImagePlus, Sparkles, X, Download, Trash2, Image as ImageIcon,
-  History, Settings2, Plus, ZoomIn, ArrowRight,
+  History, Settings2, Plus, ZoomIn, ArrowRight, MessageSquare, Send,
 } from 'lucide-react';
 import { useUi, useAuth } from '../store';
 import { api, ApiError, uploadFile } from '../api';
@@ -13,6 +13,7 @@ import {
 } from '../components/ui';
 import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGallery';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
+import { Markdown } from '../components/Markdown';
 import type { ImageModel, ImageRecord } from '../types';
 
 const PAGE_SIZE = 24;
@@ -29,6 +30,25 @@ const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: '去背景', prompt: '去
 // several of these can run side by side — one per model.
 type RunningJob = { id: string; modelId: string; prompt: string; startedAt: number };
 type ActiveJobs = { jobs?: { jobId: string; modelId: string; prompt: string; createdAt: number }[] };
+type JobStatus = { status: string; images?: ImageRecord[]; reply?: string; turns?: ConvoTurn[]; error?: string };
+
+// Conversational image models (Gemini) sometimes answer in words instead of
+// pictures — "here are two options, which one?". The exchange is kept here so
+// the user can pick or reply, and the follow-up replays it to the model.
+type ConvoTurn = { role: 'user' | 'assistant'; text: string };
+type Convo = { modelId: string; turns: ConvoTurn[] };
+
+// "方案一 / 方案二 / Option A" mentioned in the reply become one-click choices.
+function detectOptions(text: string): string[] {
+  const out: string[] = [];
+  const re = /(方案|选项|Option)\s*([一二三四五六七八九十]|[1-9]\d?|[A-H])(?![\d\w])/gi;
+  for (const m of text.matchAll(re)) {
+    const label = `${m[1]}${m[2]}`;
+    if (!out.includes(label)) out.push(label);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
 
 // Accepts both the current {title, prompt} shape and the legacy plain-string
 // entries (which double as their own title).
@@ -74,6 +94,8 @@ function ImagesInner() {
   const [running, setRunning] = useState<RunningJob[]>([]);
   const [submitting, setSubmitting] = useState<string[]>([]);
   const [genError, setGenError] = useState<{ label: string; message: string } | null>(null);
+  const [convo, setConvo] = useState<Convo | null>(null);
+  const [replyText, setReplyText] = useState('');
   // One ticker drives every job's elapsed counter.
   const [, setTick] = useState(0);
   const aliveRef = useRef(true);
@@ -273,9 +295,9 @@ function ImagesInner() {
       for (;;) {
         await new Promise((r) => setTimeout(r, 2500));
         if (!aliveRef.current) return;
-        let st: { status: string; images?: ImageRecord[]; error?: string };
+        let st: JobStatus;
         try {
-          st = await api.get<typeof st>(`/api/images/jobs/${jobId}`);
+          st = await api.get<JobStatus>(`/api/images/jobs/${jobId}`);
         } catch (err) {
           if (err instanceof ApiError && err.status === 404) throw new Error('任务状态已丢失(服务器可能重启过)');
           if (Date.now() - startedAt > 12 * 60_000) throw new Error('等待超时,已放弃');
@@ -284,6 +306,18 @@ function ImagesInner() {
         if (st.status === 'error') throw new Error(st.error || '生成失败');
         if (st.status === 'done') {
           const imgs = st.images ?? [];
+          if (!imgs.length) {
+            // The model talked instead of drawing. Not a failure: show what it
+            // said and let the user answer.
+            if (aliveRef.current) {
+              setConvo({ modelId: job.modelId, turns: st.turns ?? [{ role: 'user', text: job.prompt }, { role: 'assistant', text: st.reply ?? '' }] });
+              setReplyText('');
+            }
+            toast(`${modelLabel(job.modelId)}:模型回复了文字,请选择方案或继续对话`, 'ok');
+            tabAlert();
+            return;
+          }
+          if (aliveRef.current) setConvo((c) => (c?.modelId === job.modelId ? null : c));
           setList((prev) => {
             const have = new Set(prev.map((x) => x.id));
             return [...imgs.filter((i) => !have.has(i.id)), ...prev];
@@ -327,10 +361,23 @@ function ImagesInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function generate() {
+  function generate() {
     const p = prompt.trim();
-    if (!p || !model || uploading || busyModels.has(model.id)) return;
-    const mid = model.id;
+    if (!p || !model) return;
+    void submit(model.id, p);
+  }
+
+  // Answer a model that replied in words — the whole exchange goes along so
+  // "方案一" means something.
+  function replyToModel(text: string) {
+    const t = text.trim();
+    if (!convo || !t) return;
+    setReplyText('');
+    void submit(convo.modelId, t, convo.turns);
+  }
+
+  async function submit(mid: string, p: string, history?: ConvoTurn[]) {
+    if (uploading || busyModels.has(mid)) return;
     setGenError(null);
     setSubmitting((prev) => [...prev, mid]);
     const start = Date.now();
@@ -338,6 +385,7 @@ function ImagesInner() {
       const body: Record<string, unknown> = { modelId: mid, prompt: p, n };
       const refIds = refSlots.filter((x): x is string => !!x);
       if (refIds.length) body.inputUploadIds = refIds;
+      if (history?.length) body.history = history;
       const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
       void runJob({ id: jobId, modelId: mid, prompt: p, startedAt: start });
     } catch (err) {
@@ -363,6 +411,11 @@ function ImagesInner() {
   }
 
   const currentJob = model ? running.find((j) => j.modelId === model.id) ?? null : null;
+  const convoBusy = !!convo && busyModels.has(convo.modelId);
+  const convoOptions = useMemo(() => {
+    const last = convo?.turns.filter((t) => t.role === 'assistant').at(-1);
+    return last ? detectOptions(last.text) : [];
+  }, [convo]);
   const canGenerate = !!prompt.trim() && !!model && !uploading && !busyModels.has(model.id);
 
   return (
@@ -561,6 +614,72 @@ function ImagesInner() {
                 {genError && (
                   <div className="whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
                     生成失败({genError.label}):{genError.message}
+                  </div>
+                )}
+
+                {convo && (
+                  <div className="space-y-2.5 rounded-lg border border-acc/30 bg-acc/5 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 text-[13px] font-medium text-tx">
+                        <MessageSquare size={14} className="shrink-0 text-acc" />
+                        {modelLabel(convo.modelId)} 回复了文字,还没有生成图片
+                      </span>
+                      <button
+                        type="button"
+                        title="结束这段对话"
+                        onClick={() => setConvo(null)}
+                        className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-tx3 transition-colors hover:bg-bg2 hover:text-tx"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    {convo.turns.map((t, i) => (
+                      t.role === 'user' ? (
+                        <div key={i} className="line-clamp-2 text-xs text-tx3">你:{t.text}</div>
+                      ) : i === convo.turns.length - 1 ? (
+                        <div key={i} className="max-h-80 overflow-y-auto rounded-md border border-line bg-bg1 px-3 py-2 text-[13px]">
+                          <Markdown text={t.text} />
+                        </div>
+                      ) : (
+                        <div key={i} className="line-clamp-2 text-xs text-tx3">{modelLabel(convo.modelId)}:{t.text}</div>
+                      )
+                    ))}
+                    {convoOptions.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs text-tx3">按这个方案生成:</span>
+                        {convoOptions.map((o) => (
+                          <button
+                            key={o}
+                            type="button"
+                            disabled={convoBusy}
+                            onClick={() => replyToModel(`请按「${o}」生成图片`)}
+                            className="cursor-pointer rounded-full border border-acc/40 bg-bg1 px-2.5 py-1 text-xs text-tx transition-colors hover:border-acc hover:bg-acc/10 disabled:cursor-default disabled:opacity-60"
+                          >
+                            {o}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <Input
+                        value={replyText}
+                        disabled={convoBusy}
+                        maxLength={4000}
+                        placeholder="回复模型继续,例如:方案一,背景换成雨夜"
+                        onChange={(e) => setReplyText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); replyToModel(replyText); }
+                        }}
+                      />
+                      <Button
+                        variant="primary"
+                        disabled={!replyText.trim() || convoBusy}
+                        onClick={() => replyToModel(replyText)}
+                        className="shrink-0"
+                      >
+                        {convoBusy ? <Spinner className="h-4 w-4" /> : <Send size={14} />}继续生成
+                      </Button>
+                    </div>
                   </div>
                 )}
 
