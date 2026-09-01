@@ -10,7 +10,9 @@ import {
   QUOTA_ACTION_KEY, QUOTA_DEFAULT_KEY, QUOTA_FALLBACK_KEY,
   effectiveQuota, monthStartDay, monthTokens, quotaSettings,
 } from '../quota.js';
-import { CHAT_IMAGE_RETENTION_KEY, IMAGE_RETENTION_KEY, sweepExpiredImages } from '../retention.js';
+import {
+  CHAT_IMAGE_RETENTION_KEY, IMAGE_RETENTION_KEY, UPLOAD_RETENTION_KEY, sweepExpiredImages, sweepUnreferencedUploads,
+} from '../retention.js';
 import {
   BACKUP_INTERVAL_MAX, BACKUP_INTERVAL_MIN, BACKUP_KEEP_MAX, BACKUP_KEEP_MIN,
   backupDir, backupStatus, deleteBackup, getBackupSettings, isBackupFilename, listBackups,
@@ -18,7 +20,7 @@ import {
 } from '../backup.js';
 import { broadcast } from './events.js';
 import { FOLLOWUP_ENABLED_KEY, FOLLOWUP_MODEL_KEY, TITLE_MODEL_KEY } from './chats.js';
-import { unlinkStoredFiles } from '../storage.js';
+import { removeOrphanFiles, removeUnreferencedUploads, storageOverview, unlinkStoredFiles } from '../storage.js';
 import { TRANSLATE_CHAIN_MAX, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY } from './translate.js';
 
 const DAY_MS = 86_400_000;
@@ -155,6 +157,7 @@ const settingsSchema = z.object({
   brand: z.string().min(1).max(64).optional(),
   imageRetentionDays: z.number().int().min(0).max(3650).optional(), // 工坊图,0 = keep forever
   chatImageRetentionDays: z.number().int().min(0).max(3650).optional(), // 对话图,0 = keep forever
+  uploadRetentionDays: z.number().int().min(0).max(3650).optional(), // 未被消息引用的附件,0 = keep forever
   quotaMonthlyTokens: z.number().int().min(0).max(1e15).optional(), // 默认月度配额,0 = 不限
   quotaAction: z.enum(['block', 'downgrade']).optional(),
   quotaFallbackModelId: z.string().max(64).nullish(), // models.id,空 = 未设置
@@ -183,10 +186,15 @@ export async function adminRoutes(app: FastifyInstance) {
       .where(gte(schema.usageLog.day, monthStartDay()))
       .groupBy(schema.usageLog.userId).all();
     const monthMap = new Map(monthRows.map((r) => [r.userId, r.totalTokens]));
+    const sessionRows = db.select({ userId: schema.sessions.userId, n: sql<number>`count(*)` })
+      .from(schema.sessions).where(gte(schema.sessions.expiresAt, now()))
+      .groupBy(schema.sessions.userId).all();
+    const sessionMap = new Map(sessionRows.map((r) => [r.userId, r.n]));
     return users.map((u) => {
       const usage = usageMap.get(u.id);
       return {
         ...adminUser(u),
+        activeSessions: sessionMap.get(u.id) ?? 0,
         usage: {
           totalTokens: usage?.totalTokens ?? 0,
           requests: usage?.requests ?? 0,
@@ -257,6 +265,18 @@ export async function adminRoutes(app: FastifyInstance) {
     }
     const u = db.select().from(schema.users).where(eq(schema.users.id, id)).get()!;
     return { user: adminUser(u) };
+  });
+
+  // Sign a user out of every device without touching the account itself —
+  // for "left logged in on a shared PC", not for revoking access (use 停用).
+  app.post('/api/admin/users/:id/logout', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const target = db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, id)).get();
+    if (!target) return reply.code(404).send({ error: '用户不存在' });
+    const removed = db.delete(schema.sessions).where(eq(schema.sessions.userId, id))
+      .returning({ h: schema.sessions.tokenHash }).all().length;
+    return { ok: true, removed };
   });
 
   app.delete('/api/admin/users/:id', async (req, reply) => {
@@ -359,6 +379,7 @@ export async function adminRoutes(app: FastifyInstance) {
       brand: getSetting('brand', 'Cat-AgentUI'),
       imageRetentionDays: getSetting(IMAGE_RETENTION_KEY, 0),
       chatImageRetentionDays: getSetting(CHAT_IMAGE_RETENTION_KEY, 0),
+      uploadRetentionDays: getSetting(UPLOAD_RETENTION_KEY, 0),
       quotaMonthlyTokens: quota.defaultQuota,
       quotaAction: quota.action,
       quotaFallbackModelId: quota.fallbackModelId || null,
@@ -385,6 +406,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (body.data.brand !== undefined) setSetting('brand', body.data.brand);
     if (body.data.imageRetentionDays !== undefined) setSetting(IMAGE_RETENTION_KEY, body.data.imageRetentionDays);
     if (body.data.chatImageRetentionDays !== undefined) setSetting(CHAT_IMAGE_RETENTION_KEY, body.data.chatImageRetentionDays);
+    if (body.data.uploadRetentionDays !== undefined) setSetting(UPLOAD_RETENTION_KEY, body.data.uploadRetentionDays);
     if (body.data.quotaMonthlyTokens !== undefined) setSetting(QUOTA_DEFAULT_KEY, body.data.quotaMonthlyTokens);
     if (body.data.quotaAction !== undefined) setSetting(QUOTA_ACTION_KEY, body.data.quotaAction);
     if (body.data.quotaFallbackModelId !== undefined) {
@@ -445,7 +467,31 @@ export async function adminRoutes(app: FastifyInstance) {
       // A shortened window should take effect now, not at the next hourly tick.
       sweepExpiredImages();
     }
+    if (body.data.uploadRetentionDays !== undefined) void sweepUnreferencedUploads();
     return settingsView();
+  });
+
+  // --- storage overview & cleanup ---
+  app.get('/api/admin/storage', async (req, reply) => {
+    requireAdmin(req, reply);
+    return storageOverview();
+  });
+
+  // Two independent brooms: files with no DB row, and uploads no message
+  // references. Both are safe to run at any time — in-flight uploads are
+  // excluded by a one-hour grace period.
+  app.post('/api/admin/storage/cleanup', async (req, reply) => {
+    requireAdmin(req, reply);
+    const body = z.object({
+      orphans: z.boolean().optional(),
+      unreferencedUploads: z.boolean().optional(),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const result = {
+      orphans: body.data.orphans ? await removeOrphanFiles() : null,
+      unreferencedUploads: body.data.unreferencedUploads ? await removeUnreferencedUploads(60 * 60_000) : null,
+    };
+    return { result, overview: await storageOverview() };
   });
 
   // --- database backups ---

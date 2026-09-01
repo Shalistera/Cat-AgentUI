@@ -5,7 +5,7 @@ import { db, schema, now, getSetting } from '../db/index.js';
 import { hashPassword, verifyPassword, needsRehash, newId, sha256hex } from '../crypto.js';
 import {
   COOKIE_NAME, createSession, destroySession, setSessionCookie,
-  clearSessionCookie, requireAuth, rateLimit,
+  clearSessionCookie, requireAuth, rateLimit, sessionPublicId, sessionsForUser,
 } from '../auth.js';
 
 const credentialsSchema = z.object({
@@ -118,6 +118,53 @@ export async function authRoutes(app: FastifyInstance) {
   app.get('/api/auth/me', async (req, reply) => {
     requireAuth(req, reply);
     return { user: publicUser({ ...req.user!, settings: req.user!.settings }) };
+  });
+
+  // --- 登录设备 ---
+  // Every live session of the caller, newest activity first. The row for the
+  // cookie making the request is flagged so the UI can label "this device".
+  app.get('/api/auth/sessions', async (req, reply) => {
+    requireAuth(req, reply);
+    const current = req.cookies?.[COOKIE_NAME];
+    const currentHash = current ? sha256hex(current) : null;
+    const rows = sessionsForUser(req.user!.id)
+      .map((s) => ({
+        id: sessionPublicId(s.tokenHash),
+        current: s.tokenHash === currentHash,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+        lastSeenAt: s.lastSeenAt ?? s.createdAt,
+        ip: s.ip,
+        userAgent: s.userAgent,
+      }))
+      .sort((a, b) => Number(b.current) - Number(a.current) || b.lastSeenAt - a.lastSeenAt);
+    return { sessions: rows };
+  });
+
+  // Sign out one other device. The current session is refused here — that is
+  // what /logout is for, and it keeps this endpoint from ever needing to
+  // clear the caller's own cookie.
+  app.delete('/api/auth/sessions/:id', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const current = req.cookies?.[COOKIE_NAME];
+    const currentHash = current ? sha256hex(current) : null;
+    const target = sessionsForUser(req.user!.id).find((s) => sessionPublicId(s.tokenHash) === id);
+    if (!target) return reply.code(404).send({ error: '该设备已不在登录状态' });
+    if (target.tokenHash === currentHash) return reply.code(400).send({ error: '要退出当前设备请使用「退出登录」' });
+    db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, target.tokenHash)).run();
+    return { ok: true };
+  });
+
+  // Sign out everywhere else — the "I left myself logged in somewhere" button.
+  app.post('/api/auth/sessions/revoke-others', async (req, reply) => {
+    requireAuth(req, reply);
+    const current = req.cookies?.[COOKIE_NAME];
+    const where = current
+      ? and(eq(schema.sessions.userId, req.user!.id), ne(schema.sessions.tokenHash, sha256hex(current)))
+      : eq(schema.sessions.userId, req.user!.id);
+    const removed = db.delete(schema.sessions).where(where).returning({ h: schema.sessions.tokenHash }).all().length;
+    return { ok: true, removed };
   });
 
   app.post('/api/auth/password', async (req, reply) => {

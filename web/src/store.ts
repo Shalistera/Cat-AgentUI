@@ -139,6 +139,22 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 }));
 
+// ---- composer insert bus ----
+// Anything on a page that wants to drop text into the composer (划词引用,
+// etc.) publishes here; the mounted Composer consumes it, appends, focuses.
+// A nonce makes two identical inserts in a row distinguishable.
+interface ComposerInsertState {
+  pending: { text: string; nonce: number } | null;
+  insert(text: string): void;
+  consume(): void;
+}
+
+export const useComposerInsert = create<ComposerInsertState>((set) => ({
+  pending: null,
+  insert(text) { set({ pending: { text, nonce: Date.now() + Math.random() } }); },
+  consume() { set({ pending: null }); },
+}));
+
 // ---- outgoing message queue (per chat) ----
 // While a reply streams, further sends queue instead of being blocked; the chat
 // page auto-dispatches the next item whenever the chat is open and idle. Held

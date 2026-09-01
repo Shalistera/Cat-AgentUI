@@ -1,10 +1,117 @@
 import { useEffect, useState } from 'react';
-import { PanelLeft, Check } from 'lucide-react';
-import { api, fmtCost, fmtTokens } from '../api';
+import { PanelLeft, Check, LogOut, Monitor, Smartphone, Tablet } from 'lucide-react';
+import { api, fmtCost, fmtTime, fmtTokens } from '../api';
 import { useAuth, useUi } from '../store';
-import { Button, Input, Field, Spinner, Card, PageHeader, Stat, ToggleRow, toast } from '../components/ui';
+import { Badge, Button, Input, Field, Spinner, Card, PageHeader, Stat, ToggleRow, confirmDialog, toast } from '../components/ui';
 import { TokensBarChart } from '../components/TokensBarChart';
-import type { MyUsage, User } from '../types';
+import type { MyUsage, SessionInfo, User } from '../types';
+
+/** "Chrome · Windows" from a UA string — enough to recognise a device; the
+    full string stays in the tooltip. */
+function describeUa(ua: string | null): { label: string; kind: 'phone' | 'tablet' | 'desktop' } {
+  if (!ua) return { label: '未知设备', kind: 'desktop' };
+  const os = /iPhone/.test(ua) ? 'iPhone'
+    : /iPad/.test(ua) ? 'iPad'
+    : /Android/.test(ua) ? 'Android'
+    : /Windows/.test(ua) ? 'Windows'
+    : /Mac OS X|Macintosh/.test(ua) ? 'macOS'
+    : /CrOS/.test(ua) ? 'ChromeOS'
+    : /Linux/.test(ua) ? 'Linux' : '';
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /OPR\/|Opera/.test(ua) ? 'Opera'
+    : /Chrome\//.test(ua) && !/Chromium/.test(ua) ? 'Chrome'
+    : /Firefox\//.test(ua) ? 'Firefox'
+    : /Safari\//.test(ua) && /Version\//.test(ua) ? 'Safari'
+    : /MicroMessenger/.test(ua) ? '微信'
+    : '浏览器';
+  const kind = /iPad|Tablet/.test(ua) ? 'tablet' : /iPhone|Android.*Mobile/.test(ua) ? 'phone' : 'desktop';
+  return { label: [browser, os].filter(Boolean).join(' · '), kind };
+}
+
+function SessionsCard() {
+  const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  function load() {
+    return api.get<{ sessions: SessionInfo[] }>('/api/auth/sessions')
+      .then((r) => { setSessions(r.sessions); setFailed(false); })
+      .catch(() => setFailed(true));
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function revoke(s: SessionInfo) {
+    if (busy) return;
+    setBusy(s.id);
+    try {
+      await api.del(`/api/auth/sessions/${s.id}`);
+      toast('该设备已退出登录', 'ok');
+      await load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '操作失败', 'err');
+    } finally { setBusy(null); }
+  }
+
+  async function revokeOthers() {
+    if (busy) return;
+    const ok = await confirmDialog('退出其他设备', '除当前浏览器外,所有已登录的设备都需要重新登录。', false);
+    if (!ok) return;
+    setBusy('others');
+    try {
+      const r = await api.post<{ removed: number }>('/api/auth/sessions/revoke-others');
+      toast(r.removed ? `已退出 ${r.removed} 台其他设备` : '没有其他已登录的设备', 'ok');
+      await load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '操作失败', 'err');
+    } finally { setBusy(null); }
+  }
+
+  const others = sessions?.filter((s) => !s.current).length ?? 0;
+  const KindIcon = { phone: Smartphone, tablet: Tablet, desktop: Monitor };
+
+  return (
+    <Card title="登录设备" desc="当前账号在哪些浏览器上保持着登录。发现不认识的设备,先退出它,再修改密码。"
+      actions={others > 0 && (
+        <Button variant="outline" size="xs" disabled={busy !== null} onClick={() => void revokeOthers()}>
+          <LogOut size={12} />退出其他设备
+        </Button>
+      )}>
+      {sessions === null ? (
+        <div className="flex justify-center py-6 text-tx3">
+          {failed ? <p className="text-xs">加载失败(服务端可能还是旧版本)</p> : <Spinner />}
+        </div>
+      ) : (
+        <ul className="divide-y divide-line">
+          {sessions.map((s) => {
+            const d = describeUa(s.userAgent);
+            const Icon = KindIcon[d.kind];
+            return (
+              <li key={s.id} className="flex items-center gap-3 py-2.5" title={s.userAgent ?? undefined}>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-tx2">
+                  <Icon size={15} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-tx">
+                    <span className="truncate">{d.label}</span>
+                    {s.current && <Badge tone="acc">当前设备</Badge>}
+                  </div>
+                  <p className="mt-0.5 text-[11px] tabular-nums text-tx3">
+                    {s.ip ? `${s.ip} · ` : ''}最近活动 {fmtTime(s.lastSeenAt)} · 登录于 {fmtTime(s.createdAt)}
+                  </p>
+                </div>
+                {!s.current && (
+                  <Button variant="ghost" size="xs" disabled={busy !== null} onClick={() => void revoke(s)}>
+                    {busy === s.id ? <Spinner className="h-3 w-3" /> : '退出'}
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
 
 /* Swatches for the theme previews. Each entry mirrors the @theme token block in
    index.css (bg0 / bg1 / line / tx / acc for the respective theme) — a preview
@@ -170,6 +277,8 @@ export default function Settings() {
               </div>
             </div>
           </Card>
+
+          <SessionsCard />
 
           <Card title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">
             <ToggleRow

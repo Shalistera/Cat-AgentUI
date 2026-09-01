@@ -5,6 +5,7 @@ import {
   ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
   MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson, ChevronsUpDown,
   LayoutGrid,
+  Users,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { api } from '../api';
@@ -510,8 +511,11 @@ export function Sidebar() {
                       className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-[7px] pr-1 text-left"
                       onClick={() => { nav(`/projects/${p.id}`); if (window.innerWidth <= 900) setSidebarOpen(false); }}
                     >
-                      <FolderClosed size={13} className="shrink-0 text-tx3" />
-                      <span className={`min-w-0 flex-1 truncate text-[13px] ${p.id === activeProjectId ? 'font-medium text-tx' : 'text-tx'}`}>{p.name}</span>
+                      {p.role !== 'owner' || p.accessMode !== 'private'
+                        ? <Users size={13} className="shrink-0 text-tx3" />
+                        : <FolderClosed size={13} className="shrink-0 text-tx3" />}
+                      <span className={`min-w-0 flex-1 truncate text-[13px] ${p.id === activeProjectId ? 'font-medium text-tx' : 'text-tx'}`}
+                        title={p.role !== 'owner' ? `${p.owner.displayName || p.owner.username} 共享的项目` : undefined}>{p.name}</span>
                     </button>
                     <button
                       title="在项目中新建对话"

@@ -39,6 +39,21 @@ export function destroySession(token: string) {
   db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, sha256hex(token))).run();
 }
 
+/**
+ * Opaque per-session id for the 登录设备 UI. Derived from the token hash by
+ * one more hash round, so the value shown in the browser is neither the cookie
+ * nor the column the cookie is looked up by.
+ */
+export function sessionPublicId(tokenHash: string): string {
+  return sha256hex(`session-id:${tokenHash}`).slice(0, 24);
+}
+
+export function sessionsForUser(userId: string) {
+  return db.select().from(schema.sessions)
+    .where(eq(schema.sessions.userId, userId)).all()
+    .filter((s) => s.expiresAt >= now());
+}
+
 export function setSessionCookie(reply: FastifyReply, token: string) {
   const forwardedProto = String(reply.request.headers['x-forwarded-proto'] ?? '')
     .split(',')[0].trim().toLowerCase();
@@ -65,6 +80,7 @@ export function clearSessionCookie(reply: FastifyReply) {
 }
 
 let lastPurge = 0;
+const LAST_SEEN_INTERVAL_MS = 5 * 60_000;
 
 export async function authPlugin(app: FastifyInstance) {
   app.decorateRequest('user', null);
@@ -97,6 +113,7 @@ export async function authPlugin(app: FastifyInstance) {
     const row = db.select({
       userId: schema.sessions.userId,
       expiresAt: schema.sessions.expiresAt,
+      lastSeenAt: schema.sessions.lastSeenAt,
       id: schema.users.id,
       username: schema.users.username,
       role: schema.users.role,
@@ -113,6 +130,12 @@ export async function authPlugin(app: FastifyInstance) {
     if (row.expiresAt < now()) {
       db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, tokenHash)).run();
       return;
+    }
+    // Activity stamp for the 登录设备 list — a write at most every 5 minutes
+    // per session, so busy streaming chats don't turn into a write per request.
+    if (!row.lastSeenAt || now() - row.lastSeenAt > LAST_SEEN_INTERVAL_MS) {
+      db.update(schema.sessions).set({ lastSeenAt: now() })
+        .where(eq(schema.sessions.tokenHash, tokenHash)).run();
     }
     // Sliding renewal once past half-life
     if (row.expiresAt - now() < config.sessionTtlMs / 2) {

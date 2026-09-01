@@ -27,6 +27,9 @@ export const sessions = sqliteTable('sessions', {
   expiresAt: integer('expires_at').notNull(),
   ip: text('ip'),
   userAgent: text('user_agent'),
+  // Refreshed at most every few minutes per session (see auth.ts), enough for
+  // the 登录设备 list to say "active just now" vs "last seen last week".
+  lastSeenAt: integer('last_seen_at'),
 }, (t) => [index('idx_sessions_user').on(t.userId), index('idx_sessions_exp').on(t.expiresAt)]);
 
 export const providers = sqliteTable('providers', {
@@ -113,9 +116,29 @@ export const projects = sqliteTable('projects', {
   name: text('name').notNull(),
   description: text('description'),
   instructions: text('instructions'),
+  // Who besides the owner may use the project in their own chats:
+  // 'private' = nobody, 'shared' = every account, 'restricted' = the rows in
+  // projectMembers. Admins get NO implicit access — a project is personal
+  // data until its owner opens it up. Chats stay per-user in every mode.
+  accessMode: text('access_mode').notNull().default('private'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 }, (t) => [index('idx_projects_user').on(t.userId, t.updatedAt)]);
+
+// Explicit grants on a project. 'viewer' can read docs and chat inside the
+// project; 'editor' can also change the instructions and add/remove docs.
+// Renaming, deleting and sharing itself stay with the owner. Rows are
+// meaningful in every access mode (an editor grant on a 'shared' project
+// promotes that person above the read-only default).
+export const projectMembers = sqliteTable('project_members', {
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  role: text('role').notNull().default('viewer'), // 'viewer' | 'editor'
+  createdAt: integer('created_at').notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.projectId, t.userId] }),
+  index('idx_project_members_user').on(t.userId),
+]);
 
 export const projectDocs = sqliteTable('project_docs', {
   id: text('id').primaryKey(),

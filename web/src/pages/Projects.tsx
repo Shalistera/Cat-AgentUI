@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, FolderClosed, MessagesSquare, PanelLeft, Plus } from 'lucide-react';
+import { FileText, FolderClosed, MessagesSquare, PanelLeft, Plus, Users } from 'lucide-react';
 import { fmtTime } from '../api';
 import { useChats, useProjects, useUi } from '../store';
 import { Button, EmptyState, PageHeader, Spinner, toast } from '../components/ui';
@@ -55,10 +55,17 @@ export default function ProjectsPage() {
               >
                 <div className="flex items-center gap-2.5">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-tx2">
-                    <FolderClosed size={16} />
+                    {p.role !== 'owner' || p.accessMode !== 'private' ? <Users size={16} /> : <FolderClosed size={16} />}
                   </span>
                   <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-tight text-tx">{p.name}</h2>
                 </div>
+                {(p.role !== 'owner' || p.accessMode !== 'private') && (
+                  <p className="mt-2 truncate text-[11px] text-tx3">
+                    {p.role === 'owner'
+                      ? `已共享给${p.accessMode === 'shared' ? '所有人' : `${p.memberCount ?? 0} 位成员`}`
+                      : `${p.owner.displayName || p.owner.username} 共享 · ${p.role === 'editor' ? '可编辑' : '可查看'}`}
+                  </p>
+                )}
                 <p className="mt-3 line-clamp-2 min-h-[2.5em] text-[13px] leading-relaxed text-tx3">
                   {p.description || '暂无描述'}
                 </p>

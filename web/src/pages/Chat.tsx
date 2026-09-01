@@ -5,9 +5,10 @@ import {
   Plus, Send, Trash2,
 } from 'lucide-react';
 import { api, errMsg, streamChat, ApiError } from '../api';
-import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
+import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
+import { SelectionQuote, asQuote } from '../components/SelectionQuote';
 import { ModelAvatar } from '../components/ModelAvatar';
 import { CatMark } from '../components/Logo';
 import { Button, Modal, ModalActions, PageHeader, Textarea, confirmDialog, toast } from '../components/ui';
@@ -996,6 +997,7 @@ export default function Chat() {
       ) : (
         <>
           <div ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
+            <SelectionQuote containerRef={scrollRef} onQuote={(t) => useComposerInsert.getState().insert(asQuote(t))} />
             {/* 54rem message column over a 48rem composer (chatgpt-style: content
                 slightly wider than the input). Both widths are deliberate user
                 picks — change them in tandem with the composer wrappers below

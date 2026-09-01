@@ -4,6 +4,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { db, schema, now, getSetting } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
+import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
@@ -378,11 +379,6 @@ function chatSummary(c: typeof schema.chats.$inferSelect) {
   };
 }
 
-function ownsProject(projectId: string, userId: string): boolean {
-  return !!db.select({ id: schema.projects.id }).from(schema.projects)
-    .where(and(eq(schema.projects.id, projectId), eq(schema.projects.userId, userId))).get();
-}
-
 function messageDto(m: typeof schema.messages.$inferSelect) {
   return {
     id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
@@ -585,7 +581,7 @@ export async function chatRoutes(app: FastifyInstance) {
       temporary: z.boolean().optional(),
     }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
-    if (body.data.projectId && !ownsProject(body.data.projectId, req.user!.id)) {
+    if (body.data.projectId && !canUseProject(body.data.projectId, req.user!.id)) {
       return reply.code(404).send({ error: '项目不存在' });
     }
     const id = newId();
@@ -775,7 +771,7 @@ export async function chatRoutes(app: FastifyInstance) {
     if (d.temporary !== undefined) patch.temporary = 0;
     if (d.modelId !== undefined) patch.modelId = d.modelId;
     if (d.projectId !== undefined) {
-      if (d.projectId && !ownsProject(d.projectId, req.user!.id)) {
+      if (d.projectId && !canUseProject(d.projectId, req.user!.id)) {
         return reply.code(404).send({ error: '项目不存在' });
       }
       patch.projectId = d.projectId;

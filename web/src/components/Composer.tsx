@@ -3,7 +3,7 @@ import {
   ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon,
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
-import { useAuth, useMcp, useModels, useUi } from '../store';
+import { useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
 import { api, errMsg, uploadFile } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
@@ -208,6 +208,27 @@ export function Composer(props: ComposerProps) {
     draftTimer.current = setTimeout(() => saveDraft(key, text, atts), 300);
     return () => { if (draftTimer.current) clearTimeout(draftTimer.current); };
   }, [text, atts, props.draftKey]);
+
+  // 划词引用 etc.: append the published text under whatever is typed, unfold
+  // a compact composer, and put the caret at the end ready to type the question.
+  const insertPending = useComposerInsert((s) => s.pending);
+  const consumeInsert = useComposerInsert((s) => s.consume);
+  useEffect(() => {
+    if (!insertPending) return;
+    const add = insertPending.text;
+    setText((cur) => {
+      const base = cur.trimEnd();
+      return base ? `${base}\n\n${add}` : add;
+    });
+    consumeInsert();
+    props.onExpand?.();
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
+  }, [insertPending]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (panelOpen) return;

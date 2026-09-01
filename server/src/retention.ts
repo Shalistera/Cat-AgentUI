@@ -9,10 +9,13 @@ import path from 'node:path';
 import { and, eq, lt } from 'drizzle-orm';
 import { db, schema, getSetting } from './db/index.js';
 import { config } from './config.js';
-import { cleanupUnreferencedUploads, uploadIdsFromPartsJson } from './storage.js';
+import { cleanupUnreferencedUploads, uploadIdsFromPartsJson, removeUnreferencedUploads } from './storage.js';
 
 export const IMAGE_RETENTION_KEY = 'image_retention_days'; // 绘图工坊
 export const CHAT_IMAGE_RETENTION_KEY = 'chat_image_retention_days'; // 对话中作图
+// Uploads that no saved message references (abandoned drafts, workshop
+// inputs). 0 = keep forever; otherwise removed once older than N days.
+export const UPLOAD_RETENTION_KEY = 'upload_retention_days';
 
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -66,10 +69,18 @@ async function sweepTemporaryChats(): Promise<number> {
   return rows.length;
 }
 
+export async function sweepUnreferencedUploads(): Promise<number> {
+  const days = getSetting<number>(UPLOAD_RETENTION_KEY, 0);
+  if (!days || days <= 0) return 0;
+  const { count, bytes } = await removeUnreferencedUploads(days * 86_400_000);
+  if (count) console.log(`[retention] removed ${count} unreferenced upload(s) older than ${days}d (${bytes} bytes)`);
+  return count;
+}
+
 export function startRetentionSweeper() {
   // First pass shortly after boot (not during it), then hourly. unref so the
   // timers never hold a shutdown open.
-  const sweep = () => { sweepExpiredImages(); void sweepTemporaryChats(); };
+  const sweep = () => { sweepExpiredImages(); void sweepTemporaryChats(); void sweepUnreferencedUploads(); };
   setTimeout(sweep, 30_000).unref();
   setInterval(sweep, SWEEP_INTERVAL_MS).unref();
 }

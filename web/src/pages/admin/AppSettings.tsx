@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, X } from 'lucide-react';
 import { api, fmtTime } from '../../api';
 import { useAuth } from '../../store';
-import { Button, Card, Field, Input, Select, Spinner, Textarea, ToggleRow, toast } from '../../components/ui';
-import type { AppSettings as AppSettingsDto, ModelInfo } from '../../types';
+import { Button, Card, Field, Input, Select, Spinner, Textarea, ToggleRow, confirmDialog, toast } from '../../components/ui';
+import type { AppSettings as AppSettingsDto, ModelInfo, StorageOverview } from '../../types';
 
 interface BackupInfo { filename: string; size: number; createdAt: number }
 interface BackupSettings { enabled: boolean; intervalHours: number; keep: number }
@@ -237,6 +237,145 @@ function BackupsCard() {
   );
 }
 
+/** Who is holding how much — one accent hue, identity in the label. */
+function UsageRows({ users }: { users: StorageOverview['topUsers'] }) {
+  if (!users.length) return <p className="py-3 text-center text-xs text-tx3">还没有任何用户存放文件</p>;
+  const max = Math.max(...users.map((u) => u.uploadBytes + u.imageBytes), 1);
+  return (
+    <div className="space-y-2.5">
+      {users.map((u) => {
+        const total = u.uploadBytes + u.imageBytes;
+        return (
+          <div key={u.userId} title={`附件 ${fmtBytes(u.uploadBytes)} · 图片 ${fmtBytes(u.imageBytes)}`}>
+            <div className="mb-1 flex items-baseline justify-between gap-3 text-xs">
+              <span className="min-w-0 truncate text-tx">{u.displayName || u.username}
+                {u.displayName && <span className="ml-1 text-tx3">@{u.username}</span>}
+              </span>
+              <span className="shrink-0 tabular-nums text-tx2">{fmtBytes(total)}</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-bg2">
+              <div className="h-full rounded-full bg-acc opacity-85" style={{ width: `${Math.max((total / max) * 100, 1)}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function StorageCard({ uploadRetentionDays, onUploadRetentionChange, saving, onSave }: {
+  uploadRetentionDays: string; onUploadRetentionChange(v: string): void; saving: boolean; onSave?(): void;
+}) {
+  const [data, setData] = useState<StorageOverview | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<null | 'orphans' | 'unreferenced'>(null);
+
+  function load() {
+    return api.get<StorageOverview>('/api/admin/storage')
+      .then((r) => { setData(r); setLoadError(null); })
+      .catch((e) => setLoadError(e instanceof Error ? e.message : '加载存储信息失败'));
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function cleanup(kind: 'orphans' | 'unreferenced') {
+    if (busy || !data) return;
+    const ok = await confirmDialog(
+      kind === 'orphans' ? '清理孤儿文件' : '清理未使用的附件',
+      kind === 'orphans'
+        ? `将删除 ${data.orphans.count} 个数据库里没有记录的文件(${fmtBytes(data.orphans.bytes)})。这些文件不属于任何对话或画廊,最近一小时内写入的文件会跳过。`
+        : `将删除 ${data.uploads.unreferencedCount} 个没有出现在任何对话消息里的附件(${fmtBytes(data.uploads.unreferencedBytes)})。最近一小时内上传的会跳过;用户输入框里尚未发送的草稿附件如果早于一小时,也会被清掉。`,
+    );
+    if (!ok) return;
+    setBusy(kind);
+    try {
+      const r = await api.post<{ result: { orphans: { count: number; bytes: number } | null; unreferencedUploads: { count: number; bytes: number } | null }; overview: StorageOverview }>(
+        '/api/admin/storage/cleanup', kind === 'orphans' ? { orphans: true } : { unreferencedUploads: true },
+      );
+      const done = kind === 'orphans' ? r.result.orphans : r.result.unreferencedUploads;
+      toast(done && done.count ? `已清理 ${done.count} 个文件,释放 ${fmtBytes(done.bytes)}` : '没有需要清理的文件', 'ok');
+      setData(r.overview);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '清理失败', 'err');
+    } finally { setBusy(null); }
+  }
+
+  const used = data ? data.uploads.bytes + data.images.bytes + data.orphans.bytes : 0;
+  const pct = data ? Math.min(100, (used / data.limits.total) * 100) : 0;
+
+  return (
+    <Card title="存储空间" desc="附件与生成图片各占多少、谁占得最多,以及能安全清掉什么。数据库本身的体积见下方备份卡片。">
+      {loadError ? (
+        <p className="text-sm text-err">{loadError}(服务端可能还是旧版本,请重新构建并重启)</p>
+      ) : !data ? (
+        <div className="flex justify-center py-6 text-tx3"><Spinner /></div>
+      ) : (
+        <div className="space-y-5">
+          <div>
+            <div className="mb-1.5 flex items-baseline justify-between text-xs">
+              <span className="text-tx2">已用 <span className="tabular-nums text-tx">{fmtBytes(used)}</span> / 上限 {fmtBytes(data.limits.total)}(MAX_TOTAL_STORAGE_MB)</span>
+              <span className="tabular-nums text-tx3">磁盘剩余 {data.freeSpace === null ? '未知' : fmtBytes(data.freeSpace)}</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-bg2">
+              <div className={`h-full rounded-full ${pct >= 90 ? 'bg-err' : 'bg-acc'}`} style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg bg-bg0 px-3.5 py-3 text-xs">
+              <div className="eyebrow mb-1">对话附件</div>
+              <div className="text-base font-semibold tabular-nums text-tx">{fmtBytes(data.uploads.bytes)}</div>
+              <div className="mt-0.5 text-tx3">{data.uploads.count.toLocaleString()} 个文件 · 每人上限 {fmtBytes(data.limits.perUserUploads)}</div>
+              <div className="mt-1 text-tx3">未被任何消息引用:<span className="text-tx2">{data.uploads.unreferencedCount}</span> 个 / {fmtBytes(data.uploads.unreferencedBytes)}</div>
+            </div>
+            <div className="rounded-lg bg-bg0 px-3.5 py-3 text-xs">
+              <div className="eyebrow mb-1">生成图片</div>
+              <div className="text-base font-semibold tabular-nums text-tx">{fmtBytes(data.images.bytes)}</div>
+              <div className="mt-0.5 text-tx3">{data.images.count.toLocaleString()} 张 · 每人上限 {fmtBytes(data.limits.perUserImages)}</div>
+              <div className="mt-1 text-tx3">绘图工坊 {fmtBytes(data.images.workshopBytes)} · 对话作图 {fmtBytes(data.images.chatBytes)}</div>
+            </div>
+            <div className="rounded-lg bg-bg0 px-3.5 py-3 text-xs">
+              <div className="eyebrow mb-1">孤儿文件</div>
+              <div className="text-base font-semibold tabular-nums text-tx">{fmtBytes(data.orphans.bytes)}</div>
+              <div className="mt-0.5 text-tx3">{data.orphans.count.toLocaleString()} 个磁盘上有、数据库里没有的文件</div>
+              <div className="mt-1 text-tx3">来源:中断的上传、手工拷贝、迁移残留</div>
+            </div>
+          </div>
+
+          <div>
+            <div className="eyebrow mb-2">占用最多的用户</div>
+            <UsageRows users={data.topUsers} />
+          </div>
+
+          <Field
+            label="未使用附件保留天数"
+            hint="0 = 永久保留。上传后一直没有出现在任何对话消息里的附件(放弃的草稿、工坊参考图等),超过该天数后每小时自动清理。点击本卡片的「保存更改」生效。"
+          >
+            <Input
+              type="number" min={0} max={3650} step={1} inputMode="numeric" className="max-w-40"
+              value={uploadRetentionDays} disabled={saving}
+              onChange={(e) => onUploadRetentionChange(e.target.value)} placeholder="0"
+            />
+          </Field>
+
+          <div className="flex flex-wrap justify-end gap-2 border-t border-line pt-4">
+            {onSave && (
+              <Button variant="primary" size="sm" disabled={saving} onClick={onSave} className="mr-auto">
+                {saving && <Spinner className="h-3.5 w-3.5" />}保存更改
+              </Button>
+            )}
+            <Button variant="outline" size="sm" disabled={busy !== null || data.orphans.count === 0} onClick={() => void cleanup('orphans')}>
+              {busy === 'orphans' && <Spinner className="h-3.5 w-3.5" />}清理孤儿文件
+            </Button>
+            <Button variant="outline" size="sm" disabled={busy !== null || data.uploads.unreferencedCount === 0} onClick={() => void cleanup('unreferenced')}>
+              {busy === 'unreferenced' && <Spinner className="h-3.5 w-3.5" />}立即清理未使用附件
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function AppSettings() {
   const [loaded, setLoaded] = useState(false);
   const [brand, setBrand] = useState('');
@@ -244,6 +383,7 @@ export default function AppSettings() {
   // Raw text so the fields can be emptied while typing; clamped on save.
   const [retentionDays, setRetentionDays] = useState('0');
   const [chatRetentionDays, setChatRetentionDays] = useState('0');
+  const [uploadRetentionDays, setUploadRetentionDays] = useState('0');
   const [quotaTokens, setQuotaTokens] = useState('0');
   const [quotaAction, setQuotaAction] = useState<AppSettingsDto['quotaAction']>('block');
   const [quotaFallback, setQuotaFallback] = useState('');
@@ -261,6 +401,7 @@ export default function AppSettings() {
     setBrand(r.brand); setSignupEnabled(r.signupEnabled);
     setRetentionDays(String(r.imageRetentionDays ?? 0));
     setChatRetentionDays(String(r.chatImageRetentionDays ?? 0));
+    setUploadRetentionDays(String(r.uploadRetentionDays ?? 0));
     setQuotaTokens(String(r.quotaMonthlyTokens ?? 0));
     setQuotaAction(r.quotaAction ?? 'block');
     setQuotaFallback(r.quotaFallbackModelId ?? '');
@@ -299,6 +440,7 @@ export default function AppSettings() {
         signupEnabled,
         imageRetentionDays: clampDays(retentionDays),
         chatImageRetentionDays: clampDays(chatRetentionDays),
+        uploadRetentionDays: clampDays(uploadRetentionDays),
         quotaMonthlyTokens: Math.max(0, Math.round(Number(quotaTokens)) || 0),
         quotaAction,
         quotaFallbackModelId: quotaFallback || null,
@@ -489,6 +631,8 @@ export default function AppSettings() {
           </div>
         </div>
       </Card>
+
+      <StorageCard uploadRetentionDays={uploadRetentionDays} onUploadRetentionChange={setUploadRetentionDays} saving={busy} onSave={save} />
 
       <BackupsCard />
     </div>

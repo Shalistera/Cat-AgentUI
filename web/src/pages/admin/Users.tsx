@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Ban, BarChart3, CircleCheck, Image as ImageIcon, KeyRound, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { Ban, BarChart3, CircleCheck, Image as ImageIcon, KeyRound, LogOut, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { api, errMsg, fmtDate, fmtTokens } from '../../api';
 import { Badge, Button, Field, Input, Modal, ModalActions, Select, Spinner, Td, Th, ToggleRow, confirmDialog, toast } from '../../components/ui';
 import type { AdminUser } from '../../types';
@@ -144,6 +144,22 @@ export default function Users() {
     await load();
   }
 
+  async function forceLogout(u: AdminUser) {
+    const ok = await confirmDialog(
+      '强制下线',
+      `将「${userLabel(u)}」从所有已登录设备(${u.activeSessions} 台)退出,账号本身不受影响,可以重新登录。`,
+      false,
+    );
+    if (!ok) return;
+    try {
+      const r = await api.post<{ removed: number }>(`/api/admin/users/${u.id}/logout`);
+      toast(r.removed ? `已退出 ${r.removed} 台设备` : '该用户当前没有登录中的设备', 'ok');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '操作失败', 'err');
+    }
+    await load();
+  }
+
   async function deleteUser(u: AdminUser) {
     const ok = await confirmDialog(
       '删除用户',
@@ -238,6 +254,11 @@ export default function Users() {
                     <Button variant="ghost" size="iconSm" title="重置密码"
                       onClick={() => { setNewPassword(''); setResetTarget(u); }}>
                       <KeyRound size={14} />
+                    </Button>
+                    <Button variant="ghost" size="iconSm"
+                      title={u.activeSessions ? `强制下线(当前 ${u.activeSessions} 台设备在线)` : '强制下线(当前没有登录中的设备)'}
+                      disabled={!u.activeSessions} onClick={() => forceLogout(u)}>
+                      <LogOut size={14} className={u.activeSessions ? 'text-acc' : ''} />
                     </Button>
                     <Button variant="ghost" size="iconSm"
                       title={u.role === 'admin' ? '降为普通用户' : '升为管理员'}

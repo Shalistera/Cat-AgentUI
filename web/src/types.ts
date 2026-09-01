@@ -71,13 +71,36 @@ export interface ChatSummary {
   createdAt: number; updatedAt: number;
 }
 
+export type ProjectAccessMode = 'private' | 'shared' | 'restricted';
+export type ProjectRole = 'owner' | 'editor' | 'viewer';
+export type ProjectMemberRole = 'editor' | 'viewer';
+
 export interface Project {
   id: string; name: string;
   description: string | null;
   instructions: string | null;
   createdAt: number; updatedAt: number;
+  /** Who may use it: nobody else / everyone / the member list. */
+  accessMode: ProjectAccessMode;
+  /** What I may do with it. */
+  role: ProjectRole;
+  owner: { id: string; username: string; displayName: string | null };
   /** Present in list responses. */
-  docCount?: number; totalChars?: number;
+  docCount?: number; totalChars?: number; memberCount?: number;
+}
+
+export interface ProjectMember {
+  userId: string; username: string; displayName: string | null; role: ProjectMemberRole;
+}
+
+/** /api/users/directory — everyone I can share with (enabled accounts, minus me). */
+export interface DirectoryUser { id: string; username: string; displayName: string | null; role: 'admin' | 'user' }
+
+/** /api/auth/sessions — one signed-in device. */
+export interface SessionInfo {
+  id: string; current: boolean;
+  createdAt: number; expiresAt: number; lastSeenAt: number;
+  ip: string | null; userAgent: string | null;
 }
 
 export interface ProjectDoc { id: string; name: string; chars: number; createdAt: number }
@@ -233,6 +256,8 @@ export interface AdminUser {
   allowImages: boolean; allowImageModels: boolean;
   /** null = 跟随全局默认,0 = 不限,>0 = 每月上限。 */
   monthlyTokenQuota: number | null;
+  /** Live (unexpired) login sessions right now. */
+  activeSessions: number;
   usage: { totalTokens: number; requests: number; images: number; monthTokens: number };
 }
 
@@ -300,6 +325,8 @@ export interface AppSettings {
   imageRetentionDays: number;
   /** Chat-born image retention in days; 0 = keep forever. Separate policy. */
   chatImageRetentionDays: number;
+  /** Uploads no saved message references: removed after N days; 0 = keep forever. */
+  uploadRetentionDays: number;
   /** 默认月度 token 配额,0 = 不限。用户可单独覆盖。 */
   quotaMonthlyTokens: number;
   /** 超额动作:拒绝,或对话降级到指定模型。 */
@@ -336,4 +363,14 @@ export interface StreamHandlers {
   onFollowups?(d: { messageId?: string; questions: string[] }): void;
   onError?(message: string): void;
   onDone?(status: 'done' | 'error' | 'stopped', finishReason: string | null): void;
+}
+
+/** /api/admin/storage — what data/ is holding and for whom. */
+export interface StorageOverview {
+  uploads: { count: number; bytes: number; unreferencedCount: number; unreferencedBytes: number };
+  images: { count: number; bytes: number; workshopBytes: number; chatBytes: number };
+  orphans: { count: number; bytes: number };
+  limits: { total: number; perUserUploads: number; perUserImages: number };
+  freeSpace: number | null;
+  topUsers: { userId: string; username: string; displayName: string | null; uploadBytes: number; imageBytes: number }[];
 }

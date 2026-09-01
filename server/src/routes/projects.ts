@@ -5,6 +5,10 @@ import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { PROJECT_TOOL_DEFS, indexDoc, removeDocIndex, removeProjectIndex } from '../knowledge.js';
+import {
+  accessibleProjects, canEditProject, projectAccess, projectMemberCounts, projectMembers,
+  replaceProjectMembers, userDirectory, type ProjectRole,
+} from '../project-access.js';
 import type { ToolDef } from '../types.js';
 
 // Retrieval (knowledge.ts) means the caps are storage hygiene, not a context
@@ -25,21 +29,28 @@ export const PROJECT_INJECT_CHARS = 6_000;
     most this much before cutting off — never the whole 2M-char allowance. */
 const NO_TOOLS_INJECT_CAP = 100_000;
 
-function ownedProject(id: string, userId: string) {
-  return db.select().from(schema.projects)
-    .where(and(eq(schema.projects.id, id), eq(schema.projects.userId, userId))).get();
-}
-
 function docMeta(d: typeof schema.projectDocs.$inferSelect) {
   return { id: d.id, name: d.name, chars: d.chars, createdAt: d.createdAt };
 }
 
-function projectDto(p: typeof schema.projects.$inferSelect) {
+function ownerOf(userId: string) {
+  const u = db.select({ id: schema.users.id, username: schema.users.username, displayName: schema.users.displayName })
+    .from(schema.users).where(eq(schema.users.id, userId)).get();
+  return u ?? { id: userId, username: '已删除用户', displayName: null };
+}
+
+function projectDto(p: typeof schema.projects.$inferSelect, role: ProjectRole) {
   return {
     id: p.id, name: p.name, description: p.description,
     instructions: p.instructions, createdAt: p.createdAt, updatedAt: p.updatedAt,
+    accessMode: p.accessMode as 'private' | 'shared' | 'restricted',
+    role,
+    owner: ownerOf(p.userId),
   };
 }
+
+const NOT_FOUND = { error: '项目不存在' };
+const NO_EDIT = { error: '你只有查看权限,不能修改这个项目' };
 
 function totalChars(projectId: string): number {
   const row = db.select({ sum: sql<number | null>`sum(${schema.projectDocs.chars})` })
@@ -51,7 +62,7 @@ function totalChars(projectId: string): number {
     retrieval tools when the corpus is too big to inject whole. */
 export function buildProjectPrompt(projectId: string, userId: string, canUseTools: boolean):
   { block: string | null; tools: ToolDef[] | null } {
-  const p = ownedProject(projectId, userId);
+  const p = projectAccess(projectId, userId)?.project;
   if (!p) return { block: null, tools: null };
   const docs = db.select().from(schema.projectDocs)
     .where(eq(schema.projectDocs.projectId, projectId))
@@ -91,9 +102,8 @@ export function buildProjectPrompt(projectId: string, userId: string, canUseTool
 export async function projectRoutes(app: FastifyInstance) {
   app.get('/api/projects', async (req, reply) => {
     requireAuth(req, reply);
-    const rows = db.select().from(schema.projects)
-      .where(eq(schema.projects.userId, req.user!.id))
-      .orderBy(desc(schema.projects.updatedAt)).all();
+    const rows = accessibleProjects(req.user!.id);
+    const memberCounts = projectMemberCounts(rows.map((r) => r.project.id));
     const counts = new Map<string, { docs: number; chars: number }>();
     for (const d of db.select({
       projectId: schema.projectDocs.projectId,
@@ -103,10 +113,11 @@ export async function projectRoutes(app: FastifyInstance) {
       counts.set(d.projectId, { docs: d.docs, chars: d.chars ?? 0 });
     }
     return {
-      projects: rows.map((p) => ({
-        ...projectDto(p),
+      projects: rows.map(({ project: p, role }) => ({
+        ...projectDto(p, role),
         docCount: counts.get(p.id)?.docs ?? 0,
         totalChars: counts.get(p.id)?.chars ?? 0,
+        memberCount: memberCounts.get(p.id) ?? 0,
       })),
     };
   });
@@ -128,22 +139,28 @@ export async function projectRoutes(app: FastifyInstance) {
       createdAt: t, updatedAt: t,
     }).run();
     const p = db.select().from(schema.projects).where(eq(schema.projects.id, id)).get()!;
-    return { project: { ...projectDto(p), docCount: 0, totalChars: 0 } };
+    return { project: { ...projectDto(p, 'owner'), docCount: 0, totalChars: 0, memberCount: 0 } };
   });
 
   app.get('/api/projects/:id', async (req, reply) => {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };
-    const p = ownedProject(id, req.user!.id);
-    if (!p) return reply.code(404).send({ error: '项目不存在' });
+    const access = projectAccess(id, req.user!.id);
+    if (!access) return reply.code(404).send(NOT_FOUND);
+    const { project: p, role } = access;
     const docs = db.select().from(schema.projectDocs)
       .where(eq(schema.projectDocs.projectId, id))
       .orderBy(asc(schema.projectDocs.createdAt)).all();
+    // Only MY chats — sharing a project shares its instructions and docs,
+    // never anyone's conversations.
     const chats = db.select().from(schema.chats)
       .where(and(eq(schema.chats.userId, req.user!.id), eq(schema.chats.projectId, id)))
       .orderBy(desc(schema.chats.updatedAt)).all();
     return {
-      project: projectDto(p),
+      project: projectDto(p, role),
+      // The member roster is the owner's business; others just see the count.
+      members: role === 'owner' ? projectMembers(id) : null,
+      memberCount: projectMemberCounts([id]).get(id) ?? 0,
       docs: docs.map(docMeta),
       limits: { ...PROJECT_LIMITS, injectChars: PROJECT_INJECT_CHARS },
       chats: chats.map((c) => ({
@@ -162,29 +179,67 @@ export async function projectRoutes(app: FastifyInstance) {
       instructions: z.string().max(PROJECT_LIMITS.maxInstructionsChars).nullish(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
-    const p = ownedProject(id, req.user!.id);
-    if (!p) return reply.code(404).send({ error: '项目不存在' });
+    const access = projectAccess(id, req.user!.id);
+    if (!access) return reply.code(404).send(NOT_FOUND);
     const d = body.data;
+    // Editors may rewrite the instructions; the project's identity is the owner's.
+    if (!canEditProject(access.role)) return reply.code(403).send(NO_EDIT);
+    if ((d.name !== undefined || d.description !== undefined) && access.role !== 'owner') {
+      return reply.code(403).send({ error: '只有项目所有者可以修改名称与描述' });
+    }
     const patch: Record<string, unknown> = { updatedAt: now() };
     if (d.name !== undefined) patch.name = d.name;
     if (d.description !== undefined) patch.description = d.description;
     if (d.instructions !== undefined) patch.instructions = d.instructions;
     db.update(schema.projects).set(patch).where(eq(schema.projects.id, id)).run();
     const updated = db.select().from(schema.projects).where(eq(schema.projects.id, id)).get()!;
-    return { project: projectDto(updated) };
+    return { project: projectDto(updated, access.role) };
   });
 
   app.delete('/api/projects/:id', async (req, reply) => {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };
-    const p = ownedProject(id, req.user!.id);
-    if (!p) return reply.code(404).send({ error: '项目不存在' });
-    // Chats survive their project; they just fall back to plain chats.
-    db.update(schema.chats).set({ projectId: null })
-      .where(and(eq(schema.chats.projectId, id), eq(schema.chats.userId, req.user!.id))).run();
+    const access = projectAccess(id, req.user!.id);
+    if (!access) return reply.code(404).send(NOT_FOUND);
+    if (access.role !== 'owner') return reply.code(403).send({ error: '只有项目所有者可以删除项目' });
+    // Chats survive their project — every member's, not just the owner's;
+    // they just fall back to plain chats.
+    db.update(schema.chats).set({ projectId: null }).where(eq(schema.chats.projectId, id)).run();
     db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
     removeProjectIndex(id);
     return { ok: true };
+  });
+
+  // --- sharing (owner only) ---
+  const sharingSchema = z.object({
+    accessMode: z.enum(['private', 'shared', 'restricted']),
+    members: z.array(z.object({
+      userId: z.string().min(1).max(64),
+      role: z.enum(['viewer', 'editor']),
+    })).max(200),
+  });
+
+  app.put('/api/projects/:id/sharing', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const access = projectAccess(id, req.user!.id);
+    if (!access) return reply.code(404).send(NOT_FOUND);
+    if (access.role !== 'owner') return reply.code(403).send({ error: '只有项目所有者可以设置共享' });
+    const body = sharingSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    db.update(schema.projects).set({ accessMode: body.data.accessMode, updatedAt: now() })
+      .where(eq(schema.projects.id, id)).run();
+    replaceProjectMembers(id, req.user!.id, body.data.members);
+    const updated = db.select().from(schema.projects).where(eq(schema.projects.id, id)).get()!;
+    const members = projectMembers(id);
+    return { project: projectDto(updated, 'owner'), members, memberCount: members.length };
+  });
+
+  // Who can be invited: every enabled account except me. Names only — the
+  // member picker needs nothing else, and regular users get no admin fields.
+  app.get('/api/users/directory', async (req, reply) => {
+    requireAuth(req, reply);
+    return { users: userDirectory(req.user!.id) };
   });
 
   // Documents arrive as JSON {name, content} — the client reads the file as
@@ -193,8 +248,9 @@ export async function projectRoutes(app: FastifyInstance) {
   app.post('/api/projects/:id/docs', async (req, reply) => {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };
-    const p = ownedProject(id, req.user!.id);
-    if (!p) return reply.code(404).send({ error: '项目不存在' });
+    const access = projectAccess(id, req.user!.id);
+    if (!access) return reply.code(404).send(NOT_FOUND);
+    if (!canEditProject(access.role)) return reply.code(403).send(NO_EDIT);
     const body = z.object({
       name: z.string().trim().min(1).max(200),
       content: z.string().min(1).max(PROJECT_LIMITS.maxDocChars),
@@ -225,7 +281,7 @@ export async function projectRoutes(app: FastifyInstance) {
   app.get('/api/projects/:id/docs/:docId', async (req, reply) => {
     requireAuth(req, reply);
     const { id, docId } = req.params as { id: string; docId: string };
-    if (!ownedProject(id, req.user!.id)) return reply.code(404).send({ error: '项目不存在' });
+    if (!projectAccess(id, req.user!.id)) return reply.code(404).send(NOT_FOUND);
     const doc = db.select().from(schema.projectDocs)
       .where(and(eq(schema.projectDocs.id, docId), eq(schema.projectDocs.projectId, id))).get();
     if (!doc) return reply.code(404).send({ error: '文档不存在' });
@@ -235,7 +291,9 @@ export async function projectRoutes(app: FastifyInstance) {
   app.delete('/api/projects/:id/docs/:docId', async (req, reply) => {
     requireAuth(req, reply);
     const { id, docId } = req.params as { id: string; docId: string };
-    if (!ownedProject(id, req.user!.id)) return reply.code(404).send({ error: '项目不存在' });
+    const access = projectAccess(id, req.user!.id);
+    if (!access) return reply.code(404).send(NOT_FOUND);
+    if (!canEditProject(access.role)) return reply.code(403).send(NO_EDIT);
     const doc = db.select().from(schema.projectDocs)
       .where(and(eq(schema.projectDocs.id, docId), eq(schema.projectDocs.projectId, id))).get();
     if (!doc) return reply.code(404).send({ error: '文档不存在' });

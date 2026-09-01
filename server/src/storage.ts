@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { eq, like, sql } from 'drizzle-orm';
+import { and, eq, like, lt, sql } from 'drizzle-orm';
 import { config } from './config.js';
 import { db, schema } from './db/index.js';
 
@@ -326,3 +326,163 @@ export async function cleanupUnreferencedUploads(userId: string, candidateIds: I
     db.delete(schema.uploads).where(eq(schema.uploads.id, id)).run();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Admin storage overview + cleanup
+// ---------------------------------------------------------------------------
+
+export interface StorageOverview {
+  uploads: { count: number; bytes: number; unreferencedCount: number; unreferencedBytes: number };
+  images: { count: number; bytes: number; workshopBytes: number; chatBytes: number };
+  /** Files on disk that no DB row knows about (crashed uploads, manual copies). */
+  orphans: { count: number; bytes: number };
+  limits: { total: number; perUserUploads: number; perUserImages: number };
+  freeSpace: number | null;
+  topUsers: { userId: string; username: string; displayName: string | null; uploadBytes: number; imageBytes: number }[];
+}
+
+/** Every uploadId any saved message still points at. One pass over the
+    messages that contain an attachment part at all — far cheaper than a LIKE
+    per upload when the question is "which uploads are unused". */
+function referencedUploadIds(): Set<string> {
+  const out = new Set<string>();
+  const rows = db.select({ parts: schema.messages.parts }).from(schema.messages)
+    .where(like(schema.messages.parts, '%"uploadId"%')).all();
+  for (const r of rows) for (const id of uploadIdsFromPartsJson(r.parts)) out.add(id);
+  return out;
+}
+
+/** Uploads no message references — abandoned drafts, workshop inputs, etc.
+    Optionally only those older than `olderThanMs`. */
+function unreferencedUploads(olderThanMs = 0) {
+  const referenced = referencedUploadIds();
+  const cutoff = Date.now() - olderThanMs;
+  return db.select().from(schema.uploads)
+    .where(olderThanMs > 0 ? lt(schema.uploads.createdAt, cutoff) : undefined).all()
+    .filter((u) => !referenced.has(u.id));
+}
+
+const PART_GRACE_MS = 60 * 60_000;
+
+/** Files under data/uploads and data/images with no DB row. A fresh `.part`
+    (or any file touched within the last hour) is an upload in flight, not an
+    orphan. */
+async function orphanFiles(): Promise<{ dir: 'uploads' | 'images'; filename: string; size: number }[]> {
+  const known = {
+    uploads: new Set(db.select({ f: schema.uploads.filename }).from(schema.uploads).all().map((r) => r.f)),
+    images: new Set(db.select({ f: schema.images.filename }).from(schema.images).all().map((r) => r.f)),
+  };
+  const out: { dir: 'uploads' | 'images'; filename: string; size: number }[] = [];
+  const recent = Date.now() - PART_GRACE_MS;
+  for (const dir of ['uploads', 'images'] as const) {
+    const dirPath = path.join(config.dataDir, dir);
+    let names: string[] = [];
+    try { names = await fs.promises.readdir(dirPath); } catch { continue; }
+    for (const filename of names) {
+      if (known[dir].has(filename)) continue;
+      try {
+        const st = await fs.promises.lstat(path.join(dirPath, filename));
+        if (!st.isFile() || st.mtimeMs > recent) continue;
+        out.push({ dir, filename, size: st.size });
+      } catch { /* vanished mid-scan */ }
+    }
+  }
+  return out;
+}
+
+function freeSpaceAt(dir: string): number | null {
+  try {
+    const st = fs.statfsSync(dir);
+    return Number(st.bavail) * Number(st.bsize);
+  } catch { return null; }
+}
+
+export async function storageOverview(): Promise<StorageOverview> {
+  const up = db.select({ n: sql<number>`count(*)`, bytes: sql<number>`coalesce(sum(${schema.uploads.size}), 0)` })
+    .from(schema.uploads).get() ?? { n: 0, bytes: 0 };
+  const unref = unreferencedUploads();
+  const im = db.select({
+    source: schema.images.source,
+    n: sql<number>`count(*)`,
+    bytes: sql<number>`coalesce(sum(${schema.images.byteSize}), 0)`,
+  }).from(schema.images).groupBy(schema.images.source).all();
+  const imgTotal = im.reduce((a, r) => ({ n: a.n + r.n, bytes: a.bytes + r.bytes }), { n: 0, bytes: 0 });
+  const orphans = await orphanFiles();
+
+  const uploadByUser = new Map(db.select({ userId: schema.uploads.userId, bytes: sql<number>`coalesce(sum(${schema.uploads.size}), 0)` })
+    .from(schema.uploads).groupBy(schema.uploads.userId).all().map((r) => [r.userId, r.bytes]));
+  const imageByUser = new Map(db.select({ userId: schema.images.userId, bytes: sql<number>`coalesce(sum(${schema.images.byteSize}), 0)` })
+    .from(schema.images).groupBy(schema.images.userId).all().map((r) => [r.userId, r.bytes]));
+  const users = db.select({ id: schema.users.id, username: schema.users.username, displayName: schema.users.displayName })
+    .from(schema.users).all();
+  const topUsers = users.map((u) => ({
+    userId: u.id, username: u.username, displayName: u.displayName,
+    uploadBytes: uploadByUser.get(u.id) ?? 0, imageBytes: imageByUser.get(u.id) ?? 0,
+  }))
+    .filter((u) => u.uploadBytes + u.imageBytes > 0)
+    .sort((a, b) => (b.uploadBytes + b.imageBytes) - (a.uploadBytes + a.imageBytes))
+    .slice(0, 10);
+
+  return {
+    uploads: {
+      count: up.n, bytes: up.bytes,
+      unreferencedCount: unref.length, unreferencedBytes: unref.reduce((n, u) => n + u.size, 0),
+    },
+    images: {
+      count: imgTotal.n, bytes: imgTotal.bytes,
+      workshopBytes: im.find((r) => r.source === 'workshop')?.bytes ?? 0,
+      chatBytes: im.find((r) => r.source === 'chat')?.bytes ?? 0,
+    },
+    orphans: { count: orphans.length, bytes: orphans.reduce((n, o) => n + o.size, 0) },
+    limits: {
+      total: config.maxTotalStorageBytes,
+      perUserUploads: config.maxUserUploadBytes,
+      perUserImages: config.maxUserImageBytes,
+    },
+    freeSpace: freeSpaceAt(config.dataDir),
+    topUsers,
+  };
+}
+
+/** Delete on-disk files nothing references. Returns bytes reclaimed. */
+export async function removeOrphanFiles(): Promise<{ count: number; bytes: number }> {
+  const orphans = await orphanFiles();
+  let count = 0; let bytes = 0;
+  for (const o of orphans) {
+    try {
+      await fs.promises.unlink(path.join(config.dataDir, o.dir, o.filename));
+      count++; bytes += o.size;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.log(`[storage] keep orphan ${o.dir}/${o.filename}: ${(err as Error).message}`);
+      }
+    }
+  }
+  untrackedStorageBytes = Math.max(0, untrackedStorageBytes - bytes);
+  return { count, bytes };
+}
+
+/**
+ * Delete uploads that no saved message references and that are older than
+ * `olderThanMs` (0 = regardless of age). Age matters: a file uploaded a minute
+ * ago is most likely sitting in someone's composer draft, not abandoned.
+ */
+export async function removeUnreferencedUploads(olderThanMs: number): Promise<{ count: number; bytes: number }> {
+  const rows = unreferencedUploads(olderThanMs);
+  let count = 0; let bytes = 0;
+  for (const row of rows) {
+    // Re-check right before deleting: a message may have been saved meanwhile.
+    if (uploadIsReferenced(row.id)) continue;
+    try { await fs.promises.unlink(path.join(config.dataDir, 'uploads', row.filename)); }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.log(`[storage] keep upload ${row.id}: unlink failed (${(err as Error).message})`);
+        continue;
+      }
+    }
+    db.delete(schema.uploads).where(and(eq(schema.uploads.id, row.id), eq(schema.uploads.filename, row.filename))).run();
+    count++; bytes += row.size;
+  }
+  return { count, bytes };
+}
+

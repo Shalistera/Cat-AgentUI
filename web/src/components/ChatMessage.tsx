@@ -422,7 +422,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           </div>
         ) : (
           text && (
-            <div className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-br-sm border border-line bg-bg2 px-3.5 py-2.5 text-[15px] leading-relaxed text-tx">
+            <div data-quotable className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-br-sm border border-line bg-bg2 px-3.5 py-2.5 text-[15px] leading-relaxed text-tx">
               {text}
             </div>
           )
@@ -469,7 +469,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
     } else if (p.type === 'text') {
       const streamingThis = isStreaming && i === lastTextIdx && i === msg.parts.length - 1;
       rendered.push(
-        <div key={i} className={streamingThis ? 'blink-cursor' : ''}>
+        <div key={i} data-quotable className={streamingThis ? 'blink-cursor' : ''}>
           <Markdown text={p.text} />
         </div>,
       );

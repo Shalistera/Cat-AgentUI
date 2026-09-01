@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { and, eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { requireAuth } from '../auth.js';
+import { accessibleProjects } from '../project-access.js';
 
 // Full-text search across the user's chats: titles AND message bodies, with a
 // snippet around the first hit. Substring matching (not FTS5) is deliberate —
@@ -75,8 +76,7 @@ export async function searchRoutes(app: FastifyInstance) {
     // search to exactly them.
     chats = chats.filter((c) => !!c.archived === (q.archived ?? false));
     if (q.project !== null) {
-      const projs = db.select({ id: schema.projects.id, name: schema.projects.name })
-        .from(schema.projects).where(eq(schema.projects.userId, userId)).all();
+      const projs = accessibleProjects(userId).map((r) => r.project);
       const wanted = new Set(projs.filter((p) => p.name.toLowerCase().includes(q.project!)).map((p) => p.id));
       chats = chats.filter((c) => c.projectId && wanted.has(c.projectId));
     }
