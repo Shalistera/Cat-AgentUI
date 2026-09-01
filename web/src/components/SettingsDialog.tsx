@@ -1,0 +1,478 @@
+import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  BarChart3, Check, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, UserRound, X,
+} from 'lucide-react';
+import { api, fmtCost, fmtTime, fmtTokens } from '../api';
+import { useAuth, useUi, type SettingsTab } from '../store';
+import { Badge, Button, Field, Input, Spinner, Stat, ToggleRow, confirmDialog, toast } from './ui';
+import { TokensBarChart } from './TokensBarChart';
+import type { MyUsage, SessionInfo, User } from '../types';
+
+/* claude.ai-style settings: one dialog, sections down the left, content on the
+   right. Nothing here is a page any more — /settings just opens this. Each
+   section is its own component so it loads (and fails) independently. */
+
+const TABS: { id: SettingsTab; label: string; icon: typeof UserRound }[] = [
+  { id: 'account', label: '账号', icon: UserRound },
+  { id: 'chat', label: '对话偏好', icon: MessageSquareText },
+  { id: 'appearance', label: '外观', icon: Palette },
+  { id: 'devices', label: '登录设备', icon: Monitor },
+  { id: 'usage', label: '我的用量', icon: BarChart3 },
+];
+
+/** Section = heading + one-line description + body. Stacked sections are
+    separated by a rule instead of nested cards, so the dialog stays flat. */
+function Section({ title, desc, actions, children }: {
+  title: string; desc?: string; actions?: ReactNode; children: ReactNode;
+}) {
+  return (
+    <section className="border-b border-line py-5 first:pt-0 last:border-0 last:pb-0">
+      <div className="mb-4 flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold tracking-tight text-tx">{title}</h3>
+          {desc && <p className="mt-0.5 text-xs leading-relaxed text-tx3">{desc}</p>}
+        </div>
+        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+// ---------- 账号 ----------
+function AccountSection() {
+  const user = useAuth((s) => s.user);
+  const [displayName, setDisplayName] = useState(user?.displayName ?? '');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  async function saveProfile() {
+    if (savingProfile) return;
+    setSavingProfile(true);
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { displayName: displayName.trim() });
+      useAuth.setState({ user: r.user });
+      toast('资料已保存', 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '保存失败', 'err');
+    } finally { setSavingProfile(false); }
+  }
+
+  async function changePassword() {
+    if (savingPassword) return;
+    if (newPassword !== confirmPassword) { toast('两次输入的新密码不一致', 'err'); return; }
+    if (newPassword.length < 8) { toast('新密码至少 8 位', 'err'); return; }
+    setSavingPassword(true);
+    try {
+      await api.post('/api/auth/password', { oldPassword, newPassword });
+      toast('密码已修改', 'ok');
+      setOldPassword(''); setNewPassword(''); setConfirmPassword('');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '修改失败', 'err');
+    } finally { setSavingPassword(false); }
+  }
+
+  const profileDirty = displayName.trim() !== (user?.displayName ?? '');
+
+  return (
+    <>
+      <Section title="个人资料" desc="用户名不可修改;昵称会显示在界面各处。">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="用户名">
+            <Input value={user?.username ?? ''} disabled readOnly />
+          </Field>
+          <Field label="昵称">
+            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="未设置" maxLength={64} />
+          </Field>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button variant="primary" size="sm" disabled={savingProfile || !profileDirty} onClick={saveProfile}>
+            {savingProfile && <Spinner className="h-3.5 w-3.5" />}保存资料
+          </Button>
+        </div>
+      </Section>
+
+      <Section title="修改密码" desc="新密码至少 8 位;修改后其他设备会被登出,当前设备保持登录。">
+        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void changePassword(); }}>
+          <Field label="原密码">
+            <Input type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)}
+              autoComplete="current-password" maxLength={128} />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="新密码" hint="至少 8 位字符">
+              <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password" maxLength={128} />
+            </Field>
+            <Field label="确认新密码">
+              <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+                autoComplete="new-password" maxLength={128} />
+            </Field>
+          </div>
+          <div className="flex justify-end">
+            <Button type="submit" variant="primary" size="sm"
+              disabled={savingPassword || !oldPassword || !newPassword || !confirmPassword}>
+              {savingPassword && <Spinner className="h-3.5 w-3.5" />}修改密码
+            </Button>
+          </div>
+        </form>
+      </Section>
+    </>
+  );
+}
+
+// ---------- 对话偏好 ----------
+function ChatSection() {
+  const user = useAuth((s) => s.user);
+  const [titleEmoji, setTitleEmoji] = useState(!!user?.settings.titleEmoji);
+
+  async function toggleTitleEmoji(v: boolean) {
+    setTitleEmoji(v); // optimistic — the toggle should feel instant
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { titleEmoji: v } });
+      useAuth.setState({ user: r.user });
+    } catch (err) {
+      setTitleEmoji(!v);
+      toast(err instanceof Error ? err.message : '保存失败', 'err');
+    }
+  }
+
+  return (
+    <Section title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">
+      <ToggleRow
+        label="标题自动加 emoji"
+        desc="开启后,自动生成的对话标题会以一个匹配主题的 emoji 开头"
+        checked={titleEmoji} onChange={(v) => void toggleTitleEmoji(v)}
+      />
+      <p className="mt-4 text-xs leading-relaxed text-tx3">
+        快捷指令在新对话页直接编辑;模型收藏与排序在输入框的模型选择器里调整;翻译场景在翻译工坊页面管理。
+      </p>
+    </Section>
+  );
+}
+
+// ---------- 外观 ----------
+/* Swatches for the theme previews. Each entry mirrors the @theme token block in
+   index.css (bg0 / bg1 / line / tx / acc for the respective theme) — a preview
+   can't read the other theme's CSS variables, so a token change there must be
+   copied here. */
+const THEME_PREVIEW = {
+  light: { canvas: '#f6f7f9', surface: '#ffffff', line: '#e4e7ec', ink: '#14181f', dot: '#1f4fd8' },
+  dark: { canvas: '#0c0e13', surface: '#14171e', line: '#242a34', ink: '#e7eaf0', dot: '#7aa2ff' },
+} as const;
+
+function ThemeCard({ active, label, canvas, surface, line, ink, dot, onClick }: {
+  active: boolean; label: string; canvas: string; surface: string; line: string;
+  ink: string; dot: string; onClick(): void;
+}) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={active}
+      className={`cursor-pointer rounded-lg border p-2.5 text-left transition-colors ${
+        active ? 'border-acc ring-1 ring-acc' : 'border-line hover:border-field'}`}>
+      <div className="flex h-16 overflow-hidden rounded-md border" style={{ background: canvas, borderColor: line }}>
+        <div className="w-1/3 border-r" style={{ borderColor: line }}>
+          <div className="m-1.5 h-1.5 w-8 rounded-full" style={{ background: dot }} />
+          <div className="m-1.5 h-1 w-6 rounded-full opacity-40" style={{ background: ink }} />
+          <div className="m-1.5 h-1 w-7 rounded-full opacity-40" style={{ background: ink }} />
+        </div>
+        <div className="flex-1 p-1.5" style={{ background: surface }}>
+          <div className="h-1.5 w-full rounded-full opacity-70" style={{ background: ink }} />
+          <div className="mt-1.5 h-1.5 w-2/3 rounded-full opacity-35" style={{ background: ink }} />
+          <div className="mt-1.5 h-1.5 w-1/2 rounded-full opacity-35" style={{ background: ink }} />
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-[13px] font-medium text-tx">{label}</span>
+        {active && <Check size={14} className="text-acc" />}
+      </div>
+    </button>
+  );
+}
+
+function AppearanceSection() {
+  const theme = useUi((s) => s.theme);
+  const setTheme = useUi((s) => s.setTheme);
+  return (
+    <Section title="主题" desc="保存在本机浏览器,立即生效。">
+      <div className="grid max-w-md grid-cols-2 gap-3">
+        <ThemeCard active={theme === 'light'} label="浅色" onClick={() => setTheme('light')} {...THEME_PREVIEW.light} />
+        <ThemeCard active={theme === 'dark'} label="深色" onClick={() => setTheme('dark')} {...THEME_PREVIEW.dark} />
+      </div>
+    </Section>
+  );
+}
+
+// ---------- 登录设备 ----------
+/** "Chrome · Windows" from a UA string — enough to recognise a device; the
+    full string stays in the tooltip. */
+function describeUa(ua: string | null): { label: string; kind: 'phone' | 'tablet' | 'desktop' } {
+  if (!ua) return { label: '未知设备', kind: 'desktop' };
+  const os = /iPhone/.test(ua) ? 'iPhone'
+    : /iPad/.test(ua) ? 'iPad'
+    : /Android/.test(ua) ? 'Android'
+    : /Windows/.test(ua) ? 'Windows'
+    : /Mac OS X|Macintosh/.test(ua) ? 'macOS'
+    : /CrOS/.test(ua) ? 'ChromeOS'
+    : /Linux/.test(ua) ? 'Linux' : '';
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /OPR\/|Opera/.test(ua) ? 'Opera'
+    : /Chrome\//.test(ua) && !/Chromium/.test(ua) ? 'Chrome'
+    : /Firefox\//.test(ua) ? 'Firefox'
+    : /Safari\//.test(ua) && /Version\//.test(ua) ? 'Safari'
+    : /MicroMessenger/.test(ua) ? '微信'
+    : '浏览器';
+  const kind = /iPad|Tablet/.test(ua) ? 'tablet' : /iPhone|Android.*Mobile/.test(ua) ? 'phone' : 'desktop';
+  return { label: [browser, os].filter(Boolean).join(' · '), kind };
+}
+
+const KIND_ICON = { phone: Smartphone, tablet: Tablet, desktop: Monitor };
+
+function DevicesSection() {
+  const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  function load() {
+    return api.get<{ sessions: SessionInfo[] }>('/api/auth/sessions')
+      .then((r) => { setSessions(r.sessions); setFailed(false); })
+      .catch(() => setFailed(true));
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function revoke(s: SessionInfo) {
+    if (busy) return;
+    setBusy(s.id);
+    try {
+      await api.del(`/api/auth/sessions/${s.id}`);
+      toast('该设备已退出登录', 'ok');
+      await load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '操作失败', 'err');
+    } finally { setBusy(null); }
+  }
+
+  async function revokeOthers() {
+    if (busy) return;
+    const ok = await confirmDialog('退出其他设备', '除当前浏览器外,所有已登录的设备都需要重新登录。', false);
+    if (!ok) return;
+    setBusy('others');
+    try {
+      const r = await api.post<{ removed: number }>('/api/auth/sessions/revoke-others');
+      toast(r.removed ? `已退出 ${r.removed} 台其他设备` : '没有其他已登录的设备', 'ok');
+      await load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '操作失败', 'err');
+    } finally { setBusy(null); }
+  }
+
+  const others = sessions?.filter((s) => !s.current).length ?? 0;
+
+  return (
+    <Section title="登录设备" desc="当前账号在哪些浏览器上保持着登录。发现不认识的设备,先退出它,再修改密码。"
+      actions={others > 0 && (
+        <Button variant="outline" size="xs" disabled={busy !== null} onClick={() => void revokeOthers()}>
+          <LogOut size={12} />退出其他设备
+        </Button>
+      )}>
+      {sessions === null ? (
+        <div className="flex justify-center py-6 text-tx3">
+          {failed ? <p className="text-xs">加载失败(服务端可能还是旧版本)</p> : <Spinner />}
+        </div>
+      ) : (
+        <ul className="divide-y divide-line rounded-lg border border-line">
+          {sessions.map((s) => {
+            const d = describeUa(s.userAgent);
+            const Icon = KIND_ICON[d.kind];
+            return (
+              <li key={s.id} className="flex items-center gap-3 px-3.5 py-2.5" title={s.userAgent ?? undefined}>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg2 text-tx2">
+                  <Icon size={15} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-tx">
+                    <span className="truncate">{d.label}</span>
+                    {s.current && <Badge tone="acc">当前设备</Badge>}
+                  </div>
+                  <p className="mt-0.5 text-[11px] tabular-nums text-tx3">
+                    {s.ip ? `${s.ip} · ` : ''}最近活动 {fmtTime(s.lastSeenAt)} · 登录于 {fmtTime(s.createdAt)}
+                  </p>
+                </div>
+                {!s.current && (
+                  <Button variant="ghost" size="xs" disabled={busy !== null} onClick={() => void revoke(s)}>
+                    {busy === s.id ? <Spinner className="h-3 w-3" /> : '退出'}
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+// ---------- 我的用量 ----------
+function UsageSection() {
+  const [usage, setUsage] = useState<MyUsage | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    api.get<MyUsage>('/api/usage/me')
+      .then(setUsage)
+      .catch(() => { setFailed(true); toast('加载用量数据失败', 'err'); });
+  }, []);
+
+  return (
+    <Section title="我的用量" desc="最近 30 天的 Token 消耗与请求统计。">
+      {!usage ? (
+        <div className="flex justify-center py-10 text-tx3">
+          {failed ? <p className="text-xs">用量数据加载失败</p> : <Spinner />}
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className={`grid grid-cols-2 gap-3 ${usage.totals.cost != null ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
+            <Stat label="总 Tokens" value={fmtTokens(usage.totals.totalTokens)} />
+            {usage.totals.cost != null && (
+              <Stat label="折算成本" value={fmtCost(usage.totals.cost, usage.currency)} hint="按各模型当前单价估算" />
+            )}
+            <Stat label="请求次数" value={usage.totals.requests.toLocaleString()} />
+            <Stat label="生成图片" value={usage.totals.images.toLocaleString()} />
+          </div>
+
+          {usage.quota?.limit != null && (
+            <div>
+              <div className="eyebrow mb-2">本月配额</div>
+              <div className="space-y-1.5">
+                <div className="h-1.5 overflow-hidden rounded-full bg-bg3">
+                  <div
+                    className={`h-full rounded-full transition-[width] ${usage.quota.used >= usage.quota.limit ? 'bg-err' : 'bg-acc'}`}
+                    style={{ width: `${Math.min(100, (usage.quota.used / usage.quota.limit) * 100)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-tx3">
+                  已用 <span className="tabular-nums text-tx2">{fmtTokens(usage.quota.used)}</span>
+                  {' / '}<span className="tabular-nums text-tx2">{fmtTokens(usage.quota.limit)}</span> tokens,
+                  每月 1 日重新计算{usage.quota.used >= usage.quota.limit ? ';本月配额已用完' : ''}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div className="eyebrow mb-2">近 30 天每日 Tokens</div>
+            <TokensBarChart byDay={usage.byDay} />
+          </div>
+
+          <div>
+            <div className="eyebrow mb-1.5">按模型统计</div>
+            {usage.byModel.length === 0 ? (
+              <p className="py-4 text-center text-xs text-tx3">暂无数据</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-line">
+                    <th className="py-2 pr-2 text-left font-medium text-tx3">模型</th>
+                    <th className="py-2 pr-2 text-right font-medium text-tx3">Tokens</th>
+                    <th className="py-2 text-right font-medium text-tx3">次数</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usage.byModel.map((m) => (
+                    <tr key={m.model} className="border-b border-line last:border-0">
+                      <td className="py-2 pr-2 text-tx2">{m.model}</td>
+                      <td className="py-2 pr-2 text-right tabular-nums text-tx">{fmtTokens(m.totalTokens)}</td>
+                      <td className="py-2 text-right tabular-nums text-tx2">{m.requests.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// ---------- dialog ----------
+export function SettingsDialog() {
+  const open = useUi((s) => s.settingsOpen);
+  const tab = useUi((s) => s.settingsTab);
+  const setTab = useUi((s) => s.setSettingsTab);
+  const close = useUi((s) => s.closeSettings);
+  const user = useAuth((s) => s.user);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [open, close]);
+
+  if (!open || !user) return null;
+  const active = TABS.find((t) => t.id === tab) ?? TABS[0];
+  const initial = (user.displayName || user.username).slice(0, 1).toUpperCase();
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center sm:p-4" role="dialog" aria-modal="true" aria-label="设置">
+      <div className="absolute inset-0 bg-scrim backdrop-blur-[2px]" onClick={close} />
+      {/* Full-screen sheet on phones; a fixed-height two-pane dialog on desktop
+          so switching sections never makes the window jump. */}
+      <div className="fade-up relative flex h-full w-full flex-col overflow-hidden bg-bg1 shadow-xl sm:h-[min(44rem,88vh)] sm:max-w-4xl sm:flex-row sm:rounded-xl sm:border sm:border-line">
+        {/* left rail */}
+        <aside className="flex shrink-0 flex-col border-b border-line bg-bg0 sm:w-56 sm:border-b-0 sm:border-r">
+          <div className="flex items-center gap-3 px-4 pb-2 pt-4 sm:pb-3 sm:pt-5">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-pri text-xs font-semibold text-prifg">
+              {initial}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold tracking-tight text-tx">{user.displayName || user.username}</div>
+              <div className="truncate text-[11px] text-tx3">@{user.username} · {user.role === 'admin' ? '管理员' : '用户'}</div>
+            </div>
+            <Button variant="ghost" size="iconSm" onClick={close} title="关闭" className="sm:hidden"><X size={15} /></Button>
+          </div>
+          <nav className="flex gap-1 overflow-x-auto px-3 pb-3 sm:flex-col sm:px-3 sm:pb-4" aria-label="设置分区">
+            {TABS.map((t) => {
+              const Icon = t.icon;
+              const isActive = t.id === active.id;
+              return (
+                <button
+                  key={t.id} type="button" aria-current={isActive ? 'page' : undefined}
+                  onClick={() => setTab(t.id)}
+                  className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors ${
+                    isActive ? 'bg-bg2 font-medium text-tx shadow-xs' : 'text-tx2 hover:bg-bg2/70 hover:text-tx'}`}
+                >
+                  <Icon size={14} className={isActive ? 'text-acc' : 'text-tx3'} />
+                  {t.label}
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+
+        {/* content */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="hidden items-center justify-between border-b border-line px-6 py-3.5 sm:flex">
+            <h2 className="text-sm font-semibold tracking-tight text-tx">{active.label}</h2>
+            <Button variant="ghost" size="iconSm" onClick={close} title="关闭"><X size={15} /></Button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+            {/* key remounts the section so each visit refetches (devices, usage) */}
+            <div key={active.id} className="fade-up mx-auto max-w-2xl">
+              {active.id === 'account' && <AccountSection />}
+              {active.id === 'chat' && <ChatSection />}
+              {active.id === 'appearance' && <AppearanceSection />}
+              {active.id === 'devices' && <DevicesSection />}
+              {active.id === 'usage' && <UsageSection />}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}

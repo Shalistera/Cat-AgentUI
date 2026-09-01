@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Megaphone, X } from 'lucide-react';
 import { useAnnouncement, useAuth, useHtmlPreview, useUi } from './store';
 import { onUnauthorized } from './api';
@@ -7,6 +7,7 @@ import { startRealtime, stopRealtime } from './realtime';
 import { Toaster, ConfirmHost, Spinner } from './components/ui';
 import { Sidebar } from './components/Sidebar';
 import { HtmlPreviewPanel } from './components/HtmlPreviewPanel';
+import type { SettingsTab } from './store';
 import Login from './pages/Login';
 import ErrorReset from './pages/ErrorReset';
 import Chat from './pages/Chat';
@@ -17,7 +18,7 @@ import ProjectsPage from './pages/Projects';
 import Ppt from './pages/Ppt';
 import Ocr from './pages/Ocr';
 import Translate from './pages/Translate';
-import Settings from './pages/Settings';
+import { SettingsDialog } from './components/SettingsDialog';
 import Admin from './pages/admin/Admin';
 
 function AnnouncementBanner() {
@@ -75,8 +76,23 @@ function Shell() {
         <Outlet />
       </main>
       <HtmlPreviewPanel />
+      <SettingsDialog />
     </div>
   );
+}
+
+// /settings used to be a page. Old links (and muscle memory) still land
+// somewhere sensible: open the dialog over the chat page. `?tab=` picks the
+// section, e.g. /settings?tab=devices.
+const SETTINGS_TABS: SettingsTab[] = ['account', 'chat', 'appearance', 'devices', 'usage'];
+function SettingsOpener() {
+  const loc = useLocation();
+  const openSettings = useUi((s) => s.openSettings);
+  useEffect(() => {
+    const tab = new URLSearchParams(loc.search).get('tab') as SettingsTab | null;
+    openSettings(tab && SETTINGS_TABS.includes(tab) ? tab : undefined);
+  }, [loc.search, openSettings]);
+  return <Navigate to="/" replace />;
 }
 
 function AdminGate() {
@@ -112,7 +128,7 @@ export default function App() {
           <Route path="/ppt" element={<Ppt />} />
           <Route path="/ocr" element={<Ocr />} />
           <Route path="/translate" element={<Translate />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/settings" element={<SettingsOpener />} />
           <Route path="/admin/*" element={<AdminGate />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

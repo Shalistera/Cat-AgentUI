@@ -21,11 +21,19 @@ function initialTheme(): Theme {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+export type SettingsTab = 'account' | 'chat' | 'appearance' | 'devices' | 'usage';
+
 interface UiState {
   theme: Theme;
   sidebarOpen: boolean;
+  /** The claude.ai-style settings dialog: open state plus the active section. */
+  settingsOpen: boolean;
+  settingsTab: SettingsTab;
   setTheme(t: Theme): void;
   setSidebarOpen(v: boolean): void;
+  openSettings(tab?: SettingsTab): void;
+  closeSettings(): void;
+  setSettingsTab(tab: SettingsTab): void;
 }
 
 export const useUi = create<UiState>((set) => {
@@ -34,8 +42,13 @@ export const useUi = create<UiState>((set) => {
   return {
     theme,
     sidebarOpen: window.innerWidth > 900,
+    settingsOpen: false,
+    settingsTab: 'account',
     setTheme(t) { applyTheme(t); set({ theme: t }); },
     setSidebarOpen(v) { set({ sidebarOpen: v }); },
+    openSettings(tab) { set({ settingsOpen: true, ...(tab ? { settingsTab: tab } : {}) }); },
+    closeSettings() { set({ settingsOpen: false }); },
+    setSettingsTab(tab) { set({ settingsTab: tab }); },
   };
 });
 

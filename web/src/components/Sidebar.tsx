@@ -609,7 +609,7 @@ export function Sidebar() {
           </button>
         }>
           <div className="p-1">
-            <button className={menuItem} onClick={() => { setAccountOpen(false); nav('/settings'); if (window.innerWidth <= 900) setSidebarOpen(false); }}>
+            <button className={menuItem} onClick={() => { setAccountOpen(false); useUi.getState().openSettings(); }}>
               <SettingsIcon size={13} />设置
             </button>
             {user?.role === 'admin' && (
