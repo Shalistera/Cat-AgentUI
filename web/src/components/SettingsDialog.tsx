@@ -165,42 +165,66 @@ const THEME_PREVIEW = {
   dark: { canvas: '#0c0e13', surface: '#14171e', line: '#242a34', ink: '#e7eaf0', dot: '#7aa2ff' },
 } as const;
 
-function ThemeCard({ active, label, canvas, surface, line, ink, dot, onClick }: {
-  active: boolean; label: string; canvas: string; surface: string; line: string;
-  ink: string; dot: string; onClick(): void;
+type Swatch = (typeof THEME_PREVIEW)[keyof typeof THEME_PREVIEW];
+
+function ThemePreview({ canvas, surface, line, ink, dot }: Swatch) {
+  return (
+    <div className="flex h-full w-full" style={{ background: canvas }}>
+      <div className="w-1/3 border-r" style={{ borderColor: line }}>
+        <div className="m-1.5 h-1.5 w-8 rounded-full" style={{ background: dot }} />
+        <div className="m-1.5 h-1 w-6 rounded-full opacity-40" style={{ background: ink }} />
+        <div className="m-1.5 h-1 w-7 rounded-full opacity-40" style={{ background: ink }} />
+      </div>
+      <div className="flex-1 p-1.5" style={{ background: surface }}>
+        <div className="h-1.5 w-full rounded-full opacity-70" style={{ background: ink }} />
+        <div className="mt-1.5 h-1.5 w-2/3 rounded-full opacity-35" style={{ background: ink }} />
+        <div className="mt-1.5 h-1.5 w-1/2 rounded-full opacity-35" style={{ background: ink }} />
+      </div>
+    </div>
+  );
+}
+
+/** Miniature of the theme it selects; 跟随系统 shows both halves split
+    diagonally, the way OS pickers do. */
+function ThemeCard({ active, label, hint, preview, onClick }: {
+  active: boolean; label: string; hint?: string; preview: 'light' | 'dark' | 'system'; onClick(): void;
 }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={active}
       className={`cursor-pointer rounded-lg border p-2.5 text-left transition-colors ${
         active ? 'border-acc ring-1 ring-acc' : 'border-line hover:border-field'}`}>
-      <div className="flex h-16 overflow-hidden rounded-md border" style={{ background: canvas, borderColor: line }}>
-        <div className="w-1/3 border-r" style={{ borderColor: line }}>
-          <div className="m-1.5 h-1.5 w-8 rounded-full" style={{ background: dot }} />
-          <div className="m-1.5 h-1 w-6 rounded-full opacity-40" style={{ background: ink }} />
-          <div className="m-1.5 h-1 w-7 rounded-full opacity-40" style={{ background: ink }} />
-        </div>
-        <div className="flex-1 p-1.5" style={{ background: surface }}>
-          <div className="h-1.5 w-full rounded-full opacity-70" style={{ background: ink }} />
-          <div className="mt-1.5 h-1.5 w-2/3 rounded-full opacity-35" style={{ background: ink }} />
-          <div className="mt-1.5 h-1.5 w-1/2 rounded-full opacity-35" style={{ background: ink }} />
-        </div>
+      <div className="relative h-16 overflow-hidden rounded-md border border-line">
+        {preview === 'system' ? (
+          <>
+            <div className="absolute inset-0"><ThemePreview {...THEME_PREVIEW.light} /></div>
+            <div className="absolute inset-0" style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}>
+              <ThemePreview {...THEME_PREVIEW.dark} />
+            </div>
+          </>
+        ) : <ThemePreview {...THEME_PREVIEW[preview]} />}
       </div>
-      <div className="mt-2 flex items-center justify-between">
-        <span className="text-[13px] font-medium text-tx">{label}</span>
-        {active && <Check size={14} className="text-acc" />}
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="min-w-0">
+          <span className="block text-[13px] font-medium text-tx">{label}</span>
+          {hint && <span className="block truncate text-[11px] text-tx3">{hint}</span>}
+        </span>
+        {active && <Check size={14} className="shrink-0 text-acc" />}
       </div>
     </button>
   );
 }
 
 function AppearanceSection() {
+  const mode = useUi((s) => s.themeMode);
   const theme = useUi((s) => s.theme);
-  const setTheme = useUi((s) => s.setTheme);
+  const setThemeMode = useUi((s) => s.setThemeMode);
   return (
-    <Section title="主题" desc="保存在本机浏览器,立即生效。">
-      <div className="grid max-w-md grid-cols-2 gap-3">
-        <ThemeCard active={theme === 'light'} label="浅色" onClick={() => setTheme('light')} {...THEME_PREVIEW.light} />
-        <ThemeCard active={theme === 'dark'} label="深色" onClick={() => setTheme('dark')} {...THEME_PREVIEW.dark} />
+    <Section title="主题" desc="保存在本机浏览器,立即生效。「跟随系统」会随 iOS / Android / macOS / Windows 的深浅色设置实时切换。">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <ThemeCard active={mode === 'system'} label="跟随系统" preview="system"
+          hint={`当前系统为${theme === 'dark' ? '深色' : '浅色'}`} onClick={() => setThemeMode('system')} />
+        <ThemeCard active={mode === 'light'} label="浅色" preview="light" onClick={() => setThemeMode('light')} />
+        <ThemeCard active={mode === 'dark'} label="深色" preview="dark" onClick={() => setThemeMode('dark')} />
       </div>
     </Section>
   );

@@ -4,47 +4,76 @@ import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, Project, User } 
 import type { ComposerSettings, PendingAttachment } from './components/Composer';
 
 // ---- theme ----
-// Light is the product default; `html.dark` is the opt-in override. First-time
-// visitors inherit the OS preference instead of being forced into one theme.
+// Three-way: follow the OS (default), or pin light / dark. Only the *mode* is
+// persisted; the effective theme is re-derived from prefers-color-scheme and
+// tracks it live, so an iPhone flipping to dark at sunset flips the app too.
+// index.html applies the same rule before first paint to avoid a flash.
 export type Theme = 'dark' | 'light';
+export type ThemeMode = Theme | 'system';
 
 const THEME_KEY = 'cat-theme';
+const darkQuery = window.matchMedia?.('(prefers-color-scheme: dark)') ?? null;
+
+function systemTheme(): Theme {
+  return darkQuery?.matches ? 'dark' : 'light';
+}
+
+function resolveTheme(mode: ThemeMode): Theme {
+  return mode === 'system' ? systemTheme() : mode;
+}
 
 function applyTheme(t: Theme) {
   document.documentElement.classList.toggle('dark', t === 'dark');
-  localStorage.setItem(THEME_KEY, t);
 }
 
-function initialTheme(): Theme {
+function initialThemeMode(): ThemeMode {
   const saved = localStorage.getItem(THEME_KEY);
   if (saved === 'dark' || saved === 'light') return saved;
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return 'system';
 }
 
 export type SettingsTab = 'account' | 'chat' | 'appearance' | 'devices' | 'usage';
 
 interface UiState {
+  /** Effective theme — what is on screen right now. */
   theme: Theme;
+  /** What the user chose; 'system' follows the OS. */
+  themeMode: ThemeMode;
   sidebarOpen: boolean;
   /** The claude.ai-style settings dialog: open state plus the active section. */
   settingsOpen: boolean;
   settingsTab: SettingsTab;
-  setTheme(t: Theme): void;
+  setThemeMode(mode: ThemeMode): void;
   setSidebarOpen(v: boolean): void;
   openSettings(tab?: SettingsTab): void;
   closeSettings(): void;
   setSettingsTab(tab: SettingsTab): void;
 }
 
-export const useUi = create<UiState>((set) => {
-  const theme = initialTheme();
+export const useUi = create<UiState>((set, get) => {
+  const themeMode = initialThemeMode();
+  const theme = resolveTheme(themeMode);
   applyTheme(theme);
+  // OS switched: only matters while following it.
+  darkQuery?.addEventListener('change', () => {
+    if (get().themeMode !== 'system') return;
+    const next = systemTheme();
+    applyTheme(next);
+    set({ theme: next });
+  });
   return {
     theme,
+    themeMode,
     sidebarOpen: window.innerWidth > 900,
     settingsOpen: false,
     settingsTab: 'account',
-    setTheme(t) { applyTheme(t); set({ theme: t }); },
+    setThemeMode(mode) {
+      if (mode === 'system') localStorage.removeItem(THEME_KEY);
+      else localStorage.setItem(THEME_KEY, mode);
+      const next = resolveTheme(mode);
+      applyTheme(next);
+      set({ themeMode: mode, theme: next });
+    },
     setSidebarOpen(v) { set({ sidebarOpen: v }); },
     openSettings(tab) { set({ settingsOpen: true, ...(tab ? { settingsTab: tab } : {}) }); },
     closeSettings() { set({ settingsOpen: false }); },

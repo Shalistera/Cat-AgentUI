@@ -319,7 +319,7 @@ export function Sidebar() {
   const { user, bootstrap, logout } = useAuth();
   const { chats, loaded, load } = useChats();
   const projectsStore = useProjects();
-  const { theme, setTheme, sidebarOpen, setSidebarOpen } = useUi();
+  const { theme, setThemeMode, sidebarOpen, setSidebarOpen } = useUi();
   const [query, setQuery] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -617,7 +617,9 @@ export function Sidebar() {
                 <ShieldCheck size={13} />管理后台
               </button>
             )}
-            <button className={menuItem} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+            {/* Quick flip pins the opposite theme; 跟随系统 lives in 设置 → 外观. */}
+            <button className={menuItem} title="固定为另一种主题;要跟随系统请到「设置 → 外观」"
+              onClick={() => setThemeMode(theme === 'dark' ? 'light' : 'dark')}>
               {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
               {theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
             </button>
