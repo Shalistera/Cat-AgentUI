@@ -161,7 +161,7 @@ export function PageHeader({ title, subtitle, left, children }: {
   title: ReactNode; subtitle?: string; left?: ReactNode; children?: ReactNode;
 }) {
   return (
-    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-line bg-bg1/85 px-4 backdrop-blur-md sm:px-6">
+    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-line bg-bg1 px-4 sm:px-6">
       {left}
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-[15px] font-semibold tracking-tight text-tx">{title}</h1>
@@ -349,7 +349,7 @@ export function Modal({ open, onClose, title, desc, children, wide, className = 
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-scrim backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-scrim" onClick={onClose} />
       <div className={`fade-up relative flex max-h-[88vh] w-full flex-col ${wide ? 'max-w-2xl' : 'max-w-md'} overflow-hidden rounded-xl border border-line bg-bg1 shadow-xl ${className}`}>
         <div className="flex items-start gap-3 border-b border-line px-5 py-4">
           <div className="min-w-0 flex-1">

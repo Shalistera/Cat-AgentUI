@@ -43,7 +43,7 @@ export function LightboxHost() {
   if (!src) return null;
   const isBlob = src.startsWith('blob:') || src.startsWith('data:');
   return createPortal(
-    <div className="fixed inset-0 z-[70] flex flex-col bg-black/90 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="查看图片">
+    <div className="fixed inset-0 z-[70] flex flex-col bg-black/90" role="dialog" aria-modal="true" aria-label="查看图片">
       <div className="flex shrink-0 items-center justify-end gap-1 px-3 py-2">
         <button className={btn} title={full ? '适应窗口' : '原始大小'} onClick={() => setFull((v) => !v)}>
           {full ? <Minimize2 size={17} /> : <Maximize2 size={17} />}

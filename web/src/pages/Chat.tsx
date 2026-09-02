@@ -236,7 +236,7 @@ function QuickPrompts({ onSend }: { onSend(q: string): void }) {
           >
             {q}
           </button>
-          <div className="absolute right-1.5 top-1.5 flex rounded-md bg-bg1/90 opacity-0 shadow-xs backdrop-blur-[2px] transition-opacity group-hover/qp:opacity-100 group-focus-within/qp:opacity-100">
+          <div className="absolute right-1.5 top-1.5 flex rounded-md bg-bg1 opacity-0 shadow-xs transition-opacity group-hover/qp:opacity-100 group-focus-within/qp:opacity-100">
             <Button variant="ghost" size="iconXs" title="编辑快捷指令"
               onClick={() => setEditor({ index: i, text: q })}>
               <Pencil size={12} />

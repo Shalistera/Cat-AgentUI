@@ -521,7 +521,7 @@ export function SettingsDialog() {
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center sm:p-4" role="dialog" aria-modal="true" aria-label="设置">
-      <div className="absolute inset-0 bg-scrim backdrop-blur-[2px]" onClick={close} />
+      <div className="absolute inset-0 bg-scrim" onClick={close} />
       {/* Full-screen sheet on phones; a fixed-height two-pane dialog on desktop
           so switching sections never makes the window jump. */}
       <div className="fade-up relative flex h-full w-full flex-col overflow-hidden bg-bg1 shadow-xl sm:h-[min(44rem,88vh)] sm:max-w-4xl sm:flex-row sm:rounded-xl sm:border sm:border-line">

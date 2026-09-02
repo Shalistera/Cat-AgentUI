@@ -538,7 +538,7 @@ export function Composer(props: ComposerProps) {
           page and one dashed card names the outcome, so there is no guessing
           where the image should be dropped — anywhere counts. */}
       {dragging && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6 backdrop-blur-[2px]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6">
           <div className={`pointer-events-none flex flex-col items-center gap-2.5 rounded-2xl border-2 border-dashed bg-bg1 px-14 py-10 text-center shadow-lg ${
             dropBlocked ? 'border-err/60' : 'border-acc'
           }`}>
