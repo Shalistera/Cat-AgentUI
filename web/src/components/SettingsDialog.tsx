@@ -4,8 +4,9 @@ import {
   BarChart3, Check, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, UserRound, X,
 } from 'lucide-react';
 import { api, fmtCost, fmtTime, fmtTokens } from '../api';
+import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
 import { useAuth, useUi, type SettingsTab } from '../store';
-import { Badge, Button, Field, Input, Spinner, Stat, ToggleRow, confirmDialog, toast } from './ui';
+import { Badge, Button, Field, Input, Spinner, Stat, Textarea, ToggleRow, confirmDialog, toast } from './ui';
 import { TokensBarChart } from './TokensBarChart';
 import type { MyUsage, SessionInfo, User } from '../types';
 
@@ -129,29 +130,106 @@ function AccountSection() {
 function ChatSection() {
   const user = useAuth((s) => s.user);
   const [titleEmoji, setTitleEmoji] = useState(!!user?.settings.titleEmoji);
+  const [confirmTools, setConfirmTools] = useState(!!user?.settings.confirmTools);
+  const [notify, setNotify] = useState(notifyEnabled());
+  const perm = notifyPermission();
+  const savedInstructions = user?.settings.customInstructions ?? '';
+  const [instructions, setInstructions] = useState(savedInstructions);
+  const [savingInstructions, setSavingInstructions] = useState(false);
+  const instructionsDirty = instructions !== savedInstructions;
 
-  async function toggleTitleEmoji(v: boolean) {
-    setTitleEmoji(v); // optimistic — the toggle should feel instant
+  async function saveInstructions() {
+    if (savingInstructions) return;
+    setSavingInstructions(true);
     try {
-      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { titleEmoji: v } });
+      const value = instructions.trim();
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { customInstructions: value || null } });
+      useAuth.setState({ user: r.user });
+      setInstructions(value);
+      toast('已保存,之后的每次对话都会带上', 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '保存失败', 'err');
+    } finally {
+      setSavingInstructions(false);
+    }
+  }
+
+  async function saveSetting(key: 'titleEmoji' | 'confirmTools', v: boolean, revert: (v: boolean) => void) {
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { [key]: v } });
       useAuth.setState({ user: r.user });
     } catch (err) {
-      setTitleEmoji(!v);
+      revert(!v);
       toast(err instanceof Error ? err.message : '保存失败', 'err');
     }
   }
 
+  async function toggleNotify(v: boolean) {
+    const on = await setNotifyEnabled(v);
+    setNotify(on);
+    if (v && !on) {
+      toast(Notification.permission === 'denied'
+        ? '浏览器已拒绝本站的通知权限,请在地址栏的站点设置里重新允许'
+        : '未获得通知权限', 'err');
+    }
+  }
+
   return (
-    <Section title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">
-      <ToggleRow
-        label="标题自动加 emoji"
-        desc="开启后,自动生成的对话标题会以一个匹配主题的 emoji 开头"
-        checked={titleEmoji} onChange={(v) => void toggleTitleEmoji(v)}
-      />
-      <p className="mt-4 text-xs leading-relaxed text-tx3">
-        快捷指令在新对话页直接编辑;模型收藏与排序在输入框的模型选择器里调整;翻译场景在翻译工坊页面管理。
-      </p>
-    </Section>
+    <>
+      <Section
+        title="全局自定义指令"
+        desc="告诉模型关于你的情况和你希望它怎么回复,会自动加在每次对话的系统提示前面;单个对话的系统提示可以覆盖它。"
+        actions={(
+          <Button variant="primary" size="sm" disabled={!instructionsDirty || savingInstructions} onClick={() => void saveInstructions()}>
+            {savingInstructions && <Spinner className="h-3.5 w-3.5" />}保存
+          </Button>
+        )}
+      >
+        <Textarea
+          rows={6}
+          maxLength={4000}
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          placeholder={'例如:\n我是后端工程师,主要用 Go 和 PostgreSQL。\n回答请用中文,先给结论再解释;代码示例不要省略错误处理;不确定的地方明确说不确定。'}
+        />
+        <div className="mt-1.5 flex items-center justify-between text-[11px] text-tx3">
+          <span>不影响绘图、OCR、翻译等工坊。</span>
+          <span className="tabular-nums">{instructions.length}/4000</span>
+        </div>
+      </Section>
+      <Section title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">
+        <ToggleRow
+          label="标题自动加 emoji"
+          desc="开启后,自动生成的对话标题会以一个匹配主题的 emoji 开头"
+          checked={titleEmoji}
+          onChange={(v) => { setTitleEmoji(v); void saveSetting('titleEmoji', v, setTitleEmoji); }}
+        />
+        <div className="mt-3">
+          <ToggleRow
+            label="每次调用 MCP 工具前都询问我"
+            desc="开启后,模型每次想调用任何 MCP 工具都会先暂停,由你点「允许」或「拒绝」。关闭时只有管理员标记为需确认的服务器才会询问"
+            checked={confirmTools}
+            onChange={(v) => { setConfirmTools(v); void saveSetting('confirmTools', v, setConfirmTools); }}
+          />
+        </div>
+        <p className="mt-4 text-xs leading-relaxed text-tx3">
+          快捷指令在新对话页直接编辑;模型收藏与排序在输入框的模型选择器里调整;翻译场景在翻译工坊页面管理。
+        </p>
+      </Section>
+      <Section title="后台完成通知" desc="只在这台设备的这个浏览器上生效;通知权限由浏览器管理。">
+        <ToggleRow
+          label="切到别的标签页或窗口时,完成后弹系统通知"
+          desc={perm === 'unsupported'
+            ? '当前浏览器不支持系统通知'
+            : perm === 'denied'
+              ? '浏览器已拒绝本站的通知权限,需要在站点设置中重新允许'
+              : '回复生成、批量绘图、PPT 生成完成时通知;点击通知直接回到对应页面。标签页标题上的 ● 提示不受影响'}
+          checked={notify}
+          disabled={perm === 'unsupported' || perm === 'denied'}
+          onChange={(v) => void toggleNotify(v)}
+        />
+      </Section>
+    </>
   );
 }
 

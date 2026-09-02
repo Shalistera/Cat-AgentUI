@@ -7,6 +7,7 @@ import {
 import { useUi, useAuth } from '../store';
 import { api, ApiError, uploadFile } from '../api';
 import { tabAlert } from '../tabAlert';
+import { notifyDone } from '../notify';
 import {
   Button, Input, Textarea, Select, Field, Modal, ModalActions, Spinner, Card, PageHeader,
   toast, EmptyState, btnClass,
@@ -315,6 +316,7 @@ function ImagesInner() {
             }
             toast(`${modelLabel(job.modelId)}:模型回复了文字,请选择方案或继续对话`, 'ok');
             tabAlert();
+            notifyDone('绘图工坊', `${modelLabel(job.modelId)}:模型回复了文字,请选择方案或继续对话`, '/images');
             return;
           }
           if (aliveRef.current) setConvo((c) => (c?.modelId === job.modelId ? null : c));
@@ -327,6 +329,7 @@ function ImagesInner() {
           // the same inputs is the common case.
           toast(`${modelLabel(job.modelId)}:已生成 ${imgs.length} 张图片`, 'ok');
           tabAlert();
+          notifyDone('绘图完成', `${modelLabel(job.modelId)}:已生成 ${imgs.length} 张图片`, '/images');
           return;
         }
       }
@@ -341,6 +344,7 @@ function ImagesInner() {
       if (aliveRef.current) setGenError({ label: modelLabel(job.modelId), message: msg });
       toast(msg, 'err');
       tabAlert();
+      notifyDone('绘图失败', `${modelLabel(job.modelId)}:${msg}`, '/images');
     } finally {
       trackedRef.current.delete(jobId);
       if (aliveRef.current) setRunning((prev) => prev.filter((j) => j.id !== jobId));

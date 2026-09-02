@@ -8,7 +8,8 @@ import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
-import { getToolsForServers, callTool, type McpCapabilities } from '../mcp/manager.js';
+import { getToolsForServers, callTool, toolNeedsConfirm, type McpCapabilities } from '../mcp/manager.js';
+import { submitToolDecision, waitForToolDecision } from '../tool-confirm.js';
 import { validateMcpSelection } from '../mcp/access.js';
 import { getSearchServerId } from './mcp.js';
 import { saveGeneratedImage } from './images.js';
@@ -379,13 +380,21 @@ function chatSummary(c: typeof schema.chats.$inferSelect) {
   };
 }
 
-function messageDto(m: typeof schema.messages.$inferSelect) {
+function messageDto(m: typeof schema.messages.$inferSelect, bookmarked?: ReadonlySet<string>) {
   return {
     id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
     status: m.status, finishReason: m.finishReason ?? null, error: m.error,
     promptTokens: m.promptTokens, completionTokens: m.completionTokens, totalTokens: m.totalTokens,
     durationMs: m.durationMs, ttftMs: m.ttftMs, createdAt: m.createdAt,
+    bookmarked: bookmarked?.has(m.id) ?? false,
   };
+}
+
+/** Ids of this user's 收藏 inside one chat. */
+function bookmarkedIdsIn(chatId: string, userId: string): Set<string> {
+  return new Set(db.select({ messageId: schema.bookmarks.messageId }).from(schema.bookmarks)
+    .where(and(eq(schema.bookmarks.chatId, chatId), eq(schema.bookmarks.userId, userId))).all()
+    .map((r) => r.messageId));
 }
 
 /**
@@ -536,6 +545,22 @@ function wantsTitleEmoji(settingsJson: string): boolean {
   catch { return false; }
 }
 
+/** 全局自定义指令 (settings.customInstructions): about me / how to answer, trimmed. */
+function customInstructionsOf(settingsJson: string): string | null {
+  try {
+    const v = (JSON.parse(settingsJson) as { customInstructions?: unknown }).customInstructions;
+    return typeof v === 'string' && v.trim() ? v.trim().slice(0, 4000) : null;
+  } catch { return null; }
+}
+
+/** Personal "ask me before every MCP tool call" preference (settings.confirmTools). */
+function wantsToolConfirm(settingsJson: string): boolean {
+  try { return !!(JSON.parse(settingsJson) as { confirmTools?: unknown }).confirmTools; }
+  catch { return false; }
+}
+
+const TOOL_DENIED_RESULT = '(用户拒绝执行此工具调用。不要重试同一调用;如无法继续,请直接告诉用户你需要这个工具做什么。)';
+
 // Anchored to the QUESTION, not the answer: for tasks like translation the
 // answer is (a) in another language and (b) much longer, and a small model
 // left to itself will follow the answer — asking about the translated content,
@@ -615,6 +640,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const mcpServerIds = validateMcpSelection(
       req.user!, savedMcpServerIds.filter((serverId) => serverId !== searchServerId),
     ).allowed;
+    const marks = bookmarkedIdsIn(id, req.user!.id);
     return {
       chat: {
         ...chatSummary(c),
@@ -623,7 +649,7 @@ export async function chatRoutes(app: FastifyInstance) {
         webSearch: !!c.webSearch || legacySearch, mcpServerIds,
         currentLeafId: resolveLeafId(msgs, c.currentLeafId),
       },
-      messages: msgs.map(messageDto),
+      messages: msgs.map((m) => messageDto(m, marks)),
     };
   });
 
@@ -656,7 +682,7 @@ export async function chatRoutes(app: FastifyInstance) {
           systemPrompt: c.systemPrompt,
           currentLeafId: resolveLeafId(msgs, c.currentLeafId),
         },
-        messages: msgs.map(messageDto),
+        messages: msgs.map((m) => messageDto(m)),
       };
       reply.header('content-type', 'application/json; charset=utf-8');
       reply.header('content-disposition',
@@ -916,6 +942,81 @@ export async function chatRoutes(app: FastifyInstance) {
   });
 
   // ---- the main streaming endpoint ----
+  // The tab's answer to a `tool_confirm` event. Only the chat's owner can
+  // answer, and only while the turn is actually waiting.
+  app.post('/api/chats/:id/tool-decision', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      messageId: z.string().max(64),
+      decisions: z.record(z.string().max(256), z.enum(['allow', 'deny'])),
+    }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const c = db.select({ id: schema.chats.id }).from(schema.chats)
+      .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+    if (!c) return reply.code(404).send({ error: '对话不存在' });
+    const msg = db.select({ chatId: schema.messages.chatId }).from(schema.messages)
+      .where(eq(schema.messages.id, body.data.messageId)).get();
+    if (!msg || msg.chatId !== id) return reply.code(404).send({ error: '消息不存在' });
+    if (!submitToolDecision(body.data.messageId, req.user!.id, body.data.decisions)) {
+      return reply.code(409).send({ error: '这次调用已不再等待确认(可能已超时或对话已停止)' });
+    }
+    return { ok: true };
+  });
+
+  // ---- 收藏 ----
+  app.put('/api/chats/:id/messages/:messageId/bookmark', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id: chatId, messageId } = req.params as { id: string; messageId: string };
+    const c = db.select({ id: schema.chats.id }).from(schema.chats)
+      .where(and(eq(schema.chats.id, chatId), eq(schema.chats.userId, req.user!.id))).get();
+    if (!c) return reply.code(404).send({ error: '对话不存在' });
+    const msg = db.select({ id: schema.messages.id }).from(schema.messages)
+      .where(and(eq(schema.messages.id, messageId), eq(schema.messages.chatId, chatId))).get();
+    if (!msg) return reply.code(404).send({ error: '消息不存在' });
+    db.insert(schema.bookmarks).values({ id: newId(), userId: req.user!.id, chatId, messageId, createdAt: now() })
+      .onConflictDoNothing().run();
+    return { ok: true, bookmarked: true };
+  });
+
+  app.delete('/api/chats/:id/messages/:messageId/bookmark', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id: chatId, messageId } = req.params as { id: string; messageId: string };
+    db.delete(schema.bookmarks).where(and(
+      eq(schema.bookmarks.userId, req.user!.id),
+      eq(schema.bookmarks.chatId, chatId),
+      eq(schema.bookmarks.messageId, messageId),
+    )).run();
+    return { ok: true, bookmarked: false };
+  });
+
+  // The 收藏 page: newest first, each with the chat it lives in and the
+  // message itself (parts included — the page renders the real Markdown).
+  app.get('/api/bookmarks', async (req, reply) => {
+    requireAuth(req, reply);
+    const q = ((req.query as { q?: string }).q ?? '').trim().toLowerCase();
+    const rows = db.select({
+      id: schema.bookmarks.id, createdAt: schema.bookmarks.createdAt,
+      chatId: schema.chats.id, chatTitle: schema.chats.title, projectId: schema.chats.projectId,
+      message: schema.messages,
+    }).from(schema.bookmarks)
+      .innerJoin(schema.chats, eq(schema.chats.id, schema.bookmarks.chatId))
+      .innerJoin(schema.messages, eq(schema.messages.id, schema.bookmarks.messageId))
+      .where(eq(schema.bookmarks.userId, req.user!.id))
+      .orderBy(sql`${schema.bookmarks.createdAt} desc`)
+      .limit(500).all();
+    const items = rows.map((r) => ({
+      id: r.id, createdAt: r.createdAt,
+      chatId: r.chatId, chatTitle: r.chatTitle, projectId: r.projectId,
+      message: messageDto(r.message, new Set([r.message.id])),
+    }));
+    if (!q) return { bookmarks: items };
+    return {
+      bookmarks: items.filter((b) => b.chatTitle.toLowerCase().includes(q)
+        || b.message.parts.some((p) => p.type === 'text' && p.text.toLowerCase().includes(q))),
+    };
+  });
+
   app.post('/api/chats/:id/stream', async (req, reply) => {
     requireAuth(req, reply);
     const user = req.user!;
@@ -1134,11 +1235,20 @@ export async function chatRoutes(app: FastifyInstance) {
     const nativeSearchBlockedByTools = nativeSearchCapable && !!toolDefs?.length;
     const nativeSearchActive = nativeSearchCapable && !nativeSearchBlockedByTools;
     const searchActive = nativeSearchActive || mcpSearchActive;
-    const systemPrompt = [project.block, chat.systemPrompt, searchActive ? SEARCH_HINT : null]
-      .filter(Boolean).join('\n\n') || undefined;
+    // The person's global instructions sit between the project block and the
+    // chat's own prompt: stable across chats (cache-friendly), but the chat's
+    // prompt comes later and therefore wins on conflict.
+    const userInstructions = customInstructionsOf(user.settings);
+    const systemPrompt = [
+      project.block,
+      userInstructions ? `用户的全局偏好设置(适用于所有对话):\n${userInstructions}` : null,
+      chat.systemPrompt,
+      searchActive ? SEARCH_HINT : null,
+    ].filter(Boolean).join('\n\n') || undefined;
     // Take one snapshot for the whole turn. It covers Provider credentials,
     // custom headers, MCP env/headers, and SECRET_KEY without querying per token.
     const secretValues = allConfiguredSecretValues();
+    const confirmAllTools = wantsToolConfirm(user.settings);
 
     // --- start streaming ---
     const sse = createSse(reply);
@@ -1360,7 +1470,26 @@ export async function chatRoutes(app: FastifyInstance) {
           }
 
           if (stopReason === 'tool_calls' && pendingCalls.length && iterations < config.maxToolIterations) {
+            // 执行前确认: calls to a server the admin flagged (or every MCP call,
+            // when the person asked for that) wait for an allow/deny from the
+            // tab. Project knowledge tools are in-process reads and never ask.
+            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name)
+              && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)));
+            const denied = new Set<string>();
+            if (askFor.length) {
+              clearProviderIdleTimer(); // a human is the slow party now, not the provider
+              sse.send('tool_confirm', { messageId: assistantId, calls: askFor.map((c) => ({ id: c.id, name: c.name, args: c.args })) });
+              const decisions = await waitForToolDecision(assistantId, user.id, askFor.map((c) => c.id), controller.signal);
+              if (controller.signal.aborted) throw new Error('对话已停止');
+              for (const [id, d] of decisions) if (d !== 'allow') denied.add(id);
+            }
             for (const call of pendingCalls) {
+              if (denied.has(call.id)) {
+                const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: TOOL_DENIED_RESULT, isError: true };
+                parts.push(part);
+                sse.send('tool_result', part);
+                continue;
+              }
               const remainingTurnMs = config.chatTurnTimeoutMs - (Date.now() - t0);
               if (remainingTurnMs <= 0) {
                 abortTextForTimeout(`对话生成超过 ${Math.ceil(config.chatTurnTimeoutMs / 1000)} 秒总时限`);

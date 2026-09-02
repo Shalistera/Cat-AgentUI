@@ -5,6 +5,7 @@ import {
 import { useUi } from '../store';
 import { api, ApiError, fmtDuration, fmtTime, fmtTokens } from '../api';
 import { tabAlert } from '../tabAlert';
+import { notifyDone } from '../notify';
 import {
   Button, btnClass, Input, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
   toast, confirmDialog, EmptyState,
@@ -309,6 +310,7 @@ export default function Ppt() {
           setPreview(deck);
           toast(`已生成「${deck.title}」,共 ${deck.slideCount} 页`, 'ok');
           tabAlert();
+          notifyDone('PPT 生成完成', `「${deck.title}」共 ${deck.slideCount} 页`, '/ppt');
           return;
         }
       }
@@ -323,6 +325,7 @@ export default function Ppt() {
       if (aliveRef.current) setGenError(msg);
       toast(msg, 'err');
       tabAlert();
+      notifyDone('PPT 生成失败', msg, '/ppt');
     } finally {
       jobRef.current = null;
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }

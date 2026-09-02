@@ -91,6 +91,7 @@ export async function streamChat(
       case 'reasoning': handlers.onReasoning?.(data.text ?? ''); break;
       case 'tool_call': handlers.onToolCall?.(data); break;
       case 'tool_result': handlers.onToolResult?.(data); break;
+      case 'tool_confirm': handlers.onToolConfirm?.(data); break;
       case 'grounding': handlers.onGrounding?.(data); break;
       case 'image': handlers.onImage?.(data); break;
       case 'usage': handlers.onUsage?.(data); break;

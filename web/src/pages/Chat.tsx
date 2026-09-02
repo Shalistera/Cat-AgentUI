@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Archive, ArrowDown, Check, FolderClosed, Ghost, ListOrdered, PanelLeft, Pencil,
-  Plus, Send, Trash2,
+  Plus, Search, Send, Trash2,
 } from 'lucide-react';
 import { api, errMsg, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
@@ -13,7 +13,15 @@ import { ModelAvatar } from '../components/ModelAvatar';
 import { CatMark } from '../components/Logo';
 import { Button, Modal, ModalActions, PageHeader, Textarea, confirmDialog, toast } from '../components/ui';
 import { tabAlert } from '../tabAlert';
-import type { ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, User } from '../types';
+import { notifyDone } from '../notify';
+import { FindBar } from '../components/FindBar';
+import type { ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, ToolConfirmRequest, User } from '../types';
+
+/** First line-ish of a reply's text, for the notification body. */
+function partsPreview(parts: MessagePart[]): string {
+  const text = parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ');
+  return text.replace(/[#*`>_\[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+}
 
 function draftFromChat(c: ChatDetail | null): ComposerSettings {
   return {
@@ -321,6 +329,11 @@ export default function Chat() {
   const [settings, setSettings] = useState<ComposerSettings>(draftFromChat(null));
   const [stick, setStick] = useState(true);
   const [compare, setCompare] = useState<CompareState | null>(null);
+  // 工具调用确认 waiting on this person (one batch at a time per turn).
+  const [toolConfirm, setToolConfirm] = useState<ToolConfirmRequest | null>(null);
+  // 对话内查找: open state + the term it opened with (?find= from the sidebar).
+  const [findOpen, setFindOpen] = useState(false);
+  const [findSeed, setFindSeed] = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
   const skipLoadRef = useRef<string | null>(null);
@@ -328,9 +341,13 @@ export default function Chat() {
   // below must not overwrite it when the model subsequently changes state.
   const handoffAppliedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Message to scroll to + flash once the conversation has rendered.
+  const jumpToRef = useRef<string | null>(null);
   const settingsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatRef = useRef<ChatDetail | null>(null);
   chatRef.current = chat;
+  const messagesRef = useRef<Message[]>([]);
+  messagesRef.current = messages;
   // The message currently receiving stream deltas ('tmp-a' until meta arrives).
   const streamMsgIdRef = useRef<string | null>(null);
   // True from the moment a send is committed until its stream finishes — the
@@ -338,6 +355,12 @@ export default function Chat() {
   const sendingRef = useRef(false);
 
   const path = useMemo(() => computePath(messages, leafId), [messages, leafId]);
+  // Re-run 对话内查找 when the visible conversation changes (branch switch,
+  // reply finished). Not per streamed token — that would walk the DOM 12×/s.
+  const findVersion = useMemo(
+    () => path.length + (streaming ? 0 : 1) + path.reduce((n, m) => n + m.parts.length, 0),
+    [path, streaming],
+  );
 
   useEffect(() => { loadModels().catch(() => { /* toast below via disabled state */ }); loadMcp().catch(() => { /* optional */ }); }, [loadModels, loadMcp]);
 
@@ -366,6 +389,8 @@ export default function Chat() {
     setStreaming(false);
     sendingRef.current = false;
     setCompare(null);
+    setToolConfirm(null);
+    setFindOpen(false);
     if (!routeId) {
       handoffAppliedRef.current = false;
       setChat(null); setMessages([]); setLeafId(null); setWebSearch(false); setMcpSelected([]); setSettings(draftFromChat(null));
@@ -375,10 +400,25 @@ export default function Chat() {
     api.get<{ chat: ChatDetail; messages: Message[] }>(`/api/chats/${routeId}`)
       .then((r) => {
         if (cancelled) return;
-        setChat(r.chat); setMessages(r.messages); setLeafId(r.chat.currentLeafId);
+        setChat(r.chat); setMessages(r.messages);
         setWebSearch(r.chat.webSearch);
         setMcpSelected(r.chat.mcpServerIds); setSettings(draftFromChat(r.chat));
-        setStick(true);
+        // Deep links: ?msg=<id> (from 收藏) lands on that message — switching
+        // to its branch if needed; ?find=<term> (from sidebar search) opens
+        // 对话内查找 on the first hit. Both are one-shot and leave the URL.
+        const params = new URLSearchParams(window.location.search);
+        const msgParam = params.get('msg');
+        const findParam = params.get('find');
+        let leaf = r.chat.currentLeafId;
+        if (msgParam && r.messages.some((m) => m.id === msgParam)
+          && !computePath(r.messages, leaf).some((m) => m.id === msgParam)) {
+          leaf = newestLeafUnder(r.messages, msgParam);
+        }
+        setLeafId(leaf);
+        if (msgParam) { jumpToRef.current = msgParam; setStick(false); }
+        else setStick(true);
+        if (findParam) { setFindSeed(findParam); setFindOpen(true); setStick(false); }
+        if (msgParam || findParam) nav(`/chat/${routeId}`, { replace: true });
       })
       .catch((e) => {
         if (cancelled) return;
@@ -424,6 +464,32 @@ export default function Chat() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [path, stick]);
+
+  // Land on a deep-linked message: scroll it to the top third and pulse it.
+  useEffect(() => {
+    const id = jumpToRef.current;
+    if (!id || !path.some((m) => m.id === id)) return;
+    jumpToRef.current = null;
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'start' });
+    el.classList.add('msg-flash');
+    setTimeout(() => el.classList.remove('msg-flash'), 1800);
+  }, [path]);
+
+  // Ctrl/Cmd+F opens 对话内查找 while a conversation is on screen (typing in
+  // the composer included — that is exactly when people reach for it).
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f' && path.length > 0) {
+        e.preventDefault();
+        setFindSeed('');
+        setFindOpen(true);
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [path.length]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -556,8 +622,19 @@ export default function Chat() {
       applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status, finishReason }));
       setStreaming(false);
       sendingRef.current = false;
+      setToolConfirm(null);
       // "stopped" is always user-initiated from this tab — no need to flag it.
-      if (status !== 'stopped') tabAlert();
+      if (status !== 'stopped') {
+        tabAlert();
+        const target = chatRef.current;
+        const reply = messagesRef.current.find((m) => m.id === streamMsgIdRef.current);
+        const preview = reply ? partsPreview(reply.parts) : '';
+        notifyDone(
+          status === 'error' ? '回复出错' : `回复完成 · ${target?.title || '新对话'}`,
+          status === 'error' ? (reply?.error || '生成失败') : (preview || '点击查看回复'),
+          target ? `/chat/${target.id}` : undefined,
+        );
+      }
       chatsStore.load().catch(() => { /* ignore */ });
     };
 
@@ -580,7 +657,16 @@ export default function Chat() {
       onDelta(t) { buf.text += t; },
       onReasoning(t) { buf.reasoning += t; },
       onToolCall(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_call', ...d }] })); },
-      onToolResult(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_result', ...d }] })); },
+      onToolResult(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_result', ...d }] })); setToolConfirm(null); },
+      onToolConfirm(d) {
+        flush();
+        setToolConfirm(d);
+        // The person has to see the question — pull the view down to it and
+        // flag the tab if they are elsewhere.
+        setStick(true);
+        tabAlert();
+        notifyDone('需要你确认工具调用', `${d.calls.map((c) => c.name.split('__').pop()).join('、')}`, `/chat/${chatId}`);
+      },
       onGrounding(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
       onImage(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'image', imageId: d.imageId, mime: d.mime }] })); },
       onUsage(d) {
@@ -660,6 +746,33 @@ export default function Chat() {
 
   function stop() {
     abortRef.current?.abort();
+  }
+
+  async function decideTools(req: ToolConfirmRequest, decisions: Record<string, 'allow' | 'deny'>) {
+    const target = chatRef.current;
+    if (!target) return;
+    try {
+      await api.post(`/api/chats/${target.id}/tool-decision`, { messageId: req.messageId, decisions });
+      setToolConfirm(null);
+    } catch (e) {
+      toast(errMsg(e), 'err');
+      setToolConfirm(null);
+    }
+  }
+
+  async function toggleBookmark(msg: Message) {
+    const target = chatRef.current;
+    if (!target) return;
+    const next = !msg.bookmarked;
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, bookmarked: next } : m)));
+    try {
+      if (next) await api.put(`/api/chats/${target.id}/messages/${msg.id}/bookmark`);
+      else await api.del(`/api/chats/${target.id}/messages/${msg.id}/bookmark`);
+      toast(next ? '已收藏,可在侧栏「收藏」中查看' : '已取消收藏', 'ok');
+    } catch (e) {
+      setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, bookmarked: !next } : m)));
+      toast(errMsg(e), 'err');
+    }
   }
 
   // Queue: sends fired while a reply streams wait here; whenever this chat is
@@ -937,6 +1050,13 @@ export default function Chat() {
         {user?.role === 'admin' && models.length === 0 && modelsLoaded && (
           <Button variant="primary" size="sm" onClick={() => nav('/admin/providers')}>配置模型服务</Button>
         )}
+        {path.length > 0 && (
+          <Button variant="ghost" size="icon" title="在对话中查找 (Ctrl+F)"
+            className={findOpen ? 'bg-bg2 text-tx' : ''}
+            onClick={() => { setFindSeed(''); setFindOpen((v) => !v); }}>
+            <Search size={16} />
+          </Button>
+        )}
       </PageHeader>
 
       {isEmpty ? (
@@ -996,6 +1116,14 @@ export default function Chat() {
         </div>
       ) : (
         <>
+          <div className="relative flex min-h-0 flex-1 flex-col">
+          <FindBar
+            containerRef={scrollRef}
+            open={findOpen}
+            onClose={() => setFindOpen(false)}
+            initialQuery={findSeed}
+            version={findVersion}
+          />
           <div ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
             <SelectionQuote containerRef={scrollRef} onQuote={(t) => useComposerInsert.getState().insert(asQuote(t))} />
             {/* 54rem message column over a 48rem composer (chatgpt-style: content
@@ -1039,11 +1167,15 @@ export default function Chat() {
                     onFollowup={m.role === 'assistant' && i === lastAssistantIdx && i === path.length - 1 && !streaming
                       ? (q) => void send(q, [])
                       : undefined}
+                    onBookmark={!!chat && m.status !== 'streaming' && !m.id.startsWith('tmp-') ? () => void toggleBookmark(m) : undefined}
+                    toolConfirm={toolConfirm && toolConfirm.messageId === m.id ? toolConfirm : null}
+                    onToolDecision={toolConfirm && toolConfirm.messageId === m.id ? (d) => void decideTools(toolConfirm, d) : undefined}
                   />
                 );
               })}
               <div className="h-2" />
             </div>
+          </div>
           </div>
           <div className="relative shrink-0 border-t border-line bg-bg1 px-4 pb-3 pt-3 sm:px-6">
             {!stick && (

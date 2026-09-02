@@ -240,6 +240,14 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: '参数错误' });
       }
     }
+    // customInstructions rides ahead of every chat's system prompt (see
+    // chats.ts) — bounded so one person cannot bloat their own context.
+    {
+      const v = body.data.settings?.customInstructions;
+      if (v !== undefined && v !== null && !(typeof v === 'string' && v.length <= 4000)) {
+        return reply.code(400).send({ error: '参数错误' });
+      }
+    }
     const patch: Record<string, unknown> = {};
     if (body.data.displayName !== undefined) patch.displayName = body.data.displayName;
     if (body.data.settings !== undefined) {

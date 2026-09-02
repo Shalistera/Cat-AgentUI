@@ -30,9 +30,19 @@ const connections = new Map<string, { serverId: string; client: Client; connecte
 // child (or remote connection) per request before the cache is populated.
 const connecting = new Map<string, { serverId: string; promise: Promise<Client> }>();
 
-interface ToolRoute { serverId: string; originalName: string }
+interface ToolRoute {
+  serverId: string;
+  originalName: string;
+  /** Admin flagged the server as "ask before running" (mcpServers.confirmCalls). */
+  confirm: boolean;
+}
 export interface McpCapabilities {
   readonly routes: ReadonlyMap<string, ToolRoute>;
+}
+
+/** Does this namespaced tool require the user's go-ahead before it runs? */
+export function toolNeedsConfirm(name: string, capabilities: McpCapabilities): boolean {
+  return capabilities.routes.get(name)?.confirm ?? false;
 }
 
 function sanitize(s: string): string {
@@ -234,7 +244,7 @@ export async function getToolsForServers(serverIds: string[], user: McpAccessUse
         }
         const publicToolName = redactSensitiveText(tool.name, secretValues);
         const nsName = namespacedToolName(row.name, serverId, publicToolName, routes);
-        routes.set(nsName, { serverId, originalName: tool.name });
+        routes.set(nsName, { serverId, originalName: tool.name, confirm: !!row.confirmCalls });
         tools.push({
           name: nsName,
           description: redactSensitiveText(tool.description ?? '', secretValues),

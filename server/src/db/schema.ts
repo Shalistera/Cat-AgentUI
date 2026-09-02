@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, index, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, index, primaryKey, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -212,6 +212,20 @@ export const messages = sqliteTable('messages', {
   createdAt: integer('created_at').notNull(),
 }, (t) => [index('idx_messages_chat').on(t.chatId, t.seq)]);
 
+// 收藏的消息. One row per (user, message); a chat is single-owner so the user
+// column is redundant for access checks but gives the 收藏 page one indexed
+// scan. Rows vanish with their message or chat.
+export const bookmarks = sqliteTable('bookmarks', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  chatId: text('chat_id').notNull().references(() => chats.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [
+  uniqueIndex('idx_bookmarks_user_message').on(t.userId, t.messageId),
+  index('idx_bookmarks_user').on(t.userId, t.createdAt),
+]);
+
 export const usageLog = sqliteTable('usage_log', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull(),
@@ -241,6 +255,11 @@ export const mcpServers = sqliteTable('mcp_servers', {
   headersEnc: text('headers_enc'), // AES-256-GCM encrypted JSON Record<string,string>
   enabled: integer('enabled').notNull().default(1),
   accessMode: text('access_mode').notNull().default('shared'), // 'shared' | 'restricted'
+  // Ask the person before running any tool from this server. The turn pauses
+  // on a tool_confirm SSE event until they allow or deny each call (see
+  // chats.ts / tool-confirm.ts). For file, shell and other side-effecting
+  // servers; a search server should leave it off.
+  confirmCalls: integer('confirm_calls').notNull().default(0),
   lastStatus: text('last_status'), // 'ok' | 'error' | null(untested)
   lastError: text('last_error'),
   toolsCache: text('tools_cache').notNull().default('[]'), // JSON cached tool list

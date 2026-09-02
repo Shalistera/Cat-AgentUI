@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Megaphone, X } from 'lucide-react';
 import { useAnnouncement, useAuth, useHtmlPreview, useUi } from './store';
 import { onUnauthorized } from './api';
@@ -7,6 +7,8 @@ import { startRealtime, stopRealtime } from './realtime';
 import { Toaster, ConfirmHost, Spinner } from './components/ui';
 import { Sidebar } from './components/Sidebar';
 import { HtmlPreviewPanel } from './components/HtmlPreviewPanel';
+import { LightboxHost } from './components/Lightbox';
+import { notifyNavigate } from './notify';
 import type { SettingsTab } from './store';
 import Login from './pages/Login';
 import ErrorReset from './pages/ErrorReset';
@@ -18,6 +20,7 @@ import ProjectsPage from './pages/Projects';
 import Ppt from './pages/Ppt';
 import Ocr from './pages/Ocr';
 import Translate from './pages/Translate';
+import Bookmarks from './pages/Bookmarks';
 import { SettingsDialog } from './components/SettingsDialog';
 import Admin from './pages/admin/Admin';
 
@@ -45,7 +48,14 @@ function Shell() {
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const setSidebarOpen = useUi((s) => s.setSidebarOpen);
   const loc = useLocation();
+  const nav = useNavigate();
   const closePreview = useHtmlPreview((s) => s.close);
+
+  // A clicked system notification lands on the chat it was about.
+  useEffect(() => {
+    notifyNavigate.handler = (path) => nav(path);
+    return () => { notifyNavigate.handler = null; };
+  }, [nav]);
 
   // A popped-out HTML preview belongs to the page it came from.
   useEffect(() => { closePreview(); }, [loc.pathname, closePreview]);
@@ -77,6 +87,7 @@ function Shell() {
       </main>
       <HtmlPreviewPanel />
       <SettingsDialog />
+      <LightboxHost />
     </div>
   );
 }
@@ -128,6 +139,7 @@ export default function App() {
           <Route path="/ppt" element={<Ppt />} />
           <Route path="/ocr" element={<Ocr />} />
           <Route path="/translate" element={<Translate />} />
+          <Route path="/bookmarks" element={<Bookmarks />} />
           <Route path="/settings" element={<SettingsOpener />} />
           <Route path="/admin/*" element={<AdminGate />} />
         </Route>

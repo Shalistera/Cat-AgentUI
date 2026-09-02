@@ -41,6 +41,7 @@ const serverBodySchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().optional(),
   accessMode: z.enum(['shared', 'restricted']).optional(),
+  confirmCalls: z.boolean().optional(),
   allowedUserIds: z.array(z.string().max(64)).max(500).optional(),
 });
 
@@ -88,6 +89,7 @@ export async function mcpRoutes(app: FastifyInstance) {
         toolCount: tools.length,
         tools,
         isSearch: r.id === searchId,
+        confirmCalls: Boolean(r.confirmCalls),
       };
     });
   });
@@ -113,6 +115,7 @@ export async function mcpRoutes(app: FastifyInstance) {
       headerKeys: secretKeys(r.headersEnc),
       enabled: Boolean(r.enabled),
       accessMode: r.accessMode,
+      confirmCalls: Boolean(r.confirmCalls),
       lastStatus: r.lastStatus,
       lastError: r.lastError ? redactSensitiveText(r.lastError, secretValues) : null,
       toolsCache: parseJson<{ name: string; description: string }[]>(r.toolsCache, [])
@@ -145,6 +148,7 @@ export async function mcpRoutes(app: FastifyInstance) {
       headersEnc: encryptSecretRecord(d.headers ?? {}),
       enabled: (d.enabled ?? true) ? 1 : 0,
       accessMode: d.accessMode ?? 'shared',
+      confirmCalls: d.confirmCalls ? 1 : 0,
       createdAt: now(),
     }).run();
     replaceMcpAccess(id, d.allowedUserIds ?? []);
@@ -178,6 +182,7 @@ export async function mcpRoutes(app: FastifyInstance) {
     if (d.headers !== undefined) patch.headersEnc = encryptSecretRecord(d.headers);
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.accessMode !== undefined) patch.accessMode = d.accessMode;
+    if (d.confirmCalls !== undefined) patch.confirmCalls = d.confirmCalls ? 1 : 0;
 
     if (Object.keys(patch).length) {
       db.update(schema.mcpServers).set(patch).where(eq(schema.mcpServers.id, id)).run();

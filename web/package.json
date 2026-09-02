@@ -12,6 +12,7 @@
     "highlight.js": "^11.11.1",
     "katex": "^0.18.1",
     "lucide-react": "^1.27.0",
+    "mermaid": "^11.17.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Archive, ArchiveRestore, Ghost, MessageSquarePlus, Search, Settings as SettingsIcon,
+  Archive, ArchiveRestore, Bookmark, Ghost, MessageSquarePlus, Search, Settings as SettingsIcon,
   ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
   MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson, ChevronsUpDown,
   LayoutGrid,
@@ -314,8 +314,9 @@ export function Sidebar() {
   // The rail lives in a pathless layout route, so `useParams` never sees the
   // child route's :id — read the chat id off the path instead, or nothing in
   // the list ever shows as selected.
-  const activeChatId = useLocation().pathname.match(/^\/chat\/([^/]+)/)?.[1];
-  const activeProjectId = useLocation().pathname.match(/^\/projects\/([^/]+)/)?.[1];
+  const pathname = useLocation().pathname;
+  const activeChatId = pathname.match(/^\/chat\/([^/]+)/)?.[1];
+  const activeProjectId = pathname.match(/^\/projects\/([^/]+)/)?.[1];
   const { user, bootstrap, logout } = useAuth();
   const { chats, loaded, load } = useChats();
   const projectsStore = useProjects();
@@ -455,6 +456,13 @@ export function Sidebar() {
           >
             <Ghost size={15} />
           </Button>
+          <Button
+            variant="outline" size="icon" title="收藏的消息"
+            className={pathname === '/bookmarks' ? 'border-acc/40 bg-acc/10 text-acc' : ''}
+            onClick={() => { nav('/bookmarks'); if (window.innerWidth <= 900) setSidebarOpen(false); }}
+          >
+            <Bookmark size={15} />
+          </Button>
         </div>
         <div className="relative">
           <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tx3" />
@@ -547,7 +555,8 @@ export function Sidebar() {
             <div className="eyebrow px-2 pb-1">搜索结果</div>
             {(results ?? []).map((r) => (
               <SearchResultRow key={r.id} r={r} q={highlightQ} active={r.id === activeChatId}
-                onOpen={() => { nav(`/chat/${r.id}`); if (window.innerWidth <= 900) setSidebarOpen(false); }} />
+                // Carry the term along: the chat opens with 对话内查找 on the first hit.
+                onOpen={() => { nav(`/chat/${r.id}${highlightQ ? `?find=${encodeURIComponent(highlightQ)}` : ''}`); if (window.innerWidth <= 900) setSidebarOpen(false); }} />
             ))}
             {results === null && (
               <p className="px-2 py-4 text-center text-[11px] text-tx3">搜索中…</p>

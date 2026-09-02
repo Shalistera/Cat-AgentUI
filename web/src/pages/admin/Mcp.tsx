@@ -32,6 +32,7 @@ function McpModal({ server, users, onClose, onSaved }: {
   const [headerPairs, setHeaderPairs] = useState<KVPair[]>([]);
   const [enabled, setEnabled] = useState(server?.enabled ?? true);
   const [accessMode, setAccessMode] = useState<AccessMode>(server?.accessMode ?? 'shared');
+  const [confirmCalls, setConfirmCalls] = useState(server?.confirmCalls ?? false);
   const [allowedUserIds, setAllowedUserIds] = useState<string[]>(server?.allowedUserIds ?? []);
   const [busy, setBusy] = useState(false);
 
@@ -45,6 +46,7 @@ function McpModal({ server, users, onClose, onSaved }: {
       transport,
       enabled,
       accessMode,
+      confirmCalls,
       allowedUserIds,
     };
     if (transport === 'stdio') {
@@ -121,6 +123,12 @@ function McpModal({ server, users, onClose, onSaved }: {
         <ToggleRow
           label="启用该服务器" desc="禁用后不会出现在对话的工具菜单里"
           checked={enabled} onChange={setEnabled}
+        />
+
+        <ToggleRow
+          label="调用前需用户确认"
+          desc="模型每次想调用该服务器的工具时先暂停,由用户在对话里点「允许」或「拒绝」。写文件、执行命令等有副作用的服务器建议开启"
+          checked={confirmCalls} onChange={setConfirmCalls}
         />
 
         <Field label="访问范围" hint="搜索等基础工具建议共享;文件、命令和内部系统建议限制用户">
@@ -233,6 +241,7 @@ function ServerCard({ server, reload, onEdit }: {
         <Badge tone={server.accessMode === 'shared' ? 'acc' : 'default'}>
           {server.accessMode === 'shared' ? '全员共享' : `指定用户 ${server.allowedUserIds.length}`}
         </Badge>
+        {server.confirmCalls && <Badge tone="warn">调用前确认</Badge>}
         <div className="ml-auto flex items-center gap-1.5">
           <Button
             variant={server.isSearch ? 'primary' : 'ghost'} size="sm"

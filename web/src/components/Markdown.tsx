@@ -31,6 +31,8 @@ import dockerfile from 'highlight.js/lib/languages/dockerfile';
 import ini from 'highlight.js/lib/languages/ini';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import { useHtmlPreview } from '../store';
+import { MermaidBlock } from './Mermaid';
+import { useLightbox } from './Lightbox';
 
 for (const [name, lang] of Object.entries({
   javascript, typescript, python, java, c, cpp, csharp, go, rust, json, yaml,
@@ -166,7 +168,7 @@ function extractText(node: ReactNode): string {
   return '';
 }
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const normalized = useMemo(() => normalizeMath(text), [text]);
   return (
     <div className="md">
@@ -188,10 +190,22 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
             } else {
               code = extractText(children);
             }
+            if (lang.toLowerCase() === 'mermaid') return <MermaidBlock code={code} streaming={streaming} />;
             return <CodeBlock lang={lang} code={code} />;
           },
           a({ children, href }) {
             return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+          },
+          img({ src, alt }) {
+            const url = typeof src === 'string' ? src : '';
+            if (!url) return null;
+            return (
+              <img
+                src={url} alt={alt ?? ''} loading="lazy"
+                className="cursor-zoom-in"
+                onClick={() => useLightbox.getState().open(url, alt ?? '')}
+              />
+            );
           },
         }}
       >

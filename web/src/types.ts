@@ -21,6 +21,10 @@ export interface User {
     workshopPins?: string[] | null;
     /** Personal style presets on the 翻译工坊 page (max 4). */
     translateScenes?: TranslateScene[] | null;
+    /** Ask before EVERY MCP tool call, not just servers the admin flagged. */
+    confirmTools?: boolean;
+    /** 全局自定义指令 — prepended to every chat's system prompt (max 4000 chars). */
+    customInstructions?: string | null;
   };
 }
 
@@ -60,6 +64,21 @@ export interface Message {
   durationMs: number | null;
   ttftMs: number | null;
   createdAt: number;
+  /** 收藏 — this person bookmarked the message. */
+  bookmarked?: boolean;
+}
+
+/** One row of /api/bookmarks. */
+export interface Bookmark {
+  id: string; createdAt: number;
+  chatId: string; chatTitle: string; projectId: string | null;
+  message: Message;
+}
+
+/** A `tool_confirm` stream event: the model wants these calls, the turn waits. */
+export interface ToolConfirmRequest {
+  messageId: string;
+  calls: { id: string; name: string; args: string }[];
 }
 
 export interface ChatSummary {
@@ -160,6 +179,8 @@ export interface McpServerInfo {
   tools: { name: string; description: string }[];
   /** Admin-designated web-search provider — surfaces as the 联网搜索 toggle. */
   isSearch: boolean;
+  /** Every call from this server pauses for the user's go-ahead. */
+  confirmCalls: boolean;
 }
 
 export interface ImageModel {
@@ -306,6 +327,7 @@ export interface AdminMcpServer {
   hasEnv: boolean; hasHeaders: boolean;
   envKeys: string[]; headerKeys: string[];
   accessMode: 'shared' | 'restricted';
+  confirmCalls: boolean;
   allowedUserIds: string[];
   enabled: boolean; lastStatus: string | null; lastError: string | null;
   toolsCache?: { name: string; description: string }[];
@@ -355,6 +377,7 @@ export interface StreamHandlers {
   onReasoning?(text: string): void;
   onToolCall?(d: { id: string; name: string; args: string }): void;
   onToolResult?(d: { toolCallId: string; name: string; result: string; isError?: boolean }): void;
+  onToolConfirm?(d: ToolConfirmRequest): void;
   onGrounding?(d: Extract<MessagePart, { type: 'grounding' }>): void;
   onImage?(d: { imageId: string; mime?: string }): void;
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;

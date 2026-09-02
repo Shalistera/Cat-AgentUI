@@ -1,9 +1,10 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
-  BrainCircuit, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, GitBranch, Globe,
-  Info, Pencil, RefreshCw, Search, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
+  BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, GitBranch, Globe,
+  Info, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
-import type { Message, MessagePart, ModelInfo } from '../types';
+import type { Message, MessagePart, ModelInfo, ToolConfirmRequest } from '../types';
+import { useLightbox } from './Lightbox';
 import { fmtDuration, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
 import { useModels } from '../store';
@@ -124,6 +125,89 @@ function RegenerateMenu({ lastModel, onSame, onWith }: {
         </>
       )}
     </Popover>
+  );
+}
+
+/** 收藏 — toggles the bookmark on this message; the 收藏 page lists them. */
+function BookmarkBtn({ on, onToggle }: { on: boolean; onToggle(): void }) {
+  return (
+    <button
+      title={on ? '取消收藏' : '收藏这条消息'}
+      className={`${iconBtn} ${on ? 'text-acc hover:text-acc' : ''}`}
+      onClick={onToggle}
+    >
+      <Bookmark size={12} className={on ? 'fill-current' : ''} />
+    </button>
+  );
+}
+
+// ---- 工具调用确认 ----
+// The turn is paused server-side until every listed call has a verdict. Args
+// are shown raw (pretty-printed JSON) — this is the one place the person
+// needs to see exactly what is about to run.
+function prettyArgs(args: string): string {
+  try { return JSON.stringify(JSON.parse(args), null, 2); } catch { return args; }
+}
+
+function ToolConfirmCard({ req, onDecide }: {
+  req: ToolConfirmRequest;
+  onDecide(decisions: Record<string, 'allow' | 'deny'>): void;
+}) {
+  const [picked, setPicked] = useState<Record<string, 'allow' | 'deny'>>({});
+  const [sent, setSent] = useState(false);
+  const all = (d: 'allow' | 'deny') => Object.fromEntries(req.calls.map((c) => [c.id, d]));
+  const decided = req.calls.every((c) => picked[c.id]);
+  const submit = (decisions: Record<string, 'allow' | 'deny'>) => {
+    if (sent) return;
+    setSent(true);
+    onDecide(decisions);
+  };
+  return (
+    <div className="my-2.5 overflow-hidden rounded-lg border border-warn/40 bg-warn/10" data-find-skip>
+      <div className="flex items-center gap-2 px-3.5 py-2.5 text-[13px] font-medium text-tx">
+        <ShieldQuestion size={15} className="shrink-0 text-warn" />
+        模型想调用 {req.calls.length === 1 ? '一个工具' : `${req.calls.length} 个工具`},是否允许?
+      </div>
+      <div className="divide-y divide-line/70 border-t border-warn/25 bg-bg1">
+        {req.calls.map((c) => (
+          <div key={c.id} className="px-3.5 py-2.5">
+            <div className="flex items-center gap-2">
+              <Wrench size={13} className="shrink-0 text-tx3" />
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-tx">{toolShortName(c.name)}</span>
+              {req.calls.length > 1 && !sent && (
+                <span className="flex shrink-0 gap-1">
+                  <Button size="xs" variant={picked[c.id] === 'deny' ? 'danger' : 'ghost'}
+                    onClick={() => setPicked((p) => ({ ...p, [c.id]: 'deny' }))}>拒绝</Button>
+                  <Button size="xs" variant={picked[c.id] === 'allow' ? 'primary' : 'ghost'}
+                    onClick={() => setPicked((p) => ({ ...p, [c.id]: 'allow' }))}>允许</Button>
+                </span>
+              )}
+            </div>
+            {c.args && c.args !== '{}' && (
+              <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md border border-line bg-bg2/60 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-tx2">
+                {prettyArgs(c.args)}
+              </pre>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-warn/25 bg-bg1 px-3.5 py-2">
+        {sent ? (
+          <span className="flex items-center gap-1.5 text-xs text-tx3"><Spinner className="h-3 w-3" />已提交,继续生成…</span>
+        ) : req.calls.length === 1 ? (
+          <>
+            <Button size="sm" variant="danger" onClick={() => submit(all('deny'))}>拒绝</Button>
+            <Button size="sm" variant="primary" onClick={() => submit(all('allow'))}>允许</Button>
+          </>
+        ) : (
+          <>
+            <Button size="sm" variant="danger" onClick={() => submit(all('deny'))}>全部拒绝</Button>
+            <Button size="sm" variant="outline" disabled={!decided} onClick={() => submit(picked)}>按上面的选择提交</Button>
+            <Button size="sm" variant="primary" onClick={() => submit(all('allow'))}>全部允许</Button>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -371,9 +455,14 @@ interface Props {
   siblingInfo?: { index: number; total: number };
   onSiblingPrev?: () => void;
   onSiblingNext?: () => void;
+  /** Toggle 收藏 on this message. */
+  onBookmark?: () => void;
+  /** A pending 工具调用确认 addressed to this (streaming) message. */
+  toolConfirm?: ToolConfirmRequest | null;
+  onToolDecision?: (decisions: Record<string, 'allow' | 'deny'>) => void;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
@@ -383,12 +472,13 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
     const images = msg.parts.filter((p) => p.type === 'image');
     const files = msg.parts.filter((p): p is Extract<MessagePart, { type: 'file' }> => p.type === 'file');
     return (
-      <div className="flex flex-col items-end gap-1.5">
+      <div className="flex flex-col items-end gap-1.5" data-msg-id={msg.id}>
         {images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-2">
             {images.map((p, i) => p.type === 'image' && partSrc(p) && (
-              <img key={i} src={partSrc(p)!} alt=""
-                className="max-h-40 rounded-lg border border-line object-cover" />
+              <img key={i} src={partSrc(p)!} alt="" title="点击放大"
+                className="max-h-40 cursor-zoom-in rounded-lg border border-line object-cover"
+                onClick={() => useLightbox.getState().open(partSrc(p)!)} />
             ))}
           </div>
         )}
@@ -432,6 +522,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             <span className="mr-1"><Timestamp ts={msg.createdAt} /></span>
             {siblingInfo && <SiblingSwitch info={siblingInfo} onPrev={onSiblingPrev} onNext={onSiblingNext} />}
             <CopyBtn text={text} />
+            {onBookmark && <BookmarkBtn on={!!msg.bookmarked} onToggle={onBookmark} />}
             {onEdit && (
               <button title="编辑并重新发送" className={iconBtn} onClick={() => { setDraft(text); setEditing(true); }}>
                 <Pencil size={12} />
@@ -470,7 +561,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
       const streamingThis = isStreaming && i === lastTextIdx && i === msg.parts.length - 1;
       rendered.push(
         <div key={i} data-quotable className={streamingThis ? 'blink-cursor' : ''}>
-          <Markdown text={p.text} />
+          <Markdown text={p.text} streaming={streamingThis} />
         </div>,
       );
     } else if (p.type === 'tool_call' || p.type === 'tool_result') {
@@ -500,11 +591,12 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
       const src = partSrc(p);
       if (src) {
         rendered.push(
-          <a key={i} href={src} target="_blank" rel="noreferrer" title="在新标签页查看原图"
-            className="my-2.5 block w-fit max-w-full">
+          <button key={i} type="button" title="点击放大"
+            className="my-2.5 block w-fit max-w-full cursor-zoom-in"
+            onClick={() => useLightbox.getState().open(src, '模型生成的图片')}>
             <img src={src} alt="模型生成的图片"
               className="max-h-[28rem] max-w-full rounded-lg border border-line" />
-          </a>,
+          </button>,
         );
       }
     }
@@ -543,7 +635,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   return (
     // sm:pr mirrors the avatar column (30px + gap-3) so the text block sits
     // centered in the column and the composer overhangs it equally per side.
-    <div className="flex gap-3 sm:pr-[42px]">
+    <div className="flex gap-3 sm:pr-[42px]" data-msg-id={msg.id}>
       <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={msg.model} size={30} /></div>
       <div className="min-w-0 flex-1">
         {editing ? (
@@ -568,6 +660,9 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             </div>
           </div>
         ) : rendered}
+        {isStreaming && toolConfirm && onToolDecision && (
+          <ToolConfirmCard key={toolConfirm.calls.map((c) => c.id).join('|')} req={toolConfirm} onDecide={onToolDecision} />
+        )}
         {isStreaming && msg.parts.length === 0 && (
           <div className="flex items-center gap-2 py-1 text-[13px] text-tx3">
             <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在思考…'}
@@ -601,6 +696,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
               {siblingInfo && <SiblingSwitch info={siblingInfo} onPrev={onSiblingPrev} onNext={onSiblingNext} />}
               <CopyBtn text={plain} />
               <SpeakBtn text={plain} />
+              {onBookmark && <BookmarkBtn on={!!msg.bookmarked} onToggle={onBookmark} />}
               {onEditAssistant && !!plain && (
                 <button title="编辑回复内容(直接修改文字,不重新生成)" className={iconBtn}
                   onClick={() => { setDraft(plain); setEditing(true); }}>

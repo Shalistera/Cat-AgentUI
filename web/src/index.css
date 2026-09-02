@@ -203,6 +203,17 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
 
 ::selection { background: color-mix(in srgb, var(--color-acc) 22%, transparent); }
 
+/* 对话内查找: hits painted by the CSS Custom Highlight API (see FindBar). */
+::highlight(find-all) { background: color-mix(in srgb, var(--color-warn) 35%, transparent); color: inherit; }
+::highlight(find-current) { background: var(--color-warn); color: #fff; }
+
+/* A message navigated to from 收藏 / search results gets one soft pulse. */
+@keyframes msgFlash {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-acc) 45%, transparent); background: color-mix(in srgb, var(--color-acc) 10%, transparent); }
+  100% { box-shadow: 0 0 0 12px transparent; background: transparent; }
+}
+.msg-flash { animation: msgFlash 1.6s ease-out both; border-radius: var(--radius-lg); }
+
 /* ---------- motion ---------- */
 @keyframes fadeUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @keyframes pulseDot { 0%, 100% { opacity: .2 } 50% { opacity: 1 } }
