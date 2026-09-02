@@ -23,7 +23,7 @@ export interface User {
     translateScenes?: TranslateScene[] | null;
     /** Ask before EVERY MCP tool call, not just servers the admin flagged. */
     confirmTools?: boolean;
-    /** 全局自定义指令 — prepended to every chat's system prompt (max 4000 chars). */
+    /** 全局自定义指令 — prepended to every chat's system prompt (max 1500 chars). */
     customInstructions?: string | null;
   };
 }

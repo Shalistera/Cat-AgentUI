@@ -244,7 +244,7 @@ export async function authRoutes(app: FastifyInstance) {
     // chats.ts) — bounded so one person cannot bloat their own context.
     {
       const v = body.data.settings?.customInstructions;
-      if (v !== undefined && v !== null && !(typeof v === 'string' && v.length <= 4000)) {
+      if (v !== undefined && v !== null && !(typeof v === 'string' && v.length <= 1500)) {
         return reply.code(400).send({ error: '参数错误' });
       }
     }

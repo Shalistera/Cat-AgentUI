@@ -187,14 +187,14 @@ function ChatSection() {
       >
         <Textarea
           rows={6}
-          maxLength={4000}
+          maxLength={1500}
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
           placeholder={'例如:\n我是后端工程师,主要用 Go 和 PostgreSQL。\n回答请用中文,先给结论再解释;代码示例不要省略错误处理;不确定的地方明确说不确定。'}
         />
         <div className="mt-1.5 flex items-center justify-between text-[11px] text-tx3">
           <span>不影响绘图、OCR、翻译等工坊。</span>
-          <span className="tabular-nums">{instructions.length}/4000</span>
+          <span className="tabular-nums">{instructions.length}/1500</span>
         </div>
       </Section>
       <Section title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">

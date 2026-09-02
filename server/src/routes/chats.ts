@@ -549,7 +549,7 @@ function wantsTitleEmoji(settingsJson: string): boolean {
 function customInstructionsOf(settingsJson: string): string | null {
   try {
     const v = (JSON.parse(settingsJson) as { customInstructions?: unknown }).customInstructions;
-    return typeof v === 'string' && v.trim() ? v.trim().slice(0, 4000) : null;
+    return typeof v === 'string' && v.trim() ? v.trim().slice(0, 1500) : null;
   } catch { return null; }
 }
 
