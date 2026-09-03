@@ -559,6 +559,26 @@ function wantsToolConfirm(settingsJson: string): boolean {
   catch { return false; }
 }
 
+/** 互动画布 (settings.canvasAnswers, experimental): answer as a live HTML page. */
+function wantsCanvasAnswers(settingsJson: string): boolean {
+  try { return !!(JSON.parse(settingsJson) as { canvasAnswers?: unknown }).canvasAnswers; }
+  catch { return false; }
+}
+
+// The client (web CanvasAnswer.tsx) renders every ```html fence of the reply in
+// a sandboxed iframe sized to its content, and injects exactly the data-theme
+// attribute and CSS variables promised below — keep the two in step.
+const CANVAS_PROMPT = [
+  '【互动画布模式】用户开启了实验性的「互动画布」回答方式:请不要用 Markdown 组织回答,而是把回答做成一个完整、自包含的网页,聊天界面会在沙箱 iframe 里直接渲染它。',
+  '1. 回答里只放一个 ```html 代码块,内容是完整的 HTML 文档(以 <!DOCTYPE html> 开头,含 <head> 与 <body>)。代码块之外最多一两句话,不要重复页面里的内容,也不要在代码块外解释代码。',
+  '2. 页面就是回答本身:把结论、解释、步骤都写进页面,用 HTML/CSS 排版;配合 <canvas>、SVG 和原生 JavaScript 做图示、动画和可交互控件(滑块、按钮、切换、可点击的示例、逐步演示),让读者能操作和探索,而不只是阅读。算法、数学、物理、数据、流程、结构这类内容,尽量做成可交互演示。',
+  '3. 完全自包含:所有 CSS 与 JS 内联,不加载任何外部脚本、样式、字体或图片(沙箱内不保证有网络),不依赖构建工具或框架。',
+  '4. 适配容器:布局随宽度自适应(不要固定宽度),内容自然向下延展,高度由内容决定;不要让 html/body 或外层容器撑满视口高度(100vh),不要用内部滚动区。<canvas> 应随容器宽度重绘(ResizeObserver 或 resize 事件)并处理 devicePixelRatio。',
+  '5. 主题:界面会在 <html> 上设置 data-theme="light" 或 "dark",并提供 CSS 变量 --bg、--bg2、--fg、--muted、--line、--accent、--ok、--warn、--err、--font,与界面主题一致。请用这些变量取色和设置字体,确保浅色与深色下都清晰可读。',
+  '6. 代码必须健壮:无语法错误、无未捕获异常;脚本放在 body 末尾;不要使用 alert/confirm/prompt。',
+  '7. 如果用户只是闲聊、简单追问一句,或内容确实不适合做成页面,可以直接用简短文字回答。',
+].join('\n');
+
 const TOOL_DENIED_RESULT = '(用户拒绝执行此工具调用。不要重试同一调用;如无法继续,请直接告诉用户你需要这个工具做什么。)';
 
 // Anchored to the QUESTION, not the answer: for tasks like translation the
@@ -1239,11 +1259,15 @@ export async function chatRoutes(app: FastifyInstance) {
     // chat's own prompt: stable across chats (cache-friendly), but the chat's
     // prompt comes later and therefore wins on conflict.
     const userInstructions = customInstructionsOf(user.settings);
+    // 互动画布 is a format instruction, so it comes last and wins over the
+    // chat's own prompt; image turns have no text answer to shape.
+    const canvasAnswers = !model.imageGen && wantsCanvasAnswers(user.settings);
     const systemPrompt = [
       project.block,
       userInstructions ? `用户的全局偏好设置(适用于所有对话):\n${userInstructions}` : null,
       chat.systemPrompt,
       searchActive ? SEARCH_HINT : null,
+      canvasAnswers ? CANVAS_PROMPT : null,
     ].filter(Boolean).join('\n\n') || undefined;
     // Take one snapshot for the whole turn. It covers Provider credentials,
     // custom headers, MCP env/headers, and SECRET_KEY without querying per token.

@@ -7,7 +7,7 @@ import type { Message, MessagePart, ModelInfo, ToolConfirmRequest } from '../typ
 import { useLightbox } from './Lightbox';
 import { fmtDuration, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
-import { useModels } from '../store';
+import { useAuth, useModels } from '../store';
 import { Markdown } from './Markdown';
 import { ModelAvatar } from './ModelAvatar';
 import { Button, Popover, Spinner } from './ui';
@@ -466,6 +466,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
+  // 互动画布 (experimental): ```html fences in replies render as live pages.
+  const canvas = useAuth((s) => !!s.user?.settings.canvasAnswers);
 
   if (msg.role === 'user') {
     const text = partsToPlainText(msg.parts);
@@ -561,7 +563,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
       const streamingThis = isStreaming && i === lastTextIdx && i === msg.parts.length - 1;
       rendered.push(
         <div key={i} data-quotable className={streamingThis ? 'blink-cursor' : ''}>
-          <Markdown text={p.text} streaming={streamingThis} />
+          <Markdown text={p.text} streaming={streamingThis} canvas={canvas} />
         </div>,
       );
     } else if (p.type === 'tool_call' || p.type === 'tool_result') {

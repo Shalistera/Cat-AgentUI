@@ -32,6 +32,7 @@ import ini from 'highlight.js/lib/languages/ini';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import { useHtmlPreview } from '../store';
 import { MermaidBlock } from './Mermaid';
+import { CanvasAnswer } from './CanvasAnswer';
 import { useLightbox } from './Lightbox';
 
 for (const [name, lang] of Object.entries({
@@ -94,6 +95,8 @@ function remarkBrToBreak() {
 const headBtn = 'flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] text-tx2 transition-colors hover:bg-bg3 hover:text-tx';
 
 const PREVIEWABLE_LANGS = new Set(['html', 'htm', 'svg']);
+// 互动画布 mode renders these fences live instead of as code (see CanvasAnswer).
+const CANVAS_LANGS = new Set(['html', 'htm']);
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
@@ -168,7 +171,11 @@ function extractText(node: ReactNode): string {
   return '';
 }
 
-export const Markdown = memo(function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export const Markdown = memo(function Markdown({ text, streaming = false, canvas = false }: {
+  text: string; streaming?: boolean;
+  /** 互动画布: render ```html fences as live pages (settings.canvasAnswers). */
+  canvas?: boolean;
+}) {
   const normalized = useMemo(() => normalizeMath(text), [text]);
   return (
     <div className="md">
@@ -191,6 +198,12 @@ export const Markdown = memo(function Markdown({ text, streaming = false }: { te
               code = extractText(children);
             }
             if (lang.toLowerCase() === 'mermaid') return <MermaidBlock code={code} streaming={streaming} />;
+            if (canvas && CANVAS_LANGS.has(lang.toLowerCase())) {
+              // The fence still open at the tail of a streaming reply is the one
+              // being written; anything the text continues past is complete.
+              const open = streaming && normalized.trimEnd().endsWith(code.trimEnd());
+              return <CanvasAnswer code={code} streaming={open} />;
+            }
             return <CodeBlock lang={lang} code={code} />;
           },
           a({ children, href }) {

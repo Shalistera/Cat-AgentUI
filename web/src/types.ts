@@ -25,6 +25,8 @@ export interface User {
     confirmTools?: boolean;
     /** 全局自定义指令 — prepended to every chat's system prompt (max 1500 chars). */
     customInstructions?: string | null;
+    /** 互动画布 (experimental): answers come back as one HTML page, rendered live. */
+    canvasAnswers?: boolean;
   };
 }
 

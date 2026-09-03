@@ -131,6 +131,7 @@ function ChatSection() {
   const user = useAuth((s) => s.user);
   const [titleEmoji, setTitleEmoji] = useState(!!user?.settings.titleEmoji);
   const [confirmTools, setConfirmTools] = useState(!!user?.settings.confirmTools);
+  const [canvasAnswers, setCanvasAnswers] = useState(!!user?.settings.canvasAnswers);
   const [notify, setNotify] = useState(notifyEnabled());
   const perm = notifyPermission();
   const savedInstructions = user?.settings.customInstructions ?? '';
@@ -154,7 +155,7 @@ function ChatSection() {
     }
   }
 
-  async function saveSetting(key: 'titleEmoji' | 'confirmTools', v: boolean, revert: (v: boolean) => void) {
+  async function saveSetting(key: 'titleEmoji' | 'confirmTools' | 'canvasAnswers', v: boolean, revert: (v: boolean) => void) {
     try {
       const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { [key]: v } });
       useAuth.setState({ user: r.user });
@@ -215,6 +216,14 @@ function ChatSection() {
         <p className="mt-4 text-xs leading-relaxed text-tx3">
           快捷指令在新对话页直接编辑;模型收藏与排序在输入框的模型选择器里调整;翻译场景在翻译工坊页面管理。
         </p>
+      </Section>
+      <Section title="实验性功能" desc="还在打磨中的玩法,可能不稳定;随时可以关掉,不影响已有对话。">
+        <ToggleRow
+          label="互动画布回答"
+          desc="开启后,模型会把回答做成一个可交互的网页(HTML / Canvas / JavaScript)直接在对话里渲染,而不是 Markdown 文本;适合讲解、演示与可视化。会明显增加输出 tokens,复杂页面偶尔会有 bug;可切换查看源码或在右侧面板打开"
+          checked={canvasAnswers}
+          onChange={(v) => { setCanvasAnswers(v); void saveSetting('canvasAnswers', v, setCanvasAnswers); }}
+        />
       </Section>
       <Section title="后台完成通知" desc="只在这台设备的这个浏览器上生效;通知权限由浏览器管理。">
         <ToggleRow
