@@ -222,6 +222,15 @@ export function Composer(props: ComposerProps) {
   // next send only, so it resets after sending.
   const [canvasTurn, setCanvasTurn] = useState(false);
   const canvasAvailable = !!user?.settings.canvasAnswers;
+  // Stays lit while the reply it was pressed for streams — feedback that the
+  // request went out with it — and clears when that reply finishes.
+  const canvasArmedRef = useRef(false);
+  useEffect(() => {
+    if (!props.streaming && canvasArmedRef.current) {
+      canvasArmedRef.current = false;
+      setCanvasTurn(false);
+    }
+  }, [props.streaming]);
   const insertPending = useComposerInsert((s) => s.pending);
   const consumeInsert = useComposerInsert((s) => s.consume);
   useEffect(() => {
@@ -256,12 +265,13 @@ export function Composer(props: ComposerProps) {
       // Generation in progress: queue the follow-up instead of dropping it.
       if (!props.onEnqueue) return;
       props.onEnqueue(t, atts, opts);
+      setCanvasTurn(false); // captured by the queue item; one turn only
     } else {
       props.onSend(t, atts, opts);
+      if (canvasTurn) canvasArmedRef.current = true; // clears when this reply ends
     }
     setText('');
     setAtts([]);
-    setCanvasTurn(false); // one turn only, like ChatGPT's @Visualize
     // Clear immediately — the debounced save must not race a navigation.
     if (props.draftKey) clearDraft(props.draftKey);
     taRef.current?.blur();
