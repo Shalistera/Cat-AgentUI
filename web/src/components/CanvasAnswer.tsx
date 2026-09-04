@@ -1,20 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Code, Copy, LayoutTemplate, PanelRight, RotateCw } from 'lucide-react';
 import hljs from 'highlight.js/lib/core';
-import { useHtmlPreview, useUi, type Theme } from '../store';
+import { useComposerInsert, useHtmlPreview, useUi, type Theme } from '../store';
+import { toast } from './ui';
 
 /**
- * 互动画布 (experimental). With settings.canvasAnswers on, the model is asked
- * to answer as one self-contained HTML page (CANVAS_PROMPT in server chats.ts)
- * and every ```html fence in an assistant reply renders here as a live,
- * sandboxed iframe instead of a code block.
+ * 互动画布 (experimental). With settings.canvasAnswers on, the model keeps
+ * answering in Markdown and adds one ```html component when seeing beats
+ * reading (CANVAS_PROMPT in server chats.ts); every ```html fence in an
+ * assistant reply renders here as a live, sandboxed iframe instead of a code
+ * block.
  *
  * The sandbox has no allow-same-origin, so the parent cannot measure the
  * document. Instead a script we append posts the page height up; the parent
  * only trusts messages whose source is this very frame, and clamps the value.
+ * The same channel carries sendPrompt(text) — claude.ai's click-to-follow-up —
+ * which lands in the composer rather than sending, so a page can never fire
+ * messages on its own.
  */
 
 const SIZE_MSG = 'caui-canvas-size';
+const PROMPT_MSG = 'caui-canvas-prompt';
+const PROMPT_MAX = 2000;
 const MIN_H = 96;
 const MAX_H = 1600; // taller pages scroll inside the frame
 const INITIAL_H = 320;
@@ -37,7 +44,9 @@ function themePrelude(theme: Theme): string {
     // Height must come from content: a 100vh body and the frame that sizes to
     // it would otherwise chase each other upwards.
     + 'html,body{height:auto!important;min-height:0!important}</style>'
-    + `<script>document.documentElement.dataset.theme=${JSON.stringify(theme)}</script>`;
+    + `<script>document.documentElement.dataset.theme=${JSON.stringify(theme)};`
+    // sendPrompt: promised to the model by CANVAS_PROMPT.
+    + `window.sendPrompt=function(t){parent.postMessage({type:'${PROMPT_MSG}',text:String(t==null?'':t).slice(0,${PROMPT_MAX})},'*')};</script>`;
 }
 
 // Appended after the document: the parser hoists it into <body>, so it runs
@@ -63,8 +72,9 @@ export function themedCanvasDoc(code: string, theme: Theme): string {
       const at = html.index + html[0].length;
       doc = code.slice(0, at) + `<head>${prelude}</head>` + code.slice(at);
     } else {
-      // A bare fragment: give it a document so the tokens still apply.
-      doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${prelude}</head><body>${code}</body></html>`;
+      // The normal case now (CANVAS_PROMPT asks for fragments): give it a
+      // document so the tokens apply, and a little breathing room.
+      doc = `<!DOCTYPE html><html><head><meta charset="utf-8">${prelude}</head><body style="margin:0;padding:12px 16px">${code}</body></html>`;
     }
   }
   return doc + SIZE_SCRIPT;
@@ -88,9 +98,16 @@ export function CanvasAnswer({ code, streaming }: { code: string; streaming: boo
     const onMessage = (e: MessageEvent) => {
       const frame = frameRef.current;
       if (!frame || e.source !== frame.contentWindow) return;
-      const data = e.data as { type?: unknown; height?: unknown } | null;
-      if (!data || data.type !== SIZE_MSG || typeof data.height !== 'number' || !Number.isFinite(data.height)) return;
-      setHeight(Math.min(MAX_H, Math.max(MIN_H, Math.ceil(data.height))));
+      const data = e.data as { type?: unknown; height?: unknown; text?: unknown } | null;
+      if (!data) return;
+      if (data.type === SIZE_MSG && typeof data.height === 'number' && Number.isFinite(data.height)) {
+        setHeight(Math.min(MAX_H, Math.max(MIN_H, Math.ceil(data.height))));
+      } else if (data.type === PROMPT_MSG && typeof data.text === 'string') {
+        const text = data.text.trim().slice(0, PROMPT_MAX);
+        if (!text) return;
+        useComposerInsert.getState().insert(text);
+        toast('已放进输入框,确认后发送', 'ok');
+      }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);

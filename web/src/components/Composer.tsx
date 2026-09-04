@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import {
-  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon,
+  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon, LayoutTemplate,
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
@@ -97,6 +97,12 @@ function clearDraft(key: string) {
   try { localStorage.removeItem(DRAFT_PREFIX + key); } catch { /* ignore */ }
 }
 
+/** Per-send options that are not part of the chat's saved settings. */
+export interface SendOptions {
+  /** 互动画布 for this turn only (the 画布 button). */
+  canvas?: boolean;
+}
+
 interface ComposerProps {
   streaming: boolean;
   disabled?: boolean;
@@ -108,9 +114,9 @@ interface ComposerProps {
   onMcpChange(ids: string[]): void;
   settings: ComposerSettings;
   onSettingsChange(s: ComposerSettings): void;
-  onSend(text: string, attachments: PendingAttachment[]): void;
+  onSend(text: string, attachments: PendingAttachment[], opts?: SendOptions): void;
   /** Present = sends during generation queue up instead of being blocked. */
-  onEnqueue?(text: string, attachments: PendingAttachment[]): void;
+  onEnqueue?(text: string, attachments: PendingAttachment[], opts?: SendOptions): void;
   onStop(): void;
   /** Persist unsent input under this key (per chat); omit to disable drafts. */
   draftKey?: string;
@@ -211,6 +217,11 @@ export function Composer(props: ComposerProps) {
 
   // 划词引用 etc.: append the published text under whatever is typed, unfold
   // a compact composer, and put the caret at the end ready to type the question.
+  // 互动画布 (experimental, settings.canvasAnswers): the model normally decides
+  // per reply whether a component helps; this button demands one for the
+  // next send only, so it resets after sending.
+  const [canvasTurn, setCanvasTurn] = useState(false);
+  const canvasAvailable = !!user?.settings.canvasAnswers;
   const insertPending = useComposerInsert((s) => s.pending);
   const consumeInsert = useComposerInsert((s) => s.consume);
   useEffect(() => {
@@ -240,15 +251,17 @@ export function Composer(props: ComposerProps) {
   function send() {
     const t = text.trim();
     if ((!t && atts.length === 0) || props.disabled) return;
+    const opts: SendOptions = canvasTurn ? { canvas: true } : {};
     if (streaming) {
       // Generation in progress: queue the follow-up instead of dropping it.
       if (!props.onEnqueue) return;
-      props.onEnqueue(t, atts);
+      props.onEnqueue(t, atts, opts);
     } else {
-      props.onSend(t, atts);
+      props.onSend(t, atts, opts);
     }
     setText('');
     setAtts([]);
+    setCanvasTurn(false); // one turn only, like ChatGPT's @Visualize
     // Clear immediately — the debounced save must not race a navigation.
     if (props.draftKey) clearDraft(props.draftKey);
     taRef.current?.blur();
@@ -690,6 +703,22 @@ export function Composer(props: ComposerProps) {
             >
               <Globe size={13} />
               <span className="max-sm:hidden">联网</span>
+            </button>
+          )}
+
+          {canvasAvailable && !imageMode && (
+            <button
+              aria-pressed={canvasTurn}
+              className={canvasTurn
+                ? `${toolBtnShape} border-accs bg-accs text-accfg shadow-xs hover:opacity-90`
+                : toolBtn}
+              title={canvasTurn
+                ? '这条回答将附带一个互动画布(仅这一条),点击取消'
+                : '让这条回答附带一个互动画布(仅这一条);平时由模型自行判断是否需要'}
+              onClick={() => setCanvasTurn((v) => !v)}
+            >
+              <LayoutTemplate size={13} />
+              <span className="max-sm:hidden">画布</span>
             </button>
           )}
 

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { api, errMsg, streamChat, ApiError } from '../api';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
-import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
+import { Composer, type ComposerSettings, type PendingAttachment, type SendOptions } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { SelectionQuote, asQuote } from '../components/SelectionQuote';
 import { ModelAvatar } from '../components/ModelAvatar';
@@ -455,6 +455,7 @@ export default function Chat() {
     setMcpSelected(h.mcpSelected);
     void send(h.text, h.attachments, {
       modelId: m.id, settings: h.settings, webSearch: h.webSearch, mcpSelected: h.mcpSelected,
+      canvas: h.canvas,
     });
   }, [routeId, modelsLoaded, models, modelSel, streaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -544,6 +545,8 @@ export default function Chat() {
     settings?: ComposerSettings;
     webSearch?: boolean;
     mcpSelected?: string[];
+    /** 互动画布 for this turn only (composer 画布 button). */
+    canvas?: boolean;
   }
 
   async function ensureChat(o?: SendOverrides): Promise<ChatDetail> {
@@ -737,7 +740,10 @@ export default function Chat() {
         { id: 'tmp-a', parentId: 'tmp-u', role: 'assistant', parts: [], model: sendModel?.modelId ?? null, status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
       ]);
       setLeafId('tmp-a');
-      runStream(target.id, { content, modelId: sendModel?.id, parentMessageId: parentId ?? undefined });
+      runStream(target.id, {
+        content, modelId: sendModel?.id, parentMessageId: parentId ?? undefined,
+        canvas: o?.canvas || undefined,
+      });
     } catch (e) {
       sendingRef.current = false;
       toast(e instanceof Error ? e.message : '发送失败', 'err');
@@ -785,13 +791,13 @@ export default function Chat() {
     if (!chat || streaming || sendingRef.current || compare) return;
     if (!(queueStore.queues[chat.id] ?? []).length) return;
     const item = queueStore.shift(chat.id);
-    if (item) void send(item.text, item.attachments);
+    if (item) void send(item.text, item.attachments, item.canvas ? { canvas: true } : undefined);
   }, [chat, streaming, compare, queueStore.queues]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function enqueue(text: string, attachments: PendingAttachment[]) {
+  function enqueue(text: string, attachments: PendingAttachment[], opts?: SendOptions) {
     const target = chatRef.current;
     if (!target) return;
-    queueStore.enqueue(target.id, text, attachments);
+    queueStore.enqueue(target.id, text, attachments, opts?.canvas);
   }
 
   function queueSendNow(item: QueuedMessage) {

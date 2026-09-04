@@ -95,7 +95,7 @@ function Shell() {
 // /settings used to be a page. Old links (and muscle memory) still land
 // somewhere sensible: open the dialog over the chat page. `?tab=` picks the
 // section, e.g. /settings?tab=devices.
-const SETTINGS_TABS: SettingsTab[] = ['account', 'chat', 'appearance', 'devices', 'usage'];
+const SETTINGS_TABS: SettingsTab[] = ['account', 'chat', 'appearance', 'devices', 'usage', 'labs'];
 function SettingsOpener() {
   const loc = useLocation();
   const openSettings = useUi((s) => s.openSettings);

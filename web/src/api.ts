@@ -56,6 +56,8 @@ export interface StreamPayload {
   editMessageId?: string;
   /** Parent for a new message — the leaf of the branch being viewed. */
   parentMessageId?: string;
+  /** 互动画布 for this turn only (composer 画布 button). */
+  canvas?: boolean;
 }
 
 // POST + parse SSE from response body.
