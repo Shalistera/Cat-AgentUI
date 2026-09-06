@@ -262,7 +262,7 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean 
       icon={<BrainCircuit size={13} className={streaming ? 'animate-pulse text-acc' : 'text-tx3'} />}
       label={<span className="font-medium text-tx2">{streaming ? '正在推理…' : '推理过程'}</span>}
     >
-      <div className="max-h-64 overflow-y-auto whitespace-pre-wrap border-t border-line bg-bg1 px-3.5 py-2.5 text-[13px] leading-relaxed text-tx2">
+      <div className="max-h-64 overflow-y-auto whitespace-pre-wrap wrap-anywhere border-t border-line bg-bg1 px-3.5 py-2.5 text-[13px] leading-relaxed text-tx2">
         {text}
       </div>
     </Disclosure>
@@ -514,7 +514,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           </div>
         ) : (
           text && (
-            <div data-quotable className="max-w-[85%] whitespace-pre-wrap rounded-xl rounded-br-sm border border-line bg-bg2 px-3.5 py-2.5 text-[15px] leading-relaxed text-tx">
+            <div data-quotable className="max-w-[85%] whitespace-pre-wrap wrap-anywhere rounded-xl rounded-br-sm border border-line bg-bg2 px-3.5 py-2.5 text-[15px] leading-relaxed text-tx">
               {text}
             </div>
           )

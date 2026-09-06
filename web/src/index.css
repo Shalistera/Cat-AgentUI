@@ -277,7 +277,11 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
 .text-\[15px\] { font-size: 16px; }
 
 /* ---------- markdown ---------- */
-.md { line-height: 1.75; word-break: break-word; font-size: 16px; }
+/* overflow-wrap: anywhere (not the deprecated word-break: break-word): a
+   heading or paragraph that is one long unbreakable run — `# ======`, a URL,
+   a hash — must wrap inside the column instead of pushing past it. It also
+   lets the flex column shrink below the run's min-content width. */
+.md { line-height: 1.75; overflow-wrap: anywhere; font-size: 16px; }
 .md > *:first-child { margin-top: 0; }
 .md > *:last-child { margin-bottom: 0; }
 .md h1, .md h2, .md h3, .md h4 { font-weight: 650; margin: 1.5em 0 .6em; line-height: 1.35; letter-spacing: -0.012em; }
