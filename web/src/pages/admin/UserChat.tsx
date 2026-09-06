@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Archive, ArrowLeft, ChevronDown, ChevronUp, Eye, FolderOpen, Pin, Timer } from 'lucide-react';
+import { Archive, ArrowLeft, ChevronDown, ChevronUp, Eye, FolderOpen, Pin } from 'lucide-react';
 import { api, errMsg, fmtDate } from '../../api';
 import { Badge, Button, EmptyState, Spinner, toast } from '../../components/ui';
 import { ChatMessage } from '../../components/ChatMessage';
@@ -47,7 +47,7 @@ export default function UserChat() {
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
         <EmptyState
           title="对话不存在"
-          hint="它可能已被用户删除,或临时对话已过期清理。"
+          hint="它可能已被用户删除;临时对话不对管理员开放。"
           action={<Link to={`/admin/users/${userId}`}><Button variant="outline" size="sm">返回用户详情</Button></Link>}
         />
       </div>
@@ -72,7 +72,6 @@ export default function UserChat() {
             </h1>
             {chat.pinned && <Badge><Pin size={10} />置顶</Badge>}
             {chat.archived && <Badge><Archive size={10} />归档</Badge>}
-            {chat.temporary && <Badge tone="warn"><Timer size={10} />临时</Badge>}
             {chat.projectName && <Badge><FolderOpen size={10} />{chat.projectName}</Badge>}
           </div>
           <p className="mt-1 flex flex-wrap gap-x-2 text-xs text-tx3">

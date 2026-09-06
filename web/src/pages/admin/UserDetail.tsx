@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Archive, ChevronRight, FolderOpen, MessageSquare, Pin, Search, Timer } from 'lucide-react';
+import { ArrowLeft, Archive, ChevronRight, FolderOpen, MessageSquare, Pin, Search } from 'lucide-react';
 import { api, errMsg, fmtCost, fmtDate, fmtTokens } from '../../api';
 import {
   Badge, Button, Card, EmptyState, Input, SegmentedControl, Spinner, Stat, toast,
@@ -67,8 +67,8 @@ const CHAT_PAGE = 50;
 
 /**
  * Read-only oversight of the person's conversations (Open WebUI has the same
- * admin view). Every stored chat is listed, 归档 and 临时 included, because an
- * audit that silently skips a class of chats is worse than a badge.
+ * admin view). Saved chats only, 归档 included; 临时对话 stay private to the
+ * person — the server neither lists nor serves them here.
  */
 function UserChatsCard({ userId }: { userId: string }) {
   const [query, setQuery] = useState('');
@@ -108,7 +108,7 @@ function UserChatsCard({ userId }: { userId: string }) {
   return (
     <Card
       title="对话记录"
-      desc="该用户的全部对话(含归档与尚未清理的临时对话),点击以只读方式查看。查看记录会写入服务器日志。"
+      desc="该用户保存的全部对话(含归档;临时对话不在其中),点击以只读方式查看。查看记录会写入服务器日志。"
       actions={(
         <form className="flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); setApplied(query.trim()); }}>
           <div className="w-44 sm:w-56">
@@ -136,7 +136,6 @@ function UserChatsCard({ userId }: { userId: string }) {
                   <span className="truncate text-[13px] font-medium text-tx">{c.title.trim() || '未命名对话'}</span>
                   {c.pinned && <Pin size={11} className="shrink-0 text-tx3" aria-label="置顶" />}
                   {c.archived && <Badge><Archive size={10} />归档</Badge>}
-                  {c.temporary && <Badge tone="warn"><Timer size={10} />临时</Badge>}
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-tx3">
                   <span className="tabular-nums">{fmtDate(c.updatedAt)}</span>

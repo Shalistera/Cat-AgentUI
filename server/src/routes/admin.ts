@@ -194,7 +194,7 @@ export async function adminRoutes(app: FastifyInstance) {
       .from(schema.sessions).where(gte(schema.sessions.expiresAt, now()))
       .groupBy(schema.sessions.userId).all();
     const sessionMap = new Map(sessionRows.map((r) => [r.userId, r.n]));
-    // What the person themselves would count as history — 临时对话 excluded.
+    // What the admin can open below — 临时对话 are never part of it.
     const chatRows = db.select({ userId: schema.chats.userId, n: sql<number>`count(*)` })
       .from(schema.chats).where(eq(schema.chats.temporary, 0))
       .groupBy(schema.chats.userId).all();
@@ -318,8 +318,10 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   // --- admin: 查看用户对话 (read-only) ---
-  // Open WebUI-style oversight: an admin can list any account's chats and
-  // read them, including 归档 and 临时 ones while they still exist. Nothing
+  // Open WebUI-style oversight: an admin can list any account's saved chats
+  // and read them, 归档 included. 临时对话 are off limits — the person was
+  // promised they never enter history, so they are not listed and their
+  // bodies 404 here even while the sweeper hasn't reached them yet. Nothing
   // here writes — no branch switch, no bookmark, no un-archive — and every
   // read of a conversation body is logged with the admin's identity.
 
@@ -363,7 +365,8 @@ export async function adminRoutes(app: FastifyInstance) {
     const user = chatOwner(id);
     if (!user) return reply.code(404).send({ error: '用户不存在' });
 
-    let rows = db.select().from(schema.chats).where(eq(schema.chats.userId, id)).all();
+    let rows = db.select().from(schema.chats)
+      .where(and(eq(schema.chats.userId, id), eq(schema.chats.temporary, 0))).all();
     const q = (query.data.q ?? '').trim();
     const qLower = q.toLowerCase();
     if (qLower) {
@@ -410,7 +413,7 @@ export async function adminRoutes(app: FastifyInstance) {
     requireAdmin(req, reply);
     const { chatId } = req.params as { chatId: string };
     const c = db.select().from(schema.chats).where(eq(schema.chats.id, chatId)).get();
-    if (!c) return reply.code(404).send({ error: '对话不存在' });
+    if (!c || c.temporary) return reply.code(404).send({ error: '对话不存在' });
     const user = chatOwner(c.userId);
     if (!user) return reply.code(404).send({ error: '对话不存在' });
     const msgs = allChatMessages(c.id);

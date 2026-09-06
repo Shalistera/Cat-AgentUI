@@ -391,6 +391,18 @@ async function run() {
   'admin reads a user chat');
   assert(!secretCanaries.some((secret) => JSON.stringify(adminChat.json).includes(secret)),
     'admin chat view carries no provider secrets');
+  // 临时对话 were promised to stay out of history: not listed, body 404s.
+  const tempChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id, temporary: true }, userCookie);
+  assert(tempChat.status === 200 && tempChat.json.chat.temporary === true, 'create temporary chat');
+  const tempId = tempChat.json.chat.id;
+  const tempTurn = await stream(tempId, [{ type: 'text', text: 'hello' }], textModel.id, userCookie);
+  assert(tempTurn.status === 200, 'turn in a temporary chat');
+  const adminListTemp = await jsonReq('GET', `/api/admin/users/${userId}/chats?q=hello`, undefined, adminCookie);
+  assert(adminListTemp.status === 200 && !adminListTemp.json.chats.some((c) => c.id === tempId),
+    'temporary chats are not listed for admins');
+  const adminTemp = await jsonReq('GET', `/api/admin/chats/${tempId}`, undefined, adminCookie);
+  assert(adminTemp.status === 404, 'temporary chat body is not served to admins');
+  await jsonReq('DELETE', `/api/chats/${tempId}`, undefined, userCookie);
   const userOnAdminList = await jsonReq('GET', `/api/admin/users/${userId}/chats`, undefined, userCookie);
   const userOnAdminChat = await jsonReq('GET', `/api/admin/chats/${capChatId}`, undefined, userCookie);
   assert(userOnAdminList.status === 403 && userOnAdminChat.status === 403, 'admin chat routes need admin');
