@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../store';
 import { CatLogo, CatMark } from '../components/Logo';
-import { ReleaseNotesButton } from '../components/ReleaseNotes';
+import { appVersionLabel } from '../version';
 import { Button, Input, Field, toast } from '../components/ui';
 import type { User } from '../types';
 
@@ -71,7 +71,7 @@ export default function Login() {
         </div>
 
         <div className="relative">
-          <ReleaseNotesButton className="text-[11px] text-brandfg/55 hover:text-brandfg" />
+          <span className="font-mono text-[11px] text-brandfg/55">{appVersionLabel}</span>
         </div>
       </aside>
 
@@ -80,8 +80,9 @@ export default function Login() {
           clipping the top of the form above the scroll start. */}
       <div className="flex min-w-0 flex-1 overflow-y-auto px-6 py-10">
         <div className="fade-up m-auto w-full max-w-[364px]">
-          <div className="lg:hidden">
+          <div className="flex items-center gap-3 lg:hidden">
             <CatMark size={44} />
+            <span className="font-mono text-[11px] text-tx3">{appVersionLabel}</span>
           </div>
 
           <h1 className="mt-5 text-xl font-semibold tracking-tight text-tx lg:mt-0">
@@ -129,9 +130,6 @@ export default function Login() {
               </p>
             )}
           </form>
-          <div className="mt-8 text-center">
-            <ReleaseNotesButton className="text-[11px] font-medium text-tx3 hover:text-tx" />
-          </div>
         </div>
       </div>
     </div>
