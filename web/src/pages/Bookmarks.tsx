@@ -63,7 +63,7 @@ export default function Bookmarks() {
       </PageHeader>
 
       <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-        <div className="mx-auto w-full max-w-[54rem] space-y-4">
+        <div className="mx-auto w-full max-w-[62rem] space-y-4">
           {rows === null && (
             <div className="flex justify-center py-16 text-tx3"><Spinner className="h-5 w-5" /></div>
           )}

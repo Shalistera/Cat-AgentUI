@@ -111,6 +111,10 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     } catch { /* fall through */ }
     return null;
   }, [lang, code]);
+  // The gutter is a sibling column, not part of the <pre>: highlight.js spans
+  // can straddle newlines, so the code is never split per line, and numbers
+  // stay out of what a person selects and copies.
+  const lineCount = Math.max(1, code.split('\n').length);
 
   return (
     <div className="codeblock">
@@ -155,9 +159,16 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
       {previewSrc !== null
         // No allow-same-origin: previewed HTML must not reach our cookies/localStorage.
         ? <iframe sandbox="allow-scripts allow-modals" srcDoc={previewSrc} title="HTML 预览" className="block h-[420px] w-full border-0 bg-white" />
-        : html !== null
-          ? <pre><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
-          : <pre><code>{code}</code></pre>}
+        : (
+          <div className="codeblock-body">
+            <div className="codeblock-gutter" aria-hidden>
+              {Array.from({ length: lineCount }, (_, i) => <span key={i}>{i + 1}</span>)}
+            </div>
+            {html !== null
+              ? <pre><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
+              : <pre><code>{code}</code></pre>}
+          </div>
+        )}
     </div>
   );
 }

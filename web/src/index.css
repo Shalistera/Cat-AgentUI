@@ -342,6 +342,26 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
   font-family: var(--font-mono);
 }
 .md .codeblock pre { padding: .9rem 1rem; overflow-x: auto; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.65; }
+/* Line numbers live in their own column beside the <pre>. Same font metrics
+   and vertical padding as the code, and the code never wraps, so the rows
+   line up without touching the highlighted markup. */
+.md .codeblock-body { display: flex; align-items: stretch; }
+.md .codeblock-body pre { flex: 1 1 auto; min-width: 0; }
+.md .codeblock-gutter {
+  flex: none;
+  display: flex; flex-direction: column;
+  padding: .9rem .6rem .9rem .85rem;
+  border-right: 1px solid var(--color-line);
+  background: var(--color-bg2);
+  color: var(--color-tx3);
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.65;
+  text-align: right;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.md .codeblock-gutter span { display: block; min-width: 1.5ch; }
 /* KaTeX lays out with absolute struts; inheriting the prose line-height (1.75)
    collapses fraction numerators onto their denominators. */
 .md .katex { line-height: normal; }

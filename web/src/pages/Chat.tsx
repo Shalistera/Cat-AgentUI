@@ -119,7 +119,7 @@ function QueueBar({ items, streaming, onSendNow, onRemove, onUpdate }: {
   if (!items.length) return null;
   const iconBtn = 'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-tx3 transition-colors hover:bg-bg2 hover:text-tx';
   return (
-    <div className="mx-auto mb-2 w-full max-w-[48rem] overflow-hidden rounded-lg border border-line bg-bg1 shadow-xs">
+    <div className="mx-auto mb-2 w-full max-w-[54rem] overflow-hidden rounded-lg border border-line bg-bg1 shadow-xs">
       <div className="flex items-center gap-1.5 border-b border-line bg-bg2/45 px-3 py-1.5 text-[11px] font-medium text-tx2">
         <ListOrdered size={12} className="text-tx3" />
         已排队 {items.length} 条消息{streaming ? '，将在当前回复完成后依次发送' : ''}
@@ -1044,10 +1044,10 @@ export default function Chat() {
         // justify-centered scroll container clips overflowing content above
         // the scroll start, which cut the cat mark off on phones.
         <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6 sm:py-10">
-          {/* 54rem shell matches the conversation column; the composer itself is
-              capped at 48rem here too so its width doesn't jump when the first
+          {/* 62rem shell matches the conversation column; the composer itself is
+              capped at 54rem here too so its width doesn't jump when the first
               message lands. */}
-          <div className="fade-up m-auto w-full max-w-[54rem]">
+          <div className="fade-up m-auto w-full max-w-[62rem]">
             <div className="mb-8 flex flex-col items-center text-center">
               {/* The mark and title follow the selected model, so the empty
                   page answers "who am I about to talk to" — the cat only
@@ -1092,7 +1092,7 @@ export default function Chat() {
               )}
             </div>
 
-            <div className="mx-auto max-w-[48rem]">{composer}</div>
+            <div className="mx-auto max-w-[54rem]">{composer}</div>
 
             {modelSel && !streaming && (
               <QuickPrompts onSend={(q) => void send(q, [])} />
@@ -1112,11 +1112,11 @@ export default function Chat() {
           />
           <div ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
             <SelectionQuote containerRef={scrollRef} onQuote={(t) => useComposerInsert.getState().insert(asQuote(t))} />
-            {/* 54rem message column over a 48rem composer (chatgpt-style: content
+            {/* 62rem message column over a 54rem composer (chatgpt-style: content
                 slightly wider than the input). Both widths are deliberate user
                 picks — change them in tandem with the composer wrappers below
                 and in the empty state. */}
-            <div className="mx-auto flex w-full max-w-[54rem] flex-col gap-7 px-4 py-7 sm:px-6">
+            <div className="mx-auto flex w-full max-w-[62rem] flex-col gap-7 px-4 py-7 sm:px-6">
               {path.map((m, i) => {
                 if (compare && m.id === compare.originalId) {
                   const challenger = messages.find((x) => x.id === compare.challengerId) ?? null;
@@ -1180,7 +1180,7 @@ export default function Chat() {
               onRemove={(item) => chat && queueStore.remove(chat.id, item.id)}
               onUpdate={(item, t) => chat && queueStore.update(chat.id, item.id, t)}
             />
-            <div className="mx-auto max-w-[48rem]">{composer}</div>
+            <div className="mx-auto max-w-[54rem]">{composer}</div>
             {!composerCompact && <p className="mt-2 text-center text-[11px] text-tx3">内容由 AI 生成,请自行核实关键信息。</p>}
           </div>
         </>
