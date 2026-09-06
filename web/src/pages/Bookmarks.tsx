@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bookmark, BookmarkX, ExternalLink, PanelLeft, Search } from 'lucide-react';
-import { api, errMsg, fmtDate } from '../api';
+import { api, errMsg, fmtDate, fmtModelName } from '../api';
 import { useUi } from '../store';
 import { Markdown } from '../components/Markdown';
 import { ModelAvatar } from '../components/ModelAvatar';
@@ -85,7 +85,7 @@ export default function Bookmarks() {
               <article key={b.id} className="overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
                 <header className="flex items-center gap-2 border-b border-line bg-bg2/45 px-3.5 py-2 text-xs">
                   {b.message.role === 'assistant'
-                    ? <ModelAvatar model={b.message.model} size={18} />
+                    ? <ModelAvatar model={fmtModelName(b.message.model)} size={18} />
                     : <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-pri text-[10px] font-semibold text-prifg">我</span>}
                   <button
                     className="min-w-0 flex-1 cursor-pointer truncate text-left font-medium text-tx hover:text-acc"
@@ -94,7 +94,7 @@ export default function Bookmarks() {
                   >
                     {b.chatTitle || '新对话'}
                   </button>
-                  {b.message.model && <span className="hidden font-mono text-tx3 sm:inline">{b.message.model}</span>}
+                  {b.message.model && <span className="hidden font-mono text-tx3 sm:inline">{fmtModelName(b.message.model)}</span>}
                   <span className="tabular-nums text-tx3">{fmtDate(b.message.createdAt)}</span>
                   <Button variant="ghost" size="iconSm" title="打开对话" onClick={() => nav(`/chat/${b.chatId}?msg=${b.message.id}`)}>
                     <ExternalLink size={13} />

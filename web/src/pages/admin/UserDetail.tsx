@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Archive, ChevronRight, FolderOpen, MessageSquare, Pin, Search } from 'lucide-react';
-import { api, errMsg, fmtCost, fmtDate, fmtTokens } from '../../api';
+import { api, errMsg, fmtCost, fmtDate, fmtModelName, fmtTokens } from '../../api';
 import {
   Badge, Button, Card, EmptyState, Input, SegmentedControl, Spinner, Stat, toast,
 } from '../../components/ui';
@@ -268,7 +268,7 @@ export default function UserDetail() {
               total={totals.totalTokens}
               rows={byModel.map((m) => ({
                 key: m.model,
-                label: m.model,
+                label: fmtModelName(m.model) ?? m.model,
                 mono: true,
                 tokens: m.totalTokens,
                 detail: `${m.requests.toLocaleString()} 次请求${

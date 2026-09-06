@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, fmtCost, fmtTokens } from '../../api';
+import { api, fmtCost, fmtModelName, fmtTokens } from '../../api';
 import { Spinner, Card, Stat, SegmentedControl, Td, Th, toast } from '../../components/ui';
 import { TokensBarChart } from '../../components/TokensBarChart';
 import type { AdminUsage } from '../../types';
@@ -123,7 +123,7 @@ export default function Dashboard() {
                   {byModel.map((m) => (
                     <tr key={m.model} className="group transition-colors hover:bg-bg2/60">
                       <Td>
-                        <div className="max-w-[200px] truncate font-mono text-tx" title={m.model}>{m.model}</div>
+                        <div className="max-w-[200px] truncate font-mono text-tx" title={m.model}>{fmtModelName(m.model)}</div>
                       </Td>
                       <Td className="text-right tabular-nums">{fmtTokens(m.totalTokens)}</Td>
                       {showCost && <Td className="text-right tabular-nums">{fmtCost(m.cost, currency)}</Td>}

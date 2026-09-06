@@ -1,5 +1,5 @@
 import { Check, Download, Trash2 } from 'lucide-react';
-import { api, fmtDuration, fmtTime, fmtTokens } from '../api';
+import { api, fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { Badge, Button, Modal, ModalActions, btnClass, confirmDialog, toast } from './ui';
 import type { ImageRecord } from '../types';
 
@@ -16,7 +16,7 @@ export function TileOverlay({ prompt, model, featured = false }: {
       <p className={`line-clamp-2 leading-snug text-white ${featured ? 'text-xs' : 'text-[11px]'}`}>{prompt}</p>
       {model && (
         <span className="mt-1.5 inline-block max-w-full truncate rounded-sm bg-white/20 px-1.5 py-0.5 font-mono text-[10px] text-white">
-          {model}
+          {fmtModelName(model)}
         </span>
       )}
     </div>
@@ -87,7 +87,7 @@ export function ImageLightbox({ image, onClose, onDeleted }: {
           />
           <p className="select-text whitespace-pre-wrap text-[13px] leading-relaxed text-tx2">{image.prompt}</p>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-tx3">
-            {image.model && <Badge mono>{image.model}</Badge>}
+            {image.model && <Badge mono>{fmtModelName(image.model)}</Badge>}
             {image.size && <span>尺寸 {image.size}</span>}
             <span>耗时 {fmtDuration(image.durationMs)}</span>
             <span>{fmtTime(image.createdAt)}</span>

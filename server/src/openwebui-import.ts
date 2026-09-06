@@ -58,9 +58,23 @@ interface OwuiFileRow { id: string; filename: string | null; path: string | null
 interface OwuiMessage {
   id?: string; role?: string; content?: unknown; timestamp?: number;
   parentId?: string | null; childrenIds?: string[];
-  model?: string; models?: string[]; files?: OwuiMsgFile[];
+  model?: string; modelName?: string; models?: string[]; files?: OwuiMsgFile[];
   output?: OwuiOutputItem[];
   usage?: Record<string, unknown>; info?: Record<string, unknown>;
+}
+
+/**
+ * Open WebUI (and the gateways behind it) can store a model id with routing
+ * baggage in front of the name, e.g. `modelref::openai::personal::id:9156397c::gpt-5.6-sol`.
+ * Keep only the last segment, which is the name a person recognises; fall back
+ * to the display name Open WebUI kept alongside it.
+ */
+function cleanModelName(m: OwuiMessage): string | null {
+  const raw = typeof m.model === 'string' ? m.model.trim() : '';
+  const last = raw.split('::').map((s) => s.trim()).filter(Boolean).pop() ?? '';
+  if (last) return last.slice(0, 200);
+  const name = typeof m.modelName === 'string' ? m.modelName.trim() : '';
+  return name ? name.slice(0, 200) : null;
 }
 
 interface OwuiMsgFile {
@@ -683,7 +697,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
             parentId: prevMsgId,
             role,
             parts: JSON.stringify(parts),
-            model: typeof m.model === 'string' ? m.model : null,
+            model: cleanModelName(m),
             providerId: null,
             status: 'done',
             error: null,

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   BarChart3, Check, FlaskConical, LayoutTemplate, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, UserRound, X,
 } from 'lucide-react';
-import { api, fmtCost, fmtTime, fmtTokens } from '../api';
+import { api, fmtCost, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
 import { useAuth, useUi, type SettingsTab } from '../store';
 import { Badge, Button, Field, Input, Spinner, Stat, Textarea, ToggleRow, confirmDialog, toast } from './ui';
@@ -489,7 +489,7 @@ function UsageSection() {
                 <tbody>
                   {usage.byModel.map((m) => (
                     <tr key={m.model} className="border-b border-line last:border-0">
-                      <td className="py-2 pr-2 text-tx2">{m.model}</td>
+                      <td className="py-2 pr-2 text-tx2">{fmtModelName(m.model)}</td>
                       <td className="py-2 pr-2 text-right tabular-nums text-tx">{fmtTokens(m.totalTokens)}</td>
                       <td className="py-2 text-right tabular-nums text-tx2">{m.requests.toLocaleString()}</td>
                     </tr>

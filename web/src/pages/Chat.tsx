@@ -4,7 +4,7 @@ import {
   Archive, ArrowDown, Check, FolderClosed, Ghost, ListOrdered, PanelLeft, Pencil,
   Plus, Search, Send, Trash2,
 } from 'lucide-react';
-import { api, errMsg, fmtUsageLimit, streamChat, usageLimitExhausted, ApiError } from '../api';
+import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment, type SendOptions } from '../components/Composer';
@@ -72,7 +72,7 @@ function CompareView({ original, challenger, challengerModel, streaming, onKeep 
       <div className={`${card} border-line`}>
         <div className={head}>
           <span className="rounded-sm bg-bg3 px-1.5 py-0.5 text-[10px] text-tx2">当前回复</span>
-          {original.model && <span className="truncate font-mono text-[11px] text-tx3">{original.model}</span>}
+          {original.model && <span className="truncate font-mono text-[11px] text-tx3">{fmtModelName(original.model)}</span>}
         </div>
         <div className={body}>
           <ChatMessage msg={original} isStreaming={false} />

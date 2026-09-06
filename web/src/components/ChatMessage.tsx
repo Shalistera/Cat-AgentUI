@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo, ToolConfirmRequest } from '../types';
 import { useLightbox } from './Lightbox';
-import { fmtDuration, fmtTime, fmtTokens } from '../api';
+import { fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
 import { useAuth, useModels } from '../store';
 import { Markdown } from './Markdown';
@@ -638,7 +638,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
     // sm:pr mirrors the avatar column (30px + gap-3) so the text block sits
     // centered in the column and the composer overhangs it equally per side.
     <div className="flex gap-3 sm:pr-[42px]" data-msg-id={msg.id}>
-      <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={msg.model} size={30} /></div>
+      <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={fmtModelName(msg.model)} size={30} /></div>
       <div className="min-w-0 flex-1">
         {editing ? (
           // The editor works on the merged plain text; reasoning/tool/image
@@ -707,7 +707,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
               )}
               {onRegenerate && (
                 onRegenerateWith
-                  ? <RegenerateMenu lastModel={msg.model} onSame={onRegenerate} onWith={onRegenerateWith} />
+                  ? <RegenerateMenu lastModel={fmtModelName(msg.model)} onSame={onRegenerate} onWith={onRegenerateWith} />
                   : (
                     <button title="重新生成" className={iconBtn} onClick={onRegenerate}>
                       <RefreshCw size={12} />
@@ -725,7 +725,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
                 </button>
               )}
             </span>
-            {msg.model && <span className="font-mono text-tx2">{msg.model}</span>}
+            {msg.model && <span className="font-mono text-tx2">{fmtModelName(msg.model)}</span>}
             {statsTip && (
               <Popover open={statsOpen} setOpen={setStatsOpen} width="w-60" trigger={
                 <button title="查看生成信息" className={iconBtn}><Info size={12} /></button>

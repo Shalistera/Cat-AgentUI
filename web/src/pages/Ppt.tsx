@@ -3,7 +3,7 @@ import {
   PanelLeft, Presentation, Sparkles, Download, Trash2, FileText,
 } from 'lucide-react';
 import { useUi } from '../store';
-import { api, ApiError, fmtDuration, fmtTime, fmtTokens } from '../api';
+import { api, ApiError, fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { tabAlert } from '../tabAlert';
 import { notifyDone } from '../notify';
 import {
@@ -536,7 +536,7 @@ export default function Ppt() {
                       </div>
                       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] tabular-nums text-tx3">
                         <span>{d.slideCount} 页</span>
-                        {d.model && <span className="max-w-[10rem] truncate font-mono">{d.model}</span>}
+                        {d.model && <span className="max-w-[10rem] truncate font-mono">{fmtModelName(d.model)}</span>}
                         <span>{fmtTime(d.createdAt)}</span>
                       </div>
                     </button>
@@ -561,7 +561,7 @@ export default function Ppt() {
         {preview && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-tx3">
-              {preview.model && <Badge mono>{preview.model}</Badge>}
+              {preview.model && <Badge mono>{fmtModelName(preview.model)}</Badge>}
               <span>{preview.slideCount} 页</span>
               <span>耗时 {fmtDuration(preview.durationMs)}</span>
               {preview.totalTokens != null && preview.totalTokens > 0 && (

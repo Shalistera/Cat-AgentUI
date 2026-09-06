@@ -177,6 +177,19 @@ export function fmtDuration(ms: number | null | undefined): string {
   return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
 }
 
+/**
+ * The model name as a person should read it. Rows imported from Open WebUI can
+ * carry gateway routing in front of the name
+ * (`modelref::openai::personal::id:9156397c::gpt-5.6-sol`) — show the last
+ * segment only. Native rows are plain API names and pass through untouched.
+ */
+export function fmtModelName(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  if (!raw.includes('::')) return raw;
+  const last = raw.split('::').map((s) => s.trim()).filter(Boolean).pop();
+  return last || raw;
+}
+
 export function fmtTokens(n: number | null | undefined): string {
   if (n == null || n === 0) return '—';
   if (n < 10_000) return String(n);
