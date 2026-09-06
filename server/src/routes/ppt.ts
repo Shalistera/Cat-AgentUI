@@ -7,7 +7,7 @@ import { requireAuth } from '../auth.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
 import { accessibleOnly, canUseModel } from '../model-access.js';
-import { checkQuota, quotaBlockMessage } from '../quota.js';
+import { checkModelLimit, checkQuota, modelLimitBlockMessage, quotaBlockMessage } from '../quota.js';
 import { buildDeckPrompt, parseDeckSpec, renderDeckPptx, type DeckSpec } from '../deck.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
 
@@ -100,6 +100,8 @@ export async function pptRoutes(app: FastifyInstance) {
     // over-quota always refuses here regardless of the configured action.
     const quota = checkQuota(req.user!.id);
     if (!quota.ok) return reply.code(429).send({ error: quotaBlockMessage(quota) });
+    const modelLimit = checkModelLimit(req.user!, model);
+    if (!modelLimit.ok) return reply.code(429).send({ error: modelLimitBlockMessage(model, modelLimit) });
 
     const userId = req.user!.id;
     const job: PptJob = { id: newId(), userId, createdAt: Date.now(), status: 'running' };

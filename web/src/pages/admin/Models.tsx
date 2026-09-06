@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Pencil, Server, SlidersHorizontal, Star, Users } from 'lucide-react';
-import { api, errMsg } from '../../api';
+import { api, errMsg, fmtTokens } from '../../api';
 import {
   Badge, Button, EmptyState, Field, Input, Modal, ModalActions, Select,
   Spinner, Td, Th, Toggle, btnClass, toast,
@@ -113,6 +113,15 @@ function AccessCell({ model, reload }: { model: AdminModel; reload(): Promise<vo
   );
 }
 
+/** "每日每人 10 次 · 50.0k tokens" for the list; null when the model is unlimited. */
+function limitLabel(m: AdminModel): string | null {
+  if (!m.limitRequests && !m.limitTokens) return null;
+  const parts: string[] = [];
+  if (m.limitRequests) parts.push(`${m.limitRequests} 次`);
+  if (m.limitTokens) parts.push(`${fmtTokens(m.limitTokens)} tokens`);
+  return `${m.limitPeriod === 'week' ? '每周' : '每日'}每人 ${parts.join(' · ')}`;
+}
+
 // ---------- capability row ----------
 function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
   const [busy, setBusy] = useState(false);
@@ -134,6 +143,11 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
         <Link to={`/admin/models/${model.id}`} title="打开详细设置" className="group/name block">
           <div className="truncate font-mono text-tx group-hover/name:underline">{model.modelId}</div>
           {model.displayName && <div className="truncate text-[11px] text-tx3">{model.displayName}</div>}
+          {limitLabel(model) && (
+            <div className="mt-0.5 truncate text-[11px] tabular-nums text-warn" title="使用限制(在详细设置中修改)">
+              限 {limitLabel(model)}
+            </div>
+          )}
         </Link>
       </Td>
       <Td className="text-center"><Toggle checked={model.vision} disabled={busy} onChange={(v) => patch({ vision: v })} /></Td>
@@ -159,7 +173,7 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
           : <Badge>已停用</Badge>}
       </Td>
       <Td className="text-center">
-        <Link to={`/admin/models/${model.id}`} title="详细设置:描述、推理档位"
+        <Link to={`/admin/models/${model.id}`} title="详细设置:描述、单价、使用限制、推理档位"
           className={btnClass('ghost', 'iconXs')}>
           <SlidersHorizontal size={14} />
         </Link>
@@ -209,7 +223,7 @@ export default function Models() {
       <div className="min-w-0">
         <h1 className="text-base font-semibold tracking-tight text-tx">模型设置</h1>
         <p className="mt-0.5 text-xs leading-relaxed text-tx3">
-          配置每个模型的能力、默认联网、可见性与默认模型;点击模型名或行尾按钮进入详细设置(模型描述、推理档位)。添加模型和启用开关在
+          配置每个模型的能力、默认联网、可见性与默认模型;点击模型名或行尾按钮进入详细设置(模型描述、单价、使用限制、推理档位)。添加模型和启用开关在
           <Link to="/admin/providers" className="mx-0.5 text-acc hover:underline">模型服务</Link>
           栏目。
         </p>
@@ -272,7 +286,7 @@ export default function Models() {
                       <Th>可见性</Th>
                       <Th className="text-center">默认</Th>
                       <Th className="text-center">状态</Th>
-                      <Th className="text-center" title="模型描述、推理档位等详细配置">详情</Th>
+                      <Th className="text-center" title="模型描述、单价、使用限制、推理档位等详细配置">详情</Th>
                     </tr>
                   </thead>
                   <tbody>

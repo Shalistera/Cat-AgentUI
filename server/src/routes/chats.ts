@@ -15,7 +15,7 @@ import { getSearchServerId } from './mcp.js';
 import { saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
 import { canUseModel, grantedModelIds, imageModelsAllowed } from '../model-access.js';
-import { checkQuota, quotaBlockMessage } from '../quota.js';
+import { checkModelLimit, checkQuota, modelLimitBlockMessage, modelLimitReason, quotaBlockMessage } from '../quota.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
@@ -71,7 +71,7 @@ type MessageRow = typeof schema.messages.$inferSelect;
 
 // Every message of a chat in display order — (seq, createdAt) is also the
 // sibling order inside the tree.
-function allChatMessages(chatId: string): MessageRow[] {
+export function allChatMessages(chatId: string): MessageRow[] {
   return db.select().from(schema.messages).where(eq(schema.messages.chatId, chatId))
     .orderBy(asc(schema.messages.seq), asc(schema.messages.createdAt)).all();
 }
@@ -93,7 +93,7 @@ function ancestorChain(rows: MessageRow[], leafId: string | null | undefined): M
 
 // The branch on screen: the saved leaf while it still exists, else the newest
 // message (which is what pre-tree chats effectively showed).
-function resolveLeafId(rows: MessageRow[], savedLeafId: string | null): string | null {
+export function resolveLeafId(rows: MessageRow[], savedLeafId: string | null): string | null {
   if (savedLeafId && rows.some((r) => r.id === savedLeafId)) return savedLeafId;
   return rows.length ? rows[rows.length - 1].id : null;
 }
@@ -372,7 +372,7 @@ async function buildBoundedHistory(
   }
 }
 
-function chatSummary(c: typeof schema.chats.$inferSelect) {
+export function chatSummary(c: typeof schema.chats.$inferSelect) {
   return {
     id: c.id, title: c.title, pinned: !!c.pinned, archived: !!c.archived,
     temporary: !!c.temporary, modelId: c.modelId,
@@ -380,7 +380,7 @@ function chatSummary(c: typeof schema.chats.$inferSelect) {
   };
 }
 
-function messageDto(m: typeof schema.messages.$inferSelect, bookmarked?: ReadonlySet<string>) {
+export function messageDto(m: typeof schema.messages.$inferSelect, bookmarked?: ReadonlySet<string>) {
   return {
     id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
     status: m.status, finishReason: m.finishReason ?? null, error: m.error,
@@ -1080,6 +1080,24 @@ export async function chatRoutes(app: FastifyInstance) {
         }
       }
       if (!downgraded) return reply.code(429).send({ error: quotaBlockMessage(quota) });
+    }
+
+    // Per-model daily/weekly allowance, checked on whatever model survived
+    // the step above. Same over-limit policy as the monthly quota: refuse, or
+    // fall back to the designated model when that one still has room.
+    const modelLimit = checkModelLimit(user, model);
+    if (!modelLimit.ok) {
+      let downgraded = false;
+      if (quota.action === 'downgrade' && !model.imageGen && quota.fallbackModelId
+        && quota.fallbackModelId !== model.id) {
+        const fallback = getModelWithProvider(quota.fallbackModelId);
+        if (fallback && !fallback.model.imageGen && checkModelLimit(user, fallback.model).ok) {
+          downgradeNotice = `${modelLimitReason(model, modelLimit)},已自动切换到基础模型「${fallback.model.displayName || fallback.model.modelId}」`;
+          ({ model, provider } = fallback);
+          downgraded = true;
+        }
+      }
+      if (!downgraded) return reply.code(429).send({ error: modelLimitBlockMessage(model, modelLimit) });
     }
 
     const chatLease = tryAcquireChatTurn(user.id, chatId);

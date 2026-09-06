@@ -183,6 +183,13 @@
       "when": 1788307593777,
       "tag": "0025_bookmarks_mcp_confirm",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1788688926203,
+      "tag": "0026_model_usage_limits",
+      "breakpoints": true
     }
   ]
 }

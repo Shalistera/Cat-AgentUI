@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Archive, ChevronRight, FolderOpen, MessageSquare, Pin, Search, Timer } from 'lucide-react';
 import { api, errMsg, fmtCost, fmtDate, fmtTokens } from '../../api';
-import { Badge, Button, Card, EmptyState, SegmentedControl, Spinner, Stat, toast } from '../../components/ui';
+import {
+  Badge, Button, Card, EmptyState, Input, SegmentedControl, Spinner, Stat, toast,
+} from '../../components/ui';
 import { TokensBarChart } from '../../components/TokensBarChart';
-import type { AdminUser, AdminUserUsage } from '../../types';
+import type { AdminChatList, AdminChatSummary, AdminUser, AdminUserUsage } from '../../types';
 
 /* Per-user usage drill-down. Everything here is a GROUP BY over the existing
    usage_log rows (indexed on userId+day) — no extra bookkeeping is written to
@@ -57,6 +59,108 @@ function DistRows({ rows, total }: {
         );
       })}
     </div>
+  );
+}
+
+// ---------- 对话记录 ----------
+const CHAT_PAGE = 50;
+
+/**
+ * Read-only oversight of the person's conversations (Open WebUI has the same
+ * admin view). Every stored chat is listed, 归档 and 临时 included, because an
+ * audit that silently skips a class of chats is worse than a badge.
+ */
+function UserChatsCard({ userId }: { userId: string }) {
+  const [query, setQuery] = useState('');
+  const [applied, setApplied] = useState('');
+  const [chats, setChats] = useState<AdminChatSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [more, setMore] = useState(false);
+
+  async function fetchPage(offset: number, q: string): Promise<AdminChatList> {
+    const params = new URLSearchParams({ offset: String(offset), limit: String(CHAT_PAGE) });
+    if (q) params.set('q', q);
+    return api.get<AdminChatList>(`/api/admin/users/${userId}/chats?${params}`);
+  }
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetchPage(0, applied)
+      .then((r) => { if (alive) { setChats(r.chats); setTotal(r.total); } })
+      .catch((e) => toast(errMsg(e), 'err'))
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [userId, applied]);
+
+  async function loadMore() {
+    if (more) return;
+    setMore(true);
+    try {
+      const r = await fetchPage(chats.length, applied);
+      setChats((prev) => [...prev, ...r.chats.filter((c) => !prev.some((p) => p.id === c.id))]);
+      setTotal(r.total);
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setMore(false); }
+  }
+
+  return (
+    <Card
+      title="对话记录"
+      desc="该用户的全部对话(含归档与尚未清理的临时对话),点击以只读方式查看。查看记录会写入服务器日志。"
+      actions={(
+        <form className="flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); setApplied(query.trim()); }}>
+          <div className="w-44 sm:w-56">
+            <Input uiSize="sm" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题或消息内容…" />
+          </div>
+          <Button type="submit" variant="outline" size="sm" title="搜索"><Search size={13} /></Button>
+        </form>
+      )}
+    >
+      {loading ? (
+        <div className="flex justify-center py-8 text-tx3"><Spinner className="h-5 w-5" /></div>
+      ) : chats.length === 0 ? (
+        <p className="py-6 text-center text-xs text-tx3">{applied ? '没有匹配的对话' : '该用户还没有任何对话'}</p>
+      ) : (
+        <div className="-mx-1 divide-y divide-line">
+          {chats.map((c) => (
+            <Link
+              key={c.id}
+              to={`/admin/users/${userId}/chats/${c.id}`}
+              className="group flex items-center gap-3 rounded-md px-1 py-2.5 transition-colors hover:bg-bg2"
+            >
+              <MessageSquare size={15} className="shrink-0 text-tx3" />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-[13px] font-medium text-tx">{c.title.trim() || '未命名对话'}</span>
+                  {c.pinned && <Pin size={11} className="shrink-0 text-tx3" aria-label="置顶" />}
+                  {c.archived && <Badge><Archive size={10} />归档</Badge>}
+                  {c.temporary && <Badge tone="warn"><Timer size={10} />临时</Badge>}
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-tx3">
+                  <span className="tabular-nums">{fmtDate(c.updatedAt)}</span>
+                  <span className="tabular-nums">{c.messageCount} 条消息</span>
+                  {c.modelName && <span className="font-mono">{c.modelName}</span>}
+                  {c.projectName && (
+                    <span className="inline-flex items-center gap-0.5"><FolderOpen size={10} />{c.projectName}</span>
+                  )}
+                </div>
+              </div>
+              <ChevronRight size={14} className="shrink-0 text-tx3 opacity-0 transition-opacity group-hover:opacity-100" />
+            </Link>
+          ))}
+          {chats.length < total && (
+            <div className="flex items-center justify-between px-1 pt-3 text-xs text-tx3">
+              <span className="tabular-nums">已显示 {chats.length} / {total}</span>
+              <Button variant="outline" size="sm" disabled={more} onClick={loadMore}>
+                {more && <Spinner className="h-3.5 w-3.5" />}加载更多
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -187,6 +291,8 @@ export default function UserDetail() {
           </Card>
         </div>
       </div>
+
+      <UserChatsCard userId={user.id} />
     </div>
   );
 }

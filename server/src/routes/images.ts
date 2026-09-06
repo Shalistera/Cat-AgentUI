@@ -11,7 +11,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
 import { accessibleOnly, canUseModel, imageModelsAllowed, imageWorkshopAllowed } from '../model-access.js';
-import { checkQuota, quotaBlockMessage } from '../quota.js';
+import { checkModelLimit, checkQuota, modelLimitBlockMessage, quotaBlockMessage } from '../quota.js';
 import type { AdapterMessage, GeneratedImage } from '../types.js';
 import { tryAcquireImageJob } from '../admission.js';
 import {
@@ -189,6 +189,8 @@ export async function imageRoutes(app: FastifyInstance) {
     // Image generation has no cheaper fallback, so over-quota always refuses.
     const quota = checkQuota(req.user!.id);
     if (!quota.ok) return reply.code(429).send({ error: quotaBlockMessage(quota) });
+    const modelLimit = checkModelLimit(req.user!, model);
+    if (!modelLimit.ok) return reply.code(429).send({ error: modelLimitBlockMessage(model, modelLimit) });
 
     const adapter = getAdapter(provider.type);
     if (!adapter.generateImages) {

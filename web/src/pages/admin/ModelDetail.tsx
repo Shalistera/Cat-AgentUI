@@ -6,7 +6,7 @@ import {
   Badge, Button, Card, EmptyState, Field, Input, SegmentedControl, Spinner, Textarea, toast,
 } from '../../components/ui';
 import { ProviderAvatar } from '../../components/ModelAvatar';
-import type { AdminModel, AdminProvider, ReasoningLevel, ReasoningMode } from '../../types';
+import type { AdminModel, AdminProvider, LimitPeriod, ReasoningLevel, ReasoningMode } from '../../types';
 import { TYPE_LABELS } from './provider-common';
 
 /* The per-model drill-down. The list page keeps the toggles an admin flips in
@@ -199,6 +199,95 @@ function PricingCard({ model, reload }: { model: AdminModel; reload(): Promise<v
         <div className="flex justify-end">
           <Button variant="primary" size="sm" disabled={busy || !dirty} onClick={save}>
             {busy && <Spinner className="h-3.5 w-3.5" />}保存单价
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------- 使用限制 ----------
+const PERIOD_LABELS: Record<LimitPeriod, string> = { day: '每日', week: '每周' };
+
+/**
+ * Per-account allowance on this one model, on top of the monthly quota:
+ * requests and/or tokens per day or week. Empty = no limit on that axis.
+ */
+function UsageLimitCard({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
+  const [period, setPeriod] = useState<LimitPeriod>(model.limitPeriod);
+  const [requests, setRequests] = useState(model.limitRequests ? String(model.limitRequests) : '');
+  const [tokens, setTokens] = useState(model.limitTokens ? String(model.limitTokens) : '');
+  const [busy, setBusy] = useState(false);
+
+  // null = unlimited (blank or 0), undefined = not a usable number
+  const parse = (v: string): number | null | undefined => {
+    const t = v.trim();
+    if (!t) return null;
+    const n = Number(t);
+    if (!Number.isInteger(n) || n < 0) return undefined;
+    return n || null;
+  };
+  const dirty = period !== model.limitPeriod
+    || (parse(requests) ?? null) !== (model.limitRequests ?? null)
+    || (parse(tokens) ?? null) !== (model.limitTokens ?? null);
+
+  async function save() {
+    if (busy) return;
+    const limitRequests = parse(requests);
+    const limitTokens = parse(tokens);
+    if (limitRequests === undefined || limitTokens === undefined) {
+      toast('上限必须是不小于 0 的整数,留空或 0 表示不限', 'err');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.patch(`/api/admin/models/${model.id}`, { limitPeriod: period, limitRequests, limitTokens });
+      await reload();
+      toast('已更新使用限制', 'ok');
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Card
+      title="使用限制"
+      desc="每个账号在这个模型上的周期用量上限,用来控制贵模型的使用频率或成本;两项都留空 = 不限制。管理员不受限制。"
+    >
+      <div className="space-y-4">
+        <Field label="统计周期" hint="每日在服务器本地时间 0 点重置;每周在周一 0 点重置。">
+          <SegmentedControl<LimitPeriod>
+            value={period}
+            onChange={setPeriod}
+            options={(['day', 'week'] as const).map((p) => ({ value: p, label: PERIOD_LABELS[p] }))}
+          />
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label={`${PERIOD_LABELS[period]}次数上限(每人)`}
+            hint="只计用户主动发起的请求:对话、绘图、OCR、翻译、PPT;自动生成的标题与追问不计次。"
+          >
+            <Input
+              type="number" min={0} step={1} inputMode="numeric" value={requests} placeholder="不限"
+              onChange={(e) => setRequests(e.target.value)}
+            />
+          </Field>
+          <Field
+            label={`${PERIOD_LABELS[period]} token 上限(每人)`}
+            hint="该模型在周期内的全部 token 消耗(输入 + 输出,含自动标题与追问)。"
+          >
+            <Input
+              type="number" min={0} step={1} inputMode="numeric" value={tokens} placeholder="不限"
+              onChange={(e) => setTokens(e.target.value)}
+            />
+          </Field>
+        </div>
+        <p className="text-xs leading-relaxed text-tx3">
+          达到上限后按「应用设置 → 成本治理 → 超额后的处理」执行:拒绝请求,或(仅文字对话)降级到指定模型。
+          用户在模型选择器和新对话首页能看到自己在该模型上的已用额度。
+        </p>
+        <div className="flex justify-end">
+          <Button variant="primary" size="sm" disabled={busy || !dirty} onClick={save}>
+            {busy && <Spinner className="h-3.5 w-3.5" />}保存使用限制
           </Button>
         </div>
       </div>
@@ -403,6 +492,7 @@ export default function ModelDetail() {
       <IconCard provider={provider} model={model} reload={load} />
       <DescriptionCard model={model} reload={load} />
       <PricingCard model={model} reload={load} />
+      <UsageLimitCard model={model} reload={load} />
       <ReasoningCard model={model} reload={load} />
     </div>
   );

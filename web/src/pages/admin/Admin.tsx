@@ -5,6 +5,7 @@ import { Button, PageHeader } from '../../components/ui';
 import Dashboard from './Dashboard';
 import Users from './Users';
 import UserDetail from './UserDetail';
+import UserChat from './UserChat';
 import Providers from './Providers';
 import Models from './Models';
 import ModelDetail from './ModelDetail';
@@ -63,6 +64,7 @@ export default function Admin() {
           <Route index element={<Dashboard />} />
           <Route path="users" element={<Users />} />
           <Route path="users/:id" element={<UserDetail />} />
+          <Route path="users/:id/chats/:chatId" element={<UserChat />} />
           <Route path="providers" element={<Providers />} />
           <Route path="models" element={<Models />} />
           <Route path="models/:id" element={<ModelDetail />} />

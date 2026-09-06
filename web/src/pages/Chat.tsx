@@ -4,7 +4,8 @@ import {
   Archive, ArrowDown, Check, FolderClosed, Ghost, ListOrdered, PanelLeft, Pencil,
   Plus, Search, Send, Trash2,
 } from 'lucide-react';
-import { api, errMsg, streamChat, ApiError } from '../api';
+import { api, errMsg, fmtUsageLimit, streamChat, usageLimitExhausted, ApiError } from '../api';
+import { computePath, newestLeafUnder } from '../tree';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useUi, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment, type SendOptions } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
@@ -37,36 +38,6 @@ function draftToPatch(d: ComposerSettings) {
     systemPrompt: d.systemPrompt.trim() === '' ? null : d.systemPrompt,
     reasoningEffort: d.reasoningEffort,
   };
-}
-
-// ---- message tree helpers ----
-// `all` holds every branch in (seq, createdAt) order; the visible conversation
-// is the root→leaf chain ending at leafId. Regenerated replies and edited user
-// messages are SIBLINGS (same parentId) switched with the version arrows.
-
-function computePath(all: Message[], leafId: string | null): Message[] {
-  if (!all.length) return [];
-  const byId = new Map(all.map((m) => [m.id, m]));
-  const leaf = (leafId && byId.get(leafId)) || all[all.length - 1];
-  const path: Message[] = [];
-  const seen = new Set<string>();
-  let cur: Message | undefined = leaf;
-  while (cur && !seen.has(cur.id)) {
-    seen.add(cur.id);
-    path.unshift(cur);
-    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-  }
-  return path;
-}
-
-/** Walk down from a node always taking the newest child — the branch's tip. */
-function newestLeafUnder(all: Message[], id: string): string {
-  let cur = id;
-  for (;;) {
-    const kids = all.filter((m) => m.parentId === cur);
-    if (!kids.length) return cur;
-    cur = kids[kids.length - 1].id;
-  }
 }
 
 // ---- model comparison (用其他模型对比生成) ----
@@ -626,6 +597,9 @@ export default function Chat() {
       setStreaming(false);
       sendingRef.current = false;
       setToolConfirm(null);
+      // The turn just spent part of someone's daily/weekly allowance — pull
+      // fresh counters so the picker doesn't promise room that is gone.
+      if (models.some((m) => m.usageLimit)) loadModels(true).catch(() => { /* stale counter only */ });
       // "stopped" is always user-initiated from this tab — no need to flag it.
       if (status !== 'stopped') {
         tabAlert();
@@ -1088,6 +1062,12 @@ export default function Chat() {
               </h2>
               {!tempMode && modelSel?.description && (
                 <p className="mt-1.5 max-w-md text-[13px] leading-relaxed text-tx2">{modelSel.description}</p>
+              )}
+              {!tempMode && modelSel?.usageLimit && (
+                <p className={`mt-1.5 text-[12px] tabular-nums ${usageLimitExhausted(modelSel.usageLimit) ? 'text-err' : 'text-tx3'}`}>
+                  {fmtUsageLimit(modelSel.usageLimit)}
+                  {usageLimitExhausted(modelSel.usageLimit) ? ',已达上限,请换用其他模型' : ''}
+                </p>
               )}
               <p className="mt-1.5 text-[13px] text-tx3">
                 {tempMode

@@ -14,7 +14,7 @@ import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
 import { canUseModel } from '../model-access.js';
-import { checkQuota, quotaBlockMessage } from '../quota.js';
+import { checkModelLimit, checkQuota, modelLimitBlockMessage, quotaBlockMessage } from '../quota.js';
 import { tryAcquireChatTurn, tryReserveContextImageBytes } from '../admission.js';
 import { cleanupUnreferencedUploads, getOwnedUploadMedia, readMediaBase64 } from '../storage.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
@@ -92,6 +92,8 @@ export async function ocrRoutes(app: FastifyInstance) {
     // No notice channel for a quiet downgrade here — over quota simply refuses.
     const quota = checkQuota(userId);
     if (!quota.ok) return reply.code(429).send({ error: quotaBlockMessage(quota) });
+    const modelLimit = checkModelLimit(req.user!, model);
+    if (!modelLimit.ok) return reply.code(429).send({ error: modelLimitBlockMessage(model, modelLimit) });
 
     // Resolve + budget the files before taking any concurrency slot.
     const medias = [];

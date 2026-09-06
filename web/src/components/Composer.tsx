@@ -4,7 +4,7 @@ import {
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
-import { api, errMsg, uploadFile } from '../api';
+import { api, errMsg, uploadFile, fmtUsageLimit, fmtUsageLimitShort, usageLimitExhausted } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
 import { SortableList } from './SortableList';
@@ -504,7 +504,8 @@ export function Composer(props: ComposerProps) {
       m.nativeSearch ? 'Vertex Google 搜索' : '',
       m.reasoningLevels.length ? '可调推理强度' : '',
     ].filter(Boolean).join(' · ');
-    return `${m.displayName}\n模型 ID：${m.modelId}\n服务商：${m.providerName}\n能力：${capabilities}`;
+    const limit = m.usageLimit ? `\n用量：${fmtUsageLimit(m.usageLimit)}` : '';
+    return `${m.displayName}\n模型 ID：${m.modelId}\n服务商：${m.providerName}\n能力：${capabilities}${limit}`;
   }
 
   const modelRow = (m: ModelInfo, handle?: ReactNode) => (
@@ -522,6 +523,15 @@ export function Composer(props: ComposerProps) {
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-1 text-tx3">
+        {m.usageLimit && (
+          <span
+            className={`rounded-sm px-1 py-0.5 text-[9px] font-medium tabular-nums ${
+              usageLimitExhausted(m.usageLimit) ? 'bg-err/10 text-err' : 'bg-bg3'}`}
+            aria-label={fmtUsageLimit(m.usageLimit)}
+          >
+            {fmtUsageLimitShort(m.usageLimit)}
+          </span>
+        )}
         {m.imageGen && <ImageIcon size={12} aria-label="图像生成" />}
         {m.vision && !m.imageGen && <span className="rounded-sm bg-bg3 px-1 py-0.5 text-[9px] font-medium">视觉</span>}
         {m.tools && !m.imageGen && <Wrench size={11} aria-label="工具调用" />}

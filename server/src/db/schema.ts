@@ -93,6 +93,14 @@ export const models = sqliteTable('models', {
   // Mirrors mcpServers.accessMode: 'shared' shows the model to everyone,
   // 'restricted' only to explicitly granted users. Admins always see all.
   accessMode: text('access_mode').notNull().default('shared'),
+  // Per-account usage ceiling for THIS model, on top of the monthly quota:
+  // each ordinary user may make at most limitRequests user-initiated requests
+  // and/or consume limitTokens tokens with it per window. 'day' resets at
+  // local midnight, 'week' on Monday 00:00. null = no limit on that axis.
+  // Admins are exempt (see quota.ts).
+  limitPeriod: text('limit_period').notNull().default('day'), // 'day' | 'week'
+  limitRequests: integer('limit_requests'),
+  limitTokens: integer('limit_tokens'),
   createdAt: integer('created_at').notNull(),
 });
 

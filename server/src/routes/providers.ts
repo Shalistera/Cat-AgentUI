@@ -9,6 +9,7 @@ import {
   allConfiguredSecretValues, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
 } from '../secrets.js';
 import { accessUserIds, accessibleOnly, imageModelsAllowed, replaceModelAccess } from '../model-access.js';
+import { checkModelLimit, hasModelLimit, parseLimitPeriod } from '../quota.js';
 import { broadcast } from './events.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
@@ -52,6 +53,9 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
     defaultWebSearch: !!m.defaultWebSearch,
     inputPrice: m.inputPrice,
     outputPrice: m.outputPrice,
+    limitPeriod: parseLimitPeriod(m.limitPeriod),
+    limitRequests: m.limitRequests,
+    limitTokens: m.limitTokens,
   };
 }
 
@@ -194,11 +198,25 @@ const modelPatchSchema = z.object({
   // Per-1M-token prices in the site currency; null = unknown (no cost shown)
   inputPrice: z.number().min(0).max(1e6).nullish(),
   outputPrice: z.number().min(0).max(1e6).nullish(),
+  // Per-account allowance on this model per window; null/0 = no limit on that axis
+  limitPeriod: z.enum(['day', 'week']).optional(),
+  limitRequests: z.number().int().min(0).max(1e9).nullish(),
+  limitTokens: z.number().int().min(0).max(1e15).nullish(),
 });
 
 // Full desired ordering, first item on top. Ids that no longer exist are
 // skipped; rows not mentioned keep their old sortOrder.
 const orderSchema = z.object({ ids: z.array(z.string().min(1).max(64)).max(500) });
+
+/** The user-facing slice of a model-limit verdict; null when nothing applies. */
+function usageLimitFor(
+  user: { id: string; role: string },
+  m: { providerId: string; modelId: string; limitPeriod: string; limitRequests: number | null; limitTokens: number | null },
+) {
+  if (user.role === 'admin' || !hasModelLimit(m)) return null;
+  const v = checkModelLimit(user, m);
+  return { period: v.period, requests: v.requests, tokens: v.tokens };
+}
 
 function getProvider(id: string): ProviderRow | undefined {
   return db.select().from(schema.providers).where(eq(schema.providers.id, id)).get();
@@ -573,6 +591,9 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.accessMode !== undefined) patch.accessMode = d.accessMode;
     if (d.inputPrice !== undefined) patch.inputPrice = d.inputPrice;
     if (d.outputPrice !== undefined) patch.outputPrice = d.outputPrice;
+    if (d.limitPeriod !== undefined) patch.limitPeriod = d.limitPeriod;
+    if (d.limitRequests !== undefined) patch.limitRequests = d.limitRequests || null;
+    if (d.limitTokens !== undefined) patch.limitTokens = d.limitTokens || null;
 
     if (Object.keys(patch).length) {
       db.update(schema.models).set(patch).where(eq(schema.models.id, id)).run();
@@ -612,6 +633,9 @@ export async function providerRoutes(app: FastifyInstance) {
       isDefault: schema.models.isDefault,
       defaultWebSearch: schema.models.defaultWebSearch,
       accessMode: schema.models.accessMode,
+      limitPeriod: schema.models.limitPeriod,
+      limitRequests: schema.models.limitRequests,
+      limitTokens: schema.models.limitTokens,
       providerId: schema.providers.id,
       providerName: schema.providers.name,
       providerType: schema.providers.type,
@@ -646,6 +670,10 @@ export async function providerRoutes(app: FastifyInstance) {
       providerName: r.providerName,
       providerType: r.providerType,
       providerAvatarUrl: r.providerAvatar ? avatarUrl(r.providerId, r.providerAvatar) : null,
+      // This person's allowance on the model and how much of it is spent, so
+      // the picker can say "今日 3 / 10 次" before a request bounces. null =
+      // unlimited for them (no limit set, or they are an admin).
+      usageLimit: usageLimitFor(req.user!, r),
     }));
     // A user's own drag order (settings.modelOrder, model row ids) wins over
     // the admin order. The sort is stable, so models the user never ranked —

@@ -202,6 +202,7 @@ export default function Users() {
               <Th className="text-right">本月 / 配额</Th>
               <Th className="text-right">请求</Th>
               <Th className="text-right">图片</Th>
+              <Th className="text-right" title="已保存的对话数(不含临时对话),点击查看">对话</Th>
               <Th>注册时间</Th>
               <Th className="text-right">操作</Th>
             </tr>
@@ -240,6 +241,11 @@ export default function Users() {
                 </Td>
                 <Td className="text-right tabular-nums">{u.usage.requests.toLocaleString()}</Td>
                 <Td className="text-right tabular-nums">{u.usage.images.toLocaleString()}</Td>
+                <Td className="text-right tabular-nums">
+                  <Link to={`/admin/users/${u.id}`} title="查看该用户的对话记录" className="hover:underline">
+                    {u.chats.toLocaleString()}
+                  </Link>
+                </Td>
                 <Td className="tabular-nums">{fmtDate(u.createdAt)}</Td>
                 <Td>
                   <div className="flex items-center justify-end gap-0.5">

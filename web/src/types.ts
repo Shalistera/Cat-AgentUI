@@ -152,6 +152,28 @@ export interface ChatDetail extends ChatSummary {
   currentLeafId: string | null;
 }
 
+/** One row of the admin's per-user chat list. */
+export interface AdminChatSummary extends ChatSummary {
+  modelName: string | null;
+  projectName: string | null;
+  messageCount: number;
+}
+
+export interface AdminChatOwner { id: string; username: string; displayName: string | null }
+
+export interface AdminChatList {
+  user: AdminChatOwner;
+  total: number;
+  chats: AdminChatSummary[];
+}
+
+/** /api/admin/chats/:id — the whole tree, read-only. */
+export interface AdminChatDetail {
+  user: AdminChatOwner;
+  chat: AdminChatSummary & { systemPrompt: string | null; currentLeafId: string | null };
+  messages: Message[];
+}
+
 /** One row of /api/search — a chat plus why it matched. */
 export interface SearchResult {
   id: string; title: string; pinned: boolean; archived: boolean;
@@ -173,6 +195,17 @@ export interface ModelInfo {
   providerAvatarUrl: string | null;
   /** Ordered reasoning levels, weakest first. Empty = no reasoning control. */
   reasoningLevels: ReasoningLevel[];
+  /** My allowance on this model this day/week; null = unlimited for me. */
+  usageLimit: UsageLimit | null;
+}
+
+export type LimitPeriod = 'day' | 'week';
+
+/** Per-account model allowance and how much of it is spent (see quota.ts). */
+export interface UsageLimit {
+  period: LimitPeriod;
+  requests: { used: number; limit: number } | null;
+  tokens: { used: number; limit: number } | null;
 }
 
 export interface McpServerInfo {
@@ -281,6 +314,8 @@ export interface AdminUser {
   monthlyTokenQuota: number | null;
   /** Live (unexpired) login sessions right now. */
   activeSessions: number;
+  /** Stored conversations (临时对话 excluded), viewable in the admin console. */
+  chats: number;
   usage: { totalTokens: number; requests: number; images: number; monthTokens: number };
 }
 
@@ -300,6 +335,10 @@ export interface AdminModel {
   /** 每 100 万 token 的单价(站点货币);null = 未配置,不计成本。 */
   inputPrice: number | null;
   outputPrice: number | null;
+  /** 每人在此模型上的周期上限;null = 该项不限。管理员不受限。 */
+  limitPeriod: LimitPeriod;
+  limitRequests: number | null;
+  limitTokens: number | null;
   reasoning: {
     mode: ReasoningMode;
     /** What the model offers right now, under the current mode. */

@@ -13,7 +13,7 @@ import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
-import { checkQuota, quotaBlockMessage } from '../quota.js';
+import { checkModelLimit, checkQuota, modelLimitBlockMessage, quotaBlockMessage } from '../quota.js';
 import { tryAcquireChatTurn } from '../admission.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
@@ -158,11 +158,20 @@ export async function translateRoutes(app: FastifyInstance) {
     const { text, source, target, mode, level, scene } = body.data;
     const userId = req.user!.id;
 
-    const chain = resolveChain(mode === 'fast' ? TRANSLATE_FAST_KEY : TRANSLATE_THINK_KEY);
-    if (!chain.length) return reply.code(400).send({ error: '管理员尚未为该模式配置翻译模型' });
+    const configured = resolveChain(mode === 'fast' ? TRANSLATE_FAST_KEY : TRANSLATE_THINK_KEY);
+    if (!configured.length) return reply.code(400).send({ error: '管理员尚未为该模式配置翻译模型' });
 
     const quota = checkQuota(userId);
     if (!quota.ok) return reply.code(429).send({ error: quotaBlockMessage(quota) });
+    // A model this person has exhausted for the day simply drops out of the
+    // failover chain; only when every rung is gone does the request bounce.
+    const chain = configured.filter(({ models: m }) => checkModelLimit(req.user!, m).ok);
+    if (!chain.length) {
+      const first = configured[0].models;
+      return reply.code(429).send({
+        error: modelLimitBlockMessage(first, checkModelLimit(req.user!, first), '请稍后再试'),
+      });
+    }
 
     const turnLease = tryAcquireChatTurn(userId, `translate:${newId()}`);
     if (!turnLease) return reply.code(429).send({ error: '并发任务过多,请稍后再试' });

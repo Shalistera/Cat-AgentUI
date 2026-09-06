@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, asc, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, sql, type SQL } from 'drizzle-orm';
 import { db, schema, now, getSetting, setSetting } from '../db/index.js';
 import { hashPassword, newId } from '../crypto.js';
 import { requireAdmin, requireAuth } from '../auth.js';
@@ -19,7 +19,11 @@ import {
   runBackup, updateBackupSettings,
 } from '../backup.js';
 import { broadcast } from './events.js';
-import { FOLLOWUP_ENABLED_KEY, FOLLOWUP_MODEL_KEY, TITLE_MODEL_KEY } from './chats.js';
+import {
+  FOLLOWUP_ENABLED_KEY, FOLLOWUP_MODEL_KEY, TITLE_MODEL_KEY,
+  allChatMessages, chatSummary, messageDto, resolveLeafId,
+} from './chats.js';
+import { escapeLike, textPartsOf } from './search.js';
 import { removeOrphanFiles, removeUnreferencedUploads, storageOverview, unlinkStoredFiles } from '../storage.js';
 import { TRANSLATE_CHAIN_MAX, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY } from './translate.js';
 
@@ -190,11 +194,17 @@ export async function adminRoutes(app: FastifyInstance) {
       .from(schema.sessions).where(gte(schema.sessions.expiresAt, now()))
       .groupBy(schema.sessions.userId).all();
     const sessionMap = new Map(sessionRows.map((r) => [r.userId, r.n]));
+    // What the person themselves would count as history — 临时对话 excluded.
+    const chatRows = db.select({ userId: schema.chats.userId, n: sql<number>`count(*)` })
+      .from(schema.chats).where(eq(schema.chats.temporary, 0))
+      .groupBy(schema.chats.userId).all();
+    const chatMap = new Map(chatRows.map((r) => [r.userId, r.n]));
     return users.map((u) => {
       const usage = usageMap.get(u.id);
       return {
         ...adminUser(u),
         activeSessions: sessionMap.get(u.id) ?? 0,
+        chats: chatMap.get(u.id) ?? 0,
         usage: {
           totalTokens: usage?.totalTokens ?? 0,
           requests: usage?.requests ?? 0,
@@ -305,6 +315,120 @@ export async function adminRoutes(app: FastifyInstance) {
       req.log.warn({ err }, 'failed to remove some deleted-user media files');
     }
     return { ok: true };
+  });
+
+  // --- admin: 查看用户对话 (read-only) ---
+  // Open WebUI-style oversight: an admin can list any account's chats and
+  // read them, including 归档 and 临时 ones while they still exist. Nothing
+  // here writes — no branch switch, no bookmark, no un-archive — and every
+  // read of a conversation body is logged with the admin's identity.
+
+  const adminChatsQuery = z.object({
+    q: z.string().max(200).optional(),
+    offset: z.coerce.number().int().min(0).max(100_000).default(0),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+  });
+
+  /** Owner + names the list and viewer both show. */
+  function chatOwner(userId: string) {
+    return db.select({
+      id: schema.users.id, username: schema.users.username, displayName: schema.users.displayName,
+    }).from(schema.users).where(eq(schema.users.id, userId)).get() ?? null;
+  }
+
+  function chatNames(rows: { modelId: string | null; projectId: string | null }[]) {
+    const modelIds = [...new Set(rows.map((c) => c.modelId).filter((v): v is string => !!v))];
+    const projectIds = [...new Set(rows.map((c) => c.projectId).filter((v): v is string => !!v))];
+    const models = new Map(modelIds.length
+      ? db.select({ id: schema.models.id, modelId: schema.models.modelId, displayName: schema.models.displayName })
+        .from(schema.models).where(inArray(schema.models.id, modelIds)).all()
+        .map((m) => [m.id, m.displayName || m.modelId])
+      : []);
+    const projects = new Map(projectIds.length
+      ? db.select({ id: schema.projects.id, name: schema.projects.name })
+        .from(schema.projects).where(inArray(schema.projects.id, projectIds)).all()
+        .map((p) => [p.id, p.name])
+      : []);
+    return {
+      modelName: (c: { modelId: string | null }) => (c.modelId ? models.get(c.modelId) ?? null : null),
+      projectName: (c: { projectId: string | null }) => (c.projectId ? projects.get(c.projectId) ?? null : null),
+    };
+  }
+
+  app.get('/api/admin/users/:id/chats', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const query = adminChatsQuery.safeParse(req.query ?? {});
+    if (!query.success) return reply.code(400).send({ error: '参数错误' });
+    const user = chatOwner(id);
+    if (!user) return reply.code(404).send({ error: '用户不存在' });
+
+    let rows = db.select().from(schema.chats).where(eq(schema.chats.userId, id)).all();
+    const q = (query.data.q ?? '').trim();
+    const qLower = q.toLowerCase();
+    if (qLower) {
+      // Same substring approach as /api/search: title, or any text part of
+      // any message (SQL LIKE prefilter on the JSON, exact check in JS).
+      const hits = new Set(rows.filter((c) => (c.title || '').toLowerCase().includes(qLower)).map((c) => c.id));
+      const chunk = q.split(/["\\]/).reduce((a, b) => (b.length > a.length ? b : a), '');
+      const pattern = `%${escapeLike(chunk)}%`;
+      const msgRows = db.select({ chatId: schema.messages.chatId, parts: schema.messages.parts })
+        .from(schema.messages)
+        .innerJoin(schema.chats, eq(schema.messages.chatId, schema.chats.id))
+        .where(and(eq(schema.chats.userId, id), sql`${schema.messages.parts} LIKE ${pattern} ESCAPE '\\'`))
+        .all();
+      for (const m of msgRows) {
+        if (hits.has(m.chatId)) continue;
+        if (textPartsOf(m.parts).join('\n').toLowerCase().includes(qLower)) hits.add(m.chatId);
+      }
+      rows = rows.filter((c) => hits.has(c.id));
+    }
+    rows.sort((a, b) => b.updatedAt - a.updatedAt);
+    const total = rows.length;
+    const page = rows.slice(query.data.offset, query.data.offset + query.data.limit);
+
+    const counts = new Map(page.length
+      ? db.select({ chatId: schema.messages.chatId, n: sql<number>`count(*)` })
+        .from(schema.messages).where(inArray(schema.messages.chatId, page.map((c) => c.id)))
+        .groupBy(schema.messages.chatId).all()
+        .map((r) => [r.chatId, r.n])
+      : []);
+    const names = chatNames(page);
+    return {
+      user,
+      total,
+      chats: page.map((c) => ({
+        ...chatSummary(c),
+        modelName: names.modelName(c),
+        projectName: names.projectName(c),
+        messageCount: counts.get(c.id) ?? 0,
+      })),
+    };
+  });
+
+  app.get('/api/admin/chats/:chatId', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { chatId } = req.params as { chatId: string };
+    const c = db.select().from(schema.chats).where(eq(schema.chats.id, chatId)).get();
+    if (!c) return reply.code(404).send({ error: '对话不存在' });
+    const user = chatOwner(c.userId);
+    if (!user) return reply.code(404).send({ error: '对话不存在' });
+    const msgs = allChatMessages(c.id);
+    const names = chatNames([c]);
+    req.log.info({ admin: req.user!.username, owner: user.username, chatId: c.id }, 'admin viewed a user chat');
+    return {
+      user,
+      chat: {
+        ...chatSummary(c),
+        modelName: names.modelName(c),
+        projectName: names.projectName(c),
+        messageCount: msgs.length,
+        systemPrompt: c.systemPrompt,
+        currentLeafId: resolveLeafId(msgs, c.currentLeafId),
+      },
+      // Every branch, like the owner's own GET — the viewer walks the tree.
+      messages: msgs.map((m) => messageDto(m)),
+    };
   });
 
   app.get('/api/admin/usage', async (req, reply) => {

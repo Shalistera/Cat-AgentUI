@@ -42,7 +42,7 @@ function parseQuery(raw: string): ParsedQuery {
   return out;
 }
 
-function escapeLike(s: string): string {
+export function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, '\\$&');
 }
 
@@ -52,7 +52,7 @@ function makeSnippet(text: string, idx: number, matchLen: number): string {
   return `${start > 0 ? '…' : ''}${text.slice(start, end).replace(/\s+/g, ' ').trim()}${end < text.length ? '…' : ''}`;
 }
 
-function textPartsOf(partsJson: string): string[] {
+export function textPartsOf(partsJson: string): string[] {
   try {
     const parts = JSON.parse(partsJson) as { type?: string; text?: string }[];
     return Array.isArray(parts)

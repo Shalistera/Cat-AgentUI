@@ -321,6 +321,81 @@ async function run() {
     'provider error secret not persisted');
   await jsonReq('DELETE', `/api/chats/${echoChat.json.chat.id}`, undefined, userCookie);
 
+  // Per-model allowance (models.limit_*): the admin caps mock-gpt per person
+  // per day/week; the turn past the cap bounces with 429, admins are exempt,
+  // and /api/models tells the person how much is spent. Cleared afterwards so
+  // later scenarios keep an unlimited model.
+  const capProbe = await jsonReq('PATCH', `/api/admin/models/${textModel.id}`, {
+    limitPeriod: 'day', limitRequests: 1_000_000, limitTokens: null,
+  }, adminCookie);
+  assert(capProbe.status === 200 && capProbe.json.limitRequests === 1_000_000
+    && capProbe.json.limitPeriod === 'day', 'set model request cap');
+  const pickerBefore = await jsonReq('GET', '/api/models', undefined, userCookie);
+  const spent = pickerBefore.json.find((m) => m.id === textModel.id)?.usageLimit;
+  assert(spent && spent.period === 'day' && spent.requests && spent.tokens === null,
+    'picker reports the allowance');
+  await jsonReq('PATCH', `/api/admin/models/${textModel.id}`, {
+    limitRequests: spent.requests.used + 1,
+  }, adminCookie);
+  const capChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, userCookie);
+  const capChatId = capChat.json.chat.id;
+  const withinCap = await stream(capChatId, [{ type: 'text', text: 'hello' }], textModel.id, userCookie);
+  assert(withinCap.status === 200, 'turn within the model request cap');
+  const overCap = await stream(capChatId, [{ type: 'text', text: 'hello again' }], textModel.id, userCookie);
+  assert(overCap.status === 429 && overCap.text.includes('使用次数已达上限'),
+    'turn over the model request cap');
+  const pickerAfter = await jsonReq('GET', '/api/models', undefined, userCookie);
+  const spentAfter = pickerAfter.json.find((m) => m.id === textModel.id)?.usageLimit;
+  assert(spentAfter && spentAfter.requests.used === spentAfter.requests.limit,
+    'picker reports the exhausted allowance');
+  const adminCapChat = await jsonReq('POST', '/api/chats', { modelId: textModel.id }, adminCookie);
+  const adminTurn = await stream(adminCapChat.json.chat.id, [{ type: 'text', text: 'hello' }],
+    textModel.id, adminCookie);
+  assert(adminTurn.status === 200, 'admins are exempt from model caps');
+  const adminPicker = await jsonReq('GET', '/api/models', undefined, adminCookie);
+  assert(adminPicker.json.find((m) => m.id === textModel.id)?.usageLimit === null,
+    'admin picker shows no allowance');
+  await jsonReq('DELETE', `/api/chats/${adminCapChat.json.chat.id}`, undefined, adminCookie);
+  const tokenCap = await jsonReq('PATCH', `/api/admin/models/${textModel.id}`, {
+    limitPeriod: 'week', limitRequests: null, limitTokens: 1,
+  }, adminCookie);
+  assert(tokenCap.status === 200 && tokenCap.json.limitRequests === null
+    && tokenCap.json.limitTokens === 1 && tokenCap.json.limitPeriod === 'week',
+  'switch to a weekly token cap');
+  const overTokens = await stream(capChatId, [{ type: 'text', text: 'hello' }], textModel.id, userCookie);
+  assert(overTokens.status === 429 && overTokens.text.includes('本周 token 用量已达上限'),
+    'turn over the model token cap');
+  const clearCap = await jsonReq('PATCH', `/api/admin/models/${textModel.id}`, {
+    limitPeriod: 'day', limitRequests: 0, limitTokens: 0,
+  }, adminCookie);
+  assert(clearCap.status === 200 && clearCap.json.limitRequests === null
+    && clearCap.json.limitTokens === null, 'clear model caps');
+  const pickerCleared = await jsonReq('GET', '/api/models', undefined, userCookie);
+  assert(pickerCleared.json.find((m) => m.id === textModel.id)?.usageLimit === null,
+    'picker drops the cleared allowance');
+
+  // Admin oversight of user chats: the admin lists and reads alice's chat
+  // (every branch, read-only); alice herself gets 403 on the admin routes.
+  const adminList = await jsonReq('GET', `/api/admin/users/${userId}/chats`, undefined, adminCookie);
+  assert(adminList.status === 200 && adminList.json.user.username === 'alice'
+    && adminList.json.chats.some((c) => c.id === capChatId && c.messageCount >= 2),
+  'admin lists a user\'s chats');
+  const adminSearch = await jsonReq('GET', `/api/admin/users/${userId}/chats?q=hello`, undefined, adminCookie);
+  assert(adminSearch.status === 200 && adminSearch.json.chats.some((c) => c.id === capChatId),
+    'admin chat search matches message text');
+  const adminMiss = await jsonReq('GET', `/api/admin/users/${userId}/chats?q=zzz_no_such_text`, undefined, adminCookie);
+  assert(adminMiss.status === 200 && adminMiss.json.chats.length === 0, 'admin chat search misses cleanly');
+  const adminChat = await jsonReq('GET', `/api/admin/chats/${capChatId}`, undefined, adminCookie);
+  assert(adminChat.status === 200 && adminChat.json.user.id === userId
+    && adminChat.json.messages.length >= 2 && adminChat.json.chat.currentLeafId,
+  'admin reads a user chat');
+  assert(!secretCanaries.some((secret) => JSON.stringify(adminChat.json).includes(secret)),
+    'admin chat view carries no provider secrets');
+  const userOnAdminList = await jsonReq('GET', `/api/admin/users/${userId}/chats`, undefined, userCookie);
+  const userOnAdminChat = await jsonReq('GET', `/api/admin/chats/${capChatId}`, undefined, userCookie);
+  assert(userOnAdminList.status === 403 && userOnAdminChat.status === 403, 'admin chat routes need admin');
+  await jsonReq('DELETE', `/api/chats/${capChatId}`, undefined, userCookie);
+
   // A remote MCP handshake can also reflect its Authorization header.
   const remoteMcp = await jsonReq('POST', '/api/admin/mcp', {
     name: 'remote-secret-probe', transport: 'http',
@@ -595,6 +670,8 @@ async function run() {
     attachmentBudget: 'pass',
     attachmentCleanup: 'pass',
     storageQuota: 'pass',
+    modelUsageLimit: 'pass',
+    adminChatOversight: 'pass',
     imageConcurrency: 'pass',
     passwordQueue: 'pass',
     healthDuringEightScryptsMs: Number(healthMs.toFixed(1)),

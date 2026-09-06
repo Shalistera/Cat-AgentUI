@@ -1,4 +1,4 @@
-import type { StreamHandlers } from './types';
+import type { StreamHandlers, UsageLimit } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -182,6 +182,31 @@ export function fmtTokens(n: number | null | undefined): string {
   if (n < 10_000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+/** Every axis of a per-model allowance is spent → the next request bounces. */
+export function usageLimitExhausted(l: UsageLimit): boolean {
+  return (!!l.requests && l.requests.used >= l.requests.limit)
+    || (!!l.tokens && l.tokens.used >= l.tokens.limit);
+}
+
+/** "今日已用 3 / 10 次 · 1.2k / 50.0k tokens" for the picker and new-chat page. */
+export function fmtUsageLimit(l: UsageLimit): string {
+  const tok = (n: number) => (n === 0 ? '0' : fmtTokens(n));
+  const parts: string[] = [];
+  if (l.requests) parts.push(`${l.requests.used} / ${l.requests.limit} 次`);
+  if (l.tokens) parts.push(`${tok(l.tokens.used)} / ${tok(l.tokens.limit)} tokens`);
+  return `${l.period === 'week' ? '本周' : '今日'}已用 ${parts.join(' · ')}`;
+}
+
+/** The shortest honest reading: the exhausted axis if any, else the first one. */
+export function fmtUsageLimitShort(l: UsageLimit): string {
+  const tok = (n: number) => (n === 0 ? '0' : fmtTokens(n));
+  const reqOut = !!l.requests && l.requests.used >= l.requests.limit;
+  const tokOut = !!l.tokens && l.tokens.used >= l.tokens.limit;
+  if (l.requests && (reqOut || !tokOut)) return `${l.requests.used}/${l.requests.limit} 次`;
+  if (l.tokens) return `${tok(l.tokens.used)}/${tok(l.tokens.limit)}`;
+  return '';
 }
 
 /** Money from the usage endpoints — precision follows magnitude. */
