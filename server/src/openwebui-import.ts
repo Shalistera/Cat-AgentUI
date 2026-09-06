@@ -16,7 +16,7 @@ import Database from 'better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { db, schema, now } from './db/index.js';
 import { config } from './config.js';
-import { DOCX_MIME, detectImageMime } from './storage.js';
+import { DOCX_MIME, detectImageMime, isTextDocMime } from './storage.js';
 import type { MessagePart } from './types.js';
 
 export interface OwuiImportOptions {
@@ -32,7 +32,13 @@ export interface OwuiImportReport {
   users: { migrated: number; merged: number; renamed: string[]; noPassword: string[] };
   chats: { migrated: number; skipped: number; existing: number };
   messages: { migrated: number };
-  files: { copied: number; inlined: number; missing: string[]; nonImage: string[] };
+  files: {
+    copied: number; inlined: number; missing: string[];
+    /** Binary documents that came with Open WebUI's text extraction (readable by models). */
+    withText: number;
+    /** Attachments kept for download only — no bytes a model can read and no text rendition. */
+    unreadable: string[];
+  };
   /** First few per-chat failures (chat skipped, run continued). */
   errors: string[];
   dryRun: boolean;
@@ -53,12 +59,56 @@ interface OwuiChat {
   archived: number | null; pinned: number | null;
 }
 
-interface OwuiFileRow { id: string; filename: string | null; path: string | null; meta: string | null }
+interface OwuiFileRow { id: string; filename: string | null; path: string | null; meta: string | null; data: string | null }
+
+/** Longest text rendition we keep per document — the prompt cap is far lower. */
+const EXTRACTED_TEXT_MAX = 500_000;
+
+/** Open WebUI's own extraction of a document (`file.data.content`), if it has anything in it. */
+function contentOf(data: unknown): string | null {
+  const content = data && typeof data === 'object' ? (data as { content?: unknown }).content : undefined;
+  if (typeof content !== 'string' || !content.trim()) return null;
+  return content.length > EXTRACTED_TEXT_MAX ? content.slice(0, EXTRACTED_TEXT_MAX) : content;
+}
+
+/** One retrieval citation, whichever release wrote it. */
+interface SourceRef { fileId: string | null; name: string; url: string | null; text: string | null }
+
+function parseSources(raw: unknown): SourceRef[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SourceRef[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const s = (item as { source?: Record<string, unknown> }).source ?? {};
+    const file = (s.file && typeof s.file === 'object' ? s.file : {}) as Record<string, unknown>;
+    const fileMeta = (file.meta && typeof file.meta === 'object' ? file.meta : {}) as Record<string, unknown>;
+    const meta0 = (Array.isArray((item as { metadata?: unknown }).metadata)
+      ? ((item as { metadata: unknown[] }).metadata[0] ?? {}) : {}) as Record<string, unknown>;
+    const fileId = [file.id, s.id, meta0.file_id].find((v) => typeof v === 'string' && v) as string | undefined;
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    // Only a real web address becomes a link; Open WebUI also writes its own
+    // relative file URLs (/api/v1/files/…) here, which mean nothing to us.
+    const http = (v: unknown) => { const t = str(v); return t && /^https?:\/\//i.test(t) ? t : null; };
+    const url = http(s.url) ?? http(s.name) ?? http(meta0.source);
+    const name = str(file.filename) ?? str(fileMeta.name) ?? str(s.name) ?? str(meta0.name)
+      ?? str(meta0.source) ?? url ?? (fileId ? `文件 ${fileId.slice(0, 8)}` : null);
+    if (!name) continue;
+    // Open WebUI numbers [1] [2] after merging chunks of the same source.
+    const key = fileId ?? url ?? name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ fileId: fileId ?? null, name, url, text: contentOf(file.data) });
+  }
+  return out;
+}
 
 interface OwuiMessage {
   id?: string; role?: string; content?: unknown; timestamp?: number;
   parentId?: string | null; childrenIds?: string[];
   model?: string; modelName?: string; models?: string[]; files?: OwuiMsgFile[];
+  /** Retrieval citations of a reply (`citations` in older releases). */
+  sources?: unknown[]; citations?: unknown[];
   output?: OwuiOutputItem[];
   usage?: Record<string, unknown>; info?: Record<string, unknown>;
 }
@@ -204,30 +254,75 @@ interface ResolvedFile {
   data: Buffer;
   origName: string | null;
   inlined: boolean;
+  /** Open WebUI's text extraction of this document, when it kept one. */
+  text: string | null;
 }
 
-function classifyAttachment(file: ResolvedFile): {
+interface StoredAttachment {
   kind: 'image' | 'file'; mime: string; ext: string;
-} | null {
+  /** Bytes actually written — text files may have been transcoded to UTF-8. */
+  data: Buffer;
+}
+
+const TEXT_EXTS = new Set(['txt', 'md', 'csv', 'tsv', 'log', 'json', 'xml', 'yaml', 'yml', 'ini', 'srt']);
+
+function nameExtOf(name: string | null): string {
+  const ext = (name ?? '').split('.').pop()?.toLowerCase() ?? '';
+  return /^[a-z0-9]{1,8}$/.test(ext) ? ext : '';
+}
+
+/** Text as UTF-8 if these bytes are text in any encoding we can vouch for. */
+function decodeTextBytes(data: Buffer, nameExt: string): Buffer | null {
+  // Windows Notepad's UTF-16 with BOM
+  if (data.length >= 2 && ((data[0] === 0xff && data[1] === 0xfe) || (data[0] === 0xfe && data[1] === 0xff))) {
+    const body = Buffer.from(data.subarray(2));
+    if (data[0] === 0xfe) body.swap16();
+    return Buffer.from(body.toString('utf16le'), 'utf8');
+  }
+  if (data.includes(0)) return null;
+  try { new TextDecoder('utf-8', { fatal: true }).decode(data); return data; } catch { /* not UTF-8 */ }
+  // GB18030 (the usual 中文 Windows txt/csv) — only for names that say "text",
+  // never for an unknown binary, which would decode into nonsense.
+  if (!TEXT_EXTS.has(nameExt)) return null;
+  try {
+    return Buffer.from(new TextDecoder('gb18030', { fatal: true }).decode(data), 'utf8');
+  } catch { return null; }
+}
+
+function classifyAttachment(file: ResolvedFile): StoredAttachment | null {
   const imageMime = detectImageMime(file.data);
-  if (imageMime) return { kind: 'image', mime: imageMime, ext: EXT_BY_MIME[imageMime] };
+  if (imageMime) return { kind: 'image', mime: imageMime, ext: EXT_BY_MIME[imageMime], data: file.data };
 
   if (file.data.length >= 5 && file.data.subarray(0, 5).toString('ascii') === '%PDF-') {
-    return { kind: 'file', mime: 'application/pdf', ext: 'pdf' };
+    return { kind: 'file', mime: 'application/pdf', ext: 'pdf', data: file.data };
   }
 
-  const nameExt = (file.origName ?? '').split('.').pop()?.toLowerCase() ?? '';
+  const nameExt = nameExtOf(file.origName);
   const zip = file.data.length >= 4 && file.data[0] === 0x50 && file.data[1] === 0x4b
     && (file.data[2] === 0x03 || file.data[2] === 0x05);
-  if (zip && nameExt === 'docx') return { kind: 'file', mime: DOCX_MIME, ext: 'docx' };
+  if (zip && nameExt === 'docx') return { kind: 'file', mime: DOCX_MIME, ext: 'docx', data: file.data };
 
-  if (file.data.includes(0)) return null;
-  try { new TextDecoder('utf-8', { fatal: true }).decode(file.data); } catch { return null; }
+  const text = decodeTextBytes(file.data, nameExt);
+  if (!text) return null;
   const mime = file.mime === 'application/json' ? 'application/json'
     : file.mime.startsWith('text/') ? file.mime : 'text/plain';
-  const ext = /^[a-z0-9]{1,8}$/.test(nameExt)
-    ? nameExt : mime === 'application/json' ? 'json' : 'txt';
-  return { kind: 'file', mime, ext };
+  return { kind: 'file', mime, ext: nameExt || (mime === 'application/json' ? 'json' : 'txt'), data: text };
+}
+
+/**
+ * Anything classifyAttachment turned down: keep the original bytes so the
+ * person can still download their .doc/.xlsx/.mov, and hand the model Open
+ * WebUI's text extraction when there is one. A text-typed file we could not
+ * decode is replaced by that extraction outright — garbage bytes help nobody.
+ */
+function fallbackAttachment(file: ResolvedFile): StoredAttachment {
+  const nameExt = nameExtOf(file.origName);
+  const textish = file.mime.startsWith('text/') || file.mime === 'application/json' || TEXT_EXTS.has(nameExt);
+  if (textish && file.text) {
+    return { kind: 'file', mime: 'text/plain', ext: nameExt || 'txt', data: Buffer.from(file.text, 'utf8') };
+  }
+  const mime = /^[\w.+-]+\/[\w.+-]+$/.test(file.mime) ? file.mime : 'application/octet-stream';
+  return { kind: 'file', mime, ext: nameExt || 'bin', data: file.data };
 }
 
 // ---------- main ----------
@@ -254,7 +349,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
       users: { migrated: 0, merged: 0, renamed: [], noPassword: [] },
       chats: { migrated: 0, skipped: 0, existing: 0 },
       messages: { migrated: 0 },
-      files: { copied: 0, inlined: 0, missing: [], nonImage: [] },
+      files: { copied: 0, inlined: 0, missing: [], withText: 0, unreadable: [] },
       errors: [],
       dryRun,
     };
@@ -347,7 +442,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
     // -- attachment resolution --
     const fileRowById = tableExists('file')
       ? (() => {
-          const stmt = src.prepare(`SELECT id, filename, path, meta FROM file WHERE id = ?`);
+          const stmt = src.prepare(`SELECT id, filename, path, meta, data FROM file WHERE id = ?`);
           return (id: string) => stmt.get(id) as OwuiFileRow | undefined;
         })()
       : () => undefined;
@@ -356,19 +451,24 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
     //   data: URL (inline base64) → decode
     //   /api/v1/files/{id}/content → file table row → physical file under dataDir
     //   /cache/... (image generations) → dataDir/cache/...
-    function resolveFile(f: OwuiMsgFile): ResolvedFile | null {
+    // Text extraction can live in three places: embedded in the message's
+    // file object, in the file table's data column, or (for a citation) in the
+    // source itself. Whichever is found first wins; all are the same text.
+    function resolveFile(f: OwuiMsgFile, sourceText: string | null = null): ResolvedFile | null {
       const embeddedName = f.name ?? f.file?.meta?.name ?? f.file?.filename ?? null;
       const embeddedMime = f.content_type ?? f.file?.meta?.content_type ?? 'application/octet-stream';
+      let rowText: string | null = null;
+      const textOf = () => contentOf(f.file?.data) ?? rowText ?? sourceText;
       const embeddedText = (): ResolvedFile | null => {
-        const content = f.file?.data?.content;
-        if (typeof content !== 'string') return null;
+        const content = textOf();
+        if (!content) return null;
         const alreadyText = embeddedMime.startsWith('text/') || embeddedMime === 'application/json';
         const origName = alreadyText
           ? embeddedName
           : `${embeddedName || '附件'}.extracted.txt`;
         return {
           mime: alreadyText ? embeddedMime : 'text/plain',
-          data: Buffer.from(content, 'utf8'), origName, inlined: true,
+          data: Buffer.from(content, 'utf8'), origName, inlined: true, text: null,
         };
       };
       const embeddedPath = (): ResolvedFile | null => {
@@ -384,7 +484,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
             if (p && fs.existsSync(p)) {
               return {
                 mime: embeddedMime, data: fs.readFileSync(p),
-                origName: embeddedName, inlined: false,
+                origName: embeddedName, inlined: false, text: textOf(),
               };
             }
           } catch { /* try next */ }
@@ -398,7 +498,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
         if (!m) return null;
         const mime = m[1] || 'application/octet-stream';
         const data = m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]), 'utf8');
-        return { mime, data, origName: embeddedName, inlined: true };
+        return { mime, data, origName: embeddedName, inlined: true, text: textOf() };
       }
       const fileId = f.id ?? f.file?.id ?? /\/api\/v1\/files\/([^/]+)/.exec(url)?.[1];
       if (fileId) {
@@ -406,6 +506,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
         if (row) {
           let meta: { content_type?: string; name?: string } = {};
           try { meta = JSON.parse(row.meta ?? '{}'); } catch { /* ignore */ }
+          try { rowText = contentOf(JSON.parse(row.data ?? '{}')); } catch { /* ignore */ }
           const candidates: string[] = [];
           if (row.path) {
             candidates.push(row.path);
@@ -425,6 +526,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
                   data: fs.readFileSync(p),
                   origName: meta.name ?? row.filename ?? null,
                   inlined: false,
+                  text: textOf(),
                 };
               }
             } catch { /* try next */ }
@@ -444,7 +546,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
         if (fs.existsSync(p)) {
           const ext = path.extname(p).toLowerCase().replace('.', '');
           const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext || 'png'}`;
-          return { mime, data: fs.readFileSync(p), origName: path.basename(p), inlined: false };
+          return { mime, data: fs.readFileSync(p), origName: path.basename(p), inlined: false, text: null };
         }
         report.files.missing.push(url);
         return null;
@@ -598,6 +700,9 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
       const uploadRows: (typeof schema.uploads.$inferInsert)[] = [];
       const writtenFiles: string[] = [];
       const addedUploadIds: string[] = [];
+      // Open WebUI file ids already hung on a message of this branch (citations
+      // may name a file no message attached).
+      const attachedFileIds = new Set<string>();
       const added = { messages: 0, copied: 0, inlined: 0 };
 
       try {
@@ -610,20 +715,24 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
 
           const parts: MessagePart[] = [];
 
-          // attachments (user uploads / generated images) go first, like our UI does.
-          // File bytes are written to disk immediately and never accumulated.
-          for (const f of Array.isArray(m.files) ? m.files : []) {
-            const resolved = resolveFile(f);
-            if (!resolved) {
-              if (f.name || f.file?.filename) pushText(parts, 'text', `(附件: ${f.name ?? f.file?.filename})\n`);
-              continue;
+          // Write one resolved file to disk + the uploads row, return the part
+          // that references it. File bytes never accumulate in memory.
+          const storeAttachment = (f: OwuiMsgFile, resolved: ResolvedFile): MessagePart => {
+            let attachment = classifyAttachment(resolved);
+            let extractedText: string | null = null;
+            if (attachment) {
+              // A PDF/docx keeps its bytes; the text rendition rides along so
+              // every model can read it (docx is parsed natively anyway).
+              if (attachment.kind === 'file' && !isTextDocMime(attachment.mime) && resolved.text) {
+                extractedText = resolved.text;
+              }
+            } else {
+              attachment = fallbackAttachment(resolved);
+              const converted = attachment.data !== resolved.data; // text-typed file replaced by its extraction
+              if (!converted && resolved.text) extractedText = resolved.text;
+              if (!converted && !resolved.text) report.files.unreadable.push(resolved.origName ?? resolved.mime);
             }
-            const attachment = classifyAttachment(resolved);
-            if (!attachment) {
-              report.files.nonImage.push(resolved.origName ?? resolved.mime);
-              pushText(parts, 'text', `(附件: ${resolved.origName ?? '文件'},未随迁移导入)\n`);
-              continue;
-            }
+            if (extractedText) report.files.withText++;
             let uploadId = f.id ?? f.file?.id ?? crypto.randomUUID();
             if (existingUploadIds.has(uploadId) && uploadOwner.get(uploadId) !== catUserId) {
               uploadId = crypto.randomUUID();
@@ -631,7 +740,7 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
             if (!existingUploadIds.has(uploadId)) {
               const filename = `${uploadId}.${attachment.ext}`;
               if (!dryRun) {
-                fs.writeFileSync(path.join(uploadsDir, filename), resolved.data);
+                fs.writeFileSync(path.join(uploadsDir, filename), attachment.data);
                 writtenFiles.push(filename);
               }
               uploadRows.push({
@@ -640,7 +749,8 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
                 filename,
                 origName: resolved.origName,
                 mime: attachment.mime,
-                size: resolved.data.length,
+                size: attachment.data.length,
+                extractedText,
                 createdAt: now(),
               });
               existingUploadIds.add(uploadId);
@@ -648,14 +758,19 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
               addedUploadIds.push(uploadId);
               added[resolved.inlined ? 'inlined' : 'copied']++;
             }
-            if (attachment.kind === 'image') {
-              parts.push({ type: 'image', uploadId, mime: attachment.mime });
-            } else {
-              parts.push({
-                type: 'file', uploadId,
-                name: resolved.origName ?? undefined, mime: attachment.mime,
-              });
+            attachedFileIds.add(uploadId);
+            if (attachment.kind === 'image') return { type: 'image', uploadId, mime: attachment.mime };
+            return { type: 'file', uploadId, name: resolved.origName ?? undefined, mime: attachment.mime };
+          };
+
+          // attachments (user uploads / generated images) go first, like our UI does.
+          for (const f of Array.isArray(m.files) ? m.files : []) {
+            const resolved = resolveFile(f);
+            if (!resolved) {
+              if (f.name || f.file?.filename) pushText(parts, 'text', `(附件: ${f.name ?? f.file?.filename})\n`);
+              continue;
             }
+            parts.push(storeAttachment(f, resolved));
           }
 
           // body
@@ -687,6 +802,32 @@ export function importOpenwebui(opts: OwuiImportOptions): OwuiImportReport {
           const completionTokens = num(usage.completion_tokens) ?? num(usage.output_tokens);
 
           seq += 1;
+          // Retrieval citations. The reply keeps its [1] [2] markers, so name
+          // what they pointed at; a cited file that was never attached to any
+          // message in this branch (it came in through a chat-level upload)
+          // is imported now and hung on the user turn this reply answers, so
+          // continuing the conversation still has the document in view.
+          if (role === 'assistant') {
+            const refs = parseSources(m.sources ?? m.citations);
+            if (refs.length) {
+              const parentRow = prevMsgId ? msgRows.find((r) => r.id === prevMsgId && r.role === 'user') : undefined;
+              for (const ref of refs) {
+                if (!ref.fileId || attachedFileIds.has(ref.fileId)) continue;
+                const resolved = resolveFile({ id: ref.fileId, name: ref.name }, ref.text);
+                if (!resolved) continue;
+                const part = storeAttachment({ id: ref.fileId, name: ref.name }, resolved);
+                if (parentRow) {
+                  const pp = JSON.parse(parentRow.parts as string) as MessagePart[];
+                  parentRow.parts = JSON.stringify([part, ...pp]);
+                } else {
+                  parts.unshift(part);
+                }
+              }
+              const list = refs.map((r, i) => `[${i + 1}] ${r.url ? `[${r.name}](${r.url})` : r.name}`).join('  ');
+              pushText(parts, 'text', `\n\n参考来源:${list}`);
+            }
+          }
+
           let mid = typeof m.id === 'string' && m.id ? m.id : crypto.randomUUID();
           if (seenMsgIds.has(mid) || msgIdTaken(mid)) mid = crypto.randomUUID();
           seenMsgIds.add(mid);

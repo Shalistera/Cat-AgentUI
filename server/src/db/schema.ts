@@ -327,6 +327,11 @@ export const uploads = sqliteTable('uploads', {
   origName: text('orig_name'),
   mime: text('mime').notNull(),
   size: integer('size').notNull(),
+  // Plain-text rendition of a binary document the server can't parse itself
+  // (PDF, .doc, .xlsx …), carried over from Open WebUI's extraction at import
+  // time. When present the model reads this instead of the bytes, so the
+  // document works on every provider and stays out of the media budget.
+  extractedText: text('extracted_text'),
   createdAt: integer('created_at').notNull(),
 });
 

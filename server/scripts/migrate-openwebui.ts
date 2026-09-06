@@ -61,7 +61,12 @@ if (report.users.noPassword.length) {
 }
 console.log(`会话: 迁入 ${report.chats.migrated},已存在跳过 ${report.chats.existing},无法解析/无归属跳过 ${report.chats.skipped}`);
 console.log(`消息: ${report.messages.migrated} 条`);
-console.log(`附件: 复制 ${report.files.copied},内联解码 ${report.files.inlined},缺失 ${report.files.missing.length},非图片降级 ${report.files.nonImage.length}`);
+console.log(`附件: 复制 ${report.files.copied},内联解码 ${report.files.inlined},缺失 ${report.files.missing.length},带文本提取 ${report.files.withText},仅可下载 ${report.files.unreadable.length}`);
+if (report.files.unreadable.length) {
+  console.log('  以下附件没有模型可读的内容(原文件已迁入,可下载):');
+  for (const n of report.files.unreadable.slice(0, 20)) console.log(`    - ${n}`);
+  if (report.files.unreadable.length > 20) console.log(`    … 另 ${report.files.unreadable.length - 20} 个`);
+}
 if (report.files.missing.length && !args.dataDir) {
   console.log('  提示: 传入 --data-dir /path/to/open-webui/data 可搬运附件文件');
 }

@@ -28,8 +28,7 @@ import {
 import {
   getOwnedImageMedia, getOwnedUploadMedia, isTextDocMime, quotaErrorMessage, readMediaBase64,
   cleanupUnreferencedUploads, tryReserveStorage, uploadIdsFromPartsJson,
-  type OwnedMedia, type StorageReservation,
-} from '../storage.js';
+  type OwnedMedia, type StorageReservation, hasCompanionText } from '../storage.js';
 import { extractDocText, wrapDocAttachment } from '../doc-text.js';
 import {
   allConfiguredSecretValues, redactSensitiveText, StreamingSecretRedactor,
@@ -232,14 +231,45 @@ function adapterTextCost(part: MessagePart): number {
   return 0;
 }
 
+type FilePart = Extract<MessagePart, { type: 'file' }>;
+
+/**
+ * Documents attached earlier in the thread than the replay window reaches.
+ * Without this a person who uploaded a contract in message 1 and is now on
+ * message 50 would be answered by a model that has never seen the contract.
+ * Documents only — an old picture is simply past, and pictures are dear.
+ */
+function carriedDocParts(rows: { parts: string }[]): FilePart[] {
+  const out: FilePart[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const p of parseParts(row.parts)) {
+      if (p.type !== 'file' || !p.uploadId || seen.has(p.uploadId)) continue;
+      seen.add(p.uploadId);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+/** The replay window of an ancestor chain, plus the documents that fell out of it. */
+function historyWindow(chain: MessageRow[], max: number): { window: MessageRow[]; carried: FilePart[] } {
+  return {
+    window: chain.slice(-max),
+    carried: carriedDocParts(chain.slice(0, Math.max(0, chain.length - max))),
+  };
+}
+
 /**
  * Build a newest-first bounded replay window, then resolve only the images that
  * fit. Duplicate media references are omitted across the whole context.
+ * `carried` documents are reserved first and re-attached to the oldest user
+ * turn in the window, so a long conversation keeps its files in view.
  */
 async function buildBoundedHistory(
-  rows: { role: string; parts: string }[], ownerId: string, includeImages: boolean,
+  rows: { role: string; parts: string }[], ownerId: string, includeImages: boolean, carried: FilePart[] = [],
 ): Promise<{ messages: AdapterMessage[]; mediaLease: AdmissionLease }> {
-  const chosen: { role: 'user' | 'assistant'; parts: PlannedPart[] }[] = [];
+  let chosen: { role: 'user' | 'assistant'; parts: PlannedPart[] }[] = [];
   const seenMedia = new Set<string>();
   const mediaCache = new Map<string, Promise<OwnedMedia | null>>();
   let textChars = 0;
@@ -273,77 +303,134 @@ async function buildBoundedHistory(
     return text;
   };
 
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const row = rows[i];
-    const stored = closeDanglingToolCalls(parseParts(row.parts), '(调用未完成)');
-    const planned: PlannedPart[] = [];
-    const localMediaKeys: string[] = [];
-    let rowText = 0;
-    let rowImageBytes = 0;
-    let rowImageCount = 0;
+  // One document, one way in: prompt text when it has any (txt/docx, or the
+  // rendition an import brought along), a native block for a bare PDF on a
+  // vision model, and an honest note otherwise — a silently vanishing
+  // attachment confuses both model and user.
+  const planFile = async (key: string, media: OwnedMedia): Promise<{
+    part: PlannedPart; text: number; bytes: number; count: number;
+  }> => {
+    if (isTextDocMime(media.mime) || hasCompanionText(media)) {
+      const text = await getDocText(key, media);
+      return { part: { type: 'text', text }, text: text.length, bytes: 0, count: 0 };
+    }
+    if (media.mime === 'application/pdf' && includeImages) {
+      return { part: { type: 'pending_media', as: 'file', media }, text: 0, bytes: media.size, count: 1 };
+    }
+    const label = media.name ?? '附件';
+    const note = media.mime === 'application/pdf'
+      ? `(附件「${label}」是 PDF,当前模型不支持读取,已略过)`
+      : `(附件「${label}」无法读取其内容,已略过)`;
+    return { part: { type: 'text', text: note }, text: note.length, bytes: 0, count: 0 };
+  };
 
-    for (const part of stored) {
-      if (part.type === 'reasoning') continue;
-      if (part.type === 'image') {
-        if (!includeImages) continue;
-        const ref = getMedia(part);
-        if (!ref.key || seenMedia.has(ref.key) || localMediaKeys.includes(ref.key)) continue;
-        const media = await ref.media;
-        if (!media) continue;
-        planned.push({ type: 'pending_media', as: 'image', media });
-        localMediaKeys.push(ref.key);
-        rowImageBytes += media.size;
-        rowImageCount++;
-        continue;
-      }
-      if (part.type === 'file') {
-        const ref = getMedia(part);
-        if (!ref.key || seenMedia.has(ref.key) || localMediaKeys.includes(ref.key)) continue;
-        const media = await ref.media;
-        if (!media) continue;
-        if (isTextDocMime(media.mime)) {
-          // Text-bearing docs are flattened to prompt text — works on every
-          // model, and shares the image budget with nothing.
-          const text = await getDocText(ref.key, media);
-          planned.push({ type: 'text', text });
-          localMediaKeys.push(ref.key);
-          rowText += text.length;
-        } else if (includeImages) {
-          // PDFs ride as native document blocks and share the media budget.
-          planned.push({ type: 'pending_media', as: 'file', media });
+  // Media the window itself references — a carried copy of the same file
+  // would only be a duplicate, and the in-window one keeps its place.
+  const windowKeys = new Set<string>();
+  for (const row of rows) {
+    for (const p of parseParts(row.parts)) {
+      if ((p.type === 'file' || p.type === 'image') && p.uploadId) windowKeys.add(`u:${p.uploadId}`);
+    }
+  }
+  const carriedPlanned: PlannedPart[] = [];
+  const carriedKeys: string[] = [];
+  let carriedText = 0;
+  let carriedBytes = 0;
+  let carriedCount = 0;
+  for (const part of carried) {
+    const ref = getMedia(part);
+    if (!ref.key || windowKeys.has(ref.key) || carriedKeys.includes(ref.key)) continue;
+    const media = await ref.media;
+    if (!media) continue;
+    const planned = await planFile(ref.key, media);
+    carriedPlanned.push(planned.part);
+    carriedKeys.push(ref.key);
+    carriedText += planned.text;
+    carriedBytes += planned.bytes;
+    carriedCount += planned.count;
+  }
+
+  const fill = async (reserveText: number, reserveBytes: number, reserveCount: number) => {
+    chosen = [];
+    seenMedia.clear();
+    textChars = reserveText;
+    imageBytes = reserveBytes;
+    imageCount = reserveCount;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      const stored = closeDanglingToolCalls(parseParts(row.parts), '(调用未完成)');
+      const planned: PlannedPart[] = [];
+      const localMediaKeys: string[] = [];
+      let rowText = 0;
+      let rowImageBytes = 0;
+      let rowImageCount = 0;
+
+      for (const part of stored) {
+        if (part.type === 'reasoning') continue;
+        if (part.type === 'image') {
+          if (!includeImages) continue;
+          const ref = getMedia(part);
+          if (!ref.key || seenMedia.has(ref.key) || localMediaKeys.includes(ref.key)) continue;
+          const media = await ref.media;
+          if (!media) continue;
+          planned.push({ type: 'pending_media', as: 'image', media });
           localMediaKeys.push(ref.key);
           rowImageBytes += media.size;
           rowImageCount++;
-        } else {
-          // Silently vanishing attachments confuse both model and user.
-          const note = `(附件「${media.name ?? 'PDF'}」是 PDF,当前模型不支持读取,已略过)`;
-          planned.push({ type: 'text', text: note });
-          localMediaKeys.push(ref.key);
-          rowText += note.length;
+          continue;
         }
-        continue;
+        if (part.type === 'file') {
+          const ref = getMedia(part);
+          if (!ref.key || seenMedia.has(ref.key) || localMediaKeys.includes(ref.key)) continue;
+          const media = await ref.media;
+          if (!media) continue;
+          const filed = await planFile(ref.key, media);
+          planned.push(filed.part);
+          localMediaKeys.push(ref.key);
+          rowText += filed.text;
+          rowImageBytes += filed.bytes;
+          rowImageCount += filed.count;
+          continue;
+        }
+        rowText += adapterTextCost(part);
+        const converted = toAdapterPartNoImage(part);
+        if (converted) planned.push(converted);
       }
-      rowText += adapterTextCost(part);
-      const converted = toAdapterPartNoImage(part);
-      if (converted) planned.push(converted);
+      if (!planned.length) continue;
+      const over = textChars + rowText > config.maxContextTextChars
+        || imageBytes + rowImageBytes > config.maxContextImageBytes
+        || imageCount + rowImageCount > config.maxContextImages;
+      if (over) {
+        if (!chosen.length) return false;
+        break;
+      }
+      chosen.unshift({ role: row.role as 'user' | 'assistant', parts: planned });
+      textChars += rowText;
+      imageBytes += rowImageBytes;
+      imageCount += rowImageCount;
+      for (const key of localMediaKeys) seenMedia.add(key);
     }
+    return true;
+  };
 
-    if (!planned.length) continue;
-    const over = textChars + rowText > config.maxContextTextChars
-      || imageBytes + rowImageBytes > config.maxContextImageBytes
-      || imageCount + rowImageCount > config.maxContextImages;
-    if (over) {
-      if (!chosen.length) throw new InputBudgetError('当前消息超过模型上下文预算,请缩短文字或减少图片');
-      break;
+  // Carried documents come first, then as many recent turns as still fit. If
+  // even the newest turn can't share the budget with them, the turn wins and
+  // the documents are named instead of included.
+  let carriedIn = carriedPlanned.length > 0;
+  if (!(await fill(carriedText, carriedBytes, carriedCount))) {
+    if (!carriedIn || !(await fill(0, 0, 0))) {
+      throw new InputBudgetError('当前消息超过模型上下文预算,请缩短文字或减少图片');
     }
-    chosen.unshift({ role: row.role as 'user' | 'assistant', parts: planned });
-    textChars += rowText;
-    imageBytes += rowImageBytes;
-    imageCount += rowImageCount;
-    for (const key of localMediaKeys) seenMedia.add(key);
+    carriedIn = false;
   }
 
   while (chosen.length && chosen[0].role !== 'user') chosen.shift();
+  if (carriedPlanned.length && chosen.length) {
+    const lead: PlannedPart = carriedIn
+      ? { type: 'text', text: '(以下是本对话早前上传的附件,后续讨论可能会引用它们)' }
+      : { type: 'text', text: `(本对话早前上传的附件因上下文预算未能包含:${carried.map((p) => p.name || '附件').join('、')})` };
+    chosen[0].parts = [lead, ...(carriedIn ? carriedPlanned : []), ...chosen[0].parts];
+  }
   const mediaLease = tryReserveContextImageBytes(ownerId, imageBytes);
   if (!mediaLease) {
     throw new InputBudgetError('当前图片上下文总量繁忙,请等待其他图片对话完成后重试', 429);
@@ -1163,11 +1250,14 @@ export async function chatRoutes(app: FastifyInstance) {
     let userMessageId: string | null = null;
     let assistantParentId: string | null;
     let history: { role: string; parts: string }[];
+    let carriedDocs: FilePart[] = [];
     let applyHistoryMutation: () => void;
     if (body.regenerateMessageId) {
       const target = rows.find((m) => m.id === body.regenerateMessageId);
       if (!target || target.role !== 'assistant') return reply.code(404).send({ error: '消息不存在' });
-      history = usableHistory(ancestorChain(rows, target.parentId).slice(-config.maxContextMessages));
+      const win = historyWindow(ancestorChain(rows, target.parentId), config.maxContextMessages);
+      carriedDocs = win.carried;
+      history = usableHistory(win.window);
       assistantParentId = target.parentId;
       applyHistoryMutation = () => { /* new sibling only — nothing to rewrite */ };
     } else if (body.editMessageId) {
@@ -1178,8 +1268,10 @@ export async function chatRoutes(app: FastifyInstance) {
       userMessageId = newId();
       const seq = nextSeq(chatId);
       const createdAt = now();
+      const win = historyWindow(ancestorChain(rows, target.parentId), config.maxContextMessages - 1);
+      carriedDocs = win.carried;
       history = [
-        ...usableHistory(ancestorChain(rows, target.parentId).slice(-(config.maxContextMessages - 1))),
+        ...usableHistory(win.window),
         { role: 'user', parts: normalizedJson },
       ];
       assistantParentId = userMessageId;
@@ -1199,8 +1291,10 @@ export async function chatRoutes(app: FastifyInstance) {
       const seq = nextSeq(chatId);
       const createdAt = now();
       const normalizedJson = JSON.stringify(normalizedContent);
+      const win = historyWindow(ancestorChain(rows, parentId), config.maxContextMessages - 1);
+      carriedDocs = win.carried;
       history = [
-        ...usableHistory(ancestorChain(rows, parentId).slice(-(config.maxContextMessages - 1))),
+        ...usableHistory(win.window),
         { role: 'user', parts: normalizedJson },
       ];
       assistantParentId = userMessageId;
@@ -1219,7 +1313,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const withImages = !!model.vision || !!model.imageGen;
     let baseHistory: AdapterMessage[];
     try {
-      const bounded = await buildBoundedHistory(history, user.id, withImages);
+      const bounded = await buildBoundedHistory(history, user.id, withImages, carriedDocs);
       baseHistory = bounded.messages;
       contextMediaLease = bounded.mediaLease;
     } catch (err) {

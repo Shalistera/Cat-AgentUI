@@ -9,7 +9,7 @@ interface OwuiReport {
   users: { migrated: number; merged: number; renamed: string[]; noPassword: string[] };
   chats: { migrated: number; skipped: number; existing: number };
   messages: { migrated: number };
-  files: { copied: number; inlined: number; missing: string[]; nonImage: string[] };
+  files: { copied: number; inlined: number; missing: string[]; withText: number; unreadable: string[] };
   errors: string[];
   dryRun: boolean;
 }
@@ -176,12 +176,21 @@ export default function Import() {
               </div>
             )}
 
-            {report.files.missing.length > 0 && (
-              <div className="text-xs text-tx3">
-                有 {report.files.missing.length} 个附件文件在源数据里找不到
-                {dataDir.trim() ? '(可能已在 Open WebUI 中被清理)' : ',填写上方「附件目录」后重新导入可搬运物理文件'}
-                ;对应消息中会以文字提示替代。
-                {report.files.nonImage.length > 0 && ` 另有 ${report.files.nonImage.length} 个非图片附件(文档等)本站不支持,已降级为文字说明。`}
+            {(report.files.missing.length > 0 || report.files.withText > 0 || report.files.unreadable.length > 0) && (
+              <div className="space-y-1 text-xs text-tx3">
+                {report.files.missing.length > 0 && (
+                  <p>
+                    有 {report.files.missing.length} 个附件文件在源数据里找不到
+                    {dataDir.trim() ? '(可能已在 Open WebUI 中被清理)' : ',填写上方「附件目录」后重新导入可搬运物理文件'}
+                    ;能从 Open WebUI 的文本提取里恢复的已作为文本附件迁入,其余在消息中以文字提示替代。
+                  </p>
+                )}
+                {report.files.withText > 0 && (
+                  <p>{report.files.withText} 个 PDF / Office 文档带着 Open WebUI 的文本提取一起迁入,任何模型都能继续读它们。</p>
+                )}
+                {report.files.unreadable.length > 0 && (
+                  <p>{report.files.unreadable.length} 个附件(旧版 .doc、视频等)没有模型可读的内容,原文件已迁入、仅供下载。</p>
+                )}
               </div>
             )}
           </div>

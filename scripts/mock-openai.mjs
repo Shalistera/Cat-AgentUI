@@ -74,8 +74,19 @@ function readRaw(req) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Recent chat requests, for tests that need to see what the app actually
+// sent (context window contents, attachments, system prompt). A turn is
+// followed by title / follow-up generation calls, so "the last one" is
+// rarely the turn itself — tests pick by the final user message instead.
+const chatRequests = [];
+
 http.createServer(async (req, res) => {
   console.log(`${new Date().toISOString().slice(11, 19)} ${req.method} ${req.url}`);
+  if (req.url === '/__requests' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(chatRequests));
+    return;
+  }
   // A deliberately hostile upstream used by the security regression: some
   // gateways echo request headers in connection errors.
   if (req.url === '/mcp-leak') {
@@ -91,6 +102,8 @@ http.createServer(async (req, res) => {
 
   if (req.url === '/v1/chat/completions' && req.method === 'POST') {
     const body = await readBody(req);
+    chatRequests.push(body);
+    if (chatRequests.length > 50) chatRequests.shift();
     const lastMsg = body.messages?.[body.messages.length - 1];
     const lastText = typeof lastMsg?.content === 'string'
       ? lastMsg.content

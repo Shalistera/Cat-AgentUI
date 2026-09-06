@@ -1,18 +1,21 @@
 import fs from 'node:fs';
 import { config } from './config.js';
-import { DOCX_MIME, type OwnedMedia } from './storage.js';
+import { DOCX_MIME, hasCompanionText, type OwnedMedia } from './storage.js';
 
 // Text-bearing chat attachments (txt/md/csv/json/docx/…) are flattened into
 // the prompt as plain text — same philosophy as project docs, and the only
-// shape every provider accepts. PDFs never come through here: they ride to
-// vision models as native document blocks.
+// shape every provider accepts. Binary documents that arrived with a text
+// rendition (imports from Open WebUI: PDF/.doc/.xlsx …) take the same road.
+// A PDF without one rides to vision models as a native document block.
 
 /** Per-document cap. The overall context budget still applies on top. */
 const DOC_CHAR_CAP = config.maxMessageTextChars;
 
 export async function extractDocText(media: OwnedMedia): Promise<string> {
   let text: string;
-  if (media.mime === DOCX_MIME) {
+  if (hasCompanionText(media)) {
+    text = media.extractedText!;
+  } else if (media.mime === DOCX_MIME) {
     // Lazy import: mammoth is only paid for when a docx actually shows up.
     const mammoth = await import('mammoth');
     const r = await mammoth.extractRawText({ path: media.filePath });

@@ -12,6 +12,7 @@
     "dev:web": "npm run dev -w web",
     "build": "npm run build -w web && npm run build -w server",
     "test:security": "npm run build && node scripts/security-regression.mjs",
+    "test:context": "npm run build -w server && node scripts/doc-context-regression.mjs",
     "start": "npm run start -w server"
   },
   "devDependencies": {

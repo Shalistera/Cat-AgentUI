@@ -172,6 +172,13 @@ export interface OwnedMedia {
   size: number;
   filePath: string;
   name?: string; // original filename, for prompt labels and UI chips
+  /** Text rendition of a binary document (see uploads.extractedText). */
+  extractedText?: string | null;
+}
+
+/** A document the model can read as text even though the bytes are binary. */
+export function hasCompanionText(media: OwnedMedia): boolean {
+  return !!media.extractedText && media.extractedText.trim().length > 0;
 }
 
 export async function getOwnedUploadMedia(id: string, userId: string): Promise<OwnedMedia | null> {
@@ -183,7 +190,10 @@ export async function getOwnedUploadMedia(id: string, userId: string): Promise<O
     if (stat.size !== row.size) {
       db.update(schema.uploads).set({ size: stat.size }).where(eq(schema.uploads.id, id)).run();
     }
-    return { kind: 'upload', id, mime: row.mime, size: stat.size, filePath, name: row.origName ?? undefined };
+    return {
+      kind: 'upload', id, mime: row.mime, size: stat.size, filePath,
+      name: row.origName ?? undefined, extractedText: row.extractedText,
+    };
   } catch {
     return null;
   }
