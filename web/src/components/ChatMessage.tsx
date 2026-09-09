@@ -425,6 +425,28 @@ function Timestamp({ ts }: { ts: number }) {
   );
 }
 
+function ThoughtSignatures({ parts, streaming }: { parts: MessagePart[]; streaming: boolean }) {
+  const blocks = parts.flatMap((p) => p.type === 'thought_signature'
+    ? [{ value: p.signature, source: p.source }]
+    : p.type === 'tool_call' && p.sig ? [{ value: p.sig, source: `functionCall · ${p.name}` }] : []);
+  return (
+    <details className="my-3 min-w-0 rounded-lg border border-dashed border-line2 bg-bg1 px-3 py-2 text-xs text-tx2">
+      <summary className="cursor-pointer">实验性功能 · 加密块{blocks.length ? ` (${blocks.length})` : ''}</summary>
+      <p className="my-2 text-tx3">Gemini thoughtSignature 原始加密数据，无法解密为思维链。</p>
+      {!blocks.length && <p className="py-1 text-tx3">{streaming ? '尚未收到加密块。' : '此回复没有已保存的加密块；模型或中转服务可能未返回，旧消息也可能未记录。'}</p>}
+      {blocks.map((block, i) => (
+        <div key={i} className="mt-3 min-w-0">
+          <div className="mb-1 flex items-center gap-2">
+            <span className="min-w-0 flex-1 break-all">{block.source} · {block.value.length.toLocaleString()} 字符</span>
+            <CopyBtn text={block.value} />
+          </div>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-line bg-bg2 p-2 font-mono text-[11px]" dir="ltr">{block.value}</pre>
+        </div>
+      ))}
+    </details>
+  );
+}
+
 function partsToPlainText(parts: MessagePart[]): string {
   return parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 }
@@ -467,6 +489,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
   // 互动画布 (experimental): ```html fences in replies render as live pages.
+  const showThoughtSignatures = useAuth((s) => s.user?.settings.showThoughtSignatures === true);
   const canvas = useAuth((s) => !!s.user?.settings.canvasAnswers);
 
   if (msg.role === 'user') {
@@ -662,6 +685,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             </div>
           </div>
         ) : rendered}
+        {showThoughtSignatures && <ThoughtSignatures parts={msg.parts} streaming={isStreaming} />}
         {isStreaming && toolConfirm && onToolDecision && (
           <ToolConfirmCard key={toolConfirm.calls.map((c) => c.id).join('|')} req={toolConfirm} onDecide={onToolDecision} />
         )}

@@ -1565,21 +1565,26 @@ export async function chatRoutes(app: FastifyInstance) {
                   appendText(parts, 'reasoning', safeText);
                   sse.send('reasoning', { text: safeText });
                 }
+              } else if (ev.type === 'thought_signature') {
+                consumeOutput(ev.signature.length);
+                parts.push(ev);
+                sse.send('thought_signature', ev);
               } else if (ev.type === 'tool_call') {
-                consumeOutput(ev.id.length + ev.name.length + ev.args.length);
+                consumeOutput(ev.id.length + ev.name.length + ev.args.length + (ev.sig?.length ?? 0));
                 const safeCall = {
                   ...ev,
                   id: redactSensitiveText(ev.id, secretValues),
                   name: redactSensitiveText(ev.name, secretValues),
                   args: redactSensitiveText(ev.args, secretValues),
-                  sig: ev.sig ? redactSensitiveText(ev.sig, secretValues) : undefined,
+                  // Opaque protocol data must be replayed byte-for-byte.
+                  sig: ev.sig,
                 };
                 parts.push({
                   type: 'tool_call', id: safeCall.id, name: safeCall.name,
                   args: safeCall.args, sig: safeCall.sig,
                 });
                 pendingCalls.push(safeCall);
-                sse.send('tool_call', { id: safeCall.id, name: safeCall.name, args: safeCall.args });
+                sse.send('tool_call', { id: safeCall.id, name: safeCall.name, args: safeCall.args, sig: safeCall.sig });
               } else if (ev.type === 'grounding') {
                 const grounding = safeGroundingPart(ev.grounding, secretValues);
                 if (grounding) {

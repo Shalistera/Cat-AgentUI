@@ -235,6 +235,11 @@ export const geminiAdapter: ChatAdapter = {
       if (!cand) continue;
       grounding = groundingOf(cand.groundingMetadata) ?? grounding;
       for (const part of cand.content?.parts ?? []) {
+        // Signatures may arrive on text or on a final, empty streaming part.
+        if (!part.functionCall && typeof part.thoughtSignature === 'string' && part.thoughtSignature) {
+          yield { type: 'thought_signature', signature: part.thoughtSignature,
+            source: part.thought === true ? 'thought' : typeof part.text === 'string' && part.text ? 'text' : 'standalone' };
+        }
         if (part.thought === true && part.text) {
           yield { type: 'reasoning', text: part.text };
         } else if (typeof part.text === 'string' && part.text) {

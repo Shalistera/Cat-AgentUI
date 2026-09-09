@@ -509,6 +509,16 @@ function LabsSection() {
   const user = useAuth((s) => s.user);
   const [canvas, setCanvas] = useState(!!user?.settings.canvasAnswers);
 
+  async function saveThoughtSignatures(v: boolean) {
+    try {
+      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { showThoughtSignatures: v } });
+      useAuth.setState({ user: r.user });
+      toast(v ? '加密块显示已开启' : '加密块显示已关闭', 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '保存失败', 'err');
+    }
+  }
+
   async function saveCanvas(v: boolean) {
     setCanvas(v);
     try {
@@ -529,6 +539,14 @@ function LabsSection() {
           这里是还在打磨中的玩法:可能不稳定、可能改动、也可能消失。全部默认关闭,只对你自己生效,随时可以关掉,不影响已有对话。
         </p>
       </div>
+      <Section title="思维签名 · 加密块" desc="查看 Gemini 聊天接口实际返回的 thoughtSignature 原始字符串。">
+        <ToggleRow label="显示加密块" checked={user?.settings.showThoughtSignatures === true}
+          desc="在助手回复下方显示可展开、可复制的加密块；仅影响显示，默认关闭。"
+          onChange={(v) => void saveThoughtSignatures(v)} />
+        <p className="mt-3 text-xs leading-relaxed text-tx3">
+          这是不透明的加密数据，无法在这里解密为思维链。模型或中转服务不一定返回；旧消息只能显示已保存的签名。目前支持 Gemini 原生聊天接口。
+        </p>
+      </Section>
       <Section
         title="互动画布"
         desc="让模型在文字回答之外,按需附上一个可交互的小组件(HTML / Canvas / JavaScript),直接在对话里渲染。"

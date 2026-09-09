@@ -27,6 +27,7 @@ export interface User {
     customInstructions?: string | null;
     /** 互动画布 (experimental): answers come back as one HTML page, rendered live. */
     canvasAnswers?: boolean;
+    showThoughtSignatures?: boolean;
   };
 }
 
@@ -42,6 +43,8 @@ export interface TranslateConfig {
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
+  // Display-only opaque metadata; never inserted into the text prompt.
+  | { type: 'thought_signature'; signature: string; source: 'text' | 'thought' | 'standalone' }
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   | { type: 'file'; uploadId: string; name?: string; mime?: string }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
@@ -416,7 +419,8 @@ export interface StreamHandlers {
   onMeta?(d: { messageId: string; userMessageId: string | null; model: string }): void;
   onDelta?(text: string): void;
   onReasoning?(text: string): void;
-  onToolCall?(d: { id: string; name: string; args: string }): void;
+  onThoughtSignature?(d: Extract<MessagePart, { type: 'thought_signature' }>): void;
+  onToolCall?(d: { id: string; name: string; args: string; sig?: string }): void;
   onToolResult?(d: { toolCallId: string; name: string; result: string; isError?: boolean }): void;
   onToolConfirm?(d: ToolConfirmRequest): void;
   onGrounding?(d: Extract<MessagePart, { type: 'grounding' }>): void;

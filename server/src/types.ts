@@ -10,6 +10,8 @@ export type StopReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | '
 export type MessagePart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
+  // Display-only opaque metadata; never inserted into the text prompt.
+  | { type: 'thought_signature'; signature: string; source: 'text' | 'thought' | 'standalone' }
   // user attachment (uploadId) or model-generated image (imageId → images table)
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   // non-image attachment. name/mime are denormalized from the uploads row at
@@ -113,6 +115,8 @@ export interface ChatRequest {
 export type AdapterEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
+  // Display-only opaque metadata; never inserted into the text prompt.
+  | { type: 'thought_signature'; signature: string; source: 'text' | 'thought' | 'standalone' }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'grounding'; grounding: GroundingInfo }
   | { type: 'usage'; usage: UsageInfo }

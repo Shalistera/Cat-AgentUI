@@ -633,6 +633,7 @@ export default function Chat() {
       },
       onDelta(t) { buf.text += t; },
       onReasoning(t) { buf.reasoning += t; },
+      onThoughtSignature(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
       onToolCall(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_call', ...d }] })); },
       onToolResult(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_result', ...d }] })); setToolConfirm(null); },
       onToolConfirm(d) {
