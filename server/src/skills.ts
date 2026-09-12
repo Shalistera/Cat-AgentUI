@@ -458,15 +458,7 @@ description: 把 Markdown 内容整理成排版规范的 Word 报告(.docx),用�
 
 ## 步骤
 1. 先把报告正文写成工作区里的 Markdown 文件(如 \`报告.md\`),结构:一级标题为报告名,二级标题为章节;表格用 GFM 表格;不要用 HTML。
-2. 用 pandoc 转换(沙盒里已提供):
-   \`\`\`
-   pandoc 报告.md -o 报告.docx --from gfm
-   \`\`\`
-   如需目录再加 \`--toc\`;需要固定样式时使用本技能自带的模板:
-   \`\`\`
-   pandoc 报告.md -o 报告.docx --from gfm --reference-doc /skills/docx-report/reference.docx
-   \`\`\`
-   (只有当 reference.docx 存在时才这样做;可先用 read_skill_file 或 load_skill 的文件清单确认。)
+2. 用内置工具一步转换,不需要写命令:convert_file(input: "报告.md", output: "报告.docx")。
 3. 命令成功后在回复里告诉用户文件名,并用两三句话概括报告要点。不要把全文再贴一遍。
 
 ## 注意
@@ -528,11 +520,8 @@ description: 把 Markdown 或 HTML 内容排版成 PDF 文件(中文排版正常
 
 ## 步骤
 1. 把正文写成工作区里的 Markdown 文件(如 \`报告.md\`):一级标题为文档名,二级标题分章节,表格用 GFM 表格。
-2. 执行本技能自带的脚本,一步转成 PDF(内部是 Markdown → HTML → weasyprint,自带中文样式表):
-   \`\`\`
-   python3 /skills/pdf-export/scripts/md2pdf.py 报告.md 报告.pdf
-   \`\`\`
-   已经是 HTML 的内容用 \`--html 页面.html 输出.pdf\`。想要横版加 \`--landscape\`。
+2. 用内置工具一步转换,不需要写命令:convert_file(input: "报告.md", output: "报告.pdf")。HTML、docx 也可以直接作为 input。
+   只有需要横版时才用本技能自带的脚本:python3 /skills/pdf-export/scripts/md2pdf.py 报告.md 报告.pdf --landscape
 3. 成功后告诉用户文件名并用两三句概括内容;用户可在工作区面板直接预览 PDF。
 
 ## 注意
