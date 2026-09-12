@@ -744,7 +744,13 @@ export function Composer(props: ComposerProps) {
             >
               <FolderOpen size={13} />
               <span className="max-sm:hidden">工作区</span>
-              <span className="rounded-sm bg-acc/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wider text-acc">Beta</span>
+              {/* Phones: the full "Beta" tag next to the folder icon pushed the
+                  send button off the row. Keep the accent chip (it must stay
+                  noticeable) but shrink the label to a single "B" there. */}
+              <span className="rounded-sm bg-acc/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wider text-acc">
+                <span className="max-sm:hidden">Beta</span>
+                <span className="sm:hidden">B</span>
+              </span>
             </button>
           )}
 
