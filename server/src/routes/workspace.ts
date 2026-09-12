@@ -4,6 +4,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import multipart from '@fastify/multipart';
 import { z } from 'zod';
@@ -128,11 +129,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
     let target: { abs: string; rel: string };
     try { target = resolveSafe(id, rel); } catch (err) { file.file.resume(); return sendError(reply, err); }
 
-    // Stage next to the destination (exclusive create: an existing entry of
-    // that name, link or not, fails instead of being followed), then hand the
-    // bytes to writeWorkspaceFile so the budget is enforced by one code path.
-    fs.mkdirSync(workspaceRoot(id), { recursive: true, mode: 0o700 });
-    const staging = path.join(workspaceRoot(id), `.upload-${process.pid}-${Date.now()}.part`);
+    // Stage OUTSIDE the workspace (nothing attacker-controlled sits on that
+    // path), then hand the bytes to writeWorkspaceFile so the budget and the
+    // descriptor-anchored write are enforced by one code path.
+    const staging = path.join(os.tmpdir(), `caui-upload-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.part`);
     try {
       await pipeline(file.file, fs.createWriteStream(staging, { flags: 'wx', mode: 0o600 }));
       if (file.file.truncated) {

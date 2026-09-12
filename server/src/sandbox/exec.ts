@@ -15,7 +15,7 @@ import { spawn, execFile } from 'node:child_process';
 import { config } from '../config.js';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
-import { sweepIrregularEntries, workspaceRoot } from '../workspace.js';
+import { enforceWorkspaceQuota, sweepIrregularEntries, workspaceOverQuota, workspaceRoot } from '../workspace.js';
 import { withChatLock } from '../workspace-lock.js';
 import { ensureSeccompFilter } from './seccomp.js';
 import { skillDir, skillsFor, type SkillUser } from '../skills.js';
@@ -37,6 +37,8 @@ export interface RunRequest {
 }
 
 export interface RunResult {
+  /** Files the quota enforcer had to remove after the run (over budget). */
+  quotaRemoved?: { path: string; size: number }[];
   exitCode: number | null;
   stdout: string;
   stderr: string;
@@ -74,8 +76,8 @@ export function sandboxLoad(): { running: number; max: number } {
 
 function nodeBinDir(): string { return path.dirname(process.execPath); }
 
-function bwrapArgv(bwrap: string, workspace: string, command: string, user: SkillUser, seccomp: string | null): string[] {
-  const args = [bwrap, ...bwrapBaseArgs()];
+function bwrapArgv(bwrap: string, workspace: string, command: string, user: SkillUser, seccomp: string | null, tmpfsBytes: number): string[] {
+  const args = [bwrap, ...bwrapBaseArgs(tmpfsBytes)];
   args.push('--tmpfs', '/home', '--dir', '/home/sandbox');
   args.push('--bind', workspace, '/workspace', '--chdir', '/workspace');
   const pathParts = ['/usr/local/bin', '/usr/bin', '/bin'];
@@ -126,6 +128,9 @@ function systemdArgv(systemdRun: string, unit: string, s: SandboxSettings, timeo
     '-p', `MemoryMax=${s.memoryMb}M`, '-p', 'MemorySwapMax=0',
     '-p', `CPUQuota=${s.cpuPercent}%`,
     '-p', `TasksMax=${s.maxPids}`,
+    // per-file ceiling (SIGXFSZ past it): the workspace budget's first line
+    // of defence; the post-run enforcer handles the sum
+    '-p', `LimitFSIZE=${config.maxWorkspaceFileBytes}`,
     '-p', `RuntimeMaxSec=${timeoutSec + 15}`,
     '--', ...inner,
   ];
@@ -145,18 +150,27 @@ export async function runInSandbox(req: RunRequest): Promise<RunResult> {
   const timeoutSec = Math.max(5, Math.min(s.timeoutSec, req.timeoutSec ?? s.timeoutSec));
   const workspace = workspaceRoot(req.chatId);
   fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
+  // Leftovers from an earlier run (or from before seccomp) never meet a
+  // command; and a workspace already over budget gets nothing more written.
+  try { sweepIrregularEntries(req.chatId); } catch { /* best effort */ }
+  const quotaBefore = workspaceOverQuota(req.chatId);
+  if (quotaBefore.over) {
+    throw new Error(`工作区已超出配额(${Math.round(quotaBefore.bytes / 1048576)} MB / ${quotaBefore.files} 个文件),请先删除一些文件再执行命令`);
+  }
 
   const release = acquire(req.userId);
   const t0 = Date.now();
   const unit = `caui-sbx-${crypto.randomBytes(6).toString('hex')}`;
   const seccomp = ensureSeccompFilter();
-  const bwrapPart = bwrapArgv(env.bwrapPath, workspace, req.command, req.user, seccomp);
+  const bwrapPart = bwrapArgv(env.bwrapPath, workspace, req.command, req.user, seccomp, s.memoryMb * 1048576);
   // `sh -c 'exec 3<"$1"; shift; exec "$@"' sh <filter> bwrap …` — opens the
   // filter on fd 3 for --seccomp without any quoting of the real argv.
-  const inner = seccomp
+  let inner = seccomp
     ? ['/bin/sh', '-c', 'exec 3<"$1"; shift; exec "$@"', 'sh', seccomp, ...bwrapPart]
     : bwrapPart;
   const useSystemd = env.limitsAvailable && !!env.systemdRunPath;
+  // Without systemd the per-file ceiling comes from prlimit (util-linux).
+  if (!useSystemd && env.prlimitPath) inner = [env.prlimitPath, `--fsize=${config.maxWorkspaceFileBytes}`, '--', ...inner];
   const argv = useSystemd ? systemdArgv(env.systemdRunPath!, unit, s, timeoutSec, inner) : inner;
 
   // The chat lock is shared with every host-side write (tool, panel upload,
@@ -205,7 +219,16 @@ export async function runInSandbox(req: RunRequest): Promise<RunResult> {
     };
     child.on('error', (err) => { stderr += `\n无法启动沙盒:${err.message}`; finish(null); });
     child.on('close', (code) => finish(code));
-  }).finally(() => { try { sweepIrregularEntries(req.chatId); } catch { /* best effort */ } })).finally(release);
+  }).then((r) => {
+    // Still inside the chat lock: scrub, then pull the workspace back under
+    // budget by removing what this run produced (largest first).
+    try { sweepIrregularEntries(req.chatId); } catch { /* best effort */ }
+    try {
+      const q = enforceWorkspaceQuota(req.chatId, t0);
+      if (q.removed.length) r.quotaRemoved = q.removed;
+    } catch { /* best effort */ }
+    return r;
+  })).finally(release);
 
   db.insert(schema.sandboxRuns).values({
     id: newId(), userId: req.userId, chatId: req.chatId, messageId: req.messageId ?? null,
@@ -229,5 +252,8 @@ export function formatRunResult(r: RunResult, timeoutSec: number): string {
   if (r.stderr.trim()) parts.push(`--- stderr ---\n${r.stderr.trimEnd()}`);
   if (!r.stdout.trim() && !r.stderr.trim()) parts.push('(没有输出)');
   if (r.truncated) parts.push('(输出过长,已截断)');
+  if (r.quotaRemoved?.length) {
+    parts.push(`工作区超出 ${Math.round(config.maxWorkspaceBytes / 1048576)} MB 配额,本次命令生成的以下文件已被删除:${r.quotaRemoved.map((f) => `${f.path}(${(f.size / 1048576).toFixed(1)} MB)`).join(', ')}。请控制输出文件大小。`);
+  }
   return parts.join('\n');
 }

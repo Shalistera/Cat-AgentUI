@@ -31,6 +31,7 @@ export interface SandboxEnv {
   limitsAvailable: boolean;
   bwrapPath: string | null;
   systemdRunPath: string | null;
+  prlimitPath: string | null;
   python3Path: string | null;
   pandocPath: string | null;
   hostSetupScript: string;
@@ -70,7 +71,7 @@ function probeEnv(): NodeJS.ProcessEnv {
 export function sandboxProcessEnv(): NodeJS.ProcessEnv { return probeEnv(); }
 
 /** The bwrap argv prefix the executor uses too, so the probe proves the real thing. */
-export function bwrapBaseArgs(): string[] {
+export function bwrapBaseArgs(tmpfsBytes = 256 * 1024 * 1024): string[] {
   const args = [
     '--ro-bind', '/usr', '/usr',
     '--symlink', 'usr/lib', '/lib',
@@ -85,7 +86,9 @@ export function bwrapBaseArgs(): string[] {
   for (const p of ['/etc/ld.so.cache', '/etc/alternatives', '/etc/fonts', '/etc/localtime', '/etc/ssl/certs', '/etc/mime.types', '/etc/papersize']) {
     args.push('--ro-bind-try', p, p);
   }
-  args.push('--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp');
+  // /tmp is memory-backed: cap it so a runaway write cannot exhaust RAM
+  // (the cgroup would catch it too, but with a kill instead of ENOSPC)
+  args.push('--proc', '/proc', '--dev', '/dev', '--size', String(tmpfsBytes), '--tmpfs', '/tmp');
   return args;
 }
 
@@ -205,6 +208,7 @@ export async function probeSandboxEnv(force = false): Promise<SandboxEnv> {
       limitsAvailable: systemd.level === 'ok',
       bwrapPath: bwrap,
       systemdRunPath: systemdRun,
+      prlimitPath: which('prlimit'),
       python3Path: python3,
       pandocPath: which('pandoc'),
       hostSetupScript: hostSetupScript(),

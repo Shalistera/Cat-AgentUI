@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { requireAdmin, requireAuth } from '../auth.js';
 import {
   SKILL_FILE, SkillError, deleteSkill, deleteSkillFile, exportSkillZip, getSkill, importSampleSkills, importSkillZip,
-  listSkillFiles, listSkills, readSkillFileText, saveSkillMd, skillsFor, updateSkillMeta, writeSkillFile,
+  listSkillFiles, listSkills, readSkillFileText, saveSkillMd, skillsFor, updateSkillMeta, withSkillsLock, writeSkillFile,
 } from '../skills.js';
 
 function sendError(reply: FastifyReply, err: unknown) {
@@ -128,7 +128,10 @@ export async function skillRoutes(app: FastifyInstance) {
     if (!s) return reply.code(404).send({ error: '技能不存在' });
     try {
       if (body.data.path === SKILL_FILE) return { skill: await saveSkillMd(body.data.content, id) };
-      writeSkillFile(s.slug, body.data.path, body.data.content);
+      await withSkillsLock(() => {
+        if (!getSkill(id)) throw new SkillError('技能不存在', 404);
+        writeSkillFile(s.slug, body.data.path, body.data.content);
+      });
       return { ok: true };
     } catch (err) { return sendError(reply, err); }
   });
@@ -147,7 +150,10 @@ export async function skillRoutes(app: FastifyInstance) {
       const buf = await readAll(file.file, 8 * 1024 * 1024);
       const rel = `${dir ? `${dir}/` : ''}${name}`;
       if (rel === SKILL_FILE) { await saveSkillMd(buf.toString('utf8'), id); return { ok: true, path: rel }; }
-      const r = writeSkillFile(s.slug, rel, buf);
+      const r = await withSkillsLock(() => {
+        if (!getSkill(id)) throw new SkillError('技能不存在', 404);
+        return writeSkillFile(s.slug, rel, buf);
+      });
       return { ok: true, path: r.rel, size: r.size };
     } catch (err) { return sendError(reply, err); }
   });
@@ -159,6 +165,12 @@ export async function skillRoutes(app: FastifyInstance) {
     if (!q.success) return reply.code(400).send({ error: '参数错误' });
     const s = getSkill(id);
     if (!s) return reply.code(404).send({ error: '技能不存在' });
-    try { deleteSkillFile(s.slug, q.data.path); return { ok: true }; } catch (err) { return sendError(reply, err); }
+    try {
+      await withSkillsLock(() => {
+        if (!getSkill(id)) throw new SkillError('技能不存在', 404);
+        deleteSkillFile(s.slug, q.data.path);
+      });
+      return { ok: true };
+    } catch (err) { return sendError(reply, err); }
   });
 }

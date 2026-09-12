@@ -4,9 +4,20 @@
 // small targeted edits instead of being re-emitted whole every turn.
 //
 // Files on disk are the source of truth; nothing about them is mirrored in
-// SQLite. Every path the model or the browser supplies goes through
-// resolveSafe(), which rejects traversal, absolute paths, symlinks and odd
-// characters, so a workspace can never see outside its own directory.
+// SQLite.
+//
+// Security model. The 沙盒 mounts this directory read-write, so its contents
+// are attacker-controlled while a command runs and may contain leftovers
+// (symlinks) from before seccomp existed. Every host-side operation therefore
+// resolves the path ONE COMPONENT AT A TIME against an already-open directory
+// descriptor — `/proc/self/fd/<dirfd>/<name>` is the kernel's own handle to
+// that directory, so an ancestor being swapped for a symlink (even atomically
+// with RENAME_EXCHANGE) cannot redirect us: we never re-resolve ancestors by
+// path. Each step uses O_NOFOLLOW / O_DIRECTORY, so a symlink at any level is
+// refused rather than followed. This is the openat(dirfd, name, O_NOFOLLOW)
+// chain that openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS) performs in-kernel,
+// expressed with what Node exposes. Nothing here touches an absolute path
+// below the root except to open the root itself (which we own).
 import fs from 'node:fs';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
@@ -19,7 +30,11 @@ const READ_WINDOW = 20_000; // chars per workspace_read call
 const LIST_LIMIT = 300; // entries shown to the model / in the prompt manifest
 const EDIT_CONTEXT = 160; // chars of context echoed back around an edit
 const MAX_PATH_CHARS = 200;
-const MAX_DEPTH = 8;
+export const MAX_DEPTH = 8;
+
+const { O_RDONLY, O_WRONLY, O_DIRECTORY, O_NOFOLLOW, O_NONBLOCK, O_NOCTTY, O_CREAT, O_EXCL } = fs.constants;
+const DIR_FLAGS = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NOCTTY;
+const FILE_READ_FLAGS = O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY;
 
 export interface WorkspaceEntry {
   path: string; // relative, '/'-separated
@@ -39,21 +54,30 @@ export class WorkspaceError extends Error {
   }
 }
 
+const CHAT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
 export function workspaceRoot(chatId: string): string {
   // chat ids are our own nanoid-style strings; refuse anything else outright
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(chatId)) throw new WorkspaceError('无效的对话', 400);
+  if (!CHAT_ID_RE.test(chatId)) throw new WorkspaceError('无效的对话', 400);
   return path.join(config.dataDir, 'workspaces', chatId);
 }
 
-/** Normalise a user/model supplied relative path and resolve it inside the
-    workspace. Returns the absolute path plus the cleaned relative form. */
-export function resolveSafe(chatId: string, rel: string): { abs: string; rel: string } {
+function hasControlChars(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return true;
+  }
+  return false;
+}
+
+/** Validate a user/model supplied relative path. Returns the cleaned relative
+    form and its segments; `abs` is informational only — no I/O ever uses it. */
+export function resolveSafe(chatId: string, rel: string): { abs: string; rel: string; segments: string[] } {
   const root = workspaceRoot(chatId);
   const raw = String(rel ?? '').replace(/\\/g, '/').trim();
   if (!raw || raw.length > MAX_PATH_CHARS) throw new WorkspaceError('文件路径为空或过长');
   if (raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) throw new WorkspaceError('只能使用工作区内的相对路径');
-  // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f]/.test(raw)) throw new WorkspaceError('文件路径含有非法字符');
+  if (hasControlChars(raw)) throw new WorkspaceError('文件路径含有非法字符');
   const segments = raw.split('/').filter((s) => s !== '' && s !== '.');
   if (!segments.length) throw new WorkspaceError('文件路径为空');
   if (segments.length > MAX_DEPTH) throw new WorkspaceError(`目录层级不能超过 ${MAX_DEPTH} 层`);
@@ -62,28 +86,70 @@ export function resolveSafe(chatId: string, rel: string): { abs: string; rel: st
     if (seg.startsWith('.')) throw new WorkspaceError('不允许以 . 开头的隐藏文件或目录');
     if (seg.length > 120) throw new WorkspaceError('文件名过长');
   }
-  const cleaned = segments.join('/');
-  const abs = path.resolve(root, ...segments);
-  if (abs !== root && !abs.startsWith(root + path.sep)) throw new WorkspaceError('文件路径越界');
-  // A symlink anywhere along the way could point outside; we never create
-  // them, but an uploaded archive could in theory — refuse to follow.
-  let cur = root;
-  for (const seg of segments) {
-    cur = path.join(cur, seg);
-    try {
-      if (fs.lstatSync(cur).isSymbolicLink()) throw new WorkspaceError('工作区内不允许符号链接');
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') break;
-      throw err;
-    }
-  }
-  return { abs, rel: cleaned };
+  return { abs: path.join(root, ...segments), rel: segments.join('/'), segments };
 }
 
-function ensureRoot(chatId: string): string {
+// ---- descriptor-anchored path resolution ----
+
+const fdPath = (fd: number, name?: string) => (name === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${name}`);
+
+function errCode(err: unknown): string { return (err as NodeJS.ErrnoException).code ?? ''; }
+
+function translate(err: unknown, what: string): never {
+  const code = errCode(err);
+  if (code === 'ELOOP') throw new WorkspaceError('工作区内不允许符号链接');
+  if (code === 'ENOENT' || code === 'ENOTDIR') throw new WorkspaceError(`文件不存在:${what}`, 404);
+  if (code === 'EISDIR') throw new WorkspaceError(`「${what}」是一个目录`);
+  if (code === 'ENOTEMPTY') throw new WorkspaceError(`「${what}」不是空目录`);
+  throw err;
+}
+
+/** Open the workspace root directory (creating it when asked). The root's own
+    path is ours — nothing below data/ is attacker-writable except the
+    workspace contents, which this fd sits above. */
+function openRoot(chatId: string, create: boolean): number {
   const root = workspaceRoot(chatId);
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  return root;
+  if (create) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  try { return fs.openSync(root, DIR_FLAGS); } catch (err) {
+    if (errCode(err) === 'ENOENT') throw new WorkspaceError('工作区为空', 404);
+    throw err;
+  }
+}
+
+/** openat(parent, name, O_DIRECTORY|O_NOFOLLOW), optionally mkdir first. */
+function openChildDir(parentFd: number, name: string, create: boolean): number {
+  try {
+    return fs.openSync(fdPath(parentFd, name), DIR_FLAGS);
+  } catch (err) {
+    if (create && errCode(err) === 'ENOENT') {
+      try { fs.mkdirSync(fdPath(parentFd, name), 0o700); } catch (e2) { if (errCode(e2) !== 'EEXIST') throw e2; }
+      return fs.openSync(fdPath(parentFd, name), DIR_FLAGS);
+    }
+    throw err;
+  }
+}
+
+/** Walk `dirs` from the root, one descriptor per level, and hand the final
+    directory fd to `fn`. Every fd opened along the way is closed afterwards. */
+function withDir<T>(chatId: string, dirs: string[], create: boolean, fn: (dirFd: number) => T): T {
+  let fd = openRoot(chatId, create);
+  try {
+    for (const seg of dirs) {
+      let next: number;
+      try { next = openChildDir(fd, seg, create); } catch (err) { translate(err, seg); }
+      fs.closeSync(fd);
+      fd = next;
+    }
+    return fn(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Split a validated path into (parent dirs, final name). */
+function split(chatId: string, rel: string): { dirs: string[]; name: string; rel: string } {
+  const { segments, rel: cleaned } = resolveSafe(chatId, rel);
+  return { dirs: segments.slice(0, -1), name: segments[segments.length - 1], rel: cleaned };
 }
 
 export function workspaceExists(chatId: string): boolean {
@@ -92,30 +158,44 @@ export function workspaceExists(chatId: string): boolean {
 
 // ---- listing & accounting ----
 
+interface WalkVisit { file(dirFd: number, name: string, rel: string, st: fs.Stats): void; other?(dirFd: number, name: string, rel: string): void }
+
+/** Depth-first walk anchored on descriptors; symlinks and other irregular
+    entries are reported to `other` (if given) and never followed. */
+function walk(dirFd: number, relDir: string, depth: number, visit: WalkVisit): void {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(fdPath(dirFd), { withFileTypes: true }); } catch { return; }
+  entries.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+  for (const e of entries) {
+    const rel = relDir ? `${relDir}/${e.name}` : e.name;
+    let st: fs.Stats;
+    try { st = fs.lstatSync(fdPath(dirFd, e.name)); } catch { continue; }
+    if (st.isDirectory()) {
+      if (depth >= MAX_DEPTH + 2) continue;
+      let child: number;
+      try { child = fs.openSync(fdPath(dirFd, e.name), DIR_FLAGS); } catch { continue; }
+      try { walk(child, rel, depth + 1, visit); } finally { fs.closeSync(child); }
+    } else if (st.isFile()) {
+      visit.file(dirFd, e.name, rel, st);
+    } else {
+      visit.other?.(dirFd, e.name, rel);
+    }
+  }
+}
+
 export function listWorkspace(chatId: string, limit = Number.MAX_SAFE_INTEGER): WorkspaceListing {
-  const root = workspaceRoot(chatId);
   const files: WorkspaceEntry[] = [];
   let bytes = 0;
   let truncated = false;
-  const walk = (dir: string, relDir: string, depth: number) => {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    entries.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
-    for (const e of entries) {
-      if (e.name.startsWith('.')) continue;
-      const rel = relDir ? `${relDir}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        if (depth < MAX_DEPTH) walk(path.join(dir, e.name), rel, depth + 1);
-      } else if (e.isFile()) {
-        let st: fs.Stats;
-        try { st = fs.statSync(path.join(dir, e.name)); } catch { continue; }
-        bytes += st.size;
-        if (files.length < limit) files.push({ path: rel, size: st.size, mtime: st.mtimeMs });
-        else truncated = true;
-      }
-    }
-  };
-  walk(root, '', 0);
+  if (!workspaceExists(chatId)) return { files, bytes, truncated };
+  withDir(chatId, [], false, (root) => walk(root, '', 0, {
+    file(_fd, name, rel, st) {
+      if (name.startsWith('.')) return;
+      bytes += st.size;
+      if (files.length < limit) files.push({ path: rel, size: st.size, mtime: st.mtimeMs });
+      else truncated = true;
+    },
+  }));
   return { files, bytes, truncated };
 }
 
@@ -131,10 +211,9 @@ export function allWorkspacesBytes(): { chats: number; bytes: number } {
   let dirs: string[] = [];
   try { dirs = fs.readdirSync(base); } catch { return { chats, bytes }; }
   for (const d of dirs) {
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(d)) continue;
-    const b = workspaceBytes(d);
+    if (!CHAT_ID_RE.test(d)) continue;
+    bytes += workspaceBytes(d);
     chats += 1;
-    bytes += b;
   }
   return { chats, bytes };
 }
@@ -147,6 +226,37 @@ function assertBudget(chatId: string, addedBytes: number, addedFiles: number) {
   if (files.length + addedFiles > config.maxWorkspaceFiles) {
     throw new WorkspaceError(`工作区文件数不能超过 ${config.maxWorkspaceFiles} 个`, 413);
   }
+}
+
+/** Is the workspace within its byte / file-count budget right now? */
+export function workspaceOverQuota(chatId: string): { over: boolean; bytes: number; files: number } {
+  const { files, bytes } = listWorkspace(chatId, config.maxWorkspaceFiles + 1);
+  return { over: bytes > config.maxWorkspaceBytes || files.length > config.maxWorkspaceFiles, bytes, files: files.length };
+}
+
+/**
+ * After a 沙盒 run: the command could write more than the budget allows
+ * (seccomp does not police write/truncate). Bring the workspace back under
+ * the limits by removing what that run produced, largest first, and report
+ * what went. Files untouched by the run are never removed.
+ */
+export function enforceWorkspaceQuota(chatId: string, sinceMs: number): { removed: { path: string; size: number }[]; bytes: number } {
+  const removed: { path: string; size: number }[] = [];
+  if (!workspaceExists(chatId)) return { removed, bytes: 0 };
+  let { files, bytes } = listWorkspace(chatId);
+  const over = () => bytes > config.maxWorkspaceBytes || files.length > config.maxWorkspaceFiles;
+  if (!over()) return { removed, bytes };
+  const candidates = files.filter((f) => f.mtime >= sinceMs - 2000).sort((a, b) => b.size - a.size);
+  for (const f of candidates) {
+    if (!over()) break;
+    try {
+      deleteWorkspacePathLocked(chatId, f.path);
+      removed.push({ path: f.path, size: f.size });
+      bytes -= f.size;
+      files = files.filter((x) => x.path !== f.path);
+    } catch { /* keep going */ }
+  }
+  return { removed, bytes };
 }
 
 // ---- reading ----
@@ -171,60 +281,38 @@ export function isTextPath(rel: string): boolean {
 
 function looksBinary(buf: Buffer): boolean {
   const n = Math.min(buf.length, 8000);
-  for (let i = 0; i < n; i++) {
-    const c = buf[i];
-    if (c === 0) return true;
-  }
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
   return false;
 }
 
 /**
- * Open a workspace file for reading without ever following a symlink, then
- * prove the descriptor really is the file the (symlink-free) path leads to.
- *
- * The 沙盒 can rewrite the directory while we look at it, so "check, then
- * open" is not enough: open first (O_NOFOLLOW refuses a symlink as the last
- * component; O_NONBLOCK keeps a FIFO from hanging us), fstat the result, and
- * only then walk the path with lstat — every component must be a plain
- * directory and the final entry must have the same dev/ino as what we hold.
- * An attacker who swaps a directory for a symlink and back cannot make both
- * checks agree. The caller owns the descriptor.
+ * Open a workspace file for reading through the descriptor chain: every
+ * directory via O_DIRECTORY|O_NOFOLLOW, the file via O_NOFOLLOW (O_NONBLOCK
+ * keeps a FIFO from hanging us), then fstat must say "regular file". The
+ * caller owns the descriptor.
  */
 export function openRegular(chatId: string, rel: string): { fd: number; rel: string; size: number } {
-  const { abs, rel: cleaned } = resolveSafe(chatId, rel);
-  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK, O_NOCTTY } = fs.constants;
-  let fd: number;
-  try {
-    fd = fs.openSync(abs, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') throw new WorkspaceError(`文件不存在:${cleaned}`, 404);
-    if (code === 'ELOOP') throw new WorkspaceError('工作区内不允许符号链接');
-    throw err;
-  }
-  try {
-    const st = fs.fstatSync(fd);
-    if (!st.isFile()) throw new WorkspaceError(`不是普通文件:${cleaned}`);
-    let cur = workspaceRoot(chatId);
-    for (const seg of cleaned.split('/')) {
-      cur = path.join(cur, seg);
-      const ls = fs.lstatSync(cur);
-      if (ls.isSymbolicLink()) throw new WorkspaceError('工作区内不允许符号链接');
+  const { dirs, name, rel: cleaned } = split(chatId, rel);
+  return withDir(chatId, dirs, false, (dirFd) => {
+    let fd: number;
+    try { fd = fs.openSync(fdPath(dirFd, name), FILE_READ_FLAGS); } catch (err) { translate(err, cleaned); }
+    try {
+      const st = fs.fstatSync(fd);
+      if (!st.isFile()) throw new WorkspaceError(`不是普通文件:${cleaned}`);
+      return { fd, rel: cleaned, size: st.size };
+    } catch (err) {
+      fs.closeSync(fd);
+      throw err;
     }
-    const ls = fs.lstatSync(abs);
-    if (ls.dev !== st.dev || ls.ino !== st.ino) throw new WorkspaceError('文件在读取时被改动,请重试', 409);
-    return { fd, rel: cleaned, size: st.size };
-  } catch (err) {
-    fs.closeSync(fd);
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new WorkspaceError(`文件不存在:${cleaned}`, 404);
-    throw err;
-  }
+  });
 }
 
 function readRegular(chatId: string, rel: string): { buf: Buffer; rel: string } {
   const { fd, rel: cleaned } = openRegular(chatId, rel);
   try { return { buf: fs.readFileSync(fd), rel: cleaned }; } finally { fs.closeSync(fd); }
 }
+
+const CRLF = /\r\n/g;
 
 /** Text rendition of a workspace file: plain text as-is, docx through
     mammoth; anything else is reported as binary. */
@@ -234,48 +322,27 @@ export async function readWorkspaceText(chatId: string, rel: string): Promise<st
   if (ext === 'docx') {
     const mammoth = await import('mammoth');
     const r = await mammoth.extractRawText({ buffer: buf });
-    return r.value.replace(/\r\n/g, '\n');
+    return r.value.replace(CRLF, '\n');
   }
   if (!isTextPath(cleaned) && looksBinary(buf)) {
     throw new WorkspaceError(`「${cleaned}」是二进制文件(${buf.length.toLocaleString()} 字节),无法以文本读取`);
   }
-  return buf.toString('utf8').replace(/\r\n/g, '\n');
-}
-
-/** Every path component below the root must be a real directory — no
-    symlink may sit anywhere on the way to where we are about to write. */
-function assertNoSymlinkOnPath(chatId: string, rel: string) {
-  let cur = workspaceRoot(chatId);
-  for (const seg of rel.split('/')) {
-    cur = path.join(cur, seg);
-    try {
-      if (fs.lstatSync(cur).isSymbolicLink()) throw new WorkspaceError('工作区内不允许符号链接');
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw err;
-    }
-  }
+  return buf.toString('utf8').replace(CRLF, '\n');
 }
 
 /** Delete anything that is neither a regular file nor a directory (symlinks,
-    FIFOs, sockets). Run after every 沙盒 command as a belt to seccomp's
-    braces, so the host side only ever meets plain files. */
+    FIFOs, sockets). Run before and after every 沙盒 command and at startup,
+    so the host side only ever meets plain files. */
 export function sweepIrregularEntries(chatId: string): number {
-  const root = workspaceRoot(chatId);
+  if (!workspaceExists(chatId)) return 0;
   let removed = 0;
-  const walk = (dir: string, depth: number) => {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) { if (depth < MAX_DEPTH + 2) walk(p, depth + 1); }
-      else if (!e.isFile()) {
-        try { fs.rmSync(p, { force: true }); removed += 1; } catch { /* best effort */ }
-      }
-    }
-  };
-  walk(root, 0);
-  if (removed) console.warn(`[workspace] ${chatId}: removed ${removed} irregular entr${removed === 1 ? 'y' : 'ies'} after sandbox run`);
+  withDir(chatId, [], false, (root) => walk(root, '', 0, {
+    file() { /* keep */ },
+    other(dirFd, name) {
+      try { fs.unlinkSync(fdPath(dirFd, name)); removed += 1; } catch { /* best effort */ }
+    },
+  }));
+  if (removed) console.warn(`[workspace] ${chatId}: removed ${removed} irregular entr${removed === 1 ? 'y' : 'ies'}`);
   return removed;
 }
 
@@ -286,34 +353,36 @@ export function writeWorkspaceFile(chatId: string, rel: string, content: string 
 }
 
 function writeWorkspaceFileLocked(chatId: string, rel: string, content: string | Buffer): { rel: string; size: number } {
-  const { abs, rel: cleaned } = resolveSafe(chatId, rel);
+  const { dirs, name, rel: cleaned } = split(chatId, rel);
   const data = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
   if (data.length > config.maxWorkspaceFileBytes) {
     throw new WorkspaceError(`单个文件不能超过 ${Math.round(config.maxWorkspaceFileBytes / 1048576)} MB`, 413);
   }
-  ensureRoot(chatId);
-  let existing = 0;
-  let isNew = true;
-  try {
-    const st = fs.statSync(abs);
-    if (st.isDirectory()) throw new WorkspaceError(`「${cleaned}」是一个目录`);
-    existing = st.size;
-    isNew = false;
-  } catch (err) {
-    if (err instanceof WorkspaceError) throw err;
-  }
-  assertBudget(chatId, data.length - existing, isNew ? 1 : 0);
-  fs.mkdirSync(path.dirname(abs), { recursive: true, mode: 0o700 });
-  assertNoSymlinkOnPath(chatId, cleaned);
-  // write-then-rename so a crash mid-write never leaves a half file; the
-  // temp file is created exclusively (O_EXCL|O_NOFOLLOW) so nothing that
-  // already sits at that name — link or otherwise — can redirect the write.
-  const tmp = `${abs}.${process.pid}.${Date.now()}.tmp`;
-  const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
-  const fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
-  try { fs.writeFileSync(fd, data); } finally { fs.closeSync(fd); }
-  fs.renameSync(tmp, abs);
-  return { rel: cleaned, size: data.length };
+  return withDir(chatId, dirs, true, (dirFd) => {
+    let existing = 0;
+    let isNew = true;
+    try {
+      const st = fs.lstatSync(fdPath(dirFd, name));
+      if (st.isDirectory()) throw new WorkspaceError(`「${cleaned}」是一个目录`);
+      if (st.isFile()) { existing = st.size; isNew = false; }
+      // a leftover symlink/FIFO at that name is simply renamed over below
+    } catch (err) {
+      if (err instanceof WorkspaceError) throw err;
+    }
+    assertBudget(chatId, data.length - existing, isNew ? 1 : 0);
+    // write-then-rename so a crash mid-write never leaves a half file; the
+    // temp file is created exclusively (O_EXCL|O_NOFOLLOW) in the SAME
+    // directory descriptor, and the rename is expressed through that
+    // descriptor too, so no ancestor can be re-pointed under either step.
+    const tmp = `.${name}.${process.pid}.${Date.now()}.tmp`;
+    const fd = fs.openSync(fdPath(dirFd, tmp), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+    try { fs.writeFileSync(fd, data); } finally { fs.closeSync(fd); }
+    try { fs.renameSync(fdPath(dirFd, tmp), fdPath(dirFd, name)); } catch (err) {
+      try { fs.unlinkSync(fdPath(dirFd, tmp)); } catch { /* ignore */ }
+      translate(err, cleaned);
+    }
+    return { rel: cleaned, size: data.length };
+  });
 }
 
 export interface EditResult {
@@ -352,55 +421,82 @@ async function editWorkspaceFileLocked(
   return { rel: cleaned, replacements: replaceAll ? count : 1, size, context: next.slice(start, end) };
 }
 
+/** rm -r expressed on descriptors: recurse into real directories only,
+    unlink everything else, rmdir on the way out. Returns files removed. */
+function removeTree(parentFd: number, name: string, depth: number): number {
+  let removed = 0;
+  let fd: number;
+  try { fd = fs.openSync(fdPath(parentFd, name), DIR_FLAGS); } catch (err) { translate(err, name); }
+  try {
+    for (const e of fs.readdirSync(fdPath(fd), { withFileTypes: true })) {
+      let st: fs.Stats;
+      try { st = fs.lstatSync(fdPath(fd, e.name)); } catch { continue; }
+      if (st.isDirectory()) {
+        if (depth < MAX_DEPTH + 2) removed += removeTree(fd, e.name, depth + 1);
+      } else {
+        try { fs.unlinkSync(fdPath(fd, e.name)); if (st.isFile()) removed += 1; } catch { /* best effort */ }
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.rmdirSync(fdPath(parentFd, name));
+  return removed;
+}
+
 export function deleteWorkspacePath(chatId: string, rel: string): Promise<{ rel: string; removed: number }> {
   return withChatLock(chatId, () => deleteWorkspacePathLocked(chatId, rel));
 }
 
 function deleteWorkspacePathLocked(chatId: string, rel: string): { rel: string; removed: number } {
-  const { abs, rel: cleaned } = resolveSafe(chatId, rel);
-  let st: fs.Stats;
-  try { st = fs.lstatSync(abs); } catch { throw new WorkspaceError(`文件不存在:${cleaned}`, 404); }
-  if (st.isDirectory()) {
-    const before = listWorkspace(chatId).files.filter((f) => f.path.startsWith(`${cleaned}/`)).length;
-    fs.rmSync(abs, { recursive: true, force: true });
-    return { rel: cleaned, removed: before };
-  }
-  fs.rmSync(abs, { force: true });
-  return { rel: cleaned, removed: 1 };
+  const { dirs, name, rel: cleaned } = split(chatId, rel);
+  return withDir(chatId, dirs, false, (dirFd) => {
+    let st: fs.Stats;
+    try { st = fs.lstatSync(fdPath(dirFd, name)); } catch (err) { translate(err, cleaned); }
+    if (st.isDirectory()) {
+      const removed = removeTree(dirFd, name, dirs.length);
+      return { rel: cleaned, removed };
+    }
+    try { fs.unlinkSync(fdPath(dirFd, name)); } catch (err) { translate(err, cleaned); }
+    return { rel: cleaned, removed: st.isFile() ? 1 : 0 };
+  });
 }
 
 export function renameWorkspacePath(chatId: string, from: string, to: string): Promise<{ from: string; to: string }> {
   return withChatLock(chatId, () => {
-    const src = resolveSafe(chatId, from);
-    const dst = resolveSafe(chatId, to);
-    let st: fs.Stats;
-    try { st = fs.lstatSync(src.abs); } catch { throw new WorkspaceError(`文件不存在:${src.rel}`, 404); }
-    if (!st.isFile() && !st.isDirectory()) throw new WorkspaceError(`不是普通文件:${src.rel}`);
-    try { fs.lstatSync(dst.abs); throw new WorkspaceError(`目标已存在:${dst.rel}`, 409); }
-    catch (err) { if (err instanceof WorkspaceError) throw err; }
-    fs.mkdirSync(path.dirname(dst.abs), { recursive: true, mode: 0o700 });
-    assertNoSymlinkOnPath(chatId, dst.rel);
-    fs.renameSync(src.abs, dst.abs);
-    return { from: src.rel, to: dst.rel };
+    const src = split(chatId, from);
+    const dst = split(chatId, to);
+    return withDir(chatId, src.dirs, false, (srcFd) => withDir(chatId, dst.dirs, true, (dstFd) => {
+      let st: fs.Stats;
+      try { st = fs.lstatSync(fdPath(srcFd, src.name)); } catch (err) { translate(err, src.rel); }
+      if (!st.isFile() && !st.isDirectory()) throw new WorkspaceError(`不是普通文件:${src.rel}`);
+      try { fs.lstatSync(fdPath(dstFd, dst.name)); throw new WorkspaceError(`目标已存在:${dst.rel}`, 409); }
+      catch (err) { if (err instanceof WorkspaceError) throw err; }
+      try { fs.renameSync(fdPath(srcFd, src.name), fdPath(dstFd, dst.name)); } catch (err) { translate(err, src.rel); }
+      return { from: src.rel, to: dst.rel };
+    }));
   });
 }
 
-/** Remove the whole directory (chat deleted / swept). Best effort. */
+/** Remove the whole directory (chat deleted / swept). fs.rm never follows
+    symlinks, and the root path is ours. Best effort. */
 export function removeWorkspace(chatId: string): void {
   try { fs.rmSync(workspaceRoot(chatId), { recursive: true, force: true }); }
   catch (err) { console.warn(`[workspace] remove ${chatId} failed: ${(err as Error).message}`); }
 }
 
-/** Directories whose chat no longer exists (crash between delete and rm). */
+/** Startup: drop directories whose chat no longer exists (crash between
+    delete and rm) and scrub irregular entries from the ones that remain —
+    a workspace from before seccomp may still hold a planted symlink. */
 export function sweepOrphanWorkspaces(): number {
   const base = path.join(config.dataDir, 'workspaces');
   let dirs: string[] = [];
   try { dirs = fs.readdirSync(base); } catch { return 0; }
   let removed = 0;
   for (const d of dirs) {
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(d)) continue;
+    if (!CHAT_ID_RE.test(d)) continue;
     const row = db.select({ id: schema.chats.id }).from(schema.chats).where(eq(schema.chats.id, d)).get();
-    if (row) continue;
+    if (row) { try { sweepIrregularEntries(d); } catch { /* best effort */ } continue; }
     removeWorkspace(d);
     removed += 1;
   }
