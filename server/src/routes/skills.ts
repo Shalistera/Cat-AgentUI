@@ -129,8 +129,9 @@ export async function skillRoutes(app: FastifyInstance) {
     try {
       if (body.data.path === SKILL_FILE) return { skill: await saveSkillMd(body.data.content, id) };
       await withSkillsLock(() => {
-        if (!getSkill(id)) throw new SkillError('技能不存在', 404);
-        writeSkillFile(s.slug, body.data.path, body.data.content);
+        const cur = getSkill(id);
+        if (!cur) throw new SkillError('技能不存在', 404);
+        writeSkillFile(cur.slug, body.data.path, body.data.content);
       });
       return { ok: true };
     } catch (err) { return sendError(reply, err); }
@@ -151,8 +152,9 @@ export async function skillRoutes(app: FastifyInstance) {
       const rel = `${dir ? `${dir}/` : ''}${name}`;
       if (rel === SKILL_FILE) { await saveSkillMd(buf.toString('utf8'), id); return { ok: true, path: rel }; }
       const r = await withSkillsLock(() => {
-        if (!getSkill(id)) throw new SkillError('技能不存在', 404);
-        return writeSkillFile(s.slug, rel, buf);
+        const cur = getSkill(id);
+        if (!cur) throw new SkillError('技能不存在', 404);
+        return writeSkillFile(cur.slug, rel, buf);
       });
       return { ok: true, path: r.rel, size: r.size };
     } catch (err) { return sendError(reply, err); }
@@ -167,8 +169,9 @@ export async function skillRoutes(app: FastifyInstance) {
     if (!s) return reply.code(404).send({ error: '技能不存在' });
     try {
       await withSkillsLock(() => {
-        if (!getSkill(id)) throw new SkillError('技能不存在', 404);
-        deleteSkillFile(s.slug, q.data.path);
+        const cur = getSkill(id);
+        if (!cur) throw new SkillError('技能不存在', 404);
+        deleteSkillFile(cur.slug, q.data.path);
       });
       return { ok: true };
     } catch (err) { return sendError(reply, err); }

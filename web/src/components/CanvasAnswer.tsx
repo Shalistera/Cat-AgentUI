@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { withCanvasCsp } from '../sandboxedHtml';
 import { Check, Code, Copy, LayoutTemplate, PanelRight, RotateCw } from 'lucide-react';
 import hljs from 'highlight.js/lib/core';
 import { useComposerInsert, useHtmlPreview, useUi, type Theme } from '../store';
@@ -187,7 +188,7 @@ export function CanvasAnswer({ code, streaming }: { code: string; streaming: boo
           ref={frameRef}
           sandbox="allow-scripts allow-modals"
           referrerPolicy="no-referrer"
-          srcDoc={src}
+          srcDoc={withCanvasCsp(src)}
           title="互动画布"
           style={{ height }}
           className="block w-full border-0 bg-bg1 transition-[height] duration-150"

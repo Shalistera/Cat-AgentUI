@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
+
+class RegistrationBlocked extends Error { constructor(message: string, readonly code: number) { super(message); } }
 import { z } from 'zod';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { db, schema, now, getSetting } from '../db/index.js';
 import { hashPassword, verifyPassword, needsRehash, newId, sha256hex } from '../crypto.js';
 import {
@@ -46,26 +48,40 @@ export async function authRoutes(app: FastifyInstance) {
     if (!body.success) return reply.code(400).send({ error: '用户名(2-32位)或密码(至少8位)不符合要求' });
     const { username, password } = body.data;
 
-    const anyUser = db.select({ id: schema.users.id }).from(schema.users).limit(1).get();
-    if (anyUser && !getSetting('signup_enabled', false)) {
-      return reply.code(403).send({ error: '注册已关闭,请联系管理员' });
-    }
-    const existing = db.select({ id: schema.users.id }).from(schema.users)
-      .where(eq(schema.users.username, username)).get();
-    if (existing) return reply.code(409).send({ error: '用户名已被使用' });
-
+    // Hash outside the transaction (scrypt is async); the gate + role decision
+    // + insert then run in ONE synchronous transaction so concurrent requests
+    // can't both read "no users yet" and both become admin. better-sqlite3
+    // transactions don't interleave, so the user count is authoritative here.
+    const passwordHash = await hashPassword(password);
     const id = newId();
-    db.insert(schema.users).values({
-      id, username,
-      passwordHash: await hashPassword(password),
-      role: anyUser ? 'user' : 'admin', // first user becomes admin
-      createdAt: now(),
-    }).run();
+    let isFirstUser = false;
+    try {
+      db.transaction((tx) => {
+        const count = tx.select({ n: sql<number>`count(*)` }).from(schema.users).get()?.n ?? 0;
+        isFirstUser = count === 0;
+        if (!isFirstUser && !getSetting('signup_enabled', false)) {
+          throw new RegistrationBlocked('注册已关闭,请联系管理员', 403);
+        }
+        tx.insert(schema.users).values({
+          id, username, passwordHash,
+          role: isFirstUser ? 'admin' : 'user', // first user becomes admin
+          createdAt: now(),
+        }).run();
+      });
+    } catch (err) {
+      if (err instanceof RegistrationBlocked) return reply.code(err.code).send({ error: err.message });
+      // UNIQUE(username) violation → taken (racing registrations of same name)
+      if ((err as { code?: string }).code === 'SQLITE_CONSTRAINT_UNIQUE'
+        || /UNIQUE constraint failed: users\.username/.test((err as Error).message)) {
+        return reply.code(409).send({ error: '用户名已被使用' });
+      }
+      throw err;
+    }
 
     const token = createSession(id, req);
     setSessionCookie(reply, token);
     const u = db.select().from(schema.users).where(eq(schema.users.id, id)).get()!;
-    return { user: publicUser(u), isFirstUser: !anyUser };
+    return { user: publicUser(u), isFirstUser };
   });
 
   app.post('/api/auth/login', async (req, reply) => {

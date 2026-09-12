@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { withCanvasCsp } from '../sandboxedHtml';
 import {
   ChevronLeft, Download, FileCode, FileImage, FileText, File as FileIcon, FolderOpen, Pencil,
   RefreshCw, Save, Trash2, Upload, X,
@@ -124,7 +125,7 @@ function FileView({ chatId, file, onBack, onChanged }: {
     body = <div className="p-4"><Markdown text={text} /></div>;
   } else if (isHtml && rendered) {
     // No allow-same-origin: a model-written page must not reach our cookies.
-    body = <iframe sandbox="allow-scripts allow-modals" srcDoc={text} title={file.path} className="h-full w-full border-0 bg-white" />;
+    body = <iframe sandbox="allow-scripts allow-modals" srcDoc={withCanvasCsp(text)} title={file.path} className="h-full w-full border-0 bg-white" />;
   } else {
     body = <pre className="whitespace-pre-wrap break-words p-4 font-mono text-[12.5px] leading-relaxed text-tx">{text}</pre>;
   }

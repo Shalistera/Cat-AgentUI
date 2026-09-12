@@ -224,7 +224,7 @@ export async function runInSandbox(req: RunRequest): Promise<RunResult> {
     // budget by removing what this run produced (largest first).
     try { sweepIrregularEntries(req.chatId); } catch { /* best effort */ }
     try {
-      const q = enforceWorkspaceQuota(req.chatId, t0);
+      const q = enforceWorkspaceQuota(req.chatId);
       if (q.removed.length) r.quotaRemoved = q.removed;
     } catch { /* best effort */ }
     return r;

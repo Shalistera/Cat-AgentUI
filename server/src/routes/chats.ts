@@ -1697,6 +1697,17 @@ export async function chatRoutes(app: FastifyInstance) {
                   }
                   const override = agentSettings.subagent.modelId ? getModelWithProvider(agentSettings.subagent.modelId) : null;
                   const sm = override && override.model.tools && !override.model.imageGen ? override : { model, provider };
+                  // A subagent is a full extra model run: it must clear the
+                  // same gates a normal turn does, or one turn could fan out
+                  // into maxPerTurn uncounted calls (and reach a limited model
+                  // indirectly). Monthly quota and the effective model's
+                  // per-model limit are checked here; no downgrade — over
+                  // budget simply refuses the spawn.
+                  const subQuota = checkQuota(user.id);
+                  if (!subQuota.ok) return { result: `无法委派子代理:${quotaBlockMessage(subQuota)}`, isError: true };
+                  const subLimit = checkModelLimit(user, sm.model);
+                  if (!subLimit.ok) return { result: `无法委派子代理:${modelLimitReason(sm.model, subLimit)}`, isError: true };
+                  if (!canUseModel(user, sm.model.id)) return { result: '无法委派子代理:所选模型未对你开放', isError: true };
                   clearProviderIdleTimer(); // the nested run has its own timeout
                   const r = await runSubagent({
                     user, chatId, projectId: chat.projectId, parentMessageId: assistantId,

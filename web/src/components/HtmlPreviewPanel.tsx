@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { withCanvasCsp } from '../sandboxedHtml';
 import { RotateCw, X } from 'lucide-react';
 import { useHtmlPreview } from '../store';
 
@@ -32,7 +33,7 @@ export function HtmlPreviewPanel() {
       <iframe
         key={reloadKey}
         sandbox="allow-scripts allow-modals"
-        srcDoc={src}
+        srcDoc={withCanvasCsp(src)}
         title="HTML 预览"
         className="block w-full flex-1 border-0 bg-white"
       />

@@ -200,7 +200,26 @@ export function listWorkspace(chatId: string, limit = Number.MAX_SAFE_INTEGER): 
 }
 
 export function workspaceBytes(chatId: string): number {
-  return listWorkspace(chatId, 0).bytes;
+  return accountWorkspace(chatId).bytes;
+}
+
+/**
+ * Quota accounting counts EVERY regular file, including dot-files. The
+ * model-facing listing above hides names starting with '.', but a command
+ * could hide bulk data as .hidden-* to evade a display-based quota — so the
+ * budget and the reclaimer must never rely on that listing.
+ */
+export function accountWorkspace(chatId: string): { files: WorkspaceEntry[]; bytes: number } {
+  const files: WorkspaceEntry[] = [];
+  let bytes = 0;
+  if (!workspaceExists(chatId)) return { files, bytes };
+  withDir(chatId, [], false, (root) => walk(root, '', 0, {
+    file(_fd, name, rel, st) {
+      bytes += st.size;
+      files.push({ path: rel, size: st.size, mtime: st.mtimeMs });
+    },
+  }));
+  return { files, bytes };
 }
 
 /** Total workspace bytes across every chat (storage overview). */
@@ -219,7 +238,7 @@ export function allWorkspacesBytes(): { chats: number; bytes: number } {
 }
 
 function assertBudget(chatId: string, addedBytes: number, addedFiles: number) {
-  const { files, bytes } = listWorkspace(chatId, config.maxWorkspaceFiles + 1);
+  const { files, bytes } = accountWorkspace(chatId);
   if (bytes + addedBytes > config.maxWorkspaceBytes) {
     throw new WorkspaceError(`工作区已达 ${Math.round(config.maxWorkspaceBytes / 1048576)} MB 上限,请先删除一些文件`, 413);
   }
@@ -230,7 +249,7 @@ function assertBudget(chatId: string, addedBytes: number, addedFiles: number) {
 
 /** Is the workspace within its byte / file-count budget right now? */
 export function workspaceOverQuota(chatId: string): { over: boolean; bytes: number; files: number } {
-  const { files, bytes } = listWorkspace(chatId, config.maxWorkspaceFiles + 1);
+  const { files, bytes } = accountWorkspace(chatId);
   return { over: bytes > config.maxWorkspaceBytes || files.length > config.maxWorkspaceFiles, bytes, files: files.length };
 }
 
@@ -240,20 +259,40 @@ export function workspaceOverQuota(chatId: string): { over: boolean; bytes: numb
  * the limits by removing what that run produced, largest first, and report
  * what went. Files untouched by the run are never removed.
  */
-export function enforceWorkspaceQuota(chatId: string, sinceMs: number): { removed: { path: string; size: number }[]; bytes: number } {
+/** Unlink a regular file by its accounting-relative path, tolerating dot
+    names (which resolveSafe rejects). Walks parents via descriptors, refuses
+    to follow symlinks and refuses '..'. Reclaimer-only. */
+function reclaimUnlink(chatId: string, rel: string): void {
+  const segs = rel.split('/').filter((x) => x && x !== '.');
+  if (!segs.length || segs.some((x) => x === '..')) return;
+  const dirs = segs.slice(0, -1);
+  const name = segs[segs.length - 1];
+  withDir(chatId, dirs, false, (dirFd) => {
+    const st = fs.lstatSync(fdPath(dirFd, name));
+    if (st.isFile()) fs.unlinkSync(fdPath(dirFd, name));
+  });
+}
+
+export function enforceWorkspaceQuota(chatId: string): { removed: { path: string; size: number }[]; bytes: number } {
   const removed: { path: string; size: number }[] = [];
   if (!workspaceExists(chatId)) return { removed, bytes: 0 };
-  let { files, bytes } = listWorkspace(chatId);
-  const over = () => bytes > config.maxWorkspaceBytes || files.length > config.maxWorkspaceFiles;
+  let { files, bytes } = accountWorkspace(chatId);
+  let count = files.length;
+  const over = () => bytes > config.maxWorkspaceBytes || count > config.maxWorkspaceFiles;
   if (!over()) return { removed, bytes };
-  const candidates = files.filter((f) => f.mtime >= sinceMs - 2000).sort((a, b) => b.size - a.size);
+  // The pre-run check guaranteed the workspace was under budget before this
+  // command, and the chat lock let nothing else write meanwhile — so every
+  // byte over the limit was produced by this run. Trim largest-first, all
+  // files eligible (mtime is attacker-controlled and must not gate this),
+  // including dot-files.
+  const candidates = [...files].sort((a, b) => b.size - a.size);
   for (const f of candidates) {
     if (!over()) break;
     try {
-      deleteWorkspacePathLocked(chatId, f.path);
+      reclaimUnlink(chatId, f.path);
       removed.push({ path: f.path, size: f.size });
       bytes -= f.size;
-      files = files.filter((x) => x.path !== f.path);
+      count -= 1;
     } catch { /* keep going */ }
   }
   return { removed, bytes };

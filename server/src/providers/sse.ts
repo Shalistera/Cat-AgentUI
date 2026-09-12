@@ -1,26 +1,33 @@
 // Minimal SSE parser over a fetch Response body.
 export interface SseMessage { event: string | null; data: string }
 
-// undici surfaces a dead keep-alive socket as TypeError('fetch failed') with
-// a socket-level cause. That happens when a pooled connection sat idle while
-// a long tool call (sandbox command, subagent) ran and the remote closed it.
-// The request never left, so one retry on a fresh connection is safe; any
-// other failure, or an aborted signal, is reported as-is.
-function isStaleSocketError(err: unknown): boolean {
+// Retrying a POST is only safe when the request PROVABLY never reached the
+// upstream — otherwise a duplicate could double-bill a completion. Two classes
+// qualify:
+//   * connection-phase failures (DNS / connect / connect-timeout): no bytes
+//     were ever written;
+//   * undici picking a pooled keep-alive socket that the peer had already
+//     closed while a long tool call ran — it detects the dead socket BEFORE
+//     writing the request and raises UND_ERR_SOCKET "other side closed".
+// A mid-flight reset (ECONNRESET / EPIPE / "socket hang up") is deliberately
+// NOT retried: the request may have been received, so we surface it and let
+// the turn fail rather than risk a second charge.
+function isPreSendError(err: unknown): boolean {
   if (!(err instanceof TypeError) || err.message !== 'fetch failed') return false;
   const cause = (err as { cause?: { code?: string; message?: string } }).cause;
   const code = cause?.code ?? '';
   const msg = cause?.message ?? '';
-  return /^(UND_ERR_SOCKET|ECONNRESET|EPIPE|UND_ERR_CONNECT_TIMEOUT|ECONNREFUSED|EAI_AGAIN)$/.test(code)
-    || /other side closed|socket hang up|reset by peer/i.test(msg)
-    || (!code && !msg);
+  if (/^(UND_ERR_CONNECT_TIMEOUT|ECONNREFUSED|EAI_AGAIN|ENOTFOUND)$/.test(code)) return true;
+  // idle-reused socket found closed before the request was sent
+  if (code === 'UND_ERR_SOCKET' && /other side closed/i.test(msg)) return true;
+  return false;
 }
 
 export async function fetchRetry(url: string, init: RequestInit & { signal?: AbortSignal }): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (err) {
-    if (init.signal?.aborted || !isStaleSocketError(err)) throw err;
+    if (init.signal?.aborted || !isPreSendError(err)) throw err;
     await new Promise((r) => setTimeout(r, 300));
     if (init.signal?.aborted) throw err;
     return fetch(url, init);
