@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import {
-  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, FolderOpen, Gauge, Globe, Image as ImageIcon, LayoutTemplate,
+  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, FolderOpen, Gauge, Globe, Image as ImageIcon,
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAgentCaps, useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
@@ -97,12 +97,6 @@ function clearDraft(key: string) {
   try { localStorage.removeItem(DRAFT_PREFIX + key); } catch { /* ignore */ }
 }
 
-/** Per-send options that are not part of the chat's saved settings. */
-export interface SendOptions {
-  /** 互动画布 for this turn only (the 画布 button). */
-  canvas?: boolean;
-}
-
 interface ComposerProps {
   streaming: boolean;
   disabled?: boolean;
@@ -118,9 +112,9 @@ interface ComposerProps {
   workspacePanelOpen?: boolean;
   settings: ComposerSettings;
   onSettingsChange(s: ComposerSettings): void;
-  onSend(text: string, attachments: PendingAttachment[], opts?: SendOptions): void;
+  onSend(text: string, attachments: PendingAttachment[]): void;
   /** Present = sends during generation queue up instead of being blocked. */
-  onEnqueue?(text: string, attachments: PendingAttachment[], opts?: SendOptions): void;
+  onEnqueue?(text: string, attachments: PendingAttachment[]): void;
   onStop(): void;
   /** Persist unsent input under this key (per chat); omit to disable drafts. */
   draftKey?: string;
@@ -224,20 +218,6 @@ export function Composer(props: ComposerProps) {
 
   // 划词引用 etc.: append the published text under whatever is typed, unfold
   // a compact composer, and put the caret at the end ready to type the question.
-  // 互动画布 (experimental, settings.canvasAnswers): the model normally decides
-  // per reply whether a component helps; this button demands one for the
-  // next send only, so it resets after sending.
-  const [canvasTurn, setCanvasTurn] = useState(false);
-  const canvasAvailable = !!user?.settings.canvasAnswers;
-  // Stays lit while the reply it was pressed for streams — feedback that the
-  // request went out with it — and clears when that reply finishes.
-  const canvasArmedRef = useRef(false);
-  useEffect(() => {
-    if (!props.streaming && canvasArmedRef.current) {
-      canvasArmedRef.current = false;
-      setCanvasTurn(false);
-    }
-  }, [props.streaming]);
   const insertPending = useComposerInsert((s) => s.pending);
   const consumeInsert = useComposerInsert((s) => s.consume);
   useEffect(() => {
@@ -267,15 +247,12 @@ export function Composer(props: ComposerProps) {
   function send() {
     const t = text.trim();
     if ((!t && atts.length === 0) || props.disabled) return;
-    const opts: SendOptions = canvasTurn ? { canvas: true } : {};
     if (streaming) {
       // Generation in progress: queue the follow-up instead of dropping it.
       if (!props.onEnqueue) return;
-      props.onEnqueue(t, atts, opts);
-      setCanvasTurn(false); // captured by the queue item; one turn only
+      props.onEnqueue(t, atts);
     } else {
-      props.onSend(t, atts, opts);
-      if (canvasTurn) canvasArmedRef.current = true; // clears when this reply ends
+      props.onSend(t, atts);
     }
     setText('');
     setAtts([]);
@@ -739,37 +716,15 @@ export function Composer(props: ComposerProps) {
           {props.onWorkspaceClick && agentCaps?.workspace && model?.tools && !imageMode && (
             <button
               aria-pressed={!!props.workspacePanelOpen}
-              className={props.workspacePanelOpen
+              className={`${props.workspacePanelOpen
                 ? `${toolBtnShape} border-acc/40 bg-acc/10 text-acc`
-                : toolBtn}
+                : toolBtn} max-sm:hidden`}
               title="工作区(Beta):助手会把长文、方案、代码、数据分析等成果写成文件放在这里,并可以反复修改;点开可以查看、下载,或把文件拖进来交给助手处理"
               onClick={props.onWorkspaceClick}
             >
               <FolderOpen size={13} />
-              <span className="max-sm:hidden">工作区</span>
-              {/* Phones: the full "Beta" tag next to the folder icon pushed the
-                  send button off the row. Keep the accent chip (it must stay
-                  noticeable) but shrink the label to a single "B" there. */}
-              <span className="rounded-sm bg-acc/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wider text-acc">
-                <span className="max-sm:hidden">Beta</span>
-                <span className="sm:hidden">B</span>
-              </span>
-            </button>
-          )}
-
-          {canvasAvailable && !imageMode && (
-            <button
-              aria-pressed={canvasTurn}
-              className={canvasTurn
-                ? `${toolBtnShape} border-accs bg-accs text-accfg shadow-xs hover:opacity-90`
-                : toolBtn}
-              title={canvasTurn
-                ? '这条回答将附带一个互动画布(仅这一条),点击取消'
-                : '让这条回答附带一个互动画布(仅这一条);平时由模型自行判断是否需要'}
-              onClick={() => setCanvasTurn((v) => !v)}
-            >
-              <LayoutTemplate size={13} />
-              <span className="max-sm:hidden">画布</span>
+              <span>工作区</span>
+              <span className="rounded-sm bg-acc/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wider text-acc">Beta</span>
             </button>
           )}
 
@@ -815,7 +770,7 @@ export function Composer(props: ComposerProps) {
               title="选择模型"
             >
               {model && <ModelAvatar info={model} size={16} tile={false} />}
-              <span className="max-w-[150px] truncate text-tx max-sm:max-w-[60px]">{model ? model.displayName : '选择模型'}</span>
+              <span className="max-w-[150px] truncate text-tx max-sm:max-w-[110px]">{model ? model.displayName : '选择模型'}</span>
               <ChevronDown size={12} className="text-tx3" />
             </button>
           }>

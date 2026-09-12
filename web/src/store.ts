@@ -249,13 +249,11 @@ export interface QueuedMessage {
   id: string;
   text: string;
   attachments: PendingAttachment[];
-  /** 互动画布 requested for this turn (composer 画布 button). */
-  canvas?: boolean;
 }
 
 interface QueueState {
   queues: Record<string, QueuedMessage[]>;
-  enqueue(chatId: string, text: string, attachments: PendingAttachment[], canvas?: boolean): void;
+  enqueue(chatId: string, text: string, attachments: PendingAttachment[]): void;
   update(chatId: string, id: string, text: string): void;
   remove(chatId: string, id: string): void;
   /** Move one item to the front (used by 立即发送). */
@@ -272,8 +270,8 @@ export const useQueue = create<QueueState>((set, get) => {
   };
   return {
     queues: {},
-    enqueue(chatId, text, attachments, canvas) {
-      patch(chatId, (q) => [...q, { id: crypto.randomUUID(), text, attachments, ...(canvas ? { canvas } : {}) }]);
+    enqueue(chatId, text, attachments) {
+      patch(chatId, (q) => [...q, { id: crypto.randomUUID(), text, attachments }]);
     },
     update(chatId, id, text) {
       patch(chatId, (q) => q.map((x) => (x.id === id ? { ...x, text } : x)));
@@ -309,7 +307,6 @@ export interface ChatHandoffPayload {
   settings: ComposerSettings;
   webSearch: boolean;
   mcpSelected: string[];
-  canvas?: boolean;
 }
 export const chatHandoff: { payload: ChatHandoffPayload | null } = { payload: null };
 

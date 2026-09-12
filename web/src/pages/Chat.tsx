@@ -7,7 +7,7 @@ import {
 import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
-import { Composer, type ComposerSettings, type PendingAttachment, type SendOptions } from '../components/Composer';
+import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { SelectionQuote, asQuote } from '../components/SelectionQuote';
 import { ModelAvatar } from '../components/ModelAvatar';
@@ -437,7 +437,6 @@ export default function Chat() {
     setMcpSelected(h.mcpSelected);
     void send(h.text, h.attachments, {
       modelId: m.id, settings: h.settings, webSearch: h.webSearch, mcpSelected: h.mcpSelected,
-      canvas: h.canvas,
     });
   }, [routeId, modelsLoaded, models, modelSel, streaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -534,8 +533,6 @@ export default function Chat() {
     settings?: ComposerSettings;
     webSearch?: boolean;
     mcpSelected?: string[];
-    /** 互动画布 for this turn only (composer 画布 button). */
-    canvas?: boolean;
   }
 
   async function ensureChat(o?: SendOverrides): Promise<ChatDetail> {
@@ -753,7 +750,6 @@ export default function Chat() {
       setLeafId('tmp-a');
       runStream(target.id, {
         content, modelId: sendModel?.id, parentMessageId: parentId ?? undefined,
-        canvas: o?.canvas || undefined,
       });
     } catch (e) {
       sendingRef.current = false;
@@ -802,13 +798,13 @@ export default function Chat() {
     if (!chat || streaming || sendingRef.current || compare) return;
     if (!(queueStore.queues[chat.id] ?? []).length) return;
     const item = queueStore.shift(chat.id);
-    if (item) void send(item.text, item.attachments, item.canvas ? { canvas: true } : undefined);
+    if (item) void send(item.text, item.attachments);
   }, [chat, streaming, compare, queueStore.queues]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function enqueue(text: string, attachments: PendingAttachment[], opts?: SendOptions) {
+  function enqueue(text: string, attachments: PendingAttachment[]) {
     const target = chatRef.current;
     if (!target) return;
-    queueStore.enqueue(target.id, text, attachments, opts?.canvas);
+    queueStore.enqueue(target.id, text, attachments);
   }
 
   function queueSendNow(item: QueuedMessage) {

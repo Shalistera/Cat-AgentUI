@@ -637,9 +637,6 @@ const streamBodySchema = z.object({
   // Parent for a NEW message: the leaf of the branch the client is looking at.
   // Omitted = the chat's saved currentLeafId (fallback: newest message).
   parentMessageId: z.string().max(64).optional(),
-  // 互动画布 for THIS turn only (the composer's 画布 button). Honoured only
-  // when the person has the experimental feature switched on.
-  canvas: z.boolean().optional(),
 });
 
 const TITLE_PROMPT = '请为上面这段对话生成一个简短的标题(不超过16个字),直接输出标题文本,不要任何引号、句号或解释。';
@@ -682,8 +679,6 @@ const CANVAS_PROMPT = [
   '【互动画布】用户开启了实验性的「互动画布」:你仍然照常用 Markdown 作答,文字本身必须是完整的回答。只有当内容「看比读更清楚」——流程、结构、空间关系、数据规律、可调参数的演示——才在文字之后追加一个(最多一个)```html 代码块,界面会把它渲染成文字下方的可交互组件。闲聊、定义、事实列表、纯说理、写代码、改文案一律不加;不要为了加而加,组件不能只是重复文字。',
   '组件写法:只写 HTML 片段(不要 <!DOCTYPE>、<html>、<head>、<body>),内联 CSS 与原生 JavaScript,不加载任何外部资源,不写代码注释;宽度随容器自适应、高度由内容决定,不要 100vh 和内部滚动;<canvas> 随容器宽度重绘并处理 devicePixelRatio;取色只用界面提供的 CSS 变量 --bg、--bg2、--fg、--muted、--line、--accent、--ok、--warn、--err,字体用 --font,浅色与深色下都要清晰;无语法错误、无未捕获异常,不要 alert/confirm/prompt。组件里可以调用 sendPrompt("追问文本") 把一个追问放进用户的输入框,适合做「点击了解更多」这类按钮。',
 ].join('\n');
-// The composer's 画布 button: this one reply must carry a component.
-const CANVAS_TURN_PROMPT = '【本条要求互动画布】用户为这条消息点了「画布」:这次回答必须包含一个符合上述写法的 ```html 互动组件(尽量可操作:滑块、按钮、切换、逐步演示),放在简短的文字说明之后;文字仍要能独立成立。';
 
 const TOOL_DENIED_RESULT = '(用户拒绝执行此工具调用。不要重试同一调用;如无法继续,请直接告诉用户你需要这个工具做什么。)';
 
@@ -1499,7 +1494,6 @@ export async function chatRoutes(app: FastifyInstance) {
     // 互动画布 is a format instruction, so it comes last and wins over the
     // chat's own prompt; image turns have no text answer to shape.
     const canvasAnswers = !model.imageGen && wantsCanvasAnswers(user.settings);
-    const canvasTurn = canvasAnswers && !!body.canvas;
     const systemPrompt = [
       project.block,
       userInstructions ? `用户的全局偏好设置(适用于所有对话):\n${userInstructions}` : null,
@@ -1509,7 +1503,6 @@ export async function chatRoutes(app: FastifyInstance) {
       subagentBlock,
       nativeSearchActive ? SEARCH_HINT_NATIVE : (mcpSearchActive || bridgedSearchActive) ? SEARCH_HINT_MCP : null,
       canvasAnswers ? CANVAS_PROMPT : null,
-      canvasTurn ? CANVAS_TURN_PROMPT : null,
     ].filter(Boolean).join('\n\n') || undefined;
     // Take one snapshot for the whole turn. It covers Provider credentials,
     // custom headers, MCP env/headers, and SECRET_KEY without querying per token.
