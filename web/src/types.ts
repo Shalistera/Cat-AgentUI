@@ -468,6 +468,7 @@ export interface SandboxSettings {
   enabled: boolean; confirm: boolean;
   accessMode: 'shared' | 'restricted'; allowedUserIds: string[];
   timeoutSec: number; memoryMb: number; cpuPercent: number; maxPids: number; maxOutputChars: number;
+  builtinTools: boolean;
 }
 export interface SandboxJob {
   id: number; kind: 'create' | 'install' | 'uninstall' | 'rebuild'; args: string[];
@@ -516,5 +517,5 @@ export interface AgentAdminData {
   limits: { workspaceBytes: number; workspaceFileBytes: number; workspaceFiles: number; toolIterations: number };
 }
 /** /api/agent/capabilities — what this person's chats may use right now. */
-export interface AgentCapabilities { agentTools: boolean; workspace: boolean; sandbox: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean }
+export interface AgentCapabilities { agentTools: boolean; workspace: boolean; sandbox: boolean; convert: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean }
 

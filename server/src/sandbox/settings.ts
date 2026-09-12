@@ -20,6 +20,9 @@ export interface SandboxSettings {
   maxPids: number;
   /** Per stream (stdout / stderr) cap handed back to the model. */
   maxOutputChars: number;
+  /** Built-in fixed-script tools (convert_file). Independent of `enabled`,
+      which governs model-authored commands. */
+  builtinTools: boolean;
 }
 
 export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {
@@ -32,6 +35,7 @@ export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {
   cpuPercent: 100,
   maxPids: 64,
   maxOutputChars: 30_000,
+  builtinTools: true,
 };
 
 function clamp(n: unknown, def: number, min: number, max: number): number {
@@ -53,6 +57,7 @@ export function normalizeSandboxSettings(raw: Partial<SandboxSettings> | null | 
     cpuPercent: clamp(r.cpuPercent, d.cpuPercent, 10, 800),
     maxPids: clamp(r.maxPids, d.maxPids, 8, 4_096),
     maxOutputChars: clamp(r.maxOutputChars, d.maxOutputChars, 2_000, 200_000),
+    builtinTools: r.builtinTools === undefined ? d.builtinTools : !!r.builtinTools,
   };
 }
 

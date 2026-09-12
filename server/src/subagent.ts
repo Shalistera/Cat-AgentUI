@@ -11,7 +11,7 @@ import { StreamingSecretRedactor, redactSensitiveText } from './secrets.js';
 import { getAgentSettings, policyAllows, type AgentUser } from './agent-settings.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool } from './workspace.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from './skills.js';
-import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from './sandbox/tool.js';
+import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from './sandbox/tool.js';
 import { callProjectTool, isProjectTool } from './knowledge.js';
 
 export const SPAWN_SUBAGENT_TOOL = 'spawn_subagent';
@@ -109,15 +109,18 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
   const agent = getAgentSettings();
   const workspaceOn = policyAllows(agent.workspace, user);
   const sandboxOn = workspaceOn && s.allowSandbox && sandboxAvailableFor(user);
+  const convertOn = workspaceOn && convertAvailableFor(user);
   const skillRows = policyAllows(agent.skills, user) ? skillsFor(user) : [];
   const tools: ToolDef[] = [];
   if (workspaceOn) tools.push(...WORKSPACE_TOOL_DEFS);
   if (sandboxOn) tools.push(...SANDBOX_TOOL_DEFS);
+  if (convertOn) tools.push(CONVERT_TOOL_DEF);
   if (skillRows.length) tools.push(...SKILL_TOOL_DEFS);
   const projectOn = !!deps.projectId;
   const blocks = [SUBAGENT_SYSTEM];
   if (workspaceOn) blocks.push(buildWorkspacePrompt(deps.chatId));
   if (sandboxOn) blocks.push(buildSandboxPrompt());
+  else if (convertOn) blocks.push(buildConvertPrompt());
   if (skillRows.length) blocks.push(buildSkillsPrompt(skillRows, sandboxOn));
   const system = blocks.join('\n\n');
 
@@ -196,7 +199,7 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
           result = '任务已中止'; isError = true;
         } else if (isWorkspaceTool(call.name) && workspaceOn) {
           ({ result, isError } = await callWorkspaceTool(deps.chatId, call.name, call.args));
-        } else if (isSandboxTool(call.name) && sandboxOn) {
+        } else if (isSandboxTool(call.name) && (sandboxOn || (call.name === CONVERT_FILE_TOOL && convertOn))) {
           ({ result, isError } = await callSandboxTool({ user, chatId: deps.chatId, messageId: deps.parentMessageId, signal }, call.args, call.name));
         } else if (isSkillTool(call.name) && skillRows.length) {
           ({ result, isError } = callSkillTool(user, call.name, call.args));

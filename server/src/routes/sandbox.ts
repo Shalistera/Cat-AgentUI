@@ -40,6 +40,7 @@ export async function sandboxRoutes(app: FastifyInstance) {
       cpuPercent: z.number().int().optional(),
       maxPids: z.number().int().optional(),
       maxOutputChars: z.number().int().optional(),
+      builtinTools: z.boolean().optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     return { settings: saveSandboxSettings(body.data) };

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { requireAdmin, requireAuth } from '../auth.js';
 import { config } from '../config.js';
 import { getAgentSettings, policyAllows, saveAgentSettings, userWantsAgentTools } from '../agent-settings.js';
-import { sandboxAvailableFor } from '../sandbox/tool.js';
+import { convertAvailableFor, sandboxAvailableFor } from '../sandbox/tool.js';
 import { getSandboxSettings } from '../sandbox/settings.js';
 import { skillsFor } from '../skills.js';
 
@@ -26,6 +26,7 @@ export async function agentRoutes(app: FastifyInstance) {
       agentTools: on,
       workspace,
       sandbox: workspace && sandboxAvailableFor(user),
+      convert: workspace && convertAvailableFor(user),
       sandboxConfirm: getSandboxSettings().confirm,
       skills: on && policyAllows(a.skills, user) ? skillsFor(user).length : 0,
       subagent: on && policyAllows(a.subagent, user),

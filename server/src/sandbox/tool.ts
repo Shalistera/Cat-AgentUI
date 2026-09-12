@@ -7,7 +7,7 @@ import { installedPackageNamesSync, venvExists } from './venv.js';
 
 export const RUN_COMMAND_TOOL = 'run_command';
 
-// convert_file is appended in isSandboxTool consumers via SANDBOX_TOOL_DEFS below.
+/** Model-authored execution (run_command). convert_file is separate: see CONVERT_TOOL_DEF. */
 export const SANDBOX_TOOL_DEFS: ToolDef[] = [
   {
     name: RUN_COMMAND_TOOL,
@@ -82,6 +82,22 @@ export function sandboxNeedsConfirm(): boolean {
   return getSandboxSettings().confirm;
 }
 
+/** convert_file needs only a working sandbox host and the built-in switch —
+    not the "allow the model to run commands" policy, which is about
+    model-authored commands. */
+export function convertAvailableFor(_user: SandboxUser): boolean {
+  const env = cachedSandboxEnv();
+  return !!env && env.runnable && getSandboxSettings().builtinTools;
+}
+
+/** Prompt block when only the built-in conversion is available. */
+export function buildConvertPrompt(): string {
+  return [
+    '[文档转换]',
+    '可以用 convert_file 把工作区里的文档一步转换格式:md/txt/html/docx → pdf 或 docx,docx/html/pdf → md/txt。用户要 PDF、Word 时直接用它,转换完在回复里说明文件名。本对话没有其他命令执行能力,不要写脚本或给出终端命令让人去跑。',
+  ].join('\n');
+}
+
 export function buildSandboxPrompt(): string {
   const s = getSandboxSettings();
   const env = cachedSandboxEnv();
@@ -136,4 +152,3 @@ export async function callSandboxTool(
   }
 }
 
-SANDBOX_TOOL_DEFS.push(CONVERT_TOOL_DEF);

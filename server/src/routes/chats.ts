@@ -20,7 +20,7 @@ import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
-import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
+import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
@@ -1454,11 +1454,17 @@ export async function chatRoutes(app: FastifyInstance) {
     // is nothing to execute against without it.
     const sandboxActive = workspaceActive && sandboxAvailableFor(user);
     if (sandboxActive) toolDefs = [...(toolDefs ?? []), ...SANDBOX_TOOL_DEFS];
+    // Built-in conversions ride on the sandbox host, not on the "model may run
+    // commands" switch: PDF / Word export is a basic feature.
+    const convertActive = workspaceActive && convertAvailableFor(user);
+    if (convertActive) toolDefs = [...(toolDefs ?? []), CONVERT_TOOL_DEF];
     const workspaceBlock = workspaceActive
       ? [
         buildWorkspacePrompt(chatId),
         sandboxActive
           ? buildSandboxPrompt()
+          : convertActive
+          ? buildConvertPrompt()
           : '本对话没有命令执行能力(没有 run_command 之类的工具):不要为了"让人去跑"而主动写脚本或给出终端命令,除非用户明确要的就是脚本本身;需要计算、转换格式、生成 PDF/图表这类必须执行才能完成的事,直接告诉用户当前不支持执行,由用户决定。',
       ].join('\n\n')
       : null;
@@ -1825,7 +1831,7 @@ export async function chatRoutes(app: FastifyInstance) {
                   resetProviderIdleTimer();
                   return { result: formatSubagentResult(r), isError: r.stopped === 'error' || r.stopped === 'aborted' };
                 })()
-                : isSandboxTool(call.name) && sandboxActive
+                : isSandboxTool(call.name) && (sandboxActive || (call.name === CONVERT_FILE_TOOL && convertActive))
                 ? await callSandboxTool({ user: { id: user.id, role: user.role }, chatId, messageId: assistantId, signal: controller.signal }, call.args, call.name)
                 // A built-in tool name the model remembers from earlier turns
                 // but that is switched off now (person's 智能工具 setting, or

@@ -113,6 +113,8 @@ function SettingsCard({ data, users, onSaved }: { data: SandboxAdminData; users:
       <div className="space-y-3">
         <ToggleRow label="允许模型执行命令" desc={data.env.runnable ? '总开关。关闭后任何对话都不会出现 run_command。' : '环境自检未通过,开启也不会生效。'}
           checked={s.enabled} onChange={(v) => setS({ ...s, enabled: v })} />
+        <ToggleRow label="内置文档转换(convert_file)" desc="PDF / Word / Markdown 互转,由固定脚本完成、不需要确认。只要环境自检通过就可用,不受上面「允许模型执行命令」的影响;出 PDF 需在运行库里安装 weasyprint 与 markdown。"
+          checked={s.builtinTools} onChange={(v) => setS({ ...s, builtinTools: v })} />
         <ToggleRow label="执行前需用户确认" desc="模型每次想执行命令时先在对话里展示命令,由用户点「允许」或「拒绝」。建议保持开启,熟悉后再关。"
           checked={s.confirm} onChange={(v) => setS({ ...s, confirm: v })} />
         <Field label="谁可以使用" hint="管理员始终可用">
