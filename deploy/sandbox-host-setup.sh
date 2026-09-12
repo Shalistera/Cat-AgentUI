@@ -10,7 +10,8 @@ fi
 
 apt-get update
 # bubblewrap:隔离;python3-venv:运行库环境;pandoc / poppler:文档转换;字体:图表与 PDF 里的中文
-apt-get install -y bubblewrap python3 python3-venv pandoc fonts-noto-cjk poppler-utils fontconfig
+apt-get install -y bubblewrap python3 python3-venv pandoc fonts-noto-cjk poppler-utils fontconfig \
+  libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libharfbuzz0b   # 最后一行供 weasyprint(HTML→PDF)
 
 # Ubuntu 23.10+ 默认禁止非特权用户命名空间,bwrap 需要它(其他发行版本身即为 0,写入无害)
 if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then

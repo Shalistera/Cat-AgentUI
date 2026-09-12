@@ -27,6 +27,8 @@ export const PACKAGE_PRESETS: PackagePreset[] = [
   { name: 'python-pptx', group: '办公文档', desc: '生成 PowerPoint(pptx)' },
   { name: 'pypdf', group: '办公文档', desc: '读取、合并、拆分 PDF' },
   { name: 'pdfplumber', group: '办公文档', desc: '从 PDF 提取文本与表格' },
+  { name: 'weasyprint', group: '办公文档', desc: 'HTML / Markdown 排版成 PDF(中文用系统字体;需自检页里的 pango 等系统库)' },
+  { name: 'reportlab', group: '办公文档', desc: '程序化生成 PDF 表单与报表(需注册中文字体)' },
   { name: 'matplotlib', group: '图表与图片', desc: '绘制统计图表(输出 PNG/SVG)' },
   { name: 'pillow', group: '图表与图片', desc: '图片缩放、裁剪、格式转换' },
   { name: 'markdown', group: '文本处理', desc: 'Markdown 转 HTML' },

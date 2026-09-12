@@ -513,6 +513,89 @@ print(df.head(8).to_string())
   },
 ];
 
+SAMPLE_SKILLS.push({
+  slug: 'pdf-export',
+  files: {
+    'SKILL.md': `---
+name: pdf-export
+description: 把 Markdown 或 HTML 内容排版成 PDF 文件(中文排版正常),用户要求"导出 PDF / 可打印 / 发 PDF 给我"时使用;也可把工作区里已有的 .md 转成 PDF。
+---
+
+# 导出 PDF
+
+## 何时使用
+用户明确要 PDF,或要"能直接打印/发给别人的版本"。如果用户要的是 Word,用 docx-report。
+
+## 步骤
+1. 把正文写成工作区里的 Markdown 文件(如 \`报告.md\`):一级标题为文档名,二级标题分章节,表格用 GFM 表格。
+2. 执行本技能自带的脚本,一步转成 PDF(内部是 Markdown → HTML → weasyprint,自带中文样式表):
+   \`\`\`
+   python3 /skills/pdf-export/scripts/md2pdf.py 报告.md 报告.pdf
+   \`\`\`
+   已经是 HTML 的内容用 \`--html 页面.html 输出.pdf\`。想要横版加 \`--landscape\`。
+3. 成功后告诉用户文件名并用两三句概括内容;用户可在工作区面板直接预览 PDF。
+
+## 注意
+- 报错 \`No module named weasyprint\` / \`markdown\`:管理员尚未安装这两个运行库,告诉用户并改用 docx-report。
+- 报错提到 \`libpango\` / \`cairo\`:宿主机缺系统库,告诉用户让管理员看沙盒自检页。
+- 中文字体由样式表指定 Noto Sans CJK,Droid Sans Fallback 兜底,不要在 Markdown 里写字体。
+`,
+    'scripts/md2pdf.py': `#!/usr/bin/env python3
+# Markdown / HTML -> PDF with a CJK-friendly stylesheet.
+#   md2pdf.py INPUT.md OUTPUT.pdf [--landscape]
+#   md2pdf.py --html INPUT.html OUTPUT.pdf [--landscape]
+import sys, pathlib
+
+args = [a for a in sys.argv[1:] if not a.startswith('--')]
+flags = {a for a in sys.argv[1:] if a.startswith('--')}
+if len(args) != 2:
+    print('用法: md2pdf.py 输入.md 输出.pdf [--landscape] | md2pdf.py --html 输入.html 输出.pdf'); sys.exit(2)
+src, out = pathlib.Path(args[0]), pathlib.Path(args[1])
+
+try:
+    from weasyprint import HTML, CSS
+except ImportError:
+    print('缺少 weasyprint:请管理员在 沙盒 → Python 运行库 中安装 weasyprint', file=sys.stderr); sys.exit(1)
+
+if '--html' in flags:
+    body = src.read_text(encoding='utf-8')
+else:
+    try:
+        import markdown
+    except ImportError:
+        print('缺少 markdown:请管理员在 沙盒 → Python 运行库 中安装 markdown', file=sys.stderr); sys.exit(1)
+    body = markdown.markdown(src.read_text(encoding='utf-8'), extensions=['tables', 'fenced_code', 'toc', 'sane_lists'])
+
+css = pathlib.Path(__file__).with_name('style.css').read_text(encoding='utf-8')
+if '--landscape' in flags:
+    css += '\\n@page { size: A4 landscape; }'
+html = '<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>' + src.stem + '</title></head><body>' + body + '</body></html>'
+HTML(string=html, base_url=str(src.parent.resolve())).write_pdf(str(out), stylesheets=[CSS(string=css)])
+print('已生成 ' + str(out) + ' (' + str(out.stat().st_size) + ' 字节)')
+`,
+    'scripts/style.css': `@page { size: A4; margin: 2cm 1.8cm; @bottom-center { content: counter(page) " / " counter(pages); font-size: 9pt; color: #888; } }
+html { font-family: "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Droid Sans Fallback", "DejaVu Sans", sans-serif; font-size: 10.5pt; line-height: 1.7; color: #222; }
+h1 { font-size: 20pt; margin: 0 0 14pt; padding-bottom: 6pt; border-bottom: 1.5pt solid #333; }
+h2 { font-size: 14pt; margin: 18pt 0 8pt; }
+h3 { font-size: 12pt; margin: 14pt 0 6pt; }
+p { margin: 0 0 8pt; text-align: justify; }
+ul, ol { margin: 0 0 8pt 1.4em; padding: 0; }
+li { margin: 2pt 0; }
+table { border-collapse: collapse; width: 100%; margin: 8pt 0 12pt; font-size: 9.5pt; }
+th, td { border: 0.6pt solid #999; padding: 4pt 6pt; vertical-align: top; }
+th { background: #f0f0f0; font-weight: 600; }
+tr { page-break-inside: avoid; }
+code { font-family: "DejaVu Sans Mono", "Noto Sans Mono CJK SC", monospace; font-size: 9pt; background: #f4f4f4; padding: 0 3pt; border-radius: 2pt; }
+pre { background: #f4f4f4; padding: 8pt; border-radius: 3pt; font-size: 8.5pt; white-space: pre-wrap; word-break: break-all; }
+pre code { background: none; padding: 0; }
+blockquote { margin: 8pt 0; padding: 4pt 12pt; border-left: 3pt solid #bbb; color: #555; }
+img { max-width: 100%; }
+hr { border: 0; border-top: 0.6pt solid #bbb; margin: 12pt 0; }
+a { color: #1f4fd8; text-decoration: none; }
+`,
+  },
+});
+
 export function importSampleSkills(): Promise<SkillDto[]> {
   return withSkillsLock(() => {
     const out: SkillDto[] = [];

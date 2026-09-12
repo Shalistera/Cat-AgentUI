@@ -151,6 +151,18 @@ function seccompCheck(): EnvCheck {
   return { id: 'seccomp', label, level: 'warn', required: false, detail: `当前架构(${process.arch})没有内置的系统调用表,沙盒不加过滤运行;宿主侧仍有打开后校验与执行后清扫保护` };
 }
 
+/** weasyprint (HTML → PDF) loads pango / cairo / gdk-pixbuf through ctypes;
+    they are small apt packages but not pip-installable. */
+async function checkPdfLibs(python3: string | null): Promise<EnvCheck> {
+  const label = 'PDF 排版库(pango / cairo,供 weasyprint)';
+  const fix = 'sudo apt install -y libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libharfbuzz0b';
+  if (!python3) return { id: 'pdflibs', label, level: 'warn', required: false, detail: '无 python3,无法检测', fix };
+  const probe = "import ctypes\nfor l in ['libpango-1.0.so.0','libpangoft2-1.0.so.0','libcairo.so.2','libgdk_pixbuf-2.0.so.0','libharfbuzz.so.0']:\n    ctypes.CDLL(l)\nprint('ok')";
+  const r = await run(python3, ['-c', probe]);
+  if (r.ok && r.out.endsWith('ok')) return { id: 'pdflibs', label, level: 'ok', required: false, detail: '已就绪;在运行库里安装 weasyprint 与 markdown 即可把 Markdown / HTML 排版成 PDF' };
+  return { id: 'pdflibs', label, level: 'warn', required: false, detail: '缺少 pango / cairo 系统库,weasyprint 无法运行(不影响其他功能)', fix };
+}
+
 async function checkCjkFonts(): Promise<EnvCheck> {
   const label = '中文字体';
   const fc = which('fc-list');
@@ -171,7 +183,8 @@ export function hostSetupScript(): string {
     '# Cat-AgentUI 沙盒宿主机准备(Ubuntu/Debian,以 root 运行一次)',
     'set -euo pipefail',
     'apt-get update',
-    'apt-get install -y bubblewrap python3 python3-venv pandoc fonts-noto-cjk poppler-utils fontconfig',
+    'apt-get install -y bubblewrap python3 python3-venv pandoc fonts-noto-cjk poppler-utils fontconfig \\',
+    '  libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libharfbuzz0b',
     '# Ubuntu 23.10+ 默认禁止非特权用户命名空间;bwrap 需要它',
     "echo 'kernel.apparmor_restrict_unprivileged_userns = 0' > /etc/sysctl.d/60-userns.conf",
     'sysctl --system >/dev/null',
@@ -188,8 +201,8 @@ export async function probeSandboxEnv(force = false): Promise<SandboxEnv> {
     const bwrap = which('bwrap');
     const systemdRun = which('systemd-run');
     const python3 = which('python3');
-    const [userns, systemd, python, fonts] = await Promise.all([
-      checkUserns(bwrap), checkSystemdRun(systemdRun), checkPythonVenv(python3), checkCjkFonts(),
+    const [userns, systemd, python, fonts, pdflibs] = await Promise.all([
+      checkUserns(bwrap), checkSystemdRun(systemdRun), checkPythonVenv(python3), checkCjkFonts(), checkPdfLibs(python3),
     ]);
     const checks: EnvCheck[] = [
       userns,
@@ -198,6 +211,7 @@ export async function probeSandboxEnv(force = false): Promise<SandboxEnv> {
       checkBinary('pandoc', 'pandoc', 'pandoc', 'pandoc', 'Markdown 与 docx / html 互转'),
       checkBinary('poppler', 'poppler-utils', 'pdftotext', 'poppler-utils', 'pdftotext / pdftoppm 处理 PDF'),
       fonts,
+      pdflibs,
       { id: 'node', label: 'Node.js', level: 'ok', required: false, detail: `${process.execPath}(${process.version});沙盒内以 /opt/node/bin/node 提供` },
       seccompCheck(),
     ];
