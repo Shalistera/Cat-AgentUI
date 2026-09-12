@@ -12,7 +12,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
-import { config } from '../config.js';
+import { config, serverRoot } from '../config.js';
+
+const builtinToolsDir = path.join(serverRoot, 'tools');
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { enforceWorkspaceQuota, sweepIrregularEntries, workspaceOverQuota, workspaceRoot } from '../workspace.js';
@@ -86,6 +88,8 @@ function bwrapArgv(bwrap: string, workspace: string, command: string, user: Skil
     pathParts.unshift('/opt/venv/bin');
   }
   args.push('--ro-bind', nodeBinDir(), '/opt/node/bin');
+  // Built-in helper scripts shipped with the server (convert.py …), read-only.
+  args.push('--ro-bind', builtinToolsDir, '/opt/tools');
   // 技能 scripts and reference files, read-only — and only the skills this
   // person may use. Mounting the whole tree would let a command `cat` a
   // restricted or disabled skill the application layer refuses to show.

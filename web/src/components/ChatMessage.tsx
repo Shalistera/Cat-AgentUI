@@ -152,16 +152,17 @@ function prettyArgs(args: string): string {
 
 function ToolConfirmCard({ req, onDecide }: {
   req: ToolConfirmRequest;
-  onDecide(decisions: Record<string, 'allow' | 'deny'>): void;
+  onDecide(decisions: Record<string, 'allow' | 'deny'>, rememberChat: boolean): void;
 }) {
   const [picked, setPicked] = useState<Record<string, 'allow' | 'deny'>>({});
   const [sent, setSent] = useState(false);
+  const [remember, setRemember] = useState(false);
   const all = (d: 'allow' | 'deny') => Object.fromEntries(req.calls.map((c) => [c.id, d]));
   const decided = req.calls.every((c) => picked[c.id]);
   const submit = (decisions: Record<string, 'allow' | 'deny'>) => {
     if (sent) return;
     setSent(true);
-    onDecide(decisions);
+    onDecide(decisions, remember && Object.values(decisions).every((d) => d === 'allow'));
   };
   return (
     <div className="my-2.5 overflow-hidden rounded-lg border border-warn/40 bg-warn/10" data-find-skip>
@@ -195,6 +196,12 @@ function ToolConfirmCard({ req, onDecide }: {
         ))}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 border-t border-warn/25 bg-bg1 px-3.5 py-2">
+        {!sent && (
+          <label className="mr-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-tx3" title="之后这段对话里的工具调用不再逐条询问(重启服务后重置)">
+            <input type="checkbox" className="accent-acc" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            本对话内不再询问
+          </label>
+        )}
         {sent ? (
           <span className="flex items-center gap-1.5 text-xs text-tx3"><Spinner className="h-3 w-3" />已提交,继续生成…</span>
         ) : req.calls.length === 1 ? (
@@ -295,6 +302,7 @@ const WORKSPACE_VERBS: Record<string, { doing: string; done: string }> = {
   workspace_read: { doing: '正在读取', done: '读取了' },
   workspace_write: { doing: '正在写入', done: '写入了' },
   workspace_edit: { doing: '正在修改', done: '修改了' },
+  convert_file: { doing: '正在转换', done: '转换了' },
   workspace_delete: { doing: '正在删除', done: '删除了' },
 };
 
@@ -347,6 +355,7 @@ function pathOf(call: ToolCallPart): string {
     // skill tools are keyed by skill name; read_skill_file also has a path
     if (call.name === 'load_skill') return typeof a.name === 'string' ? a.name : '';
     if (call.name === 'read_skill_file') return typeof a.name === 'string' ? `${a.name}/${typeof a.path === 'string' ? a.path : ''}` : '';
+    if (call.name === 'convert_file') return typeof a.output === 'string' ? a.output : '';
     return typeof a.path === 'string' ? a.path : '';
   } catch { return ''; }
 }
@@ -612,7 +621,7 @@ interface Props {
   onBookmark?: () => void;
   /** A pending 工具调用确认 addressed to this (streaming) message. */
   toolConfirm?: ToolConfirmRequest | null;
-  onToolDecision?: (decisions: Record<string, 'allow' | 'deny'>) => void;
+  onToolDecision?: (decisions: Record<string, 'allow' | 'deny'>, rememberChat: boolean) => void;
 }
 
 export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {

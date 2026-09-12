@@ -762,11 +762,11 @@ export default function Chat() {
     abortRef.current?.abort();
   }
 
-  async function decideTools(req: ToolConfirmRequest, decisions: Record<string, 'allow' | 'deny'>) {
+  async function decideTools(req: ToolConfirmRequest, decisions: Record<string, 'allow' | 'deny'>, rememberChat = false) {
     const target = chatRef.current;
     if (!target) return;
     try {
-      await api.post(`/api/chats/${target.id}/tool-decision`, { messageId: req.messageId, decisions });
+      await api.post(`/api/chats/${target.id}/tool-decision`, { messageId: req.messageId, decisions, rememberChat });
       setToolConfirm(null);
     } catch (e) {
       toast(errMsg(e), 'err');
@@ -1206,7 +1206,7 @@ export default function Chat() {
                       : undefined}
                     onBookmark={!!chat && m.status !== 'streaming' && !m.id.startsWith('tmp-') ? () => void toggleBookmark(m) : undefined}
                     toolConfirm={toolConfirm && toolConfirm.messageId === m.id ? toolConfirm : null}
-                    onToolDecision={toolConfirm && toolConfirm.messageId === m.id ? (d) => void decideTools(toolConfirm, d) : undefined}
+                    onToolDecision={toolConfirm && toolConfirm.messageId === m.id ? (d, r) => void decideTools(toolConfirm, d, r) : undefined}
                   />
                 );
               })}

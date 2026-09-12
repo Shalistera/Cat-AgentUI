@@ -53,6 +53,14 @@ export function waitForToolDecision(
  * for this message (already answered, timed out, or never asked) or when the
  * caller is not the person the question was addressed to.
  */
+// "本对话内不再询问": the person allowed a batch and asked us to stop asking
+// for this chat. In-memory and per (chat, user); a restart forgets it, which
+// is the right default for a trust decision.
+const autoAllow = new Set<string>();
+export function rememberAutoAllow(chatId: string, userId: string): void { autoAllow.add(`${chatId}:${userId}`); }
+export function isAutoAllowed(chatId: string, userId: string): boolean { return autoAllow.has(`${chatId}:${userId}`); }
+export function forgetAutoAllow(chatId: string, userId: string): void { autoAllow.delete(`${chatId}:${userId}`); }
+
 export function submitToolDecision(
   messageId: string, userId: string, decisions: Record<string, ToolDecision>,
 ): boolean {

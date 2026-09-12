@@ -11,7 +11,7 @@ import { StreamingSecretRedactor, redactSensitiveText } from './secrets.js';
 import { getAgentSettings, policyAllows, type AgentUser } from './agent-settings.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool } from './workspace.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from './skills.js';
-import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, sandboxAvailableFor, sandboxNeedsConfirm } from './sandbox/tool.js';
+import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from './sandbox/tool.js';
 import { callProjectTool, isProjectTool } from './knowledge.js';
 
 export const SPAWN_SUBAGENT_TOOL = 'spawn_subagent';
@@ -97,7 +97,7 @@ function summarizeArgs(name: string, args: string): string {
 
 const VERB: Record<string, string> = {
   workspace_read: '读取', workspace_write: '写入', workspace_edit: '修改', workspace_delete: '删除', workspace_list: '查看工作区',
-  run_command: '执行', load_skill: '加载技能', read_skill_file: '读取技能文件', project_search: '检索资料', project_read_doc: '读取资料',
+  run_command: '执行', convert_file: '转换', load_skill: '加载技能', read_skill_file: '读取技能文件', project_search: '检索资料', project_read_doc: '读取资料',
 };
 
 export async function runSubagent(deps: SubagentDeps, task: string): Promise<SubagentResult> {
@@ -177,7 +177,7 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
       if (stopReason !== 'tool_calls' || !pending.length) break;
 
       const denied = new Set<string>();
-      const askFor = pending.filter((c) => isSandboxTool(c.name) && sandboxConfirm);
+      const askFor = pending.filter((c) => isSandboxTool(c.name) && sandboxConfirm && !isTrustedCommand(c.name, c.args));
       if (askFor.length) {
         deps.onProgress(`等待用户确认 ${askFor.length} 条命令…`);
         const decisions = await deps.askConfirm(askFor.map((c) => ({ id: c.id, name: c.name, args: c.args })));
@@ -197,7 +197,7 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
         } else if (isWorkspaceTool(call.name) && workspaceOn) {
           ({ result, isError } = await callWorkspaceTool(deps.chatId, call.name, call.args));
         } else if (isSandboxTool(call.name) && sandboxOn) {
-          ({ result, isError } = await callSandboxTool({ user, chatId: deps.chatId, messageId: deps.parentMessageId, signal }, call.args));
+          ({ result, isError } = await callSandboxTool({ user, chatId: deps.chatId, messageId: deps.parentMessageId, signal }, call.args, call.name));
         } else if (isSkillTool(call.name) && skillRows.length) {
           ({ result, isError } = callSkillTool(user, call.name, call.args));
         } else if (isProjectTool(call.name) && projectOn) {

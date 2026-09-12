@@ -9,7 +9,7 @@ import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
 import { getToolsForServers, callTool, toolNeedsConfirm, type McpCapabilities } from '../mcp/manager.js';
-import { submitToolDecision, waitForToolDecision } from '../tool-confirm.js';
+import { isAutoAllowed, rememberAutoAllow, submitToolDecision, waitForToolDecision } from '../tool-confirm.js';
 import { validateMcpSelection } from '../mcp/access.js';
 import { getSearchServerId } from './mcp.js';
 import { saveGeneratedImage } from './images.js';
@@ -20,7 +20,7 @@ import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
-import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
+import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
@@ -1124,6 +1124,8 @@ export async function chatRoutes(app: FastifyInstance) {
     const body = z.object({
       messageId: z.string().max(64),
       decisions: z.record(z.string().max(256), z.enum(['allow', 'deny'])),
+      /** 本对话内不再询问 — only honoured when every decision is 'allow'. */
+      rememberChat: z.boolean().optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const c = db.select({ id: schema.chats.id }).from(schema.chats)
@@ -1134,6 +1136,9 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!msg || msg.chatId !== id) return reply.code(404).send({ error: '消息不存在' });
     if (!submitToolDecision(body.data.messageId, req.user!.id, body.data.decisions)) {
       return reply.code(409).send({ error: '这次调用已不再等待确认(可能已超时或对话已停止)' });
+    }
+    if (body.data.rememberChat && Object.values(body.data.decisions).every((d) => d === 'allow')) {
+      rememberAutoAllow(id, req.user!.id);
     }
     return { ok: true };
   });
@@ -1730,7 +1735,12 @@ export async function chatRoutes(app: FastifyInstance) {
             // 执行前确认: calls to a server the admin flagged (or every MCP call,
             // when the person asked for that) wait for an allow/deny from the
             // tab. Project knowledge tools are in-process reads and never ask.
-            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name) && !isSubagentTool(call.name) && call.name !== GOOGLE_SEARCH_TOOL
+            // 本对话内不再询问 (set from a confirm card) silences every ask in
+            // this chat; trusted commands (convert_file, plain skill-script
+            // invocations) never ask.
+            const chatAutoAllow = isAutoAllowed(chatId, user.id);
+            const askFor = chatAutoAllow ? [] : pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name) && !isSubagentTool(call.name) && call.name !== GOOGLE_SEARCH_TOOL
+              && !isTrustedCommand(call.name, call.args)
               && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)
                 || (isSandboxTool(call.name) && sandboxConfirm)));
             const denied = new Set<string>();
@@ -1816,7 +1826,7 @@ export async function chatRoutes(app: FastifyInstance) {
                   return { result: formatSubagentResult(r), isError: r.stopped === 'error' || r.stopped === 'aborted' };
                 })()
                 : isSandboxTool(call.name) && sandboxActive
-                ? await callSandboxTool({ user: { id: user.id, role: user.role }, chatId, messageId: assistantId, signal: controller.signal }, call.args)
+                ? await callSandboxTool({ user: { id: user.id, role: user.role }, chatId, messageId: assistantId, signal: controller.signal }, call.args, call.name)
                 // A built-in tool name the model remembers from earlier turns
                 // but that is switched off now (person's 智能工具 setting, or
                 // admin policy): say so plainly instead of the MCP "not found".
