@@ -56,7 +56,7 @@ export function buildSandboxPrompt(): string {
 }
 
 export async function callSandboxTool(
-  ctx: { userId: string; chatId: string; messageId?: string; signal?: AbortSignal },
+  ctx: { user: SandboxUser; chatId: string; messageId?: string; signal?: AbortSignal },
   argsJson: string,
 ): Promise<{ result: string; isError: boolean }> {
   let args: Record<string, unknown> = {};
@@ -66,7 +66,7 @@ export async function callSandboxTool(
   if (command.length > 20_000) return { result: '命令过长,请把脚本写进文件再执行', isError: true };
   const timeoutSec = Number.isFinite(Number(args.timeout_seconds)) ? Number(args.timeout_seconds) : undefined;
   try {
-    const r = await runInSandbox({ userId: ctx.userId, chatId: ctx.chatId, messageId: ctx.messageId, command, timeoutSec, signal: ctx.signal });
+    const r = await runInSandbox({ userId: ctx.user.id, user: ctx.user, chatId: ctx.chatId, messageId: ctx.messageId, command, timeoutSec, signal: ctx.signal });
     const effectiveTimeout = Math.max(5, Math.min(getSandboxSettings().timeoutSec, timeoutSec ?? getSandboxSettings().timeoutSec));
     return { result: formatRunResult(r, effectiveTimeout), isError: r.timedOut || r.exitCode !== 0 };
   } catch (err) {

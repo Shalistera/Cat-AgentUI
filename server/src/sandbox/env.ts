@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { config } from '../config.js';
+import { deniedSyscallNames } from './seccomp.js';
 
 export type CheckLevel = 'ok' | 'warn' | 'fail';
 
@@ -140,6 +141,13 @@ function checkBinary(id: string, label: string, bin: string, pkg: string, why: s
     : { id, label, level: 'warn', required: false, detail: `未安装;${why}`, fix: `sudo apt install -y ${pkg}` };
 }
 
+function seccompCheck(): EnvCheck {
+  const denied = deniedSyscallNames();
+  const label = '系统调用过滤(seccomp)';
+  if (denied) return { id: 'seccomp', label, level: 'ok', required: false, detail: `沙盒内禁止 ${denied.join(', ')};命令无法创建符号链接、管道或挂载` };
+  return { id: 'seccomp', label, level: 'warn', required: false, detail: `当前架构(${process.arch})没有内置的系统调用表,沙盒不加过滤运行;宿主侧仍有打开后校验与执行后清扫保护` };
+}
+
 async function checkCjkFonts(): Promise<EnvCheck> {
   const label = '中文字体';
   const fc = which('fc-list');
@@ -188,6 +196,7 @@ export async function probeSandboxEnv(force = false): Promise<SandboxEnv> {
       checkBinary('poppler', 'poppler-utils', 'pdftotext', 'poppler-utils', 'pdftotext / pdftoppm 处理 PDF'),
       fonts,
       { id: 'node', label: 'Node.js', level: 'ok', required: false, detail: `${process.execPath}(${process.version});沙盒内以 /opt/node/bin/node 提供` },
+      seccompCheck(),
     ];
     const env: SandboxEnv = {
       checkedAt: Date.now(),

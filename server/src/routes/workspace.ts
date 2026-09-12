@@ -12,7 +12,7 @@ import { db, schema, now } from '../db/index.js';
 import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
 import {
-  WorkspaceError, deleteWorkspacePath, extOf, isTextPath, listWorkspace, readWorkspaceText,
+  WorkspaceError, deleteWorkspacePath, extOf, isTextPath, listWorkspace, openRegular, readWorkspaceText,
   renameWorkspacePath, resolveSafe, workspaceRoot, writeWorkspaceFile,
 } from '../workspace.js';
 
@@ -81,10 +81,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
         const text = await readWorkspaceText(id, q.data.path);
         return { text };
       }
-      const { abs, rel } = resolveSafe(id, q.data.path);
-      let st: fs.Stats;
-      try { st = fs.statSync(abs); } catch { return reply.code(404).send({ error: '文件不存在' }); }
-      if (!st.isFile()) return reply.code(404).send({ error: '文件不存在' });
+      // open-then-verify (see workspace.ts openRegular): the stream reads
+      // from the descriptor we proved is inside the workspace, never from a
+      // path that could be re-pointed underneath us.
+      const { fd, rel, size } = openRegular(id, q.data.path);
       const mime = mimeFor(rel);
       const name = rel.split('/').pop()!;
       // HTML/SVG are never served inline from our origin: a model-written page
@@ -95,8 +95,8 @@ export async function workspaceRoutes(app: FastifyInstance) {
       reply.header('content-disposition', `${forceDownload ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(name)}`);
       reply.header('x-content-type-options', 'nosniff');
       reply.header('cache-control', 'private, no-store');
-      reply.header('content-length', String(st.size));
-      return reply.send(fs.createReadStream(abs));
+      reply.header('content-length', String(size));
+      return reply.send(fs.createReadStream('', { fd, autoClose: true }));
     } catch (err) { return sendError(reply, err); }
   });
 
@@ -108,7 +108,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const body = pathQuery.extend({ content: z.string().max(config.maxWorkspaceFileBytes) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     try {
-      const r = writeWorkspaceFile(id, body.data.path, body.data.content);
+      const r = await writeWorkspaceFile(id, body.data.path, body.data.content);
       touchChat(id);
       return { ok: true, path: r.rel, size: r.size };
     } catch (err) { return sendError(reply, err); }
@@ -128,17 +128,18 @@ export async function workspaceRoutes(app: FastifyInstance) {
     let target: { abs: string; rel: string };
     try { target = resolveSafe(id, rel); } catch (err) { file.file.resume(); return sendError(reply, err); }
 
-    // Stage next to the destination, then hand the bytes to writeWorkspaceFile
-    // so the size/count budget is enforced by one code path.
+    // Stage next to the destination (exclusive create: an existing entry of
+    // that name, link or not, fails instead of being followed), then hand the
+    // bytes to writeWorkspaceFile so the budget is enforced by one code path.
     fs.mkdirSync(workspaceRoot(id), { recursive: true, mode: 0o700 });
     const staging = path.join(workspaceRoot(id), `.upload-${process.pid}-${Date.now()}.part`);
     try {
-      await pipeline(file.file, fs.createWriteStream(staging, { mode: 0o600 }));
+      await pipeline(file.file, fs.createWriteStream(staging, { flags: 'wx', mode: 0o600 }));
       if (file.file.truncated) {
         return reply.code(413).send({ error: `单个文件不能超过 ${Math.round(config.maxWorkspaceFileBytes / 1048576)} MB` });
       }
       const data = fs.readFileSync(staging);
-      const r = writeWorkspaceFile(id, target.rel, data);
+      const r = await writeWorkspaceFile(id, target.rel, data);
       touchChat(id);
       return { ok: true, path: r.rel, size: r.size };
     } catch (err) {
@@ -166,11 +167,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
       // PDF/xlsx…) go in as .txt so the model can actually read them.
       if (row.extractedText && !isTextPath(fallbackName) && extOf(fallbackName) !== 'docx') {
         const name = body.data.path || `${fallbackName.replace(/\.[^.]+$/, '')}.txt`;
-        const r = writeWorkspaceFile(id, name, row.extractedText);
+        const r = await writeWorkspaceFile(id, name, row.extractedText);
         touchChat(id);
         return { ok: true, path: r.rel, size: r.size };
       }
-      const r = writeWorkspaceFile(id, body.data.path || fallbackName, fs.readFileSync(src));
+      const r = await writeWorkspaceFile(id, body.data.path || fallbackName, fs.readFileSync(src));
       touchChat(id);
       return { ok: true, path: r.rel, size: r.size };
     } catch (err) { return sendError(reply, err); }
@@ -183,7 +184,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const body = z.object({ from: z.string().min(1).max(300), to: z.string().min(1).max(300) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     try {
-      const r = renameWorkspacePath(id, body.data.from, body.data.to);
+      const r = await renameWorkspacePath(id, body.data.from, body.data.to);
       touchChat(id);
       return { ok: true, ...r };
     } catch (err) { return sendError(reply, err); }
@@ -196,7 +197,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const q = pathQuery.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: '参数错误' });
     try {
-      const r = deleteWorkspacePath(id, q.data.path);
+      const r = await deleteWorkspacePath(id, q.data.path);
       touchChat(id);
       return { ok: true, ...r };
     } catch (err) { return sendError(reply, err); }

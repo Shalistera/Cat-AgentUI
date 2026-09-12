@@ -1677,7 +1677,7 @@ export async function chatRoutes(app: FastifyInstance) {
                 : isSkillTool(call.name) && skillsActive
                 ? callSkillTool(user, call.name, call.args)
                 : isSandboxTool(call.name) && sandboxActive
-                ? await callSandboxTool({ userId: user.id, chatId, messageId: assistantId, signal: controller.signal }, call.args)
+                ? await callSandboxTool({ user: { id: user.id, role: user.role }, chatId, messageId: assistantId, signal: controller.signal }, call.args)
                 : await callTool(
                   call.name, call.args, toolCapabilities, user,
                   { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },

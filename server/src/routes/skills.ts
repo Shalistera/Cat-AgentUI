@@ -54,12 +54,12 @@ export async function skillRoutes(app: FastifyInstance) {
     requireAdmin(req, reply);
     const body = z.object({ skillMd: z.string().min(1).max(60_000) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
-    try { return { skill: saveSkillMd(body.data.skillMd) }; } catch (err) { return sendError(reply, err); }
+    try { return { skill: await saveSkillMd(body.data.skillMd) }; } catch (err) { return sendError(reply, err); }
   });
 
   app.post('/api/admin/skills/samples', async (req, reply) => {
     requireAdmin(req, reply);
-    try { return { skills: importSampleSkills() }; } catch (err) { return sendError(reply, err); }
+    try { return { skills: await importSampleSkills() }; } catch (err) { return sendError(reply, err); }
   });
 
   app.post('/api/admin/skills/import', async (req, reply) => {
@@ -85,7 +85,7 @@ export async function skillRoutes(app: FastifyInstance) {
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     try {
-      if (body.data.skillMd !== undefined) saveSkillMd(body.data.skillMd, id);
+      if (body.data.skillMd !== undefined) await saveSkillMd(body.data.skillMd, id);
       const { skillMd: _md, ...meta } = body.data;
       return { skill: Object.keys(meta).length ? updateSkillMeta(id, meta) : getSkill(id) };
     } catch (err) { return sendError(reply, err); }
@@ -94,7 +94,7 @@ export async function skillRoutes(app: FastifyInstance) {
   app.delete('/api/admin/skills/:id', async (req, reply) => {
     requireAdmin(req, reply);
     const { id } = req.params as { id: string };
-    try { deleteSkill(id); return { ok: true }; } catch (err) { return sendError(reply, err); }
+    try { await deleteSkill(id); return { ok: true }; } catch (err) { return sendError(reply, err); }
   });
 
   app.get('/api/admin/skills/:id/export', async (req, reply) => {
@@ -127,7 +127,7 @@ export async function skillRoutes(app: FastifyInstance) {
     const s = getSkill(id);
     if (!s) return reply.code(404).send({ error: '技能不存在' });
     try {
-      if (body.data.path === SKILL_FILE) return { skill: saveSkillMd(body.data.content, id) };
+      if (body.data.path === SKILL_FILE) return { skill: await saveSkillMd(body.data.content, id) };
       writeSkillFile(s.slug, body.data.path, body.data.content);
       return { ok: true };
     } catch (err) { return sendError(reply, err); }
@@ -146,7 +146,7 @@ export async function skillRoutes(app: FastifyInstance) {
     try {
       const buf = await readAll(file.file, 8 * 1024 * 1024);
       const rel = `${dir ? `${dir}/` : ''}${name}`;
-      if (rel === SKILL_FILE) { saveSkillMd(buf.toString('utf8'), id); return { ok: true, path: rel }; }
+      if (rel === SKILL_FILE) { await saveSkillMd(buf.toString('utf8'), id); return { ok: true, path: rel }; }
       const r = writeSkillFile(s.slug, rel, buf);
       return { ok: true, path: r.rel, size: r.size };
     } catch (err) { return sendError(reply, err); }

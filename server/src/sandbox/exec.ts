@@ -15,7 +15,10 @@ import { spawn, execFile } from 'node:child_process';
 import { config } from '../config.js';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
-import { workspaceRoot } from '../workspace.js';
+import { sweepIrregularEntries, workspaceRoot } from '../workspace.js';
+import { withChatLock } from '../workspace-lock.js';
+import { ensureSeccompFilter } from './seccomp.js';
+import { skillDir, skillsFor, type SkillUser } from '../skills.js';
 import { bwrapBaseArgs, cachedSandboxEnv, probeSandboxEnv, sandboxProcessEnv } from './env.js';
 import { getSandboxSettings, type SandboxSettings } from './settings.js';
 import { venvDir, venvExists } from './venv.js';
@@ -23,6 +26,8 @@ import { skillsRoot } from '../skills.js';
 
 export interface RunRequest {
   userId: string;
+  /** Role decides which 技能 directories are visible inside the sandbox. */
+  user: SkillUser;
   chatId: string;
   messageId?: string;
   command: string;
@@ -69,7 +74,7 @@ export function sandboxLoad(): { running: number; max: number } {
 
 function nodeBinDir(): string { return path.dirname(process.execPath); }
 
-function bwrapArgv(bwrap: string, workspace: string, command: string): string[] {
+function bwrapArgv(bwrap: string, workspace: string, command: string, user: SkillUser, seccomp: string | null): string[] {
   const args = [bwrap, ...bwrapBaseArgs()];
   args.push('--tmpfs', '/home', '--dir', '/home/sandbox');
   args.push('--bind', workspace, '/workspace', '--chdir', '/workspace');
@@ -79,8 +84,17 @@ function bwrapArgv(bwrap: string, workspace: string, command: string): string[] 
     pathParts.unshift('/opt/venv/bin');
   }
   args.push('--ro-bind', nodeBinDir(), '/opt/node/bin');
-  // 技能 scripts and reference files, read-only (see skills.ts).
-  if (fs.existsSync(skillsRoot)) args.push('--ro-bind', skillsRoot, '/skills');
+  // 技能 scripts and reference files, read-only — and only the skills this
+  // person may use. Mounting the whole tree would let a command `cat` a
+  // restricted or disabled skill the application layer refuses to show.
+  const visibleSkills = skillsFor(user).filter((r) => fs.existsSync(skillDir(r.slug)));
+  if (visibleSkills.length) {
+    args.push('--tmpfs', '/skills');
+    for (const r of visibleSkills) args.push('--ro-bind', skillDir(r.slug), `/skills/${r.slug}`);
+  }
+  // Syscall denylist (symlink / mknod / mount / unshare …): fd 3 is opened
+  // by the sh wrapper below, before bwrap starts.
+  if (seccomp) args.push('--seccomp', '3');
   pathParts.push('/opt/node/bin');
   args.push(
     '--unshare-all', '--new-session', '--die-with-parent', '--clearenv',
@@ -135,11 +149,20 @@ export async function runInSandbox(req: RunRequest): Promise<RunResult> {
   const release = acquire(req.userId);
   const t0 = Date.now();
   const unit = `caui-sbx-${crypto.randomBytes(6).toString('hex')}`;
-  const inner = bwrapArgv(env.bwrapPath, workspace, req.command);
+  const seccomp = ensureSeccompFilter();
+  const bwrapPart = bwrapArgv(env.bwrapPath, workspace, req.command, req.user, seccomp);
+  // `sh -c 'exec 3<"$1"; shift; exec "$@"' sh <filter> bwrap …` — opens the
+  // filter on fd 3 for --seccomp without any quoting of the real argv.
+  const inner = seccomp
+    ? ['/bin/sh', '-c', 'exec 3<"$1"; shift; exec "$@"', 'sh', seccomp, ...bwrapPart]
+    : bwrapPart;
   const useSystemd = env.limitsAvailable && !!env.systemdRunPath;
   const argv = useSystemd ? systemdArgv(env.systemdRunPath!, unit, s, timeoutSec, inner) : inner;
 
-  const result = await new Promise<RunResult>((resolve) => {
+  // The chat lock is shared with every host-side write (tool, panel upload,
+  // edit, delete): while a command may be rearranging the directory from
+  // inside, nothing on the host writes into it.
+  const result = await withChatLock(req.chatId, () => new Promise<RunResult>((resolve) => {
     let stdout = '';
     let stderr = '';
     let truncated = false;
@@ -182,7 +205,7 @@ export async function runInSandbox(req: RunRequest): Promise<RunResult> {
     };
     child.on('error', (err) => { stderr += `\n无法启动沙盒:${err.message}`; finish(null); });
     child.on('close', (code) => finish(code));
-  }).finally(release);
+  }).finally(() => { try { sweepIrregularEntries(req.chatId); } catch { /* best effort */ } })).finally(release);
 
   db.insert(schema.sandboxRuns).values({
     id: newId(), userId: req.userId, chatId: req.chatId, messageId: req.messageId ?? null,

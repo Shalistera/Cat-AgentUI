@@ -13,6 +13,7 @@ import { eq } from 'drizzle-orm';
 import { config } from './config.js';
 import { db, schema } from './db/index.js';
 import type { ToolDef } from './types.js';
+import { withChatLock } from './workspace-lock.js';
 
 const READ_WINDOW = 20_000; // chars per workspace_read call
 const LIST_LIMIT = 300; // entries shown to the model / in the prompt manifest
@@ -177,29 +178,114 @@ function looksBinary(buf: Buffer): boolean {
   return false;
 }
 
+/**
+ * Open a workspace file for reading without ever following a symlink, then
+ * prove the descriptor really is the file the (symlink-free) path leads to.
+ *
+ * The 沙盒 can rewrite the directory while we look at it, so "check, then
+ * open" is not enough: open first (O_NOFOLLOW refuses a symlink as the last
+ * component; O_NONBLOCK keeps a FIFO from hanging us), fstat the result, and
+ * only then walk the path with lstat — every component must be a plain
+ * directory and the final entry must have the same dev/ino as what we hold.
+ * An attacker who swaps a directory for a symlink and back cannot make both
+ * checks agree. The caller owns the descriptor.
+ */
+export function openRegular(chatId: string, rel: string): { fd: number; rel: string; size: number } {
+  const { abs, rel: cleaned } = resolveSafe(chatId, rel);
+  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK, O_NOCTTY } = fs.constants;
+  let fd: number;
+  try {
+    fd = fs.openSync(abs, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') throw new WorkspaceError(`文件不存在:${cleaned}`, 404);
+    if (code === 'ELOOP') throw new WorkspaceError('工作区内不允许符号链接');
+    throw err;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw new WorkspaceError(`不是普通文件:${cleaned}`);
+    let cur = workspaceRoot(chatId);
+    for (const seg of cleaned.split('/')) {
+      cur = path.join(cur, seg);
+      const ls = fs.lstatSync(cur);
+      if (ls.isSymbolicLink()) throw new WorkspaceError('工作区内不允许符号链接');
+    }
+    const ls = fs.lstatSync(abs);
+    if (ls.dev !== st.dev || ls.ino !== st.ino) throw new WorkspaceError('文件在读取时被改动,请重试', 409);
+    return { fd, rel: cleaned, size: st.size };
+  } catch (err) {
+    fs.closeSync(fd);
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new WorkspaceError(`文件不存在:${cleaned}`, 404);
+    throw err;
+  }
+}
+
+function readRegular(chatId: string, rel: string): { buf: Buffer; rel: string } {
+  const { fd, rel: cleaned } = openRegular(chatId, rel);
+  try { return { buf: fs.readFileSync(fd), rel: cleaned }; } finally { fs.closeSync(fd); }
+}
+
 /** Text rendition of a workspace file: plain text as-is, docx through
     mammoth; anything else is reported as binary. */
 export async function readWorkspaceText(chatId: string, rel: string): Promise<string> {
-  const { abs, rel: cleaned } = resolveSafe(chatId, rel);
-  let st: fs.Stats;
-  try { st = fs.statSync(abs); } catch { throw new WorkspaceError(`文件不存在:${cleaned}`, 404); }
-  if (!st.isFile()) throw new WorkspaceError(`不是文件:${cleaned}`);
+  const { buf, rel: cleaned } = readRegular(chatId, rel);
   const ext = extOf(cleaned);
   if (ext === 'docx') {
     const mammoth = await import('mammoth');
-    const r = await mammoth.extractRawText({ path: abs });
+    const r = await mammoth.extractRawText({ buffer: buf });
     return r.value.replace(/\r\n/g, '\n');
   }
-  const buf = fs.readFileSync(abs);
   if (!isTextPath(cleaned) && looksBinary(buf)) {
-    throw new WorkspaceError(`「${cleaned}」是二进制文件(${st.size.toLocaleString()} 字节),无法以文本读取`);
+    throw new WorkspaceError(`「${cleaned}」是二进制文件(${buf.length.toLocaleString()} 字节),无法以文本读取`);
   }
   return buf.toString('utf8').replace(/\r\n/g, '\n');
 }
 
+/** Every path component below the root must be a real directory — no
+    symlink may sit anywhere on the way to where we are about to write. */
+function assertNoSymlinkOnPath(chatId: string, rel: string) {
+  let cur = workspaceRoot(chatId);
+  for (const seg of rel.split('/')) {
+    cur = path.join(cur, seg);
+    try {
+      if (fs.lstatSync(cur).isSymbolicLink()) throw new WorkspaceError('工作区内不允许符号链接');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+  }
+}
+
+/** Delete anything that is neither a regular file nor a directory (symlinks,
+    FIFOs, sockets). Run after every 沙盒 command as a belt to seccomp's
+    braces, so the host side only ever meets plain files. */
+export function sweepIrregularEntries(chatId: string): number {
+  const root = workspaceRoot(chatId);
+  let removed = 0;
+  const walk = (dir: string, depth: number) => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (depth < MAX_DEPTH + 2) walk(p, depth + 1); }
+      else if (!e.isFile()) {
+        try { fs.rmSync(p, { force: true }); removed += 1; } catch { /* best effort */ }
+      }
+    }
+  };
+  walk(root, 0);
+  if (removed) console.warn(`[workspace] ${chatId}: removed ${removed} irregular entr${removed === 1 ? 'y' : 'ies'} after sandbox run`);
+  return removed;
+}
+
 // ---- writing ----
 
-export function writeWorkspaceFile(chatId: string, rel: string, content: string | Buffer): { rel: string; size: number } {
+export function writeWorkspaceFile(chatId: string, rel: string, content: string | Buffer): Promise<{ rel: string; size: number }> {
+  return withChatLock(chatId, () => writeWorkspaceFileLocked(chatId, rel, content));
+}
+
+function writeWorkspaceFileLocked(chatId: string, rel: string, content: string | Buffer): { rel: string; size: number } {
   const { abs, rel: cleaned } = resolveSafe(chatId, rel);
   const data = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
   if (data.length > config.maxWorkspaceFileBytes) {
@@ -218,9 +304,14 @@ export function writeWorkspaceFile(chatId: string, rel: string, content: string 
   }
   assertBudget(chatId, data.length - existing, isNew ? 1 : 0);
   fs.mkdirSync(path.dirname(abs), { recursive: true, mode: 0o700 });
-  // write-then-rename so a crash mid-write never leaves a half file
+  assertNoSymlinkOnPath(chatId, cleaned);
+  // write-then-rename so a crash mid-write never leaves a half file; the
+  // temp file is created exclusively (O_EXCL|O_NOFOLLOW) so nothing that
+  // already sits at that name — link or otherwise — can redirect the write.
   const tmp = `${abs}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, data, { mode: 0o600 });
+  const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
+  const fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+  try { fs.writeFileSync(fd, data); } finally { fs.closeSync(fd); }
   fs.renameSync(tmp, abs);
   return { rel: cleaned, size: data.length };
 }
@@ -233,7 +324,13 @@ export interface EditResult {
   context: string;
 }
 
-export async function editWorkspaceFile(
+export function editWorkspaceFile(
+  chatId: string, rel: string, oldStr: string, newStr: string, replaceAll: boolean,
+): Promise<EditResult> {
+  return withChatLock(chatId, () => editWorkspaceFileLocked(chatId, rel, oldStr, newStr, replaceAll));
+}
+
+async function editWorkspaceFileLocked(
   chatId: string, rel: string, oldStr: string, newStr: string, replaceAll: boolean,
 ): Promise<EditResult> {
   const { rel: cleaned } = resolveSafe(chatId, rel);
@@ -249,13 +346,17 @@ export async function editWorkspaceFile(
   }
   const first = text.indexOf(oldStr);
   const next = replaceAll ? text.split(oldStr).join(newStr) : text.slice(0, first) + newStr + text.slice(first + oldStr.length);
-  const { size } = writeWorkspaceFile(chatId, cleaned, next);
+  const { size } = writeWorkspaceFileLocked(chatId, cleaned, next);
   const start = Math.max(0, first - EDIT_CONTEXT);
   const end = Math.min(next.length, first + newStr.length + EDIT_CONTEXT);
   return { rel: cleaned, replacements: replaceAll ? count : 1, size, context: next.slice(start, end) };
 }
 
-export function deleteWorkspacePath(chatId: string, rel: string): { rel: string; removed: number } {
+export function deleteWorkspacePath(chatId: string, rel: string): Promise<{ rel: string; removed: number }> {
+  return withChatLock(chatId, () => deleteWorkspacePathLocked(chatId, rel));
+}
+
+function deleteWorkspacePathLocked(chatId: string, rel: string): { rel: string; removed: number } {
   const { abs, rel: cleaned } = resolveSafe(chatId, rel);
   let st: fs.Stats;
   try { st = fs.lstatSync(abs); } catch { throw new WorkspaceError(`文件不存在:${cleaned}`, 404); }
@@ -268,14 +369,20 @@ export function deleteWorkspacePath(chatId: string, rel: string): { rel: string;
   return { rel: cleaned, removed: 1 };
 }
 
-export function renameWorkspacePath(chatId: string, from: string, to: string): { from: string; to: string } {
-  const src = resolveSafe(chatId, from);
-  const dst = resolveSafe(chatId, to);
-  if (!fs.existsSync(src.abs)) throw new WorkspaceError(`文件不存在:${src.rel}`, 404);
-  if (fs.existsSync(dst.abs)) throw new WorkspaceError(`目标已存在:${dst.rel}`, 409);
-  fs.mkdirSync(path.dirname(dst.abs), { recursive: true, mode: 0o700 });
-  fs.renameSync(src.abs, dst.abs);
-  return { from: src.rel, to: dst.rel };
+export function renameWorkspacePath(chatId: string, from: string, to: string): Promise<{ from: string; to: string }> {
+  return withChatLock(chatId, () => {
+    const src = resolveSafe(chatId, from);
+    const dst = resolveSafe(chatId, to);
+    let st: fs.Stats;
+    try { st = fs.lstatSync(src.abs); } catch { throw new WorkspaceError(`文件不存在:${src.rel}`, 404); }
+    if (!st.isFile() && !st.isDirectory()) throw new WorkspaceError(`不是普通文件:${src.rel}`);
+    try { fs.lstatSync(dst.abs); throw new WorkspaceError(`目标已存在:${dst.rel}`, 409); }
+    catch (err) { if (err instanceof WorkspaceError) throw err; }
+    fs.mkdirSync(path.dirname(dst.abs), { recursive: true, mode: 0o700 });
+    assertNoSymlinkOnPath(chatId, dst.rel);
+    fs.renameSync(src.abs, dst.abs);
+    return { from: src.rel, to: dst.rel };
+  });
 }
 
 /** Remove the whole directory (chat deleted / swept). Best effort. */
@@ -424,7 +531,7 @@ export async function callWorkspaceTool(chatId: string, name: string, argsJson: 
         const rel = str('path');
         if (!rel) return { result: '缺少 path 参数', isError: true };
         if (typeof args.content !== 'string') return { result: '缺少 content 参数', isError: true };
-        const r = writeWorkspaceFile(chatId, rel, args.content);
+        const r = await writeWorkspaceFile(chatId, rel, args.content);
         return { result: `已写入 ${r.rel}(${fmtBytes(r.size)})`, isError: false };
       }
       case 'workspace_edit': {
@@ -442,7 +549,7 @@ export async function callWorkspaceTool(chatId: string, name: string, argsJson: 
       case 'workspace_delete': {
         const rel = str('path');
         if (!rel) return { result: '缺少 path 参数', isError: true };
-        const r = deleteWorkspacePath(chatId, rel);
+        const r = await deleteWorkspacePath(chatId, rel);
         return { result: `已删除 ${r.rel}(${r.removed} 个文件)`, isError: false };
       }
       default:
