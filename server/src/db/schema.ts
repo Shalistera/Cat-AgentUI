@@ -343,3 +343,19 @@ export const appSettings = sqliteTable('app_settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(), // JSON
 });
+
+// 沙盒执行审计: one row per run_command the model executed, so an admin can
+// see who ran what, how long it took, and whether it hit the limits.
+export const sandboxRuns = sqliteTable('sandbox_runs', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  chatId: text('chat_id'),
+  messageId: text('message_id'),
+  command: text('command').notNull(),
+  exitCode: integer('exit_code'),
+  timedOut: integer('timed_out').notNull().default(0),
+  durationMs: integer('duration_ms').notNull().default(0),
+  outputChars: integer('output_chars').notNull().default(0),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [index('idx_sandbox_runs_created').on(t.createdAt)]);
+

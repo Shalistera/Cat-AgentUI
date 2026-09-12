@@ -101,13 +101,17 @@ export const config = {
   maxWorkspaceBytes: intEnv('MAX_WORKSPACE_MB', 64, 1, 10_000) * MIB,
   maxWorkspaceFileBytes: intEnv('MAX_WORKSPACE_FILE_MB', 8, 1, 200) * MIB,
   maxWorkspaceFiles: intEnv('MAX_WORKSPACE_FILES', 500, 10, 10_000),
+  // 沙盒 (bwrap + systemd-run): process-local concurrency and the hard cap an
+  // admin can raise the per-command timeout to.
+  maxSandboxConcurrency: intEnv('MAX_SANDBOX_CONCURRENCY', 3, 1, 32),
+  maxSandboxTimeoutSec: intEnv('MAX_SANDBOX_TIMEOUT_SECONDS', 600, 10, 3_600),
 
   // Scheduled SQLite snapshots (see backup.ts). 0 hours = disabled.
   backupIntervalHours: intEnv('BACKUP_INTERVAL_HOURS', 24, 0, 720),
   backupKeep: intEnv('BACKUP_KEEP', 14, 1, 365),
 };
 
-for (const d of ['', 'uploads', 'images', 'workspaces']) {
+for (const d of ['', 'uploads', 'images', 'workspaces', 'sandbox']) {
   const dir = path.join(config.dataDir, d);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(dir, 0o700); } catch { /* best effort on unusual filesystems */ }

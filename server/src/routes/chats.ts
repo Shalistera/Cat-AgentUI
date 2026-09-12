@@ -20,6 +20,7 @@ import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
+import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
 } from '../types.js';
@@ -1373,7 +1374,14 @@ export async function chatRoutes(app: FastifyInstance) {
     // rides in the prompt so the model knows what exists before calling.
     const workspaceActive = !!chat.workspace && !!model.tools && !model.imageGen;
     if (workspaceActive) toolDefs = [...(toolDefs ?? []), ...WORKSPACE_TOOL_DEFS];
-    const workspaceBlock = workspaceActive ? buildWorkspacePrompt(chatId) : null;
+    // 沙盒 rides on the workspace: commands run in that directory, so there
+    // is nothing to execute against without it.
+    const sandboxActive = workspaceActive && sandboxAvailableFor(user);
+    if (sandboxActive) toolDefs = [...(toolDefs ?? []), ...SANDBOX_TOOL_DEFS];
+    const workspaceBlock = workspaceActive
+      ? [buildWorkspacePrompt(chatId), sandboxActive ? buildSandboxPrompt() : null].filter(Boolean).join('\n\n')
+      : null;
+    const sandboxConfirm = sandboxActive && sandboxNeedsConfirm();
     // Vertex currently rejects googleSearch + functionDeclarations in one
     // generateContent request. Preserve explicit MCP/project tools and disable
     // native search for this turn rather than silently dropping those tools.
@@ -1631,7 +1639,8 @@ export async function chatRoutes(app: FastifyInstance) {
             // when the person asked for that) wait for an allow/deny from the
             // tab. Project knowledge tools are in-process reads and never ask.
             const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name)
-              && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)));
+              && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)
+                || (isSandboxTool(call.name) && sandboxConfirm)));
             const denied = new Set<string>();
             if (askFor.length) {
               clearProviderIdleTimer(); // a human is the slow party now, not the provider
@@ -1658,6 +1667,8 @@ export async function chatRoutes(app: FastifyInstance) {
                 ? callProjectTool(chat.projectId, call.name, call.args)
                 : isWorkspaceTool(call.name) && workspaceActive
                 ? await callWorkspaceTool(chatId, call.name, call.args)
+                : isSandboxTool(call.name) && sandboxActive
+                ? await callSandboxTool({ userId: user.id, chatId, messageId: assistantId, signal: controller.signal }, call.args)
                 : await callTool(
                   call.name, call.args, toolCapabilities, user,
                   { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },

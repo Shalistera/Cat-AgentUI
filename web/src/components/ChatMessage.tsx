@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
-  BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe,
+  BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
   Info, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo, ToolConfirmRequest } from '../types';
@@ -166,14 +166,16 @@ function ToolConfirmCard({ req, onDecide }: {
     <div className="my-2.5 overflow-hidden rounded-lg border border-warn/40 bg-warn/10" data-find-skip>
       <div className="flex items-center gap-2 px-3.5 py-2.5 text-[13px] font-medium text-tx">
         <ShieldQuestion size={15} className="shrink-0 text-warn" />
-        模型想调用 {req.calls.length === 1 ? '一个工具' : `${req.calls.length} 个工具`},是否允许?
+        {req.calls.every((c) => c.name === 'run_command')
+          ? `模型想在沙盒里执行${req.calls.length === 1 ? '一条命令' : `${req.calls.length} 条命令`},是否允许?`
+          : `模型想调用 ${req.calls.length === 1 ? '一个工具' : `${req.calls.length} 个工具`},是否允许?`}
       </div>
       <div className="divide-y divide-line/70 border-t border-warn/25 bg-bg1">
         {req.calls.map((c) => (
           <div key={c.id} className="px-3.5 py-2.5">
             <div className="flex items-center gap-2">
-              <Wrench size={13} className="shrink-0 text-tx3" />
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-tx">{toolShortName(c.name)}</span>
+              {c.name === 'run_command' ? <Terminal size={13} className="shrink-0 text-tx3" /> : <Wrench size={13} className="shrink-0 text-tx3" />}
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-tx">{c.name === 'run_command' ? '执行命令' : toolShortName(c.name)}</span>
               {req.calls.length > 1 && !sent && (
                 <span className="flex shrink-0 gap-1">
                   <Button size="xs" variant={picked[c.id] === 'deny' ? 'danger' : 'ghost'}
@@ -185,7 +187,7 @@ function ToolConfirmCard({ req, onDecide }: {
             </div>
             {c.args && c.args !== '{}' && (
               <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md border border-line bg-bg2/60 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-tx2">
-                {prettyArgs(c.args)}
+                {c.name === 'run_command' ? (commandOf(c as ToolCallPart) || prettyArgs(c.args)) : prettyArgs(c.args)}
               </pre>
             )}
           </div>
@@ -297,6 +299,20 @@ function isWorkspaceTool(name: string): boolean {
   return name in WORKSPACE_VERBS;
 }
 
+// 沙盒 run_command: the command itself is the label, and its output is shown
+// in the expanded row — for once the "how" is exactly what the person wants.
+const RUN_COMMAND = 'run_command';
+function commandOf(call: ToolCallPart): string {
+  try {
+    const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
+    return typeof a.command === 'string' ? a.command : '';
+  } catch { return ''; }
+}
+function commandSummary(cmd: string): string {
+  const oneLine = cmd.trim().split('\n')[0].replace(/\s+/g, ' ');
+  return oneLine.length > 72 ? `${oneLine.slice(0, 72)}…` : oneLine;
+}
+
 function pathOf(call: ToolCallPart): string {
   try {
     const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
@@ -332,14 +348,25 @@ function ToolRun({ calls, results, organizing }: {
   const pending = calls.filter((c) => !results.has(c.id));
   const failed = calls.filter((c) => results.get(c.id)?.isError);
   const searching = calls.some((c) => isSearchTool(c.name));
-  const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name));
+  const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name) || c.name === RUN_COMMAND);
+  const hasCommand = calls.some((c) => c.name === RUN_COMMAND);
   const active = pending.length > 0;
   const busy = active || organizing;
   const noun = searching ? '搜索' : '调用工具';
 
   let label: string;
-  if (workspaceOnly && active) {
-    label = `${workspaceLabel(pending[pending.length - 1], false)}…`;
+  const lastPending = pending[pending.length - 1];
+  if (workspaceOnly && active && lastPending.name === RUN_COMMAND) {
+    label = `正在执行「${commandSummary(commandOf(lastPending))}」…`;
+  } else if (workspaceOnly && active) {
+    label = `${workspaceLabel(lastPending, false)}…`;
+  } else if (hasCommand && !organizing) {
+    const cmds = calls.filter((c) => c.name === RUN_COMMAND);
+    const failedCmds = cmds.filter((c) => results.get(c.id)?.isError).length;
+    label = cmds.length === 1
+      ? `执行了「${commandSummary(commandOf(cmds[0]))}」`
+      : `执行了 ${cmds.length} 条命令`;
+    if (failedCmds) label += `,${failedCmds} 条失败`;
   } else if (workspaceOnly && !organizing) {
     // Files written/changed are what the person cares about; reads fold away.
     const writes = calls.filter((c) => c.name !== 'workspace_read' && c.name !== 'workspace_list');
@@ -362,7 +389,7 @@ function ToolRun({ calls, results, organizing }: {
     label = calls.length === 1 ? `${noun}完成` : `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次`;
   }
 
-  const Icon = searching ? Globe : workspaceOnly ? FolderOpen : Wrench;
+  const Icon = searching ? Globe : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
 
   return (
     <Disclosure
@@ -389,11 +416,17 @@ function ToolRun({ calls, results, organizing }: {
                 {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
                   : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
                   : <Check size={13} className="shrink-0 text-ok" />}
-                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
+                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === RUN_COMMAND ? '执行' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
                 {q && <span className="truncate text-tx3">「{q}」</span>}
                 {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">「{pathOf(c)}」</span>}
               </div>
-              {r?.isError && (
+              {c.name === RUN_COMMAND && (
+                <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg2 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-tx">{commandOf(c)}</pre>
+              )}
+              {c.name === RUN_COMMAND && r && (
+                <pre className={`mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border px-2 py-1.5 font-mono text-[11px] leading-relaxed ${r.isError ? 'border-err/30 bg-err/10 text-err' : 'border-line bg-bg1 text-tx2'}`}>{r.result.slice(0, 6000)}</pre>
+              )}
+              {c.name !== RUN_COMMAND && r?.isError && (
                 <div className="mt-1.5 whitespace-pre-wrap break-words rounded-md border border-err/30 bg-err/10 px-2 py-1.5 text-[11px] leading-relaxed text-err">
                   {r.result.slice(0, 500)}
                 </div>

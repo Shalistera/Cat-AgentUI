@@ -204,6 +204,13 @@
       "when": 1789175034195,
       "tag": "0028_chat_workspace",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1789178874659,
+      "tag": "0029_sandbox_runs",
+      "breakpoints": true
     }
   ]
 }

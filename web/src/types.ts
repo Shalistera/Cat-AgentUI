@@ -455,3 +455,38 @@ export interface StorageOverview {
   freeSpace: number | null;
   topUsers: { userId: string; username: string; displayName: string | null; uploadBytes: number; imageBytes: number }[];
 }
+
+// ---- 沙盒 (admin) ----
+export interface SandboxEnvCheck {
+  id: string; label: string; level: 'ok' | 'warn' | 'fail'; detail: string; fix?: string; required: boolean;
+}
+export interface SandboxSettings {
+  enabled: boolean; confirm: boolean;
+  accessMode: 'shared' | 'restricted'; allowedUserIds: string[];
+  timeoutSec: number; memoryMb: number; cpuPercent: number; maxPids: number; maxOutputChars: number;
+}
+export interface SandboxJob {
+  id: number; kind: 'create' | 'install' | 'uninstall' | 'rebuild'; args: string[];
+  status: 'running' | 'done' | 'error'; startedAt: number; endedAt: number | null; log: string[]; error: string | null;
+}
+export interface SandboxAdminData {
+  env: {
+    checkedAt: number; checks: SandboxEnvCheck[]; runnable: boolean; limitsAvailable: boolean;
+    python3Path: string | null; pandocPath: string | null; hostSetupScript: string;
+  };
+  settings: SandboxSettings;
+  limits: { maxTimeoutSec: number; maxConcurrency: number };
+  load: { running: number; max: number };
+  venv: {
+    exists: boolean;
+    packages: { name: string; version: string }[];
+    presets: { name: string; group: string; desc: string }[];
+  };
+  job: SandboxJob | null;
+}
+export interface SandboxRun {
+  id: string; createdAt: number; command: string; exitCode: number | null; timedOut: boolean;
+  durationMs: number; outputChars: number; chatId: string | null; chatTitle: string | null;
+  user: { id: string; username: string; displayName: string | null };
+}
+

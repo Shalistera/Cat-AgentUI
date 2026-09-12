@@ -23,6 +23,9 @@ import { ocrRoutes } from './routes/ocr.js';
 import { translateRoutes } from './routes/translate.js';
 import { initKnowledgeIndex } from './knowledge.js';
 import { workspaceRoutes } from './routes/workspace.js';
+import { sandboxRoutes } from './routes/sandbox.js';
+import { probeSandboxEnv } from './sandbox/env.js';
+import { warmPackagesCache } from './sandbox/venv.js';
 import { sweepOrphanWorkspaces } from './workspace.js';
 import { startRetentionSweeper } from './retention.js';
 import { startBackupScheduler } from './backup.js';
@@ -55,6 +58,9 @@ async function main() {
   initKnowledgeIndex();
   await reconcileStorageMetadata();
   sweepOrphanWorkspaces();
+  // Host probes take a few seconds; run them off the startup path so the
+  // first chat turn already knows whether run_command can be offered.
+  probeSandboxEnv().then(() => warmPackagesCache()).catch(() => { /* reported on the admin page */ });
 
   const app = Fastify({
     logger: {
@@ -117,6 +123,7 @@ async function main() {
   await app.register(ocrRoutes);
   await app.register(translateRoutes);
   await app.register(workspaceRoutes);
+  await app.register(sandboxRoutes);
 
   // static SPA
   const webDist = path.join(repoRoot, 'web', 'dist');
