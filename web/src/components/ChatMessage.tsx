@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
-  BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, GitBranch, Globe,
+  BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe,
   Info, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo, ToolConfirmRequest } from '../types';
@@ -283,6 +283,34 @@ function isSearchTool(name: string): boolean {
   return /search|news|query/i.test(toolShortName(name));
 }
 
+// 工作区 tools get verbs + the file name instead of the raw tool id, so the
+// status line reads "正在写入「方案.md」…" rather than "workspace_write".
+const WORKSPACE_VERBS: Record<string, { doing: string; done: string }> = {
+  workspace_list: { doing: '正在查看工作区', done: '查看了工作区' },
+  workspace_read: { doing: '正在读取', done: '读取了' },
+  workspace_write: { doing: '正在写入', done: '写入了' },
+  workspace_edit: { doing: '正在修改', done: '修改了' },
+  workspace_delete: { doing: '正在删除', done: '删除了' },
+};
+
+function isWorkspaceTool(name: string): boolean {
+  return name in WORKSPACE_VERBS;
+}
+
+function pathOf(call: ToolCallPart): string {
+  try {
+    const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
+    return typeof a.path === 'string' ? a.path : '';
+  } catch { return ''; }
+}
+
+function workspaceLabel(call: ToolCallPart, done: boolean): string {
+  const v = WORKSPACE_VERBS[call.name];
+  const p = pathOf(call);
+  const verb = done ? v.done : v.doing;
+  return p ? `${verb}「${p}」` : verb;
+}
+
 function queryOf(call: ToolCallPart): string {
   try {
     const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
@@ -304,12 +332,26 @@ function ToolRun({ calls, results, organizing }: {
   const pending = calls.filter((c) => !results.has(c.id));
   const failed = calls.filter((c) => results.get(c.id)?.isError);
   const searching = calls.some((c) => isSearchTool(c.name));
+  const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name));
   const active = pending.length > 0;
   const busy = active || organizing;
   const noun = searching ? '搜索' : '调用工具';
 
   let label: string;
-  if (active) {
+  if (workspaceOnly && active) {
+    label = `${workspaceLabel(pending[pending.length - 1], false)}…`;
+  } else if (workspaceOnly && !organizing) {
+    // Files written/changed are what the person cares about; reads fold away.
+    const writes = calls.filter((c) => c.name !== 'workspace_read' && c.name !== 'workspace_list');
+    const shown = writes.length ? writes : calls;
+    const names = [...new Set(shown.map((c) => pathOf(c)).filter(Boolean))];
+    label = shown.length === 1
+      ? workspaceLabel(shown[0], true)
+      : names.length
+        ? `${WORKSPACE_VERBS[shown[shown.length - 1].name].done}「${names.slice(0, 3).join('」「')}」${names.length > 3 ? ` 等 ${names.length} 个文件` : ''}`
+        : `操作了工作区 ${calls.length} 次`;
+    if (failed.length) label += `,${failed.length} 次失败`;
+  } else if (active) {
     const q = queryOf(pending[pending.length - 1]);
     label = q ? `正在${noun}「${q}」…` : `正在${noun}…`;
   } else if (organizing) {
@@ -320,7 +362,7 @@ function ToolRun({ calls, results, organizing }: {
     label = calls.length === 1 ? `${noun}完成` : `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次`;
   }
 
-  const Icon = searching ? Globe : Wrench;
+  const Icon = searching ? Globe : workspaceOnly ? FolderOpen : Wrench;
 
   return (
     <Disclosure
@@ -347,8 +389,9 @@ function ToolRun({ calls, results, organizing }: {
                 {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
                   : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
                   : <Check size={13} className="shrink-0 text-ok" />}
-                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : toolShortName(c.name)}</span>
+                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
                 {q && <span className="truncate text-tx3">「{q}」</span>}
+                {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">「{pathOf(c)}」</span>}
               </div>
               {r?.isError && (
                 <div className="mt-1.5 whitespace-pre-wrap break-words rounded-md border border-err/30 bg-err/10 px-2 py-1.5 text-[11px] leading-relaxed text-err">

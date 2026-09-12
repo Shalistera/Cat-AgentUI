@@ -187,6 +187,10 @@ export const chats = sqliteTable('chats', {
   // 临时对话: hidden from the chat list and search, swept (with uploads) after
   // a TTL of inactivity. Clearing the flag "saves" it as a normal chat.
   temporary: integer('temporary').notNull().default(0),
+  // 工作区: a private per-chat directory (data/workspaces/<chatId>) the model
+  // reads and writes through in-process tools, so long deliverables live in
+  // files it can revise in place instead of being re-emitted every turn.
+  workspace: integer('workspace').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 }, (t) => [index('idx_chats_user').on(t.userId, t.updatedAt)]);

@@ -97,12 +97,17 @@ export const config = {
 
   maxToolIterations: intEnv('MAX_TOOL_ITERATIONS', 10, 1, 50),
 
+  // 工作区 (per-chat file directory the model edits through tools).
+  maxWorkspaceBytes: intEnv('MAX_WORKSPACE_MB', 64, 1, 10_000) * MIB,
+  maxWorkspaceFileBytes: intEnv('MAX_WORKSPACE_FILE_MB', 8, 1, 200) * MIB,
+  maxWorkspaceFiles: intEnv('MAX_WORKSPACE_FILES', 500, 10, 10_000),
+
   // Scheduled SQLite snapshots (see backup.ts). 0 hours = disabled.
   backupIntervalHours: intEnv('BACKUP_INTERVAL_HOURS', 24, 0, 720),
   backupKeep: intEnv('BACKUP_KEEP', 14, 1, 365),
 };
 
-for (const d of ['', 'uploads', 'images']) {
+for (const d of ['', 'uploads', 'images', 'workspaces']) {
   const dir = path.join(config.dataDir, d);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(dir, 0o700); } catch { /* best effort on unusual filesystems */ }

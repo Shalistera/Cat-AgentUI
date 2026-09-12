@@ -1,12 +1,13 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Megaphone, X } from 'lucide-react';
-import { useAnnouncement, useAuth, useHtmlPreview, useUi } from './store';
+import { useAnnouncement, useAuth, useHtmlPreview, useUi, useWorkspacePanel } from './store';
 import { onUnauthorized } from './api';
 import { startRealtime, stopRealtime } from './realtime';
 import { Toaster, ConfirmHost, Spinner } from './components/ui';
 import { Sidebar } from './components/Sidebar';
 import { HtmlPreviewPanel } from './components/HtmlPreviewPanel';
+import { WorkspacePanel } from './components/WorkspacePanel';
 import { LightboxHost } from './components/Lightbox';
 import { notifyNavigate } from './notify';
 import type { SettingsTab } from './store';
@@ -59,6 +60,11 @@ function Shell() {
 
   // A popped-out HTML preview belongs to the page it came from.
   useEffect(() => { closePreview(); }, [loc.pathname, closePreview]);
+  // The 工作区 panel follows chats (the chat page re-points it); anywhere
+  // else it has nothing to show.
+  useEffect(() => {
+    if (!loc.pathname.startsWith('/chat/')) useWorkspacePanel.getState().close();
+  }, [loc.pathname]);
 
   // Server-pushed cache invalidation lives for exactly as long as the session.
   const userId = user?.id ?? null;
@@ -86,6 +92,7 @@ function Shell() {
         <Outlet />
       </main>
       <HtmlPreviewPanel />
+      <WorkspacePanel />
       <SettingsDialog />
       <LightboxHost />
     </div>

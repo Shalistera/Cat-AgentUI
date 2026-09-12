@@ -10,6 +10,7 @@ import { and, eq, lt } from 'drizzle-orm';
 import { db, schema, getSetting } from './db/index.js';
 import { config } from './config.js';
 import { cleanupUnreferencedUploads, uploadIdsFromPartsJson, removeUnreferencedUploads } from './storage.js';
+import { removeWorkspace } from './workspace.js';
 
 export const IMAGE_RETENTION_KEY = 'image_retention_days'; // 绘图工坊
 export const CHAT_IMAGE_RETENTION_KEY = 'chat_image_retention_days'; // 对话中作图
@@ -63,6 +64,7 @@ async function sweepTemporaryChats(): Promise<number> {
       .where(eq(schema.messages.chatId, chat.id)).all()
       .flatMap((m) => uploadIdsFromPartsJson(m.parts));
     db.delete(schema.chats).where(eq(schema.chats.id, chat.id)).run();
+    removeWorkspace(chat.id);
     await cleanupUnreferencedUploads(chat.userId, uploadIds);
   }
   if (rows.length) console.log(`[retention] removed ${rows.length} temporary chat(s) idle beyond TTL`);

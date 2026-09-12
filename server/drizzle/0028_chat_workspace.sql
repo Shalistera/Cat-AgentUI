@@ -1,0 +1,1 @@
+ALTER TABLE `chats` ADD `workspace` integer DEFAULT 0 NOT NULL;

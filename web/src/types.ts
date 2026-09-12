@@ -90,6 +90,8 @@ export interface ChatSummary {
   id: string; title: string; pinned: boolean; archived: boolean;
   /** 临时对话 — not listed, not searchable, swept after idle TTL. */
   temporary: boolean;
+  /** 工作区 — per-chat file directory the model edits through tools. */
+  workspace: boolean;
   modelId: string | null;
   projectId: string | null;
   createdAt: number; updatedAt: number;
@@ -414,6 +416,16 @@ export interface AppSettings {
   translateThinkModelIds: string[];
 }
 
+/** One file in a chat's 工作区. */
+export interface WorkspaceFile { path: string; size: number; mtime: number }
+
+export interface WorkspaceListing {
+  enabled: boolean;
+  files: WorkspaceFile[];
+  bytes: number;
+  limits: { bytes: number; files: number; fileBytes: number };
+}
+
 // SSE stream handler callbacks
 export interface StreamHandlers {
   onMeta?(d: { messageId: string; userMessageId: string | null; model: string }): void;
@@ -438,6 +450,7 @@ export interface StorageOverview {
   uploads: { count: number; bytes: number; unreferencedCount: number; unreferencedBytes: number };
   images: { count: number; bytes: number; workshopBytes: number; chatBytes: number };
   orphans: { count: number; bytes: number };
+  workspaces: { chats: number; bytes: number };
   limits: { total: number; perUserUploads: number; perUserImages: number };
   freeSpace: number | null;
   topUsers: { userId: string; username: string; displayName: string | null; uploadBytes: number; imageBytes: number }[];

@@ -22,6 +22,8 @@ import { searchRoutes } from './routes/search.js';
 import { ocrRoutes } from './routes/ocr.js';
 import { translateRoutes } from './routes/translate.js';
 import { initKnowledgeIndex } from './knowledge.js';
+import { workspaceRoutes } from './routes/workspace.js';
+import { sweepOrphanWorkspaces } from './workspace.js';
 import { startRetentionSweeper } from './retention.js';
 import { startBackupScheduler } from './backup.js';
 import { reconcileStorageMetadata } from './storage.js';
@@ -52,6 +54,7 @@ async function main() {
   }
   initKnowledgeIndex();
   await reconcileStorageMetadata();
+  sweepOrphanWorkspaces();
 
   const app = Fastify({
     logger: {
@@ -113,6 +116,7 @@ async function main() {
   await app.register(searchRoutes);
   await app.register(ocrRoutes);
   await app.register(translateRoutes);
+  await app.register(workspaceRoutes);
 
   // static SPA
   const webDist = path.join(repoRoot, 'web', 'dist');

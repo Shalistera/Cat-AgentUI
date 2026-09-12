@@ -96,6 +96,26 @@ export const useHtmlPreview = create<HtmlPreviewState>((set) => ({
   close() { set({ src: null }); },
 }));
 
+// ---- 工作区 panel ----
+// Which chat's files the right-hand panel shows. `version` is bumped whenever
+// the model (tool result) or the person (upload/delete) changes a file, so
+// the panel refetches without polling.
+interface WorkspacePanelState {
+  chatId: string | null;
+  version: number;
+  open(chatId: string): void;
+  close(): void;
+  bump(): void;
+}
+
+export const useWorkspacePanel = create<WorkspacePanelState>((set) => ({
+  chatId: null,
+  version: 0,
+  open(chatId) { set({ chatId }); },
+  close() { set({ chatId: null }); },
+  bump() { set((s) => ({ version: s.version + 1 })); },
+}));
+
 // ---- auth ----
 interface AuthState {
   user: User | null;

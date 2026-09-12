@@ -19,6 +19,7 @@ import { checkModelLimit, checkQuota, modelLimitBlockMessage, modelLimitReason, 
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
+import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
 } from '../types.js';
@@ -462,7 +463,7 @@ async function buildBoundedHistory(
 export function chatSummary(c: typeof schema.chats.$inferSelect) {
   return {
     id: c.id, title: c.title, pinned: !!c.pinned, archived: !!c.archived,
-    temporary: !!c.temporary, modelId: c.modelId,
+    temporary: !!c.temporary, workspace: !!c.workspace, modelId: c.modelId,
     projectId: c.projectId, createdAt: c.createdAt, updatedAt: c.updatedAt,
   };
 }
@@ -862,6 +863,7 @@ export async function chatRoutes(app: FastifyInstance) {
       archived: z.boolean().optional(),
       // false = 保存为正式对话; re-marking a saved chat temporary is not allowed.
       temporary: z.literal(false).optional(),
+      workspace: z.boolean().optional(),
       modelId: z.string().max(64).nullish(),
       projectId: z.string().max(64).nullish(),
     }).safeParse(req.body);
@@ -878,6 +880,9 @@ export async function chatRoutes(app: FastifyInstance) {
     if (d.reasoningEffort !== undefined) patch.reasoningEffort = d.reasoningEffort;
     const searchServerId = getSearchServerId();
     if (d.webSearch !== undefined) patch.webSearch = d.webSearch ? 1 : 0;
+    // Switching the workspace off keeps the files: the person may want them
+    // back, and the panel still lists them. Deleting the chat removes them.
+    if (d.workspace !== undefined) patch.workspace = d.workspace ? 1 : 0;
     if (d.mcpServerIds !== undefined) {
       // Search intent is now provider-neutral and stored separately. Never let
       // the designated fallback leak back into the generic tool selection.
@@ -1046,6 +1051,7 @@ export async function chatRoutes(app: FastifyInstance) {
       .where(eq(schema.messages.chatId, id)).all()
       .flatMap((m) => uploadIdsFromPartsJson(m.parts));
     db.delete(schema.chats).where(eq(schema.chats.id, id)).run();
+    removeWorkspace(id);
     await cleanupUnreferencedUploads(req.user!.id, uploadIds);
     return { ok: true };
   });
@@ -1363,6 +1369,11 @@ export async function chatRoutes(app: FastifyInstance) {
       ? buildProjectPrompt(chat.projectId, user.id, !!model.tools)
       : { block: null, tools: null };
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
+    // 工作区 tools are in-process like project knowledge; the manifest block
+    // rides in the prompt so the model knows what exists before calling.
+    const workspaceActive = !!chat.workspace && !!model.tools && !model.imageGen;
+    if (workspaceActive) toolDefs = [...(toolDefs ?? []), ...WORKSPACE_TOOL_DEFS];
+    const workspaceBlock = workspaceActive ? buildWorkspacePrompt(chatId) : null;
     // Vertex currently rejects googleSearch + functionDeclarations in one
     // generateContent request. Preserve explicit MCP/project tools and disable
     // native search for this turn rather than silently dropping those tools.
@@ -1381,6 +1392,7 @@ export async function chatRoutes(app: FastifyInstance) {
       project.block,
       userInstructions ? `用户的全局偏好设置(适用于所有对话):\n${userInstructions}` : null,
       chat.systemPrompt,
+      workspaceBlock,
       searchActive ? SEARCH_HINT : null,
       canvasAnswers ? CANVAS_PROMPT : null,
       canvasTurn ? CANVAS_TURN_PROMPT : null,
@@ -1618,7 +1630,7 @@ export async function chatRoutes(app: FastifyInstance) {
             // 执行前确认: calls to a server the admin flagged (or every MCP call,
             // when the person asked for that) wait for an allow/deny from the
             // tab. Project knowledge tools are in-process reads and never ask.
-            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name)
+            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name)
               && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)));
             const denied = new Set<string>();
             if (askFor.length) {
@@ -1644,6 +1656,8 @@ export async function chatRoutes(app: FastifyInstance) {
               // goes out to its MCP server.
               const { result, isError } = isProjectTool(call.name) && chat.projectId
                 ? callProjectTool(chat.projectId, call.name, call.args)
+                : isWorkspaceTool(call.name) && workspaceActive
+                ? await callWorkspaceTool(chatId, call.name, call.args)
                 : await callTool(
                   call.name, call.args, toolCapabilities, user,
                   { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },

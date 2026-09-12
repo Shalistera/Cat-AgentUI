@@ -3,6 +3,7 @@ import path from 'node:path';
 import { and, eq, like, lt, sql } from 'drizzle-orm';
 import { config } from './config.js';
 import { db, schema } from './db/index.js';
+import { allWorkspacesBytes } from './workspace.js';
 
 export type StorageKind = 'upload' | 'image';
 
@@ -346,6 +347,8 @@ export interface StorageOverview {
   images: { count: number; bytes: number; workshopBytes: number; chatBytes: number };
   /** Files on disk that no DB row knows about (crashed uploads, manual copies). */
   orphans: { count: number; bytes: number };
+  /** 工作区 directories (per-chat files the model edits). */
+  workspaces: { chats: number; bytes: number };
   limits: { total: number; perUserUploads: number; perUserImages: number };
   freeSpace: number | null;
   topUsers: { userId: string; username: string; displayName: string | null; uploadBytes: number; imageBytes: number }[];
@@ -444,6 +447,7 @@ export async function storageOverview(): Promise<StorageOverview> {
       chatBytes: im.find((r) => r.source === 'chat')?.bytes ?? 0,
     },
     orphans: { count: orphans.length, bytes: orphans.reduce((n, o) => n + o.size, 0) },
+    workspaces: allWorkspacesBytes(),
     limits: {
       total: config.maxTotalStorageBytes,
       perUserUploads: config.maxUserUploadBytes,

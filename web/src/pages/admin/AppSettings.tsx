@@ -299,7 +299,7 @@ function StorageCard({ uploadRetentionDays, onUploadRetentionChange, saving, onS
     } finally { setBusy(null); }
   }
 
-  const used = data ? data.uploads.bytes + data.images.bytes + data.orphans.bytes : 0;
+  const used = data ? data.uploads.bytes + data.images.bytes + data.orphans.bytes + (data.workspaces?.bytes ?? 0) : 0;
   const pct = data ? Math.min(100, (used / data.limits.total) * 100) : 0;
 
   return (
@@ -320,7 +320,7 @@ function StorageCard({ uploadRetentionDays, onUploadRetentionChange, saving, onS
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg bg-bg0 px-3.5 py-3 text-xs">
               <div className="eyebrow mb-1">对话附件</div>
               <div className="text-base font-semibold tabular-nums text-tx">{fmtBytes(data.uploads.bytes)}</div>
@@ -338,6 +338,12 @@ function StorageCard({ uploadRetentionDays, onUploadRetentionChange, saving, onS
               <div className="text-base font-semibold tabular-nums text-tx">{fmtBytes(data.orphans.bytes)}</div>
               <div className="mt-0.5 text-tx3">{data.orphans.count.toLocaleString()} 个磁盘上有、数据库里没有的文件</div>
               <div className="mt-1 text-tx3">来源:中断的上传、手工拷贝、迁移残留</div>
+            </div>
+            <div className="rounded-lg bg-bg0 px-3.5 py-3 text-xs">
+              <div className="eyebrow mb-1">对话工作区</div>
+              <div className="text-base font-semibold tabular-nums text-tx">{fmtBytes(data.workspaces?.bytes ?? 0)}</div>
+              <div className="mt-0.5 text-tx3">{(data.workspaces?.chats ?? 0).toLocaleString()} 个对话有文件</div>
+              <div className="mt-1 text-tx3">随对话删除;上限见 MAX_WORKSPACE_MB</div>
             </div>
           </div>
 
