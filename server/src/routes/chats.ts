@@ -717,6 +717,44 @@ function parseFollowups(raw: string): string[] {
 // metadata — the model cites by linking the sentence to the result's URL and
 // the client turns links that match a search result into numbered chips.
 const SEARCH_HINT_NATIVE = '你可以使用联网搜索工具。当问题涉及时效性信息、近期事件、具体数据或你不确定的事实时,先搜索再回答;闲聊、常识或纯创作类请求无需搜索。来源会自动标注在回答旁,不要在文末再罗列来源链接。';
+const GOOGLE_SEARCH_TOOL = 'google_search';
+const GOOGLE_SEARCH_TOOL_DEF: ToolDef = {
+  name: GOOGLE_SEARCH_TOOL,
+  description: '用 Google 搜索并返回要点与来源链接。问题涉及时效性信息、近期事件、具体数据或不确定的事实时调用;一次一个查询,可多次调用。',
+  parameters: {
+    type: 'object',
+    properties: { query: { type: 'string', description: '搜索查询,用具体的关键词或问题' } },
+    required: ['query'],
+    additionalProperties: false,
+  },
+};
+
+/** Run one Google-grounded Gemini request on the same model and turn the
+    answer + grounding chunks into a tool result the main model can cite from. */
+async function bridgedGoogleSearch(
+  adapter: ReturnType<typeof getAdapter>, cfg: ReturnType<typeof toRuntimeConfig>, modelId: string, query: string, parentSignal: AbortSignal,
+): Promise<{ text: string; sources: GroundingSource[] }> {
+  const signal = AbortSignal.any([parentSignal, AbortSignal.timeout(90_000)]);
+  let text = '';
+  let sources: GroundingSource[] = [];
+  for await (const ev of adapter.streamChat(cfg, {
+    model: modelId,
+    system: '你是搜索助手。用 Google 搜索回答下面的查询,用中文给出信息完整、含具体数据/日期/名称的要点(6 条以内),每条尽量注明依据哪个来源;不要寒暄,不要在文末罗列链接。',
+    messages: [{ role: 'user', parts: [{ type: 'text', text: query }] }],
+    webSearch: true,
+    maxTokens: 2048,
+    hardMaxTokens: config.maxModelOutputTokens,
+    signal,
+  })) {
+    if (ev.type === 'text') text += ev.text;
+    else if (ev.type === 'grounding') sources = ev.grounding.sources;
+  }
+  const list = sources.length
+    ? `\n\n来源(引用时请用 Markdown 链接指向对应 URL):\n${sources.map((s, i) => `[${i + 1}] ${s.title} — ${s.uri}`).join('\n')}`
+    : '\n\n(本次搜索没有返回来源)';
+  return { text: `${text.trim() || '(搜索没有返回内容)'}${list}`, sources };
+}
+
 const SEARCH_HINT_MCP = '你可以使用联网搜索工具。当问题涉及时效性信息、近期事件、具体数据或你不确定的事实时,先搜索再回答;闲聊、常识或纯创作类请求无需搜索。基于搜索结果回答时,在每句有依据的话末尾放一个 Markdown 链接指向该来源的完整 URL,链接文字写来源站名或标题,例如「……发布于 9 月 3 日[nodejs.org](https://nodejs.org/...)」;只能链接搜索结果里出现过的 URL,不要编造;不要在文末再罗列来源。';
 
 export async function chatRoutes(app: FastifyInstance) {
@@ -1397,15 +1435,15 @@ export async function chatRoutes(app: FastifyInstance) {
     // The model decides per turn whether a file is warranted; the directory
     // only comes into being on the first write.
     const agentSettings = getAgentSettings();
-    // Vertex cannot combine googleSearch with function tools in one request.
-    // The person switched 联网 on explicitly; the agent tools are implicit
-    // (always offered), so when native search is possible they step aside for
-    // this turn — unless explicit MCP / project tools already block it, in
-    // which case there is nothing to protect and they ride along as usual.
-    const explicitToolsBlockSearch = nativeSearchCapable && !!toolDefs?.length;
-    const yieldToNativeSearch = nativeSearchCapable && !explicitToolsBlockSearch;
-    const agentTools = userWantsAgentTools(user.settings) && !yieldToNativeSearch;
+    const agentTools = userWantsAgentTools(user.settings);
     const workspaceActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.workspace, user);
+    // Why the built-in tools are absent this turn — surfaced to the model (and
+    // so to the person) when it still tries to call one from memory.
+    const agentOffReason = !agentTools ? '你在「设置 → 对话偏好」里关闭了「智能工具」'
+      : !model.tools ? '当前模型未开启「工具调用」,管理员可在模型设置里打开'
+      : model.imageGen ? '当前是图像生成模型'
+      : !policyAllows(agentSettings.workspace, user) ? '管理员未对你开放工作区(管理后台 → Agent 能力)'
+      : null;
     if (workspaceActive) toolDefs = [...(toolDefs ?? []), ...WORKSPACE_TOOL_DEFS];
     // 沙盒 rides on the workspace: commands run in that directory, so there
     // is nothing to execute against without it.
@@ -1426,12 +1464,18 @@ export async function chatRoutes(app: FastifyInstance) {
     if (subagentActive) toolDefs = [...(toolDefs ?? []), ...SUBAGENT_TOOL_DEFS];
     const subagentBlock = subagentActive ? buildSubagentPrompt() : null;
     let subagentSpawned = 0;
-    // Vertex currently rejects googleSearch + functionDeclarations in one
-    // generateContent request. Preserve explicit MCP/project tools and disable
-    // native search for this turn rather than silently dropping those tools.
-    const nativeSearchBlockedByTools = nativeSearchCapable && !!toolDefs?.length;
-    const nativeSearchActive = nativeSearchCapable && !nativeSearchBlockedByTools;
-    const searchActive = nativeSearchActive || mcpSearchActive;
+    // Vertex rejects googleSearch + functionDeclarations in one request. With
+    // no other tools, native search rides on the main request (best: sentence-
+    // level citations). With tools present, Google Search becomes a function
+    // tool of ours instead: the model calls google_search(query), we run a
+    // separate grounded Gemini request and hand back the findings plus
+    // numbered sources; the model cites by linking, like MCP search does.
+    const bridgedSearchActive = nativeSearchCapable && !!toolDefs?.length;
+    if (bridgedSearchActive) toolDefs = [...(toolDefs ?? []), GOOGLE_SEARCH_TOOL_DEF];
+    const nativeSearchActive = nativeSearchCapable && !bridgedSearchActive;
+    const searchActive = nativeSearchActive || mcpSearchActive || bridgedSearchActive;
+    const bridgedSources: GroundingSource[] = [];
+    const bridgedQueries: string[] = [];
     // The person's global instructions sit between the project block and the
     // chat's own prompt: stable across chats (cache-friendly), but the chat's
     // prompt comes later and therefore wins on conflict.
@@ -1447,7 +1491,7 @@ export async function chatRoutes(app: FastifyInstance) {
       workspaceBlock,
       skillsBlock,
       subagentBlock,
-      nativeSearchActive ? SEARCH_HINT_NATIVE : mcpSearchActive ? SEARCH_HINT_MCP : null,
+      nativeSearchActive ? SEARCH_HINT_NATIVE : (mcpSearchActive || bridgedSearchActive) ? SEARCH_HINT_MCP : null,
       canvasAnswers ? CANVAS_PROMPT : null,
       canvasTurn ? CANVAS_TURN_PROMPT : null,
     ].filter(Boolean).join('\n\n') || undefined;
@@ -1484,9 +1528,6 @@ export async function chatRoutes(app: FastifyInstance) {
     if (downgradeNotice) sse.send('notice', { message: downgradeNotice });
     if (mcpAccess.denied.length) {
       sse.send('notice', { message: '部分 MCP 服务器已被禁用或撤销授权,本次不会调用' });
-    }
-    if (nativeSearchBlockedByTools) {
-      sse.send('notice', { message: 'Vertex Google 搜索暂不能与 MCP/项目检索工具在同一次请求中组合,本轮保留其他工具并跳过联网搜索' });
     }
     for (const te of toolErrors) sse.send('notice', { message: `MCP 服务器「${te.name}」连接失败: ${te.error}` });
 
@@ -1684,7 +1725,7 @@ export async function chatRoutes(app: FastifyInstance) {
             // 执行前确认: calls to a server the admin flagged (or every MCP call,
             // when the person asked for that) wait for an allow/deny from the
             // tab. Project knowledge tools are in-process reads and never ask.
-            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name) && !isSubagentTool(call.name)
+            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name) && !isSubagentTool(call.name) && call.name !== GOOGLE_SEARCH_TOOL
               && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)
                 || (isSandboxTool(call.name) && sandboxConfirm)));
             const denied = new Set<string>();
@@ -1713,6 +1754,19 @@ export async function chatRoutes(app: FastifyInstance) {
                 ? callProjectTool(chat.projectId, call.name, call.args)
                 : isWorkspaceTool(call.name) && workspaceActive
                 ? await callWorkspaceTool(chatId, call.name, call.args)
+                : call.name === GOOGLE_SEARCH_TOOL && bridgedSearchActive
+                ? await (async () => {
+                  let q = '';
+                  try { const a = JSON.parse(call.args || '{}') as { query?: unknown }; q = typeof a.query === 'string' ? a.query.trim() : ''; } catch { /* empty */ }
+                  if (!q) return { result: '缺少 query 参数', isError: true };
+                  clearProviderIdleTimer();
+                  try {
+                    const r = await bridgedGoogleSearch(adapter, cfg, model.modelId, q, controller.signal);
+                    bridgedQueries.push(q);
+                    for (const src of r.sources) if (!bridgedSources.some((x) => x.uri === src.uri)) bridgedSources.push(src);
+                    return { result: r.text, isError: false };
+                  } finally { resetProviderIdleTimer(); }
+                })()
                 : isSkillTool(call.name) && skillsActive
                 ? callSkillTool(user, call.name, call.args)
                 : isSubagentTool(call.name) && subagentActive
@@ -1762,7 +1816,7 @@ export async function chatRoutes(app: FastifyInstance) {
                 // but that is switched off now (person's 智能工具 setting, or
                 // admin policy): say so plainly instead of the MCP "not found".
                 : isWorkspaceTool(call.name) || isSandboxTool(call.name) || isSkillTool(call.name) || isSubagentTool(call.name)
-                ? { result: '该工具当前不可用(智能工具已关闭或未对你开放),请直接用文字回答', isError: true }
+                ? { result: `该工具当前不可用:${agentOffReason ?? '该能力未开启或未对你开放'}。请直接用文字回答,并如实告诉用户这个原因`, isError: true }
                 : await callTool(
                   call.name, call.args, toolCapabilities, user,
                   { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },
@@ -1803,6 +1857,10 @@ export async function chatRoutes(app: FastifyInstance) {
     // tool's results (url/title per line), so the UI can number sources and
     // turn the model's inline links into citation chips — same look as
     // Vertex grounding, just without the sentence-level supports.
+    if (bridgedSearchActive && bridgedSources.length && !parts.some((p) => p.type === 'grounding')) {
+      const grounding = safeGroundingPart({ queries: bridgedQueries, sources: bridgedSources, label: 'Google 搜索' }, secretValues);
+      if (grounding) { parts.push(grounding); sse.send('grounding', grounding); }
+    }
     if (mcpSearchActive && !parts.some((p) => p.type === 'grounding')) {
       const isSearchCall = (name: string) => toolCapabilities.routes.get(name)?.serverId === searchServerId;
       const queries = parts.flatMap((p) => {
