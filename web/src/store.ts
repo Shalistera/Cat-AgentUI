@@ -102,12 +102,16 @@ export const useHtmlPreview = create<HtmlPreviewState>((set) => ({
 // the panel refetches without polling.
 interface WorkspacePanelState {
   chatId: string | null;
+  /** Open on the new-chat page before any chat exists: shows guidance; the
+      first send re-points it to the created chat. */
+  home: boolean;
   version: number;
   /** Chats whose panel the person closed by hand: never auto-reopen those. */
   dismissed: Record<string, true>;
   /** File count per chat, for the header chip. */
   counts: Record<string, number>;
   open(chatId: string): void;
+  openHome(): void;
   /** Auto-open on first file write; a no-op once the person has dismissed it. */
   autoOpen(chatId: string): void;
   close(): void;
@@ -117,10 +121,12 @@ interface WorkspacePanelState {
 
 export const useWorkspacePanel = create<WorkspacePanelState>((set, get) => ({
   chatId: null,
+  home: false,
   version: 0,
   dismissed: {},
   counts: {},
-  open(chatId) { set((s) => { const d = { ...s.dismissed }; delete d[chatId]; return { chatId, dismissed: d }; }); },
+  open(chatId) { set((s) => { const d = { ...s.dismissed }; delete d[chatId]; return { chatId, home: false, dismissed: d }; }); },
+  openHome() { set({ chatId: null, home: true }); },
   autoOpen(chatId) {
     const s = get();
     if (s.dismissed[chatId] || s.chatId === chatId) return;
@@ -128,7 +134,7 @@ export const useWorkspacePanel = create<WorkspacePanelState>((set, get) => ({
   },
   close() {
     const cur = get().chatId;
-    set((s) => ({ chatId: null, dismissed: cur ? { ...s.dismissed, [cur]: true } : s.dismissed }));
+    set((s) => ({ chatId: null, home: false, dismissed: cur ? { ...s.dismissed, [cur]: true } : s.dismissed }));
   },
   bump() { set((s) => ({ version: s.version + 1 })); },
   setCount(chatId, n) { set((s) => ({ counts: { ...s.counts, [chatId]: n } })); },

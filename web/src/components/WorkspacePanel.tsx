@@ -5,7 +5,7 @@ import {
   RefreshCw, Save, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, errMsg, uploadWorkspaceFile } from '../api';
-import { useWorkspacePanel } from '../store';
+import { useComposerInsert, useWorkspacePanel } from '../store';
 import { Markdown } from './Markdown';
 import { Spinner, confirmDialog, toast } from './ui';
 import type { WorkspaceFile, WorkspaceListing } from '../types';
@@ -162,10 +162,40 @@ function FileView({ chatId, file, onBack, onChanged }: {
   );
 }
 
+// ---- guidance: what the workspace is for, as tasks you can try ----
+// Clicking one drops the prompt into the composer; sending stays the person's call.
+const STARTERS: { label: string; prompt: string }[] = [
+  { label: '把一段内容整理成 Word 或 PDF', prompt: '帮我把下面这段内容整理成一份排版规范的报告,导出 PDF 和 Word 各一份:\n\n' },
+  { label: '写一篇长文,之后逐段修改', prompt: '帮我写一份 1500 字左右的方案初稿,保存到工作区;写完后我会逐段让你修改。主题是:' },
+  { label: '分析一份表格并出图', prompt: '我会上传一份 CSV / Excel,请按关键列做汇总统计、找出异常,画一张图表,结论写成 分析.md。' },
+  { label: '把上传的文档转换格式', prompt: '把我上传到工作区的文档转换成 PDF。' },
+  { label: '按大纲分章生成一份文档', prompt: '按下面的大纲写成完整文档,每章一个小节,保存为 文档.md:\n\n' },
+];
+
+function Starters({ compact = false }: { compact?: boolean }) {
+  const insert = useComposerInsert((s) => s.insert);
+  return (
+    <div className={compact ? 'mt-3 w-full' : 'mt-4 w-full'}>
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3">试试这些</div>
+      <ul className="space-y-1">
+        {STARTERS.map((s) => (
+          <li key={s.label}>
+            <button type="button" onClick={() => insert(s.prompt)} title="放进输入框,由你决定何时发送"
+              className="w-full cursor-pointer rounded-md border border-line bg-bg1 px-2.5 py-1.5 text-left text-xs text-tx2 transition-colors hover:border-acc/50 hover:bg-acc/5 hover:text-tx">
+              {s.label}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 // ---- the panel ----
 
 export function WorkspacePanel() {
   const chatId = useWorkspacePanel((s) => s.chatId);
+  const home = useWorkspacePanel((s) => s.home);
   const version = useWorkspacePanel((s) => s.version);
   const close = useWorkspacePanel((s) => s.close);
   const bump = useWorkspacePanel((s) => s.bump);
@@ -212,7 +242,27 @@ export function WorkspacePanel() {
     } catch (e) { toast(errMsg(e), 'err'); }
   }
 
-  if (!chatId) return null;
+  if (!chatId && !home) return null;
+  // Home (no chat yet): guidance only; uploads need a chat and appear once
+  // the first message creates one.
+  if (!chatId) {
+    return (
+      <aside className="fixed inset-0 z-40 flex flex-col bg-bg1 md:static md:relative md:z-auto md:w-[clamp(22rem,38vw,40rem)] md:shrink-0 md:border-l md:border-line">
+        <div className="flex items-center justify-between border-b border-line bg-bg2 py-1.5 pl-4 pr-2">
+          <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3"><FolderOpen size={13} /> 工作区</span>
+          <button className={headBtn} title="关闭面板" onClick={close}><X size={15} /></button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 py-10 text-center text-sm text-tx3">
+          <FolderOpen size={26} className="text-tx3/70" />
+          <div className="mt-2 text-tx2">每段对话都有自己的工作区</div>
+          <div className="mt-1 text-xs leading-relaxed">
+            助手会把长文、报告、代码、数据结果写成文件放在这里,并且可以在原文上反复修改;你也可以把文件拖进来交给它处理。发出第一条消息后这里就会接上这段对话。
+          </div>
+          <Starters />
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside
@@ -246,12 +296,13 @@ export function WorkspacePanel() {
             ) : !data ? (
               <div className="flex justify-center py-10 text-tx3"><Spinner /></div>
             ) : data.files.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 px-6 py-12 text-center text-sm text-tx3">
+              <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-sm text-tx3">
                 <FolderOpen size={26} className="text-tx3/70" />
                 <div className="text-tx2">工作区还是空的</div>
                 <div className="text-xs leading-relaxed">
-                  让模型把长文、方案、代码等成果写成文件,它会在这里出现并可以反复修改;也可以拖入或上传文件让模型处理。
+                  助手写出的文件会出现在这里并可以反复修改;也可以拖入或上传文件交给它处理。
                 </div>
+                <Starters compact />
               </div>
             ) : (
               <ul className="divide-y divide-line/60">

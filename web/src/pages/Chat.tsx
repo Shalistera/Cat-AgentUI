@@ -298,6 +298,7 @@ export default function Chat() {
   const [webSearch, setWebSearch] = useState(false);
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
   const workspacePanelChat = useWorkspacePanel((s) => s.chatId);
+  const workspacePanelHome = useWorkspacePanel((s) => s.home);
   const workspaceFileCount = useWorkspacePanel((s) => (chat ? s.counts[chat.id] : undefined));
   const [settings, setSettings] = useState<ComposerSettings>(draftFromChat(null));
   const [stick, setStick] = useState(true);
@@ -509,7 +510,7 @@ export default function Chat() {
   function toggleWorkspacePanel() {
     const panel = useWorkspacePanel.getState();
     const target = chatRef.current;
-    if (!target) return;
+    if (!target) { if (panel.home) panel.close(); else panel.openHome(); return; }
     if (panel.chatId === target.id) panel.close(); else panel.open(target.id);
   }
 
@@ -555,6 +556,8 @@ export default function Chat() {
       created = p.chat;
     }
     setChat(created);
+    // Panel opened on the home page follows the chat it was waiting for.
+    if (useWorkspacePanel.getState().home) useWorkspacePanel.getState().open(created.id);
     // A 临时对话 must not surface in the sidebar list.
     if (!created.temporary) {
       chatsStore.upsert({
@@ -1000,7 +1003,7 @@ export default function Chat() {
       mcpSelected={mcpSelected}
       onMcpChange={persistMcp}
       onWorkspaceClick={toggleWorkspacePanel}
-      workspacePanelOpen={!!chat && workspacePanelChat === chat.id}
+      workspacePanelOpen={chat ? workspacePanelChat === chat.id : workspacePanelHome}
       settings={settings}
       onSettingsChange={persistSettings}
       onSend={send}
