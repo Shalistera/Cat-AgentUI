@@ -22,7 +22,7 @@ import { callProjectTool, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
 import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
-import { getAgentSettings, policyAllows } from '../agent-settings.js';
+import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
@@ -1375,8 +1375,13 @@ export async function chatRoutes(app: FastifyInstance) {
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
     // 工作区 tools are in-process like project knowledge; the manifest block
     // rides in the prompt so the model knows what exists before calling.
+    // 工作区 is no longer a per-chat switch: it is on whenever the admin
+    // policy allows it and the person hasn't turned 智能工具 off in settings.
+    // The model decides per turn whether a file is warranted; the directory
+    // only comes into being on the first write.
     const agentSettings = getAgentSettings();
-    const workspaceActive = !!chat.workspace && !!model.tools && !model.imageGen && policyAllows(agentSettings.workspace, user);
+    const agentTools = userWantsAgentTools(user.settings);
+    const workspaceActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.workspace, user);
     if (workspaceActive) toolDefs = [...(toolDefs ?? []), ...WORKSPACE_TOOL_DEFS];
     // 沙盒 rides on the workspace: commands run in that directory, so there
     // is nothing to execute against without it.
@@ -1387,7 +1392,7 @@ export async function chatRoutes(app: FastifyInstance) {
       : null;
     const sandboxConfirm = sandboxActive && sandboxNeedsConfirm();
     // 技能: name + description only; the model loads the full text on demand.
-    const skillRows = model.tools && !model.imageGen && policyAllows(agentSettings.skills, user) ? skillsFor(user) : [];
+    const skillRows = agentTools && model.tools && !model.imageGen && policyAllows(agentSettings.skills, user) ? skillsFor(user) : [];
     const skillsActive = skillRows.length > 0;
     if (skillsActive) toolDefs = [...(toolDefs ?? []), ...SKILL_TOOL_DEFS];
     const skillsBlock = skillsActive ? buildSkillsPrompt(skillRows, sandboxActive) : null;
@@ -1729,6 +1734,11 @@ export async function chatRoutes(app: FastifyInstance) {
                 })()
                 : isSandboxTool(call.name) && sandboxActive
                 ? await callSandboxTool({ user: { id: user.id, role: user.role }, chatId, messageId: assistantId, signal: controller.signal }, call.args)
+                // A built-in tool name the model remembers from earlier turns
+                // but that is switched off now (person's 智能工具 setting, or
+                // admin policy): say so plainly instead of the MCP "not found".
+                : isWorkspaceTool(call.name) || isSandboxTool(call.name) || isSkillTool(call.name) || isSubagentTool(call.name)
+                ? { result: '该工具当前不可用(智能工具已关闭或未对你开放),请直接用文字回答', isError: true }
                 : await callTool(
                   call.name, call.args, toolCapabilities, user,
                   { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },

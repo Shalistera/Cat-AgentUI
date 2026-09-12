@@ -23,6 +23,8 @@ export interface User {
     translateScenes?: TranslateScene[] | null;
     /** Ask before EVERY MCP tool call, not just servers the admin flagged. */
     confirmTools?: boolean;
+    /** 智能工具 master switch (工作区 / 沙盒 / 技能 / 子代理); undefined = on. */
+    agentTools?: boolean;
     /** 全局自定义指令 — prepended to every chat's system prompt (max 1500 chars). */
     customInstructions?: string | null;
     /** 互动画布 (experimental): answers come back as one HTML page, rendered live. */
@@ -514,5 +516,5 @@ export interface AgentAdminData {
   limits: { workspaceBytes: number; workspaceFileBytes: number; workspaceFiles: number; toolIterations: number };
 }
 /** /api/agent/capabilities — what this person's chats may use right now. */
-export interface AgentCapabilities { workspace: boolean; sandbox: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean }
+export interface AgentCapabilities { agentTools: boolean; workspace: boolean; sandbox: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean }
 

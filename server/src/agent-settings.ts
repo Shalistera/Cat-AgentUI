@@ -92,6 +92,14 @@ export function saveAgentSettings(patch: DeepPartial<AgentSettings>): AgentSetti
 
 export interface AgentUser { id: string; role: string }
 
+/** Personal master switch (users.settings.agentTools): undefined = on. The
+    admin policy decides what is *allowed*; this is the person opting out. */
+export function userWantsAgentTools(settingsJson: string | undefined): boolean {
+  if (!settingsJson) return true;
+  try { return (JSON.parse(settingsJson) as { agentTools?: unknown }).agentTools !== false; }
+  catch { return true; }
+}
+
 export function policyAllows(p: AccessPolicy, user: AgentUser): boolean {
   if (!p.enabled) return false;
   if (user.role === 'admin') return true;

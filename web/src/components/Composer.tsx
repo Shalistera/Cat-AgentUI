@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import {
-  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, FolderOpen, Gauge, Globe, Image as ImageIcon, LayoutTemplate,
+  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon, LayoutTemplate,
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
-import { useAgentCaps, useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
+import { useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
 import { api, errMsg, uploadFile, fmtUsageLimit, fmtUsageLimitShort, usageLimitExhausted } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
@@ -112,11 +112,6 @@ interface ComposerProps {
   onWebSearchChange(enabled: boolean): void;
   mcpSelected: string[];
   onMcpChange(ids: string[]): void;
-  /** 工作区 — per-chat files the model edits. Clicking the button enables it
-      (first time) and opens/closes the side panel. */
-  workspace?: boolean;
-  onWorkspaceClick?(): void;
-  workspacePanelOpen?: boolean;
   settings: ComposerSettings;
   onSettingsChange(s: ComposerSettings): void;
   onSend(text: string, attachments: PendingAttachment[], opts?: SendOptions): void;
@@ -171,9 +166,6 @@ export function Composer(props: ComposerProps) {
   const composingRef = useRef(false);
   const models = useModels((s) => s.models);
   const user = useAuth((s) => s.user);
-  const agentCaps = useAgentCaps((s) => s.caps);
-  const loadAgentCaps = useAgentCaps((s) => s.load);
-  useEffect(() => { loadAgentCaps(); }, [loadAgentCaps]);
   const dark = useUi((s) => s.theme) === 'dark';
   const mcpServers = useMcp((s) => s.servers).filter((s) => s.enabled);
   // Vertex Gemini exposes Google Search natively. The designated search MCP
@@ -731,24 +723,6 @@ export function Composer(props: ComposerProps) {
             >
               <Globe size={13} />
               <span className="max-sm:hidden">联网</span>
-            </button>
-          )}
-
-          {props.onWorkspaceClick && model?.tools && !imageMode && agentCaps?.workspace && (
-            <button
-              aria-pressed={!!props.workspace}
-              className={props.workspace
-                ? props.workspacePanelOpen
-                  ? `${toolBtnShape} border-accs bg-accs text-accfg shadow-xs hover:opacity-90`
-                  : `${toolBtnShape} border-acc/40 bg-acc/10 text-acc`
-                : toolBtn}
-              title={props.workspace
-                ? '工作区已启用:模型可以在本对话的文件目录里读写文件;点击打开/收起面板'
-                : '启用工作区:给本对话一个文件目录,长文、方案、代码等成果写成文件并可反复修改'}
-              onClick={props.onWorkspaceClick}
-            >
-              <FolderOpen size={13} />
-              <span className="max-sm:hidden">工作区</span>
             </button>
           )}
 

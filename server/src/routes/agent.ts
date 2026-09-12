@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAdmin, requireAuth } from '../auth.js';
 import { config } from '../config.js';
-import { getAgentSettings, policyAllows, saveAgentSettings } from '../agent-settings.js';
+import { getAgentSettings, policyAllows, saveAgentSettings, userWantsAgentTools } from '../agent-settings.js';
 import { sandboxAvailableFor } from '../sandbox/tool.js';
 import { getSandboxSettings } from '../sandbox/settings.js';
 import { skillsFor } from '../skills.js';
@@ -20,13 +20,15 @@ export async function agentRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     const user = req.user!;
     const a = getAgentSettings();
-    const workspace = policyAllows(a.workspace, user);
+    const on = userWantsAgentTools(user.settings);
+    const workspace = on && policyAllows(a.workspace, user);
     return {
+      agentTools: on,
       workspace,
       sandbox: workspace && sandboxAvailableFor(user),
       sandboxConfirm: getSandboxSettings().confirm,
-      skills: policyAllows(a.skills, user) ? skillsFor(user).length : 0,
-      subagent: policyAllows(a.subagent, user),
+      skills: on && policyAllows(a.skills, user) ? skillsFor(user).length : 0,
+      subagent: on && policyAllows(a.subagent, user),
     };
   });
 

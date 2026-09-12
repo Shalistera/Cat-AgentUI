@@ -7,7 +7,7 @@ import {
 import { api, errMsg, uploadWorkspaceFile } from '../api';
 import { useWorkspacePanel } from '../store';
 import { Markdown } from './Markdown';
-import { Spinner, Toggle, confirmDialog, toast } from './ui';
+import { Spinner, confirmDialog, toast } from './ui';
 import type { WorkspaceFile, WorkspaceListing } from '../types';
 
 const headBtn = 'flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg3 hover:text-tx disabled:opacity-40 disabled:pointer-events-none';
@@ -180,7 +180,7 @@ export function WorkspacePanel() {
   const reload = useCallback(() => {
     if (!chatId) return;
     api.get<WorkspaceListing>(`/api/chats/${chatId}/workspace`)
-      .then((r) => { setData(r); setError(null); })
+      .then((r) => { setData(r); setError(null); useWorkspacePanel.getState().setCount(chatId, r.files.length); })
       .catch((e) => setError(errMsg(e)));
   }, [chatId]);
 
@@ -209,16 +209,6 @@ export function WorkspacePanel() {
     try {
       await api.del(`${fileUrl(chatId, f.path)}`);
       bump();
-    } catch (e) { toast(errMsg(e), 'err'); }
-  }
-
-  async function setEnabled(v: boolean) {
-    if (!chatId) return;
-    try {
-      await api.patch(`/api/chats/${chatId}`, { workspace: v });
-      setData((d) => (d ? { ...d, enabled: v } : d));
-      // The chat page mirrors this flag in its composer button.
-      window.dispatchEvent(new CustomEvent('caui:workspace-toggle', { detail: { chatId, enabled: v } }));
     } catch (e) { toast(errMsg(e), 'err'); }
   }
 
@@ -289,10 +279,7 @@ export function WorkspacePanel() {
           {data && (
             <div className="flex items-center justify-between gap-3 border-t border-line bg-bg2/60 px-4 py-2 text-[11px] text-tx3">
               <span className="tabular-nums">{data.files.length} 个文件 · {fmtBytes(data.bytes)} / {fmtBytes(data.limits.bytes)}</span>
-              <label className="flex items-center gap-2">
-                <span>{data.enabled ? '模型可读写' : '模型不可用'}</span>
-                <Toggle checked={data.enabled} onChange={setEnabled} />
-              </label>
+              <span>{data.enabled ? '助手可读写' : '智能工具已关闭,助手不会改动这些文件'}</span>
             </div>
           )}
         </>

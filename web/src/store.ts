@@ -103,17 +103,35 @@ export const useHtmlPreview = create<HtmlPreviewState>((set) => ({
 interface WorkspacePanelState {
   chatId: string | null;
   version: number;
+  /** Chats whose panel the person closed by hand: never auto-reopen those. */
+  dismissed: Record<string, true>;
+  /** File count per chat, for the header chip. */
+  counts: Record<string, number>;
   open(chatId: string): void;
+  /** Auto-open on first file write; a no-op once the person has dismissed it. */
+  autoOpen(chatId: string): void;
   close(): void;
   bump(): void;
+  setCount(chatId: string, n: number): void;
 }
 
-export const useWorkspacePanel = create<WorkspacePanelState>((set) => ({
+export const useWorkspacePanel = create<WorkspacePanelState>((set, get) => ({
   chatId: null,
   version: 0,
-  open(chatId) { set({ chatId }); },
-  close() { set({ chatId: null }); },
+  dismissed: {},
+  counts: {},
+  open(chatId) { set((s) => { const d = { ...s.dismissed }; delete d[chatId]; return { chatId, dismissed: d }; }); },
+  autoOpen(chatId) {
+    const s = get();
+    if (s.dismissed[chatId] || s.chatId === chatId) return;
+    set({ chatId });
+  },
+  close() {
+    const cur = get().chatId;
+    set((s) => ({ chatId: null, dismissed: cur ? { ...s.dismissed, [cur]: true } : s.dismissed }));
+  },
   bump() { set((s) => ({ version: s.version + 1 })); },
+  setCount(chatId, n) { set((s) => ({ counts: { ...s.counts, [chatId]: n } })); },
 }));
 
 // ---- auth ----
@@ -349,7 +367,7 @@ export const useAgentCaps = create<AgentCapsState>((set, get) => ({
   async load(force = false) {
     if (get().caps && !force) return;
     try { set({ caps: await api.get<AgentCapabilities>('/api/agent/capabilities') }); }
-    catch { set({ caps: { workspace: false, sandbox: false, sandboxConfirm: true, skills: 0, subagent: false } }); }
+    catch { set({ caps: { agentTools: true, workspace: false, sandbox: false, sandboxConfirm: true, skills: 0, subagent: false } }); }
   },
 }));
 

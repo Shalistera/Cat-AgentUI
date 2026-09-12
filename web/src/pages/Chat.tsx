@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Archive, ArrowDown, Check, FolderClosed, Ghost, ListOrdered, PanelLeft, Pencil,
+  Archive, ArrowDown, Check, FolderClosed, FolderOpen, Ghost, ListOrdered, PanelLeft, Pencil,
   Plus, Search, Send, Trash2,
 } from 'lucide-react';
 import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, usageLimitExhausted, ApiError } from '../api';
@@ -297,8 +297,8 @@ export default function Chat() {
   const [modelSel, setModelSel] = useState<ModelInfo | null>(null);
   const [webSearch, setWebSearch] = useState(false);
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
-  const [workspace, setWorkspace] = useState(false);
   const workspacePanelChat = useWorkspacePanel((s) => s.chatId);
+  const workspaceFileCount = useWorkspacePanel((s) => (chat ? s.counts[chat.id] : undefined));
   const [settings, setSettings] = useState<ComposerSettings>(draftFromChat(null));
   const [stick, setStick] = useState(true);
   const [compare, setCompare] = useState<CompareState | null>(null);
@@ -366,7 +366,7 @@ export default function Chat() {
     setFindOpen(false);
     if (!routeId) {
       handoffAppliedRef.current = false;
-      setChat(null); setMessages([]); setLeafId(null); setWebSearch(false); setMcpSelected([]); setWorkspace(false); setSettings(draftFromChat(null));
+      setChat(null); setMessages([]); setLeafId(null); setWebSearch(false); setMcpSelected([]); setSettings(draftFromChat(null));
       useWorkspacePanel.getState().close();
       return;
     }
@@ -377,13 +377,13 @@ export default function Chat() {
         setChat(r.chat); setMessages(r.messages);
         setWebSearch(r.chat.webSearch);
         setMcpSelected(r.chat.mcpServerIds); setSettings(draftFromChat(r.chat));
-        setWorkspace(r.chat.workspace);
-        // Panel left open from the previous chat: re-point it here if this
-        // chat has a workspace, otherwise it has nothing to show.
+        // The panel belongs to one chat; leaving that chat closes it (the
+        // header chip reopens it). Prime the file count for the chip.
         const panel = useWorkspacePanel.getState();
-        if (panel.chatId && panel.chatId !== r.chat.id) {
-          if (r.chat.workspace) panel.open(r.chat.id); else panel.close();
-        }
+        if (panel.chatId && panel.chatId !== r.chat.id) panel.close();
+        api.get<{ files: unknown[] }>(`/api/chats/${r.chat.id}/workspace`)
+          .then((w) => useWorkspacePanel.getState().setCount(r.chat.id, w.files.length))
+          .catch(() => { /* chip stays hidden */ });
         // Deep links: ?msg=<id> (from 收藏) lands on that message — switching
         // to its branch if needed; ?find=<term> (from sidebar search) opens
         // 对话内查找 on the first hit. Both are one-shot and leave the URL.
@@ -506,32 +506,11 @@ export default function Chat() {
       .catch(() => toast('保存联网搜索设置失败', 'err'));
   }
 
-  // The panel's own 启用 toggle must be mirrored in the composer button.
-  useEffect(() => {
-    const onToggle = (e: Event) => {
-      const d = (e as CustomEvent<{ chatId: string; enabled: boolean }>).detail;
-      if (d.chatId === chatRef.current?.id) setWorkspace(d.enabled);
-    };
-    window.addEventListener('caui:workspace-toggle', onToggle);
-    return () => window.removeEventListener('caui:workspace-toggle', onToggle);
-  }, []);
-
-  async function onWorkspaceClick() {
+  function toggleWorkspacePanel() {
     const panel = useWorkspacePanel.getState();
-    if (workspace) {
-      const target = chatRef.current;
-      if (!target) return;
-      if (panel.chatId === target.id) panel.close(); else panel.open(target.id);
-      return;
-    }
-    setWorkspace(true);
     const target = chatRef.current;
-    if (!target) return; // applied on chat creation; the panel opens once it exists
-    try {
-      await api.patch(`/api/chats/${target.id}`, { workspace: true });
-      setChat((c) => (c ? { ...c, workspace: true } : c));
-      panel.open(target.id);
-    } catch (e) { setWorkspace(false); toast(errMsg(e), 'err'); }
+    if (!target) return;
+    if (panel.chatId === target.id) panel.close(); else panel.open(target.id);
   }
 
   function persistMcp(ids: string[]) {
@@ -569,14 +548,13 @@ export default function Chat() {
     const patch = draftToPatch(o?.settings ?? settings);
     const search = o?.webSearch ?? webSearch;
     const mcp = o?.mcpSelected ?? mcpSelected;
-    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || search || mcp.length || workspace) {
+    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || search || mcp.length) {
       const p = await api.patch<{ chat: ChatDetail }>(`/api/chats/${created.id}`, {
-        ...patch, webSearch: search, mcpServerIds: mcp, workspace,
+        ...patch, webSearch: search, mcpServerIds: mcp,
       });
       created = p.chat;
     }
     setChat(created);
-    if (workspace) useWorkspacePanel.getState().open(created.id);
     // A 临时对话 must not surface in the sidebar list.
     if (!created.temporary) {
       chatsStore.upsert({
@@ -679,12 +657,16 @@ export default function Chat() {
         flush();
         applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_result', ...d }] }));
         setToolConfirm(null);
-        // A file changed on disk → the panel refetches; a first write in a
-        // chat opens the panel so the person sees the result land.
+        // A file changed on disk → the panel refetches and the header chip
+        // updates. The first write in a chat pops the panel so the person
+        // sees the result land; once they've closed it, it stays closed.
         if (d.name.startsWith('workspace_') && d.name !== 'workspace_read' && d.name !== 'workspace_list' && !d.isError) {
           const panel = useWorkspacePanel.getState();
-          if (panel.chatId !== chatId && window.innerWidth >= 768) panel.open(chatId);
+          if (window.innerWidth >= 768) panel.autoOpen(chatId);
           panel.bump();
+          api.get<{ files: unknown[] }>(`/api/chats/${chatId}/workspace`)
+            .then((w) => useWorkspacePanel.getState().setCount(chatId, w.files.length))
+            .catch(() => { /* ignore */ });
         }
       },
       onToolConfirm(d) {
@@ -1017,9 +999,6 @@ export default function Chat() {
       onWebSearchChange={persistWebSearch}
       mcpSelected={mcpSelected}
       onMcpChange={persistMcp}
-      workspace={workspace}
-      onWorkspaceClick={onWorkspaceClick}
-      workspacePanelOpen={!!chat && workspacePanelChat === chat.id}
       settings={settings}
       onSettingsChange={persistSettings}
       onSend={send}
@@ -1056,6 +1035,21 @@ export default function Chat() {
             </Link>
           ) : null;
         })()}
+        {chat && !!workspaceFileCount && (
+          <button
+            type="button"
+            title={workspacePanelChat === chat.id ? '收起文件面板' : '查看这段对话产生的文件'}
+            aria-pressed={workspacePanelChat === chat.id}
+            onClick={toggleWorkspacePanel}
+            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+              workspacePanelChat === chat.id
+                ? 'border-acc/40 bg-acc/10 text-acc'
+                : 'border-line bg-bg2 text-tx2 hover:border-line2 hover:text-tx'}`}
+          >
+            <FolderOpen size={12} className="shrink-0" />
+            文件 <span className="tabular-nums">{workspaceFileCount}</span>
+          </button>
+        )}
         {chat?.temporary && (
           <div className="flex items-center gap-1.5">
             <span title={'临时对话:不会出现在历史记录和搜索中,\n闲置 24 小时后自动删除(用量仍正常统计)'}

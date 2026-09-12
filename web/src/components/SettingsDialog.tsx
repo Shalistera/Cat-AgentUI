@@ -135,6 +135,7 @@ function ChatSection() {
   const user = useAuth((s) => s.user);
   const [titleEmoji, setTitleEmoji] = useState(!!user?.settings.titleEmoji);
   const [confirmTools, setConfirmTools] = useState(!!user?.settings.confirmTools);
+  const [agentTools, setAgentTools] = useState(user?.settings.agentTools !== false);
   const [notify, setNotify] = useState(notifyEnabled());
   const perm = notifyPermission();
   const savedInstructions = user?.settings.customInstructions ?? '';
@@ -158,7 +159,7 @@ function ChatSection() {
     }
   }
 
-  async function saveSetting(key: 'titleEmoji' | 'confirmTools', v: boolean, revert: (v: boolean) => void) {
+  async function saveSetting(key: 'titleEmoji' | 'confirmTools' | 'agentTools', v: boolean, revert: (v: boolean) => void) {
     try {
       const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { [key]: v } });
       useAuth.setState({ user: r.user });
@@ -203,11 +204,19 @@ function ChatSection() {
       </Section>
       <Section title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">
         <ToggleRow
+          label="智能工具"
+          desc="允许助手在需要时把长内容写成文件、在沙盒里运行代码做分析和转换、调用技能、把子任务交给子代理。产生的文件显示在对话顶部的「文件」标签里。关闭后助手只用文字回答"
+          checked={agentTools}
+          onChange={(v) => { setAgentTools(v); void saveSetting('agentTools', v, setAgentTools); }}
+        />
+        <div className="mt-3">
+        <ToggleRow
           label="标题自动加 emoji"
           desc="开启后,自动生成的对话标题会以一个匹配主题的 emoji 开头"
           checked={titleEmoji}
           onChange={(v) => { setTitleEmoji(v); void saveSetting('titleEmoji', v, setTitleEmoji); }}
         />
+        </div>
         <div className="mt-3">
           <ToggleRow
             label="每次调用 MCP 工具前都询问我"

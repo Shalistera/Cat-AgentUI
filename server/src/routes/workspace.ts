@@ -12,6 +12,7 @@ import { and, eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
+import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import {
   WorkspaceError, deleteWorkspacePath, extOf, isTextPath, listWorkspace, openRegular, readWorkspaceText,
   renameWorkspacePath, resolveSafe, workspaceRoot, writeWorkspaceFile,
@@ -62,7 +63,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
     if (!c) return;
     const listing = listWorkspace(id, config.maxWorkspaceFiles);
     return {
-      enabled: !!c.workspace,
+      enabled: userWantsAgentTools(req.user!.settings) && policyAllows(getAgentSettings().workspace, req.user!),
       files: listing.files,
       bytes: listing.bytes,
       limits: { bytes: config.maxWorkspaceBytes, files: config.maxWorkspaceFiles, fileBytes: config.maxWorkspaceFileBytes },
