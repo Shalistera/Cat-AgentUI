@@ -8,6 +8,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
+import { adminReturn } from '../pages/admin/Admin';
 import { api } from '../api';
 import { CatMark } from './Logo';
 import { Button, Input, Modal, ModalActions, Popover, confirmDialog, toast } from './ui';
@@ -622,7 +623,7 @@ export function Sidebar() {
               <SettingsIcon size={13} />设置
             </button>
             {user?.role === 'admin' && (
-              <button className={menuItem} onClick={() => { setAccountOpen(false); nav('/admin'); if (window.innerWidth <= 900) setSidebarOpen(false); }}>
+              <button className={menuItem} onClick={() => { setAccountOpen(false); adminReturn.path = window.location.pathname; nav('/admin'); if (window.innerWidth <= 900) setSidebarOpen(false); }}>
                 <ShieldCheck size={13} />管理后台
               </button>
             )}
