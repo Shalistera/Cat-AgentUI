@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
-import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
+import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment, type SendOptions } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { SelectionQuote, asQuote } from '../components/SelectionQuote';
@@ -674,6 +674,7 @@ export default function Chat() {
       onReasoning(t) { buf.reasoning += t; },
       onThoughtSignature(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
       onToolCall(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_call', ...d }] })); },
+      onSubagentProgress(d) { useSubagentProgress.getState().push(d.toolCallId, d.text); },
       onToolResult(d) {
         flush();
         applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_result', ...d }] }));

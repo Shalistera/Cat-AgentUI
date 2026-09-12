@@ -1,7 +1,7 @@
 import type {
   AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
-import { sseMessages, providerError } from './sse.js';
+import { sseMessages, providerError, fetchRetry } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
 
 const DEFAULT_BASE = 'https://api.anthropic.com';
@@ -140,7 +140,7 @@ async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): As
   const tools = toTools(req.tools);
   if (tools) body.tools = tools;
 
-  const res = await fetch(`${base(cfg)}/v1/messages`, {
+  const res = await fetchRetry(`${base(cfg)}/v1/messages`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
   });
   if (!res.ok) throw await providerError('Anthropic', res);

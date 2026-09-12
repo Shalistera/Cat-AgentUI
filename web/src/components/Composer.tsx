@@ -3,7 +3,7 @@ import {
   ArrowLeft, ArrowUp, Check, ChevronDown, FileText, FolderOpen, Gauge, Globe, Image as ImageIcon, LayoutTemplate,
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
-import { useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
+import { useAgentCaps, useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
 import { api, errMsg, uploadFile, fmtUsageLimit, fmtUsageLimitShort, usageLimitExhausted } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
@@ -171,6 +171,9 @@ export function Composer(props: ComposerProps) {
   const composingRef = useRef(false);
   const models = useModels((s) => s.models);
   const user = useAuth((s) => s.user);
+  const agentCaps = useAgentCaps((s) => s.caps);
+  const loadAgentCaps = useAgentCaps((s) => s.load);
+  useEffect(() => { loadAgentCaps(); }, [loadAgentCaps]);
   const dark = useUi((s) => s.theme) === 'dark';
   const mcpServers = useMcp((s) => s.servers).filter((s) => s.enabled);
   // Vertex Gemini exposes Google Search natively. The designated search MCP
@@ -731,7 +734,7 @@ export function Composer(props: ComposerProps) {
             </button>
           )}
 
-          {props.onWorkspaceClick && model?.tools && !imageMode && (
+          {props.onWorkspaceClick && model?.tools && !imageMode && agentCaps?.workspace && (
             <button
               aria-pressed={!!props.workspace}
               className={props.workspace

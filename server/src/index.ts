@@ -25,6 +25,7 @@ import { initKnowledgeIndex } from './knowledge.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import { skillRoutes } from './routes/skills.js';
+import { agentRoutes } from './routes/agent.js';
 import { reconcileSkills } from './skills.js';
 import { probeSandboxEnv } from './sandbox/env.js';
 import { warmPackagesCache } from './sandbox/venv.js';
@@ -128,6 +129,7 @@ async function main() {
   await app.register(workspaceRoutes);
   await app.register(sandboxRoutes);
   await app.register(skillRoutes);
+  await app.register(agentRoutes);
 
   // static SPA
   const webDist = path.join(repoRoot, 'web', 'dist');

@@ -8,7 +8,7 @@ export interface UsageRecord {
   providerId?: string;
   providerType?: string;
   model?: string;
-  kind: 'chat' | 'image' | 'title' | 'followup' | 'ppt' | 'ocr' | 'translate';
+  kind: 'chat' | 'image' | 'title' | 'followup' | 'ppt' | 'ocr' | 'translate' | 'subagent';
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;

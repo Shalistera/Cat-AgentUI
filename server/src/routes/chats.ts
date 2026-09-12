@@ -22,6 +22,8 @@ import { callProjectTool, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
 import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
+import { getAgentSettings, policyAllows } from '../agent-settings.js';
+import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
 } from '../types.js';
@@ -1373,7 +1375,8 @@ export async function chatRoutes(app: FastifyInstance) {
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
     // 工作区 tools are in-process like project knowledge; the manifest block
     // rides in the prompt so the model knows what exists before calling.
-    const workspaceActive = !!chat.workspace && !!model.tools && !model.imageGen;
+    const agentSettings = getAgentSettings();
+    const workspaceActive = !!chat.workspace && !!model.tools && !model.imageGen && policyAllows(agentSettings.workspace, user);
     if (workspaceActive) toolDefs = [...(toolDefs ?? []), ...WORKSPACE_TOOL_DEFS];
     // 沙盒 rides on the workspace: commands run in that directory, so there
     // is nothing to execute against without it.
@@ -1384,10 +1387,16 @@ export async function chatRoutes(app: FastifyInstance) {
       : null;
     const sandboxConfirm = sandboxActive && sandboxNeedsConfirm();
     // 技能: name + description only; the model loads the full text on demand.
-    const skillRows = model.tools && !model.imageGen ? skillsFor(user) : [];
+    const skillRows = model.tools && !model.imageGen && policyAllows(agentSettings.skills, user) ? skillsFor(user) : [];
     const skillsActive = skillRows.length > 0;
     if (skillsActive) toolDefs = [...(toolDefs ?? []), ...SKILL_TOOL_DEFS];
     const skillsBlock = skillsActive ? buildSkillsPrompt(skillRows, sandboxActive) : null;
+    // 子代理: needs the workspace (that is where its output lands) and a
+    // tool-capable model; the model it runs on may be an admin-designated one.
+    const subagentActive = workspaceActive && subagentAvailableFor(user);
+    if (subagentActive) toolDefs = [...(toolDefs ?? []), ...SUBAGENT_TOOL_DEFS];
+    const subagentBlock = subagentActive ? buildSubagentPrompt() : null;
+    let subagentSpawned = 0;
     // Vertex currently rejects googleSearch + functionDeclarations in one
     // generateContent request. Preserve explicit MCP/project tools and disable
     // native search for this turn rather than silently dropping those tools.
@@ -1408,6 +1417,7 @@ export async function chatRoutes(app: FastifyInstance) {
       chat.systemPrompt,
       workspaceBlock,
       skillsBlock,
+      subagentBlock,
       searchActive ? SEARCH_HINT : null,
       canvasAnswers ? CANVAS_PROMPT : null,
       canvasTurn ? CANVAS_TURN_PROMPT : null,
@@ -1645,7 +1655,7 @@ export async function chatRoutes(app: FastifyInstance) {
             // 执行前确认: calls to a server the admin flagged (or every MCP call,
             // when the person asked for that) wait for an allow/deny from the
             // tab. Project knowledge tools are in-process reads and never ask.
-            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name)
+            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name) && !isSubagentTool(call.name)
               && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)
                 || (isSandboxTool(call.name) && sandboxConfirm)));
             const denied = new Set<string>();
@@ -1676,6 +1686,36 @@ export async function chatRoutes(app: FastifyInstance) {
                 ? await callWorkspaceTool(chatId, call.name, call.args)
                 : isSkillTool(call.name) && skillsActive
                 ? callSkillTool(user, call.name, call.args)
+                : isSubagentTool(call.name) && subagentActive
+                ? await (async () => {
+                  let sargs: { task?: unknown; title?: unknown } = {};
+                  try { sargs = JSON.parse(call.args || '{}'); } catch { /* empty */ }
+                  const task = typeof sargs.task === 'string' ? sargs.task.trim() : '';
+                  if (!task) return { result: '缺少 task 参数', isError: true };
+                  if (++subagentSpawned > agentSettings.subagent.maxPerTurn) {
+                    return { result: `本轮已达子代理上限(${agentSettings.subagent.maxPerTurn} 次),请自己完成剩余工作`, isError: true };
+                  }
+                  const override = agentSettings.subagent.modelId ? getModelWithProvider(agentSettings.subagent.modelId) : null;
+                  const sm = override && override.model.tools && !override.model.imageGen ? override : { model, provider };
+                  clearProviderIdleTimer(); // the nested run has its own timeout
+                  const r = await runSubagent({
+                    user, chatId, projectId: chat.projectId, parentMessageId: assistantId,
+                    adapter: getAdapter(sm.provider.type), cfg: toRuntimeConfig(sm.provider),
+                    model: sm.model, provider: sm.provider,
+                    reasoning: sm.model.id === model.id ? resolveReasoning(chat.reasoningEffort, model, provider.type as ProviderType) : undefined,
+                    secretValues, signal: controller.signal,
+                    askConfirm: async (calls) => {
+                      sse.send('tool_confirm', { messageId: assistantId, calls });
+                      const d = await waitForToolDecision(assistantId, user.id, calls.map((c) => c.id), controller.signal);
+                      if (controller.signal.aborted) throw new Error('对话已停止');
+                      return d;
+                    },
+                    onProgress: (line) => sse.send('subagent_progress', { toolCallId: call.id, text: line }),
+                    consumeOutput,
+                  }, task);
+                  resetProviderIdleTimer();
+                  return { result: formatSubagentResult(r), isError: r.stopped === 'error' || r.stopped === 'aborted' };
+                })()
                 : isSandboxTool(call.name) && sandboxActive
                 ? await callSandboxTool({ user: { id: user.id, role: user.role }, chatId, messageId: assistantId, signal: controller.signal }, call.args)
                 : await callTool(

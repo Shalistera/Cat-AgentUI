@@ -1,6 +1,32 @@
 // Minimal SSE parser over a fetch Response body.
 export interface SseMessage { event: string | null; data: string }
 
+// undici surfaces a dead keep-alive socket as TypeError('fetch failed') with
+// a socket-level cause. That happens when a pooled connection sat idle while
+// a long tool call (sandbox command, subagent) ran and the remote closed it.
+// The request never left, so one retry on a fresh connection is safe; any
+// other failure, or an aborted signal, is reported as-is.
+function isStaleSocketError(err: unknown): boolean {
+  if (!(err instanceof TypeError) || err.message !== 'fetch failed') return false;
+  const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+  const code = cause?.code ?? '';
+  const msg = cause?.message ?? '';
+  return /^(UND_ERR_SOCKET|ECONNRESET|EPIPE|UND_ERR_CONNECT_TIMEOUT|ECONNREFUSED|EAI_AGAIN)$/.test(code)
+    || /other side closed|socket hang up|reset by peer/i.test(msg)
+    || (!code && !msg);
+}
+
+export async function fetchRetry(url: string, init: RequestInit & { signal?: AbortSignal }): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (init.signal?.aborted || !isStaleSocketError(err)) throw err;
+    await new Promise((r) => setTimeout(r, 300));
+    if (init.signal?.aborted) throw err;
+    return fetch(url, init);
+  }
+}
+
 const MAX_SSE_BUFFER_CHARS = 2 * 1024 * 1024;
 const MAX_SSE_EVENT_CHARS = 2 * 1024 * 1024;
 

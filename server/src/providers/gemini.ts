@@ -4,7 +4,7 @@ import type {
   AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, GroundingInfo, ImageGenRequest, ImageGenResult,
   ProviderRuntimeConfig, UsageInfo,
 } from '../types.js';
-import { sseMessages, providerError, readJsonLimited } from './sse.js';
+import { sseMessages, providerError, readJsonLimited, fetchRetry } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
 import { config } from '../config.js';
 
@@ -216,7 +216,7 @@ function toUsage(u: any): UsageInfo {
 export const geminiAdapter: ChatAdapter = {
   async *streamChat(cfg, req) {
     const { url, headers } = await endpoint(cfg, req.model, 'streamGenerateContent?alt=sse');
-    const res = await fetch(url, {
+    const res = await fetchRetry(url, {
       method: 'POST', headers, body: JSON.stringify(buildChatBody(req)), signal: req.signal,
     });
     if (!res.ok) throw await providerError('Gemini', res);

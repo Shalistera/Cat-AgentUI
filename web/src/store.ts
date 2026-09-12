@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api } from './api';
-import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, Project, User } from './types';
+import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, Project, User, AgentCapabilities } from './types';
 import type { ComposerSettings, PendingAttachment } from './components/Composer';
 
 // ---- theme ----
@@ -336,6 +336,32 @@ export const useModels = create<ModelsState>((set, get) => ({
     if (get().loaded && !force) return;
     const r = await api.get<ModelInfo[]>('/api/models');
     set({ models: Array.isArray(r) ? r : [], loaded: true });
+  },
+}));
+
+// ---- Agent 能力 (per-user capability flags) ----
+interface AgentCapsState {
+  caps: AgentCapabilities | null;
+  load(force?: boolean): Promise<void>;
+}
+export const useAgentCaps = create<AgentCapsState>((set, get) => ({
+  caps: null,
+  async load(force = false) {
+    if (get().caps && !force) return;
+    try { set({ caps: await api.get<AgentCapabilities>('/api/agent/capabilities') }); }
+    catch { set({ caps: { workspace: false, sandbox: false, sandboxConfirm: true, skills: 0, subagent: false } }); }
+  },
+}));
+
+// ---- 子代理 progress (transient, keyed by the parent's tool call id) ----
+interface SubagentProgressState {
+  lines: Record<string, string[]>;
+  push(toolCallId: string, text: string): void;
+}
+export const useSubagentProgress = create<SubagentProgressState>((set) => ({
+  lines: {},
+  push(toolCallId, text) {
+    set((s) => ({ lines: { ...s.lines, [toolCallId]: [...(s.lines[toolCallId] ?? []), text].slice(-40) } }));
   },
 }));
 

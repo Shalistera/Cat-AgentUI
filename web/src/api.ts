@@ -108,6 +108,7 @@ export async function streamChat(
       case 'thought_signature': handlers.onThoughtSignature?.(data); break;
       case 'tool_call': handlers.onToolCall?.(data); break;
       case 'tool_result': handlers.onToolResult?.(data); break;
+      case 'subagent_progress': handlers.onSubagentProgress?.(data); break;
       case 'tool_confirm': handlers.onToolConfirm?.(data); break;
       case 'grounding': handlers.onGrounding?.(data); break;
       case 'image': handlers.onImage?.(data); break;

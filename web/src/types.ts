@@ -435,6 +435,8 @@ export interface StreamHandlers {
   onToolCall?(d: { id: string; name: string; args: string; sig?: string }): void;
   onToolResult?(d: { toolCallId: string; name: string; result: string; isError?: boolean }): void;
   onToolConfirm?(d: ToolConfirmRequest): void;
+  /** 子代理 live progress for the parent's spawn_subagent tool row. */
+  onSubagentProgress?(d: { toolCallId: string; text: string }): void;
   onGrounding?(d: Extract<MessagePart, { type: 'grounding' }>): void;
   onImage?(d: { imageId: string; mime?: string }): void;
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;
@@ -497,4 +499,20 @@ export interface SkillInfo {
   fileCount: number; bytes: number; createdAt: number; updatedAt: number;
 }
 export interface SkillDetail { skill: SkillInfo; files: { path: string; size: number }[]; skillMd: string }
+
+// ---- Agent 能力 ----
+export interface AccessPolicy { enabled: boolean; accessMode: 'shared' | 'restricted'; allowedUserIds: string[] }
+export interface AgentSettings {
+  workspace: AccessPolicy;
+  skills: AccessPolicy;
+  subagent: AccessPolicy & {
+    modelId: string; maxPerTurn: number; maxIterations: number; timeoutSec: number; maxResultChars: number; allowSandbox: boolean;
+  };
+}
+export interface AgentAdminData {
+  settings: AgentSettings;
+  limits: { workspaceBytes: number; workspaceFileBytes: number; workspaceFiles: number; toolIterations: number };
+}
+/** /api/agent/capabilities — what this person's chats may use right now. */
+export interface AgentCapabilities { workspace: boolean; sandbox: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean }
 

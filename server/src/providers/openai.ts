@@ -2,7 +2,7 @@ import type {
   AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, ImageGenResult,
   ImageGenRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
-import { sseMessages, readBodyLimited, providerError, readJsonLimited } from './sse.js';
+import { sseMessages, readBodyLimited, providerError, readJsonLimited, fetchRetry } from './sse.js';
 import { isBareOrigin, stripEndpointSuffix, trimUrl } from './base-url.js';
 import { config } from '../config.js';
 
@@ -119,7 +119,7 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
   const tools = toChatTools(req.tools);
   if (tools) { body.tools = tools; body.tool_choice = 'auto'; }
 
-  const res = await fetch(`${base(cfg)}/chat/completions`, {
+  const res = await fetchRetry(`${base(cfg)}/chat/completions`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
   });
   if (!res.ok) throw await providerError('OpenAI', res);
@@ -237,7 +237,7 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
     body.tool_choice = 'auto';
   }
 
-  const res = await fetch(`${base(cfg)}/responses`, {
+  const res = await fetchRetry(`${base(cfg)}/responses`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
   });
   if (!res.ok) throw await providerError('OpenAI(Responses)', res);

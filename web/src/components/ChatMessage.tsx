@@ -1,13 +1,13 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
-  BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
+  Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
   Info, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo, ToolConfirmRequest } from '../types';
 import { useLightbox } from './Lightbox';
 import { fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
-import { useAuth, useModels } from '../store';
+import { useAuth, useModels, useSubagentProgress } from '../store';
 import { Markdown } from './Markdown';
 import { ModelAvatar } from './ModelAvatar';
 import { Button, Popover, Spinner } from './ui';
@@ -304,6 +304,31 @@ function isWorkspaceTool(name: string): boolean {
 // 沙盒 run_command: the command itself is the label, and its output is shown
 // in the expanded row — for once the "how" is exactly what the person wants.
 const RUN_COMMAND = 'run_command';
+const SPAWN_SUBAGENT = 'spawn_subagent';
+function subagentTitle(call: ToolCallPart): string {
+  try {
+    const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
+    if (typeof a.title === 'string' && a.title.trim()) return a.title.trim();
+    if (typeof a.task === 'string') return a.task.trim().split('\n')[0].slice(0, 60);
+  } catch { /* ignore */ }
+  return '子任务';
+}
+function subagentTask(call: ToolCallPart): string {
+  try { const a = JSON.parse(call.args || '{}') as Record<string, unknown>; return typeof a.task === 'string' ? a.task : ''; } catch { return ''; }
+}
+
+/** Live lines from the child run, shown under the parent's tool row. */
+function SubagentProgress({ callId, done }: { callId: string; done: boolean }) {
+  const lines = useSubagentProgress((s) => s.lines[callId]);
+  if (!lines?.length) return null;
+  const shown = done ? lines.slice(-6) : lines.slice(-8);
+  return (
+    <ul className="mt-1.5 space-y-0.5 border-l-2 border-line pl-2.5 text-[11px] text-tx3">
+      {lines.length > shown.length && <li>…</li>}
+      {shown.map((l, i) => <li key={i} className="truncate">{l}</li>)}
+    </ul>
+  );
+}
 function commandOf(call: ToolCallPart): string {
   try {
     const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
@@ -353,16 +378,24 @@ function ToolRun({ calls, results, organizing }: {
   const pending = calls.filter((c) => !results.has(c.id));
   const failed = calls.filter((c) => results.get(c.id)?.isError);
   const searching = calls.some((c) => isSearchTool(c.name));
-  const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name) || c.name === RUN_COMMAND);
+  const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name) || c.name === RUN_COMMAND || c.name === SPAWN_SUBAGENT);
   const hasCommand = calls.some((c) => c.name === RUN_COMMAND);
+  const hasSubagent = calls.some((c) => c.name === SPAWN_SUBAGENT);
   const active = pending.length > 0;
   const busy = active || organizing;
   const noun = searching ? '搜索' : '调用工具';
 
   let label: string;
   const lastPending = pending[pending.length - 1];
-  if (workspaceOnly && active && lastPending.name === RUN_COMMAND) {
+  if (workspaceOnly && active && lastPending.name === SPAWN_SUBAGENT) {
+    label = `子代理正在处理「${subagentTitle(lastPending)}」…`;
+  } else if (workspaceOnly && active && lastPending.name === RUN_COMMAND) {
     label = `正在执行「${commandSummary(commandOf(lastPending))}」…`;
+  } else if (hasSubagent && !active && !organizing) {
+    const subs = calls.filter((c) => c.name === SPAWN_SUBAGENT);
+    const failedSubs = subs.filter((c) => results.get(c.id)?.isError).length;
+    label = subs.length === 1 ? `子代理完成了「${subagentTitle(subs[0])}」` : `${subs.length} 个子任务已完成`;
+    if (failedSubs) label += `,${failedSubs} 个失败`;
   } else if (workspaceOnly && active) {
     label = `${workspaceLabel(lastPending, false)}…`;
   } else if (hasCommand && !organizing) {
@@ -394,7 +427,7 @@ function ToolRun({ calls, results, organizing }: {
     label = calls.length === 1 ? `${noun}完成` : `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次`;
   }
 
-  const Icon = searching ? Globe : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
+  const Icon = searching ? Globe : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
 
   return (
     <Disclosure
@@ -421,17 +454,30 @@ function ToolRun({ calls, results, organizing }: {
                 {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
                   : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
                   : <Check size={13} className="shrink-0 text-ok" />}
-                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === RUN_COMMAND ? '执行' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
+                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
+                {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">「{subagentTitle(c)}」</span>}
                 {q && <span className="truncate text-tx3">「{q}」</span>}
                 {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">「{pathOf(c)}」</span>}
               </div>
+              {c.name === SPAWN_SUBAGENT && (
+                <>
+                  <details className="mt-1.5 text-[11px] text-tx3">
+                    <summary className="cursor-pointer select-none hover:text-tx">任务说明</summary>
+                    <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg2 px-2 py-1.5 font-mono leading-relaxed text-tx2">{subagentTask(c)}</pre>
+                  </details>
+                  <SubagentProgress callId={c.id} done={!!r} />
+                  {r && (
+                    <pre className={`mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border px-2 py-1.5 text-[11px] leading-relaxed ${r.isError ? 'border-err/30 bg-err/10 text-err' : 'border-line bg-bg1 text-tx2'}`}>{r.result.slice(0, 6000)}</pre>
+                  )}
+                </>
+              )}
               {c.name === RUN_COMMAND && (
                 <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg2 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-tx">{commandOf(c)}</pre>
               )}
               {c.name === RUN_COMMAND && r && (
                 <pre className={`mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border px-2 py-1.5 font-mono text-[11px] leading-relaxed ${r.isError ? 'border-err/30 bg-err/10 text-err' : 'border-line bg-bg1 text-tx2'}`}>{r.result.slice(0, 6000)}</pre>
               )}
-              {c.name !== RUN_COMMAND && r?.isError && (
+              {c.name !== RUN_COMMAND && c.name !== SPAWN_SUBAGENT && r?.isError && (
                 <div className="mt-1.5 whitespace-pre-wrap break-words rounded-md border border-err/30 bg-err/10 px-2 py-1.5 text-[11px] leading-relaxed text-err">
                   {r.result.slice(0, 500)}
                 </div>

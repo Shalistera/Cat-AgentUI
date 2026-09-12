@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowUpDown, BarChart3, Boxes, DatabaseZap, Plug, Settings2, ShieldCheck, Sparkles, Terminal, Users as UsersIcon, Wrench, X,
+  ArrowUpDown, BarChart3, Bot, Boxes, DatabaseZap, Plug, Settings2, ShieldCheck, Sparkles, Terminal, Users as UsersIcon, Wrench, X,
 } from 'lucide-react';
 import { Button } from '../../components/ui';
 import Chat from '../Chat';
@@ -18,6 +18,7 @@ import AppSettings from './AppSettings';
 import Import from './Import';
 import Sandbox from './Sandbox';
 import Skills from './Skills';
+import AgentSettingsPage from './AgentSettings';
 
 /* The admin console is a dialog, the same shape as 设置: sections down the
    left, content on the right, floating over the app. It keeps URL routing
@@ -31,7 +32,8 @@ const SECTIONS: { to: string; label: string; icon: typeof BarChart3; end?: boole
   { to: '/admin/providers', label: '模型服务', icon: Plug, group: '模型' },
   { to: '/admin/models', label: '模型设置', icon: Boxes },
   { to: '/admin/model-order', label: '模型排序', icon: ArrowUpDown },
-  { to: '/admin/mcp', label: 'MCP', icon: Wrench, group: 'Agent 能力' },
+  { to: '/admin/agent', label: '总控', icon: Bot, group: 'Agent 能力' },
+  { to: '/admin/mcp', label: 'MCP', icon: Wrench },
   { to: '/admin/sandbox', label: '沙盒', icon: Terminal },
   { to: '/admin/skills', label: '技能', icon: Sparkles },
   { to: '/admin/settings', label: '站点设置', icon: Settings2, group: '站点' },
@@ -123,6 +125,7 @@ export default function Admin() {
                 <Route path="mcp" element={<Mcp />} />
                 <Route path="sandbox" element={<Sandbox />} />
                 <Route path="skills" element={<Skills />} />
+                <Route path="agent" element={<AgentSettingsPage />} />
                 <Route path="settings" element={<AppSettings />} />
                 <Route path="import" element={<Import />} />
               </Routes>
