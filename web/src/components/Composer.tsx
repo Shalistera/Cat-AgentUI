@@ -16,7 +16,7 @@ import type { ModelInfo, ReasoningEffort, ReasoningLevel, User } from '../types'
    never on `toolBtn`: stacking `text-accfg` after `text-tx2` leaves the winner
    to Tailwind's stylesheet order, which is how the 联网 on-state ended up grey
    on cobalt in both themes. */
-const toolBtnShape = 'flex h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none';
+const toolBtnShape = 'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none';
 const toolBtn = `${toolBtnShape} border-transparent text-tx2 hover:border-line hover:bg-bg2 hover:text-tx`;
 
 // `off` is a real stop rather than an absence — Gemini needs an explicit zero
@@ -698,7 +698,10 @@ export function Composer(props: ComposerProps) {
         </div>
 
         <div className={`flex items-center gap-1 rounded-b-xl border-t border-line bg-bg2/45 px-2 py-2 ${compact ? 'hidden' : ''}`}>
-          {/* left: attachments, then tools */}
+          {/* left: attachments, then tools. The group scrolls sideways when
+              it outgrows the row (phones), so extra tools never squeeze the
+              model / send controls on the right. */}
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <input ref={fileRef} type="file" multiple hidden
             accept={imageMode ? 'image/png,image/jpeg,image/webp,image/gif' : FILE_ACCEPT}
             onChange={(e) => pickFiles(e.target.files)} />
@@ -800,8 +803,10 @@ export function Composer(props: ComposerProps) {
             </Popover>
           )}
 
-          <div className="flex-1" />
+          </div>
 
+          {/* right: model, effort, mic, send — fixed width, never crushed. */}
+          <div className="flex shrink-0 items-center gap-1">
           {/* Model selection stays primary; lower-frequency controls live in
               their own secondary views inside the same anchored popover. */}
           <Popover open={panelOpen} setOpen={setPanelOpen} align="right" width="w-[22rem]" trigger={
@@ -810,7 +815,7 @@ export function Composer(props: ComposerProps) {
               title="选择模型"
             >
               {model && <ModelAvatar info={model} size={16} tile={false} />}
-              <span className="max-w-[150px] truncate text-tx max-sm:max-w-[76px]">{model ? model.displayName : '选择模型'}</span>
+              <span className="max-w-[150px] truncate text-tx max-sm:max-w-[60px]">{model ? model.displayName : '选择模型'}</span>
               <ChevronDown size={12} className="text-tx3" />
             </button>
           }>
@@ -977,7 +982,7 @@ export function Composer(props: ComposerProps) {
           {sttSupported() && !props.disabled && (
             <button
               title={listening ? '停止语音输入' : '语音输入(浏览器本地识别,无服务器开销)'}
-              className={`flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border shadow-xs transition-colors ${
+              className={`flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border shadow-xs transition-colors max-sm:hidden ${
                 listening
                   ? 'animate-pulse border-err/40 bg-err/10 text-err'
                   : 'border-line2 bg-bg1 text-tx2 hover:bg-bg2 hover:text-tx'}`}
@@ -992,7 +997,7 @@ export function Composer(props: ComposerProps) {
                 <button
                   title="加入队列:当前回复完成后自动发送"
                   disabled={!text.trim() && atts.length === 0}
-                  className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx2 shadow-xs transition-colors hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none"
+                  className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx2 shadow-xs transition-colors hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none"
                   onClick={send}
                 >
                   <ListPlus size={15} />
@@ -1000,7 +1005,7 @@ export function Composer(props: ComposerProps) {
               )}
               <button
                 title="停止生成"
-                className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx shadow-xs transition-colors hover:bg-bg2"
+                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx shadow-xs transition-colors hover:bg-bg2"
                 onClick={props.onStop}
               >
                 <Square size={12} fill="currentColor" />
@@ -1010,12 +1015,13 @@ export function Composer(props: ComposerProps) {
             <button
               title="发送消息"
               disabled={(!text.trim() && atts.length === 0) || props.disabled}
-              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md bg-pri text-prifg shadow-xs transition-colors hover:bg-pri2 disabled:opacity-40 disabled:pointer-events-none"
+              className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md bg-pri text-prifg shadow-xs transition-colors hover:bg-pri2 disabled:opacity-40 disabled:pointer-events-none"
               onClick={send}
             >
               <ArrowUp size={16} strokeWidth={2.5} />
             </button>
           )}
+          </div>
         </div>
       </div>
     </div>
