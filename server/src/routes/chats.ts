@@ -21,6 +21,7 @@ import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
 import { SANDBOX_TOOL_DEFS, buildSandboxPrompt, callSandboxTool, isSandboxTool, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
+import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
 } from '../types.js';
@@ -1382,6 +1383,11 @@ export async function chatRoutes(app: FastifyInstance) {
       ? [buildWorkspacePrompt(chatId), sandboxActive ? buildSandboxPrompt() : null].filter(Boolean).join('\n\n')
       : null;
     const sandboxConfirm = sandboxActive && sandboxNeedsConfirm();
+    // 技能: name + description only; the model loads the full text on demand.
+    const skillRows = model.tools && !model.imageGen ? skillsFor(user) : [];
+    const skillsActive = skillRows.length > 0;
+    if (skillsActive) toolDefs = [...(toolDefs ?? []), ...SKILL_TOOL_DEFS];
+    const skillsBlock = skillsActive ? buildSkillsPrompt(skillRows, sandboxActive) : null;
     // Vertex currently rejects googleSearch + functionDeclarations in one
     // generateContent request. Preserve explicit MCP/project tools and disable
     // native search for this turn rather than silently dropping those tools.
@@ -1401,6 +1407,7 @@ export async function chatRoutes(app: FastifyInstance) {
       userInstructions ? `用户的全局偏好设置(适用于所有对话):\n${userInstructions}` : null,
       chat.systemPrompt,
       workspaceBlock,
+      skillsBlock,
       searchActive ? SEARCH_HINT : null,
       canvasAnswers ? CANVAS_PROMPT : null,
       canvasTurn ? CANVAS_TURN_PROMPT : null,
@@ -1638,7 +1645,7 @@ export async function chatRoutes(app: FastifyInstance) {
             // 执行前确认: calls to a server the admin flagged (or every MCP call,
             // when the person asked for that) wait for an allow/deny from the
             // tab. Project knowledge tools are in-process reads and never ask.
-            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name)
+            const askFor = pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name)
               && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)
                 || (isSandboxTool(call.name) && sandboxConfirm)));
             const denied = new Set<string>();
@@ -1667,6 +1674,8 @@ export async function chatRoutes(app: FastifyInstance) {
                 ? callProjectTool(chat.projectId, call.name, call.args)
                 : isWorkspaceTool(call.name) && workspaceActive
                 ? await callWorkspaceTool(chatId, call.name, call.args)
+                : isSkillTool(call.name) && skillsActive
+                ? callSkillTool(user, call.name, call.args)
                 : isSandboxTool(call.name) && sandboxActive
                 ? await callSandboxTool({ userId: user.id, chatId, messageId: assistantId, signal: controller.signal }, call.args)
                 : await callTool(

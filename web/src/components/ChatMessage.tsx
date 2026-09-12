@@ -288,6 +288,8 @@ function isSearchTool(name: string): boolean {
 // 工作区 tools get verbs + the file name instead of the raw tool id, so the
 // status line reads "正在写入「方案.md」…" rather than "workspace_write".
 const WORKSPACE_VERBS: Record<string, { doing: string; done: string }> = {
+  load_skill: { doing: '正在加载技能', done: '加载了技能' },
+  read_skill_file: { doing: '正在读取技能文件', done: '读取了技能文件' },
   workspace_list: { doing: '正在查看工作区', done: '查看了工作区' },
   workspace_read: { doing: '正在读取', done: '读取了' },
   workspace_write: { doing: '正在写入', done: '写入了' },
@@ -316,6 +318,9 @@ function commandSummary(cmd: string): string {
 function pathOf(call: ToolCallPart): string {
   try {
     const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
+    // skill tools are keyed by skill name; read_skill_file also has a path
+    if (call.name === 'load_skill') return typeof a.name === 'string' ? a.name : '';
+    if (call.name === 'read_skill_file') return typeof a.name === 'string' ? `${a.name}/${typeof a.path === 'string' ? a.path : ''}` : '';
     return typeof a.path === 'string' ? a.path : '';
   } catch { return ''; }
 }

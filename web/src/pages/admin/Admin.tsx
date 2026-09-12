@@ -14,6 +14,7 @@ import Mcp from './Mcp';
 import AppSettings from './AppSettings';
 import Import from './Import';
 import Sandbox from './Sandbox';
+import Skills from './Skills';
 
 const tabs: { to: string; label: string; end?: boolean }[] = [
   { to: '/admin', label: '总览', end: true },
@@ -23,6 +24,7 @@ const tabs: { to: string; label: string; end?: boolean }[] = [
   { to: '/admin/model-order', label: '模型排序' },
   { to: '/admin/mcp', label: 'MCP' },
   { to: '/admin/sandbox', label: '沙盒' },
+  { to: '/admin/skills', label: '技能' },
   { to: '/admin/settings', label: '站点设置' },
   { to: '/admin/import', label: '数据迁移' },
 ];
@@ -73,6 +75,7 @@ export default function Admin() {
           <Route path="model-order" element={<ModelOrder />} />
           <Route path="mcp" element={<Mcp />} />
           <Route path="sandbox" element={<Sandbox />} />
+          <Route path="skills" element={<Skills />} />
           <Route path="settings" element={<AppSettings />} />
           <Route path="import" element={<Import />} />
         </Routes>

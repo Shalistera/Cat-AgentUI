@@ -359,3 +359,19 @@ export const sandboxRuns = sqliteTable('sandbox_runs', {
   createdAt: integer('created_at').notNull(),
 }, (t) => [index('idx_sandbox_runs_created').on(t.createdAt)]);
 
+// 技能 (Agent Skills): a directory under data/skills/<slug> holding SKILL.md
+// (frontmatter name/description + instructions) plus optional scripts and
+// reference files. The row carries what the prompt and ACL need; the files
+// on disk are the source of truth for content.
+export const skills = sqliteTable('skills', {
+  id: text('id').primaryKey(),
+  slug: text('slug').notNull().unique(), // directory name == frontmatter name
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  enabled: integer('enabled').notNull().default(1),
+  accessMode: text('access_mode').notNull().default('shared'), // 'shared' | 'restricted'
+  allowedUserIds: text('allowed_user_ids').notNull().default('[]'), // JSON string[]
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+

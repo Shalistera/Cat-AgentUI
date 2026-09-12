@@ -490,3 +490,11 @@ export interface SandboxRun {
   user: { id: string; username: string; displayName: string | null };
 }
 
+// ---- 技能 (admin) ----
+export interface SkillInfo {
+  id: string; slug: string; name: string; description: string; enabled: boolean;
+  accessMode: 'shared' | 'restricted'; allowedUserIds: string[];
+  fileCount: number; bytes: number; createdAt: number; updatedAt: number;
+}
+export interface SkillDetail { skill: SkillInfo; files: { path: string; size: number }[]; skillMd: string }
+

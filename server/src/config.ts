@@ -111,7 +111,7 @@ export const config = {
   backupKeep: intEnv('BACKUP_KEEP', 14, 1, 365),
 };
 
-for (const d of ['', 'uploads', 'images', 'workspaces', 'sandbox']) {
+for (const d of ['', 'uploads', 'images', 'workspaces', 'sandbox', 'skills']) {
   const dir = path.join(config.dataDir, d);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(dir, 0o700); } catch { /* best effort on unusual filesystems */ }

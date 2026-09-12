@@ -19,6 +19,7 @@ import { workspaceRoot } from '../workspace.js';
 import { bwrapBaseArgs, cachedSandboxEnv, probeSandboxEnv, sandboxProcessEnv } from './env.js';
 import { getSandboxSettings, type SandboxSettings } from './settings.js';
 import { venvDir, venvExists } from './venv.js';
+import { skillsRoot } from '../skills.js';
 
 export interface RunRequest {
   userId: string;
@@ -78,6 +79,8 @@ function bwrapArgv(bwrap: string, workspace: string, command: string): string[] 
     pathParts.unshift('/opt/venv/bin');
   }
   args.push('--ro-bind', nodeBinDir(), '/opt/node/bin');
+  // 技能 scripts and reference files, read-only (see skills.ts).
+  if (fs.existsSync(skillsRoot)) args.push('--ro-bind', skillsRoot, '/skills');
   pathParts.push('/opt/node/bin');
   args.push(
     '--unshare-all', '--new-session', '--die-with-parent', '--clearenv',
@@ -97,7 +100,9 @@ function bwrapArgv(bwrap: string, workspace: string, command: string): string[] 
     '--setenv', 'NO_COLOR', '1',
   );
   if (venvExists()) args.push('--setenv', 'VIRTUAL_ENV', '/opt/venv');
-  args.push('--', '/bin/sh', '-c', command);
+  // Files the command creates stay private to the service user (0600),
+  // matching what the panel itself writes.
+  args.push('--', '/bin/sh', '-c', `umask 077\n${command}`);
   return args;
 }
 
