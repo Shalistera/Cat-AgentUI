@@ -303,6 +303,31 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
 }
 .md a:hover { text-decoration-color: var(--color-acc); }
 
+/* Inline source citation (Google 搜索 grounding): a small numbered chip that
+   sits like a footnote mark and links to the source. Also used as the row
+   number in the sources list so the two agree. */
+.cite-chip,
+.md a.cite-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.3rem;
+  margin-left: 0.15rem;
+  border-radius: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: 0.15em;
+  color: var(--color-acc);
+  background: color-mix(in srgb, var(--color-acc) 12%, transparent);
+  text-decoration: none;
+  transition: background-color 120ms, color 120ms;
+}
+.md a.cite-chip:hover { background: var(--color-acc); color: var(--color-accfg); text-decoration: none; }
+.md a.cite-chip + a.cite-chip { margin-left: 0.1rem; }
+
 .md blockquote {
   border-left: 2px solid var(--color-line2);
   padding: .1em 0 .1em 1em;

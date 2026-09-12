@@ -51,7 +51,7 @@ export type MessagePart =
   | { type: 'file'; uploadId: string; name?: string; mime?: string }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
-  | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[] }
+  | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; supports?: { text: string; start: number; sources: number[] }[] }
   | { type: 'followups'; questions: string[] };
 
 export interface Message {

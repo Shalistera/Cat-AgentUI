@@ -159,6 +159,7 @@ function toAdapterPartsNoImages(parts: MessagePart[]): AdapterMessagePart[] {
 
 const MAX_GROUNDING_QUERIES = 20;
 const MAX_GROUNDING_SOURCES = 30;
+const MAX_GROUNDING_SUPPORTS = 200;
 
 function safeGroundingPart(
   grounding: GroundingInfo, secretValues: string[],
@@ -166,20 +167,31 @@ function safeGroundingPart(
   const queries = [...new Set(grounding.queries)]
     .map((q) => redactSensitiveText(q.trim(), secretValues).slice(0, 500))
     .filter(Boolean).slice(0, MAX_GROUNDING_QUERIES);
-  const seenUris = new Set<string>();
-  const sources = grounding.sources.flatMap((source) => {
-    if (seenUris.size >= MAX_GROUNDING_SOURCES) return [];
+  // Dedupe/filter sources while remembering where each original index went,
+  // so the supports (which cite original positions) can follow.
+  const byHref = new Map<string, number>();
+  const remap = new Map<number, number>();
+  const sources: { uri: string; title: string }[] = [];
+  grounding.sources.forEach((source, origIdx) => {
     let uri: URL;
-    try { uri = new URL(source.uri); } catch { return []; }
-    if (!['http:', 'https:'].includes(uri.protocol) || uri.username || uri.password) return [];
+    try { uri = new URL(source.uri); } catch { return; }
+    if (!['http:', 'https:'].includes(uri.protocol) || uri.username || uri.password) return;
     const href = redactSensitiveText(uri.toString(), secretValues).slice(0, 4000);
-    if (seenUris.has(href)) return [];
-    seenUris.add(href);
+    const existing = byHref.get(href);
+    if (existing !== undefined) { remap.set(origIdx, existing); return; }
+    if (sources.length >= MAX_GROUNDING_SOURCES) return;
     const title = redactSensitiveText(source.title.trim(), secretValues).slice(0, 500) || href;
-    return [{ uri: href, title }];
+    byHref.set(href, sources.length);
+    remap.set(origIdx, sources.length);
+    sources.push({ uri: href, title });
   });
+  const supports = (grounding.supports ?? []).flatMap((sup) => {
+    const text = redactSensitiveText(sup.text, secretValues).slice(0, 1000);
+    const idx = [...new Set(sup.sources.map((i) => remap.get(i)).filter((v): v is number => typeof v === 'number'))];
+    return text.trim() && idx.length ? [{ text, start: sup.start, sources: idx }] : [];
+  }).slice(0, MAX_GROUNDING_SUPPORTS);
   return queries.length || sources.length
-    ? { type: 'grounding', queries, sources }
+    ? { type: 'grounding', queries, sources, ...(supports.length ? { supports } : {}) }
     : null;
 }
 
@@ -1380,7 +1392,14 @@ export async function chatRoutes(app: FastifyInstance) {
     // The model decides per turn whether a file is warranted; the directory
     // only comes into being on the first write.
     const agentSettings = getAgentSettings();
-    const agentTools = userWantsAgentTools(user.settings);
+    // Vertex cannot combine googleSearch with function tools in one request.
+    // The person switched 联网 on explicitly; the agent tools are implicit
+    // (always offered), so when native search is possible they step aside for
+    // this turn — unless explicit MCP / project tools already block it, in
+    // which case there is nothing to protect and they ride along as usual.
+    const explicitToolsBlockSearch = nativeSearchCapable && !!toolDefs?.length;
+    const yieldToNativeSearch = nativeSearchCapable && !explicitToolsBlockSearch;
+    const agentTools = userWantsAgentTools(user.settings) && !yieldToNativeSearch;
     const workspaceActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.workspace, user);
     if (workspaceActive) toolDefs = [...(toolDefs ?? []), ...WORKSPACE_TOOL_DEFS];
     // 沙盒 rides on the workspace: commands run in that directory, so there

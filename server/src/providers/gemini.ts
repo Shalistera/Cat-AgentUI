@@ -189,20 +189,37 @@ function groundingOf(metadata: any): GroundingInfo | null {
   const queries = Array.isArray(metadata.webSearchQueries)
     ? metadata.webSearchQueries.filter((q: unknown): q is string => typeof q === 'string' && !!q.trim())
     : [];
-  const sources = Array.isArray(metadata.groundingChunks)
-    ? metadata.groundingChunks.flatMap((chunk: any) => {
+  // Keep chunk index → source index so groundingSupports can be resolved
+  // (chunks without a web uri are dropped, which shifts positions).
+  const sources: GroundingInfo['sources'] = [];
+  const chunkToSource = new Map<number, number>();
+  if (Array.isArray(metadata.groundingChunks)) {
+    metadata.groundingChunks.forEach((chunk: any, i: number) => {
       const web = chunk?.web;
-      return typeof web?.uri === 'string' && web.uri
-        ? [{
-          uri: web.uri,
-          title: typeof web.title === 'string' && web.title ? web.title
-            : typeof web.domain === 'string' && web.domain ? web.domain
-            : web.uri,
-        }]
-        : [];
-    })
-    : [];
-  return queries.length || sources.length ? { queries, sources } : null;
+      if (typeof web?.uri !== 'string' || !web.uri) return;
+      chunkToSource.set(i, sources.length);
+      sources.push({
+        uri: web.uri,
+        title: typeof web.title === 'string' && web.title ? web.title
+          : typeof web.domain === 'string' && web.domain ? web.domain
+          : web.uri,
+      });
+    });
+  }
+  const supports: GroundingInfo['supports'] = [];
+  if (Array.isArray(metadata.groundingSupports)) {
+    for (const sup of metadata.groundingSupports) {
+      const text = typeof sup?.segment?.text === 'string' ? sup.segment.text : '';
+      const idx = Array.isArray(sup?.groundingChunkIndices) ? sup.groundingChunkIndices : [];
+      const mapped: number[] = [];
+      for (const i of idx) { const m = chunkToSource.get(Number(i)); if (typeof m === 'number' && !mapped.includes(m)) mapped.push(m); }
+      if (!text.trim() || !mapped.length) continue;
+      supports.push({ text, start: Number(sup.segment?.startIndex) || 0, sources: mapped });
+    }
+  }
+  return queries.length || sources.length
+    ? { queries, sources, ...(supports.length ? { supports } : {}) }
+    : null;
 }
 
 function toUsage(u: any): UsageInfo {

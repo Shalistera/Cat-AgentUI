@@ -9,6 +9,7 @@ import { fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
 import { useAuth, useModels, useSubagentProgress } from '../store';
 import { Markdown } from './Markdown';
+import { injectCitations } from '../citations';
 import { ModelAvatar } from './ModelAvatar';
 import { Button, Popover, Spinner } from './ui';
 
@@ -528,11 +529,14 @@ function GroundingBlock({ part }: { part: GroundingPart }) {
           <div className="space-y-1.5">
             {part.sources.map((source, i) => (
               <a key={`${source.uri}-${i}`} href={source.uri} target="_blank" rel="noreferrer"
-                className="block rounded-md px-2 py-1.5 transition-colors hover:bg-bg2">
+                className="flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-bg2">
+                <span className="cite-chip mt-0.5 shrink-0">{i + 1}</span>
+                <span className="min-w-0 flex-1">
                 <span className="block truncate text-xs font-medium text-tx hover:text-acc">{source.title}</span>
                 {sourceSubline(source) && (
                   <span className="mt-0.5 block truncate text-[10px] text-tx3">{sourceSubline(source)}</span>
                 )}
+                </span>
               </a>
             ))}
           </div>
@@ -703,6 +707,11 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   for (const p of msg.parts) if (p.type === 'tool_result') resultsByCallId.set(p.toolCallId, p);
   let lastTextIdx = -1;
   msg.parts.forEach((p, i) => { if (p.type === 'text') lastTextIdx = i; });
+  // Google 搜索 grounding: which sentence each source backs. Markers are
+  // injected at render time only (the stored text stays clean).
+  const groundingPart = msg.parts.find((p): p is GroundingPart => p.type === 'grounding');
+  const citations = groundingPart?.sources;
+  const supports = groundingPart?.supports;
 
   for (let i = 0; i < msg.parts.length; i++) {
     const p = msg.parts[i];
@@ -711,9 +720,10 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
       rendered.push(<ReasoningBlock key={i} text={p.text} streaming={isStreaming && isLast} />);
     } else if (p.type === 'text') {
       const streamingThis = isStreaming && i === lastTextIdx && i === msg.parts.length - 1;
+      const shown = streamingThis ? p.text : injectCitations(p.text, supports);
       rendered.push(
         <div key={i} data-quotable className={streamingThis ? 'blink-cursor' : ''}>
-          <Markdown text={p.text} streaming={streamingThis} canvas={canvas} />
+          <Markdown text={shown} streaming={streamingThis} canvas={canvas} citations={citations} />
         </div>,
       );
     } else if (p.type === 'tool_call' || p.type === 'tool_result') {

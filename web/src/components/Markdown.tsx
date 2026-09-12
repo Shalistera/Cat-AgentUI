@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -182,10 +182,31 @@ function extractText(node: ReactNode): string {
   return '';
 }
 
-export const Markdown = memo(function Markdown({ text, streaming = false, canvas = false }: {
+export interface Citation { uri: string; title: string }
+
+/** Superscript source chip: `[n](cite:n)` rendered as ⁿ linking to source n. */
+function CiteChip({ n, citations }: { n: number; citations: Citation[] }) {
+  const c = citations[n - 1];
+  if (!c) return null;
+  let host = '';
+  try { host = new URL(c.uri).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
+  const label = /vertexaisearch\.cloud\.google\.com$/i.test(host) ? c.title : (c.title || host);
+  return (
+    <a
+      href={c.uri} target="_blank" rel="noopener noreferrer"
+      title={label}
+      className="cite-chip"
+      aria-label={`来源 ${n}:${label}`}
+    >{n}</a>
+  );
+}
+
+export const Markdown = memo(function Markdown({ text, streaming = false, canvas = false, citations }: {
   text: string; streaming?: boolean;
   /** 互动画布: render ```html fences as live pages (settings.canvasAnswers). */
   canvas?: boolean;
+  /** Google 搜索 sources, 1-based in `cite:n` links (see citations.ts). */
+  citations?: Citation[];
 }) {
   const normalized = useMemo(() => normalizeMath(text), [text]);
   return (
@@ -196,6 +217,8 @@ export const Markdown = memo(function Markdown({ text, streaming = false, canvas
         // all the time; the plugin relaxes the rule for CJK text without touching Latin behaviour.
         remarkPlugins={[remarkGfm, remarkMath, remarkCjkFriendly, remarkBrToBreak]}
         rehypePlugins={[[rehypeKatex, { strict: false }]]}
+        // keep our internal cite: scheme; everything else goes through the default sanitiser
+        urlTransform={(url) => (url.startsWith('cite:') ? url : defaultUrlTransform(url))}
         components={{
           pre({ children }) {
             const child = Array.isArray(children) ? children[0] : children;
@@ -218,6 +241,10 @@ export const Markdown = memo(function Markdown({ text, streaming = false, canvas
             return <CodeBlock lang={lang} code={code} />;
           },
           a({ children, href }) {
+            if (typeof href === 'string' && href.startsWith('cite:') && citations) {
+              const n = Number(href.slice(5));
+              return Number.isInteger(n) && n > 0 ? <CiteChip n={n} citations={citations} /> : null;
+            }
             return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
           },
           img({ src, alt }) {
