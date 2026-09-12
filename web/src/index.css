@@ -325,6 +325,8 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
   text-decoration: none;
   transition: background-color 120ms, color 120ms;
 }
+.cite-chip { user-select: none; -webkit-user-select: none; }
+.md a.cite-chip::before { content: attr(data-n); }
 .md a.cite-chip:hover { background: var(--color-acc); color: var(--color-accfg); text-decoration: none; }
 .md a.cite-chip + a.cite-chip { margin-left: 0.1rem; }
 

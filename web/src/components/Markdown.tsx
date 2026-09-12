@@ -206,12 +206,17 @@ function CiteChip({ n, citations }: { n: number; citations: Citation[] }) {
   try { host = new URL(c.uri).hostname.replace(/^www\./, ''); } catch { /* ignore */ }
   const label = /vertexaisearch\.cloud\.google\.com$/i.test(host) ? c.title : (c.title || host);
   return (
+    // The number is painted by CSS (::before, from data-n) rather than being
+    // a text node: text selected in the browser then never picks the chips
+    // up, so copied prose stays clean in every browser — user-select:none
+    // alone still leaks into the clipboard on some (Safari).
     <a
       href={c.uri} target="_blank" rel="noopener noreferrer"
       title={label}
       className="cite-chip"
+      data-n={n}
       aria-label={`来源 ${n}:${label}`}
-    >{n}</a>
+    />
   );
 }
 
