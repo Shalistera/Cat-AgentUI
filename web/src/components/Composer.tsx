@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import {
-  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, Gauge, Globe, Image as ImageIcon, LayoutTemplate,
+  ArrowLeft, ArrowUp, Check, ChevronDown, FileText, FolderOpen, Gauge, Globe, Image as ImageIcon, LayoutTemplate,
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
-import { useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
+import { useAgentCaps, useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
 import { api, errMsg, uploadFile, fmtUsageLimit, fmtUsageLimitShort, usageLimitExhausted } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
@@ -112,6 +112,10 @@ interface ComposerProps {
   onWebSearchChange(enabled: boolean): void;
   mcpSelected: string[];
   onMcpChange(ids: string[]): void;
+  /** 工作区(Beta) entry: opens / collapses the file panel. Discovery only —
+      the capability itself is always on (see settings → 智能工具). */
+  onWorkspaceClick?(): void;
+  workspacePanelOpen?: boolean;
   settings: ComposerSettings;
   onSettingsChange(s: ComposerSettings): void;
   onSend(text: string, attachments: PendingAttachment[], opts?: SendOptions): void;
@@ -166,6 +170,9 @@ export function Composer(props: ComposerProps) {
   const composingRef = useRef(false);
   const models = useModels((s) => s.models);
   const user = useAuth((s) => s.user);
+  const agentCaps = useAgentCaps((s) => s.caps);
+  const loadAgentCaps = useAgentCaps((s) => s.load);
+  useEffect(() => { loadAgentCaps(); }, [loadAgentCaps]);
   const dark = useUi((s) => s.theme) === 'dark';
   const mcpServers = useMcp((s) => s.servers).filter((s) => s.enabled);
   // Vertex Gemini exposes Google Search natively. The designated search MCP
@@ -723,6 +730,21 @@ export function Composer(props: ComposerProps) {
             >
               <Globe size={13} />
               <span className="max-sm:hidden">联网</span>
+            </button>
+          )}
+
+          {props.onWorkspaceClick && agentCaps?.workspace && model?.tools && !imageMode && (
+            <button
+              aria-pressed={!!props.workspacePanelOpen}
+              className={props.workspacePanelOpen
+                ? `${toolBtnShape} border-acc/40 bg-acc/10 text-acc`
+                : toolBtn}
+              title="工作区(Beta):助手会把长文、方案、代码、数据分析等成果写成文件放在这里,并可以反复修改;点开可以查看、下载,或把文件拖进来交给助手处理"
+              onClick={props.onWorkspaceClick}
+            >
+              <FolderOpen size={13} />
+              <span className="max-sm:hidden">工作区</span>
+              <span className="rounded-sm bg-acc/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wider text-acc">Beta</span>
             </button>
           )}
 

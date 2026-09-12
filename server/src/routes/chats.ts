@@ -25,7 +25,7 @@ import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsF
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
-  AdapterMessage, AdapterMessagePart, GroundingInfo, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
+  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
 } from '../types.js';
 import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
@@ -191,7 +191,7 @@ function safeGroundingPart(
     return text.trim() && idx.length ? [{ text, start: sup.start, sources: idx }] : [];
   }).slice(0, MAX_GROUNDING_SUPPORTS);
   return queries.length || sources.length
-    ? { type: 'grounding', queries, sources, ...(supports.length ? { supports } : {}) }
+    ? { type: 'grounding', queries, sources, ...(supports.length ? { supports } : {}), ...(grounding.label ? { label: grounding.label.slice(0, 80) } : {}) }
     : null;
 }
 
@@ -712,7 +712,12 @@ function parseFollowups(raw: string): string[] {
 // deliberately no "search now" button: like the first-party ChatGPT/Claude/
 // Gemini panels, the tools are simply present and the model decides per
 // question whether calling them is worth it.
-const SEARCH_HINT = '你可以使用联网搜索工具。当问题涉及时效性信息、近期事件、具体数据或你不确定的事实时,先搜索再回答;闲聊、常识或纯创作类请求无需搜索。基于搜索结果回答时,请在文末列出所引用的来源链接。';
+// Native (Vertex) search: citations come back as grounding metadata, so the
+// model must not paste a source list itself. MCP search: there is no such
+// metadata — the model cites by linking the sentence to the result's URL and
+// the client turns links that match a search result into numbered chips.
+const SEARCH_HINT_NATIVE = '你可以使用联网搜索工具。当问题涉及时效性信息、近期事件、具体数据或你不确定的事实时,先搜索再回答;闲聊、常识或纯创作类请求无需搜索。来源会自动标注在回答旁,不要在文末再罗列来源链接。';
+const SEARCH_HINT_MCP = '你可以使用联网搜索工具。当问题涉及时效性信息、近期事件、具体数据或你不确定的事实时,先搜索再回答;闲聊、常识或纯创作类请求无需搜索。基于搜索结果回答时,在每句有依据的话末尾放一个 Markdown 链接指向该来源的完整 URL,链接文字写来源站名或标题,例如「……发布于 9 月 3 日[nodejs.org](https://nodejs.org/...)」;只能链接搜索结果里出现过的 URL,不要编造;不要在文末再罗列来源。';
 
 export async function chatRoutes(app: FastifyInstance) {
   app.get('/api/chats', async (req, reply) => {
@@ -1442,7 +1447,7 @@ export async function chatRoutes(app: FastifyInstance) {
       workspaceBlock,
       skillsBlock,
       subagentBlock,
-      searchActive ? SEARCH_HINT : null,
+      nativeSearchActive ? SEARCH_HINT_NATIVE : mcpSearchActive ? SEARCH_HINT_MCP : null,
       canvasAnswers ? CANVAS_PROMPT : null,
       canvasTurn ? CANVAS_TURN_PROMPT : null,
     ].filter(Boolean).join('\n\n') || undefined;
@@ -1793,6 +1798,38 @@ export async function chatRoutes(app: FastifyInstance) {
       }
     }
     clearTextTimers();
+
+    // MCP search turns get a synthetic grounding part built from the search
+    // tool's results (url/title per line), so the UI can number sources and
+    // turn the model's inline links into citation chips — same look as
+    // Vertex grounding, just without the sentence-level supports.
+    if (mcpSearchActive && !parts.some((p) => p.type === 'grounding')) {
+      const isSearchCall = (name: string) => toolCapabilities.routes.get(name)?.serverId === searchServerId;
+      const queries = parts.flatMap((p) => {
+        if (p.type !== 'tool_call' || !isSearchCall(p.name)) return [];
+        try { const a = JSON.parse(p.args || '{}') as Record<string, unknown>; const q = a.query ?? a.q ?? a.keyword; return typeof q === 'string' ? [q] : []; } catch { return []; }
+      });
+      const sources: GroundingSource[] = [];
+      for (const p of parts) {
+        if (p.type !== 'tool_result' || p.isError || !isSearchCall(p.name)) continue;
+        for (const line of p.result.split('\n')) {
+          const t = line.trim();
+          if (!t) continue;
+          let url = '';
+          let title = '';
+          if (t.startsWith('{')) {
+            try { const o = JSON.parse(t) as { url?: unknown; title?: unknown }; if (typeof o.url === 'string') { url = o.url; title = typeof o.title === 'string' ? o.title : ''; } } catch { /* not json */ }
+          }
+          if (!url) { const m = t.match(/https?:\/\/[^\s)\]"'<>]+/); if (m) url = m[0]; }
+          if (!url) continue;
+          if (!title) { try { title = new URL(url).hostname.replace(/^www\./, ''); } catch { title = url; } }
+          sources.push({ uri: url, title });
+        }
+      }
+      const serverName = db.select({ name: schema.mcpServers.name }).from(schema.mcpServers).where(eq(schema.mcpServers.id, searchServerId!)).get()?.name;
+      const grounding = safeGroundingPart({ queries, sources, label: serverName || '联网搜索' }, secretValues);
+      if (grounding) { parts.push(grounding); sse.send('grounding', grounding); }
+    }
 
     const finalParts = closeDanglingToolCalls(
       parts,

@@ -517,7 +517,7 @@ function GroundingBlock({ part }: { part: GroundingPart }) {
       open={open}
       onToggle={() => setOpen(!open)}
       icon={<Globe size={13} className="shrink-0 text-tx3" />}
-      label={<span className="font-medium text-tx2">Google 搜索{count ? ` · ${count} 个来源` : ''}</span>}
+      label={<span className="font-medium text-tx2">{part.label || 'Google 搜索'}{count ? ` · ${count} 个来源` : ''}</span>}
     >
       <div className="border-t border-line bg-bg1 px-3.5 py-2.5">
         {part.queries.length > 0 && (

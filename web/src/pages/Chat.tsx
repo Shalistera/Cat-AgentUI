@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
-import { chatHandoff, LAST_MODEL_KEY, useAgentCaps, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
+import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment, type SendOptions } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { SelectionQuote, asQuote } from '../components/SelectionQuote';
@@ -299,9 +299,6 @@ export default function Chat() {
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
   const workspacePanelChat = useWorkspacePanel((s) => s.chatId);
   const workspaceFileCount = useWorkspacePanel((s) => (chat ? s.counts[chat.id] : undefined));
-  const agentCaps = useAgentCaps((s) => s.caps);
-  const loadAgentCaps = useAgentCaps((s) => s.load);
-  useEffect(() => { loadAgentCaps(); }, [loadAgentCaps]);
   const [settings, setSettings] = useState<ComposerSettings>(draftFromChat(null));
   const [stick, setStick] = useState(true);
   const [compare, setCompare] = useState<CompareState | null>(null);
@@ -1002,6 +999,8 @@ export default function Chat() {
       onWebSearchChange={persistWebSearch}
       mcpSelected={mcpSelected}
       onMcpChange={persistMcp}
+      onWorkspaceClick={toggleWorkspacePanel}
+      workspacePanelOpen={!!chat && workspacePanelChat === chat.id}
       settings={settings}
       onSettingsChange={persistSettings}
       onSend={send}
@@ -1038,7 +1037,7 @@ export default function Chat() {
             </Link>
           ) : null;
         })()}
-        {chat && (agentCaps?.workspace || !!workspaceFileCount) && (
+        {chat && !!workspaceFileCount && (
           <button
             type="button"
             title={workspacePanelChat === chat.id ? '收起文件面板' : '这段对话的文件:查看、下载、上传给助手处理'}
@@ -1050,7 +1049,7 @@ export default function Chat() {
                 : 'border-line bg-bg2 text-tx2 hover:border-line2 hover:text-tx'}`}
           >
             <FolderOpen size={12} className="shrink-0" />
-            文件{!!workspaceFileCount && <span className="tabular-nums">{workspaceFileCount}</span>}
+            文件 <span className="tabular-nums">{workspaceFileCount}</span>
           </button>
         )}
         {chat?.temporary && (

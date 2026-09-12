@@ -184,6 +184,20 @@ function extractText(node: ReactNode): string {
 
 export interface Citation { uri: string; title: string }
 
+/** Match a link against the source list loosely: scheme, trailing slash,
+    fragment and case of the host don't count. */
+function normalizeUrl(u: string): string {
+  try {
+    const x = new URL(u);
+    x.hash = '';
+    return `${x.hostname.toLowerCase().replace(/^www\./, '')}${x.pathname.replace(/\/+$/, '')}${x.search}`;
+  } catch { return u.trim().replace(/\/+$/, '').toLowerCase(); }
+}
+function citationIndex(href: string, citations: Citation[]): number {
+  const key = normalizeUrl(href);
+  return citations.findIndex((c) => normalizeUrl(c.uri) === key);
+}
+
 /** Superscript source chip: `[n](cite:n)` rendered as ⁿ linking to source n. */
 function CiteChip({ n, citations }: { n: number; citations: Citation[] }) {
   const c = citations[n - 1];
@@ -244,6 +258,12 @@ export const Markdown = memo(function Markdown({ text, streaming = false, canvas
             if (typeof href === 'string' && href.startsWith('cite:') && citations) {
               const n = Number(href.slice(5));
               return Number.isInteger(n) && n > 0 ? <CiteChip n={n} citations={citations} /> : null;
+            }
+            // MCP search: the model links the sentence to a result URL; a link
+            // that matches one of the sources becomes the same numbered chip.
+            if (typeof href === 'string' && citations?.length) {
+              const idx = citationIndex(href, citations);
+              if (idx >= 0) return <CiteChip n={idx + 1} citations={citations} />;
             }
             return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
           },
