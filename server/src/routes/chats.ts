@@ -1450,7 +1450,12 @@ export async function chatRoutes(app: FastifyInstance) {
     const sandboxActive = workspaceActive && sandboxAvailableFor(user);
     if (sandboxActive) toolDefs = [...(toolDefs ?? []), ...SANDBOX_TOOL_DEFS];
     const workspaceBlock = workspaceActive
-      ? [buildWorkspacePrompt(chatId), sandboxActive ? buildSandboxPrompt() : null].filter(Boolean).join('\n\n')
+      ? [
+        buildWorkspacePrompt(chatId),
+        sandboxActive
+          ? buildSandboxPrompt()
+          : '本对话没有命令执行能力(没有 run_command 之类的工具):不要为了"让人去跑"而主动写脚本或给出终端命令,除非用户明确要的就是脚本本身;需要计算、转换格式、生成 PDF/图表这类必须执行才能完成的事,直接告诉用户当前不支持执行,由用户决定。',
+      ].join('\n\n')
       : null;
     const sandboxConfirm = sandboxActive && sandboxNeedsConfirm();
     // 技能: name + description only; the model loads the full text on demand.
