@@ -12,6 +12,11 @@ import { Button, Field, Popover, toast, Toggle } from './ui';
 import { sttSupported, startDictation, type SpeechRecognitionLike } from '../speech';
 import type { ModelInfo, ReasoningEffort, ReasoningLevel, User } from '../types';
 
+// On touch-primary devices (phones, tablets) there is no Shift key to reach
+// for, so Enter must stay a plain newline and sending goes through the button,
+// as every mobile chat app does. Desktop keeps Enter-to-send.
+const touchKeyboard = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+
 /* Active tool buttons build their palette on top of the colourless shape base,
    never on `toolBtn`: stacking `text-accfg` after `text-tx2` leaves the winner
    to Tailwind's stylesheet order, which is how the 联网 on-state ended up grey
@@ -623,6 +628,7 @@ export function Composer(props: ComposerProps) {
           placeholder={props.disabled ? '管理员尚未配置模型'
             : compact ? '输入消息…'
             : imageMode ? '描述你想生成的画面…'
+            : touchKeyboard ? '输入消息…'
             : '输入消息,Enter 发送,Shift + Enter 换行'}
           disabled={props.disabled}
           className={`max-h-[220px] w-full resize-none bg-transparent px-4 text-[15px] leading-relaxed text-tx outline-none focus-visible:outline-none placeholder:text-tx3 ${
@@ -639,7 +645,7 @@ export function Composer(props: ComposerProps) {
             void pickFiles(files);
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !composingRef.current) {
+            if (e.key === 'Enter' && !e.shiftKey && !touchKeyboard && !composingRef.current) {
               e.preventDefault();
               send();
             }
