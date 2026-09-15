@@ -157,6 +157,16 @@ export function supportsVertexGoogleSearch(model: string): boolean {
   return major > 2 || (major === 2 && minor >= 5);
 }
 
+/** Vertex 2.5 rejects googleSearch next to functionDeclarations ("Multiple
+ * tools are supported only when they are all search tools"); Gemini 3.x
+ * accepts both in one request and grounds while calling functions. Verified
+ * against gemini-2.5-pro (400) / gemini-3.1-pro-preview, gemini-3.6-flash (200)
+ * on 2026-09-15. */
+export function supportsVertexSearchWithFunctions(model: string): boolean {
+  const match = /^gemini-(\d+)/i.exec(model.trim());
+  return !!match && Number(match[1]) >= 3;
+}
+
 function buildChatBody(req: ChatRequest): any {
   const body: any = { contents: toContents(req.messages) };
   if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
@@ -172,15 +182,18 @@ function buildChatBody(req: ChatRequest): any {
     generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: budget > 0 };
   }
   if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
-  if (req.webSearch) {
-    body.tools = [{ googleSearch: {} }];
-  } else if (req.tools?.length) {
-    body.tools = [{
+  // Both may ride together on Gemini 3.x; the caller keeps them apart for
+  // 2.5 (see supportsVertexSearchWithFunctions).
+  const tools: any[] = [];
+  if (req.webSearch) tools.push({ googleSearch: {} });
+  if (req.tools?.length) {
+    tools.push({
       functionDeclarations: req.tools.map((t) => ({
         name: t.name, description: t.description, parameters: cleanSchema(t.parameters),
       })),
-    }];
+    });
   }
+  if (tools.length) body.tools = tools;
   return body;
 }
 

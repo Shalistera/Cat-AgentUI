@@ -7,7 +7,7 @@ import { requireAuth } from '../auth.js';
 import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
-import { supportsVertexGoogleSearch } from '../providers/gemini.js';
+import { supportsVertexGoogleSearch, supportsVertexSearchWithFunctions } from '../providers/gemini.js';
 import { getToolsForServers, callTool, toolNeedsConfirm, type McpCapabilities } from '../mcp/manager.js';
 import { isAutoAllowed, rememberAutoAllow, submitToolDecision, waitForToolDecision } from '../tool-confirm.js';
 import { validateMcpSelection } from '../mcp/access.js';
@@ -1475,18 +1475,38 @@ export async function chatRoutes(app: FastifyInstance) {
     if (subagentActive) toolDefs = [...(toolDefs ?? []), ...SUBAGENT_TOOL_DEFS];
     const subagentBlock = subagentActive ? buildSubagentPrompt() : null;
     let subagentSpawned = 0;
-    // Vertex rejects googleSearch + functionDeclarations in one request. With
-    // no other tools, native search rides on the main request (best: sentence-
-    // level citations). With tools present, Google Search becomes a function
-    // tool of ours instead: the model calls google_search(query), we run a
-    // separate grounded Gemini request and hand back the findings plus
+    // Native search rides on the main request whenever Vertex lets it: the
+    // model searches inside its own turn (fast, sentence-level citations).
+    // Gemini 3.x accepts googleSearch next to functionDeclarations; 2.5 does
+    // not, so there, with other tools present, Google Search becomes a
+    // function tool of ours instead: the model calls google_search(query), we
+    // run a separate grounded Gemini request and hand back the findings plus
     // numbered sources; the model cites by linking, like MCP search does.
-    const bridgedSearchActive = nativeSearchCapable && !!toolDefs?.length;
+    const bridgedSearchActive = nativeSearchCapable && !!toolDefs?.length && !supportsVertexSearchWithFunctions(model.modelId);
     if (bridgedSearchActive) toolDefs = [...(toolDefs ?? []), GOOGLE_SEARCH_TOOL_DEF];
     const nativeSearchActive = nativeSearchCapable && !bridgedSearchActive;
     const searchActive = nativeSearchActive || mcpSearchActive || bridgedSearchActive;
     const bridgedSources: GroundingSource[] = [];
     const bridgedQueries: string[] = [];
+    // Native grounding arrives once per model round; a tool-using turn has
+    // several. They fold into one part (the client numbers sources from the
+    // first grounding part it finds), with supports re-based onto the
+    // message-wide text so their order survives the merge.
+    let nativeGrounding: GroundingInfo | null = null;
+    const mergeGrounding = (next: GroundingInfo, textOffset: number) => {
+      const acc = nativeGrounding ?? (nativeGrounding = { queries: [], sources: [], supports: [] });
+      for (const q of next.queries) if (!acc.queries.includes(q)) acc.queries.push(q);
+      const remap = next.sources.map((src) => {
+        const at = acc.sources.findIndex((x) => x.uri === src.uri);
+        if (at >= 0) return at;
+        acc.sources.push(src);
+        return acc.sources.length - 1;
+      });
+      for (const sup of next.supports ?? []) {
+        const sources = [...new Set(sup.sources.map((i) => remap[i]).filter((v): v is number => typeof v === 'number'))];
+        if (sources.length) acc.supports!.push({ text: sup.text, start: sup.start + textOffset, sources });
+      }
+    };
     // The person's global instructions sit between the project block and the
     // chat's own prompt: stable across chats (cache-friendly), but the chat's
     // prompt comes later and therefore wins on conflict.
@@ -1646,6 +1666,7 @@ export async function chatRoutes(app: FastifyInstance) {
           const messages = [...baseHistory];
           if (parts.length) messages.push({ role: 'assistant', parts: toAdapterPartsNoImages(parts) });
           const pendingCalls: { id: string; name: string; args: string }[] = [];
+          const textBeforeRound = parts.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 0), 0);
           let stopReason = 'stop';
           const textRedactor = new StreamingSecretRedactor(secretValues);
           const reasoningRedactor = new StreamingSecretRedactor(secretValues);
@@ -1702,11 +1723,7 @@ export async function chatRoutes(app: FastifyInstance) {
                 pendingCalls.push(safeCall);
                 sse.send('tool_call', { id: safeCall.id, name: safeCall.name, args: safeCall.args, sig: safeCall.sig });
               } else if (ev.type === 'grounding') {
-                const grounding = safeGroundingPart(ev.grounding, secretValues);
-                if (grounding) {
-                  parts.push(grounding);
-                  sse.send('grounding', grounding);
-                }
+                mergeGrounding(ev.grounding, textBeforeRound);
               } else if (ev.type === 'usage') {
                 usage.prompt += ev.usage.promptTokens ?? 0;
                 usage.completion += ev.usage.completionTokens ?? 0;
@@ -1871,6 +1888,10 @@ export async function chatRoutes(app: FastifyInstance) {
     // tool's results (url/title per line), so the UI can number sources and
     // turn the model's inline links into citation chips — same look as
     // Vertex grounding, just without the sentence-level supports.
+    if (nativeGrounding) {
+      const grounding = safeGroundingPart(nativeGrounding, secretValues);
+      if (grounding) { parts.push(grounding); sse.send('grounding', grounding); }
+    }
     if (bridgedSearchActive && bridgedSources.length && !parts.some((p) => p.type === 'grounding')) {
       const grounding = safeGroundingPart({ queries: bridgedQueries, sources: bridgedSources, label: 'Google 搜索' }, secretValues);
       if (grounding) { parts.push(grounding); sse.send('grounding', grounding); }

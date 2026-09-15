@@ -16,7 +16,7 @@
 - **每条回复的透明统计**:耗时、首字延迟、输入/输出 tokens、tokens/s
 - **绘图工坊**:OpenAI `gpt-image-1` 与 Google Nano Banana(`gemini-*-image`)系列,支持参考图(图生图/编辑)、画廊管理
 - **对话内直接出图**:在对话里直接选绘图模型即可作画,自动带上当前对话的上下文与图片,可以接着说「换成蓝色」「把背景改成雨天」;生成的图片同样进入画廊
-- **联网搜索**:Vertex AI 上的 Gemini 2.5/3.x 可直接使用原生 Google Search Grounding,无需 Brave MCP;回答里每句有依据的话后面带编号引用角标,悬停看来源、点击直达,底部来源列表同一编号;其他 Provider 仍可回退到管理员指定的搜索 MCP。Vertex 不允许 googleSearch 与函数工具同请求:对话里没有其他工具时原生搜索直接挂在请求上(句级引用最准);有工作区/MCP/项目等工具时,Google 搜索改为一个 `google_search` 函数工具,模型调用时服务端另发一次带 grounding 的请求取回要点与来源,两者从此可以共存
+- **联网搜索**:Vertex AI 上的 Gemini 2.5/3.x 可直接使用原生 Google Search Grounding,无需 Brave MCP;回答里每句有依据的话后面带编号引用角标,悬停看来源、点击直达,底部来源列表同一编号;其他 Provider 仍可回退到管理员指定的搜索 MCP。Gemini 3.x 上原生搜索与工作区/MCP/项目等函数工具直接同请求挂载,搜索发生在模型自己的推理里(最快,句级引用最准);Gemini 2.5 的 Vertex 接口不允许两者同请求,有其他工具时 Google 搜索改为一个 `google_search` 函数工具,模型调用时服务端另发一次带 grounding 的请求取回要点与来源
 - **MCP 工具**:stdio / Streamable HTTP / SSE 三种传输,支持全员共享或指定用户访问,对话中按需启用,工具调用过程完整可见
 - **多用户**:首个注册用户自动成为管理员;管理端可建用户、停用、重置密码;可关闭开放注册;管理员可在用户详情页搜索并只读查看该用户的对话记录(临时对话除外)
 - **用量看板**:管理员可查看每用户/每模型/每日的 tokens、请求数与绘图量;用户可见自己的用量
@@ -121,9 +121,9 @@ npx pm2 save
 `generateContent` 请求中发送 `tools: [{ googleSearch: {} }]`,并保存/展示返回的来源。
 非 Vertex 模型仍可使用 **管理后台 → MCP** 中指定的搜索服务器作为回退。
 
-Vertex API 目前不允许在同一个 `generateContent` 请求中混用 `googleSearch` 与函数调用工具。
-因此当同一轮还启用了 MCP 工具或大型项目资料的检索工具时,Cat-AgentUI 会保留这些工具、跳过
-本轮原生搜索并给出提示,不会静默丢弃工具。支持模型、配额、计费与展示条款以
+Gemini 3.x 允许在同一个 `generateContent` 请求中混用 `googleSearch` 与函数调用工具,
+搜索与工作区等工具同时可用;Gemini 2.5 仍会拒绝这种组合,因此 2.5 上一旦同轮还有其他工具,
+Google 搜索改由服务端桥接为 `google_search` 函数工具(多一次模型往返,略慢)。支持模型、配额、计费与展示条款以
 [Google Cloud 官方说明](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search)
 为准。
 
