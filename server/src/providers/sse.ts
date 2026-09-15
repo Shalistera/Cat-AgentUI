@@ -102,7 +102,7 @@ export async function providerError(name: string, res: Response): Promise<Error>
   const body = await readErrorBody(res);
   const gateway = GATEWAY_STATUS[res.status];
   if (gateway) return new Error(`${name}: ${gateway} (${res.status})`);
-  if (res.status === 429) return new Error(`${name}: 请求过于频繁或额度不足,请稍后再试 (429)`);
+  if (res.status === 429) return new Error(`${name}: 上游服务暂时繁忙,请稍等片刻后重试 (429)`);
   if (looksLikeHtml(body) || !body.trim()) return new Error(`${name}: 上游返回了错误 (${res.status}),请稍后再试`);
   return new Error(`${name} ${res.status}: ${body}`);
 }
