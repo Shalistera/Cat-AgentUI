@@ -14,6 +14,7 @@
     "test:security": "npm run build && node scripts/security-regression.mjs",
     "test:signatures": "npm run build -w server && node scripts/thought-signature-regression.mjs",
     "test:context": "npm run build -w server && node scripts/doc-context-regression.mjs",
+    "test:upload-quota": "npm run build -w server && node scripts/upload-quota-regression.mjs",
     "start": "npm run start -w server"
   },
   "devDependencies": {

@@ -2,10 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { and, eq, like, lt, sql } from 'drizzle-orm';
 import { config } from './config.js';
-import { db, schema } from './db/index.js';
+import { db, schema, getSetting } from './db/index.js';
 import { allWorkspacesBytes } from './workspace.js';
 
 export type StorageKind = 'upload' | 'image';
+
+export const MAX_USER_UPLOAD_MB_KEY = 'max_user_upload_mb';
+export const MAX_USER_UPLOAD_MB = 100_000;
+const MIB = 1024 * 1024;
+
+export function maxUserUploadMb(): number {
+  const value = getSetting(MAX_USER_UPLOAD_MB_KEY, config.maxUserUploadBytes / MIB);
+  return Number.isInteger(value) && value >= 1 && value <= MAX_USER_UPLOAD_MB
+    ? value : config.maxUserUploadBytes / MIB;
+}
 
 interface ReservationRow { userId: string; kind: StorageKind; bytes: number }
 const reservations = new Map<symbol, ReservationRow>();
@@ -48,7 +58,7 @@ function reservedBytes(kind?: StorageKind, userId?: string): number {
  * close the check-then-write race between concurrent requests in this process.
  */
 export function tryReserveStorage(userId: string, kind: StorageKind, bytes: number): ReserveResult {
-  const perUserLimit = kind === 'upload' ? config.maxUserUploadBytes : config.maxUserImageBytes;
+  const perUserLimit = kind === 'upload' ? maxUserUploadMb() * MIB : config.maxUserImageBytes;
   const perUserStored = kind === 'upload' ? sumUploads(userId) : sumImages(userId);
   if (perUserStored + reservedBytes(kind, userId) + bytes > perUserLimit) {
     return { ok: false, reason: 'user' };
@@ -450,7 +460,7 @@ export async function storageOverview(): Promise<StorageOverview> {
     workspaces: allWorkspacesBytes(),
     limits: {
       total: config.maxTotalStorageBytes,
-      perUserUploads: config.maxUserUploadBytes,
+      perUserUploads: maxUserUploadMb() * MIB,
       perUserImages: config.maxUserImageBytes,
     },
     freeSpace: freeSpaceAt(config.dataDir),

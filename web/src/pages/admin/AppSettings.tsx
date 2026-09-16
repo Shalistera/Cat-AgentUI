@@ -263,8 +263,9 @@ function UsageRows({ users }: { users: StorageOverview['topUsers'] }) {
   );
 }
 
-function StorageCard({ uploadRetentionDays, onUploadRetentionChange, saving, onSave }: {
+function StorageCard({ uploadRetentionDays, onUploadRetentionChange, maxUserUploadMb, onMaxUserUploadChange, savedMaxUserUploadMb, saving, onSave }: {
   uploadRetentionDays: string; onUploadRetentionChange(v: string): void; saving: boolean; onSave?(): void;
+  maxUserUploadMb: string; onMaxUserUploadChange(v: string): void; savedMaxUserUploadMb: number;
 }) {
   const [data, setData] = useState<StorageOverview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -275,7 +276,7 @@ function StorageCard({ uploadRetentionDays, onUploadRetentionChange, saving, onS
       .then((r) => { setData(r); setLoadError(null); })
       .catch((e) => setLoadError(e instanceof Error ? e.message : '加载存储信息失败'));
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [savedMaxUserUploadMb]);
 
   async function cleanup(kind: 'orphans' | 'unreferenced') {
     if (busy || !data) return;
@@ -353,6 +354,17 @@ function StorageCard({ uploadRetentionDays, onUploadRetentionChange, saving, onS
           </div>
 
           <Field
+            label="每用户附件上限(MB)"
+            hint="适用于所有用户的附件累计存储量,可设为 1–100000 MB。保存后立即生效;调低上限不会删除已有附件,已超额用户需清理空间后才能继续上传。"
+          >
+            <Input
+              type="number" min={1} max={100000} step={1} inputMode="numeric" className="max-w-40"
+              value={maxUserUploadMb} disabled={saving}
+              onChange={(e) => onMaxUserUploadChange(e.target.value)}
+            />
+          </Field>
+
+          <Field
             label="未使用附件保留天数"
             hint="0 = 永久保留。上传后一直没有出现在任何对话消息里的附件(放弃的草稿、工坊参考图等),超过该天数后每小时自动清理。点击本卡片的「保存更改」生效。"
           >
@@ -390,6 +402,8 @@ export default function AppSettings() {
   const [retentionDays, setRetentionDays] = useState('0');
   const [chatRetentionDays, setChatRetentionDays] = useState('0');
   const [uploadRetentionDays, setUploadRetentionDays] = useState('0');
+  const [maxUserUploadMb, setMaxUserUploadMb] = useState('');
+  const [savedMaxUserUploadMb, setSavedMaxUserUploadMb] = useState(0);
   const [quotaTokens, setQuotaTokens] = useState('0');
   const [quotaAction, setQuotaAction] = useState<AppSettingsDto['quotaAction']>('block');
   const [quotaFallback, setQuotaFallback] = useState('');
@@ -408,6 +422,8 @@ export default function AppSettings() {
     setRetentionDays(String(r.imageRetentionDays ?? 0));
     setChatRetentionDays(String(r.chatImageRetentionDays ?? 0));
     setUploadRetentionDays(String(r.uploadRetentionDays ?? 0));
+    setMaxUserUploadMb(String(r.maxUserUploadMb));
+    setSavedMaxUserUploadMb(r.maxUserUploadMb);
     setQuotaTokens(String(r.quotaMonthlyTokens ?? 0));
     setQuotaAction(r.quotaAction ?? 'block');
     setQuotaFallback(r.quotaFallbackModelId ?? '');
@@ -434,6 +450,11 @@ export default function AppSettings() {
     if (busy) return;
     const name = brand.trim();
     if (!name) { toast('站点名称不能为空', 'err'); return; }
+    const uploadLimit = Number(maxUserUploadMb);
+    if (!Number.isInteger(uploadLimit) || uploadLimit < 1 || uploadLimit > 100000) {
+      toast('每用户附件上限须为 1–100000 MB 的整数', 'err');
+      return;
+    }
     if (quotaAction === 'downgrade' && !quotaFallback) {
       toast('降级模式需要选择一个降级模型,否则超额会按拒绝处理', 'err');
       return;
@@ -447,6 +468,7 @@ export default function AppSettings() {
         imageRetentionDays: clampDays(retentionDays),
         chatImageRetentionDays: clampDays(chatRetentionDays),
         uploadRetentionDays: clampDays(uploadRetentionDays),
+        maxUserUploadMb: uploadLimit,
         quotaMonthlyTokens: Math.max(0, Math.round(Number(quotaTokens)) || 0),
         quotaAction,
         quotaFallbackModelId: quotaFallback || null,
@@ -638,7 +660,11 @@ export default function AppSettings() {
         </div>
       </Card>
 
-      <StorageCard uploadRetentionDays={uploadRetentionDays} onUploadRetentionChange={setUploadRetentionDays} saving={busy} onSave={save} />
+      <StorageCard
+        uploadRetentionDays={uploadRetentionDays} onUploadRetentionChange={setUploadRetentionDays}
+        maxUserUploadMb={maxUserUploadMb} onMaxUserUploadChange={setMaxUserUploadMb}
+        savedMaxUserUploadMb={savedMaxUserUploadMb} saving={busy} onSave={save}
+      />
 
       <BackupsCard />
     </div>

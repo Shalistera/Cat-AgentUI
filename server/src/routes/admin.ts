@@ -24,7 +24,10 @@ import {
   allChatMessages, chatSummary, messageDto, resolveLeafId,
 } from './chats.js';
 import { escapeLike, textPartsOf } from './search.js';
-import { removeOrphanFiles, removeUnreferencedUploads, storageOverview, unlinkStoredFiles } from '../storage.js';
+import {
+  MAX_USER_UPLOAD_MB, MAX_USER_UPLOAD_MB_KEY, maxUserUploadMb,
+  removeOrphanFiles, removeUnreferencedUploads, storageOverview, unlinkStoredFiles,
+} from '../storage.js';
 import { TRANSLATE_CHAIN_MAX, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY } from './translate.js';
 
 const DAY_MS = 86_400_000;
@@ -162,6 +165,7 @@ const settingsSchema = z.object({
   imageRetentionDays: z.number().int().min(0).max(3650).optional(), // 工坊图,0 = keep forever
   chatImageRetentionDays: z.number().int().min(0).max(3650).optional(), // 对话图,0 = keep forever
   uploadRetentionDays: z.number().int().min(0).max(3650).optional(), // 未被消息引用的附件,0 = keep forever
+  maxUserUploadMb: z.number().int().min(1).max(MAX_USER_UPLOAD_MB).optional(),
   quotaMonthlyTokens: z.number().int().min(0).max(1e15).optional(), // 默认月度配额,0 = 不限
   quotaAction: z.enum(['block', 'downgrade']).optional(),
   quotaFallbackModelId: z.string().max(64).nullish(), // models.id,空 = 未设置
@@ -507,6 +511,7 @@ export async function adminRoutes(app: FastifyInstance) {
       imageRetentionDays: getSetting(IMAGE_RETENTION_KEY, 0),
       chatImageRetentionDays: getSetting(CHAT_IMAGE_RETENTION_KEY, 0),
       uploadRetentionDays: getSetting(UPLOAD_RETENTION_KEY, 0),
+      maxUserUploadMb: maxUserUploadMb(),
       quotaMonthlyTokens: quota.defaultQuota,
       quotaAction: quota.action,
       quotaFallbackModelId: quota.fallbackModelId || null,
@@ -534,6 +539,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (body.data.imageRetentionDays !== undefined) setSetting(IMAGE_RETENTION_KEY, body.data.imageRetentionDays);
     if (body.data.chatImageRetentionDays !== undefined) setSetting(CHAT_IMAGE_RETENTION_KEY, body.data.chatImageRetentionDays);
     if (body.data.uploadRetentionDays !== undefined) setSetting(UPLOAD_RETENTION_KEY, body.data.uploadRetentionDays);
+    if (body.data.maxUserUploadMb !== undefined) setSetting(MAX_USER_UPLOAD_MB_KEY, body.data.maxUserUploadMb);
     if (body.data.quotaMonthlyTokens !== undefined) setSetting(QUOTA_DEFAULT_KEY, body.data.quotaMonthlyTokens);
     if (body.data.quotaAction !== undefined) setSetting(QUOTA_ACTION_KEY, body.data.quotaAction);
     if (body.data.quotaFallbackModelId !== undefined) {

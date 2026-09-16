@@ -397,6 +397,8 @@ export interface AppSettings {
   chatImageRetentionDays: number;
   /** Uploads no saved message references: removed after N days; 0 = keep forever. */
   uploadRetentionDays: number;
+  /** 每用户附件存储上限(MB),适用于所有用户。 */
+  maxUserUploadMb: number;
   /** 默认月度 token 配额,0 = 不限。用户可单独覆盖。 */
   quotaMonthlyTokens: number;
   /** 超额动作:拒绝,或对话降级到指定模型。 */
