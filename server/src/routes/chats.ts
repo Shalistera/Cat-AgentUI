@@ -25,7 +25,7 @@ import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsF
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
-  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, ReasoningRequest, StopReason, ToolDef,
+  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef,
 } from '../types.js';
 import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
@@ -1305,7 +1305,7 @@ export async function chatRoutes(app: FastifyInstance) {
       .map((m) => {
         if (m.role !== 'assistant') return m;
         const cut = m.status === 'stopped' || m.status === 'error'
-          || m.finishReason === 'length' || m.finishReason === 'content_filter';
+          || m.finishReason === 'length' || m.finishReason === 'content_filter' || m.finishReason === 'incomplete';
         if (!cut) return m;
         const parts = parseParts(m.parts);
         if (!parts.some((p) => p.type === 'text' && p.text.trim())) return m;
@@ -1567,7 +1567,7 @@ export async function chatRoutes(app: FastifyInstance) {
     let ttft: number | null = null;
     const t0 = Date.now();
     let status: 'done' | 'error' | 'stopped' = 'done';
-    let finishReason: StopReason | null = null;
+    let finishReason: FinishReason | null = null;
     let errMsg: string | null = null;
     let imageCount = 0;
     let outputChars = 0;
@@ -1928,6 +1928,17 @@ export async function chatRoutes(app: FastifyInstance) {
       parts,
       status === 'stopped' ? '(用户已停止,调用未执行)' : '(调用未完成)',
     );
+    // A "successful" turn that produced nothing the user can read — typically
+    // Vertex closing the stream right after the thinking part, so the person
+    // is left staring at a thought chain and no answer — or one that ended on
+    // an unrecognised / missing finish signal, is flagged so the UI can say
+    // so and offer 重新生成 instead of pretending the reply is complete.
+    // Image turns legitimately end without a finish signal; they count as a
+    // body via their image parts.
+    if (status === 'done') {
+      const hasBody = finalParts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image' || p.type === 'tool_call');
+      if (!hasBody || finishReason === 'other') finishReason = 'incomplete';
+    }
     const durationMs = Date.now() - t0;
     db.update(schema.messages).set({
       parts: JSON.stringify(finalParts),

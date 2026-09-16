@@ -4,8 +4,18 @@
 
 /** Why the model stopped. 'length' (max output tokens) and 'content_filter'
     (provider safety / refusal) mean the reply is cut short — the chat route
-    persists them so the UI can flag "输出可能不完整". */
+    persists them so the UI can flag "输出可能不完整". 'other' is any
+    provider-specific finish the adapter doesn't recognise (Gemini OTHER /
+    MALFORMED_FUNCTION_CALL, Anthropic pause_turn, …) or a stream that closed
+    without a finish signal at all. */
 export type StopReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'other';
+
+/** Stored on the message row: a provider StopReason, or 'incomplete' — set by
+    the chat route (never by an adapter) when a 'done' reply has no visible
+    body (only reasoning, e.g. Vertex dropping the stream after the thinking
+    part) or ended with 'other' / no finish signal. The UI treats it like
+    'length': flag the reply and offer 重新生成. */
+export type FinishReason = StopReason | 'incomplete';
 
 export type MessagePart =
   | { type: 'text'; text: string }

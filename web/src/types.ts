@@ -62,7 +62,9 @@ export interface Message {
   parts: MessagePart[];
   model: string | null;
   status: 'done' | 'error' | 'stopped' | 'streaming';
-  /** Provider stop reason; 'length' / 'content_filter' on a done reply = cut short. */
+  /** Provider stop reason; 'length' / 'content_filter' / 'incomplete' on a done
+      reply = cut short ('incomplete' = no visible body or the stream ended
+      without a proper finish signal — e.g. only the thought chain arrived). */
   finishReason: string | null;
   error: string | null;
   promptTokens: number | null;

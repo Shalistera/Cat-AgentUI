@@ -792,8 +792,15 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   // filter) — and errors that interrupted a partial answer — get a banner with
   // an inline 重新生成 so the user doesn't have to hunt for the hover action.
   const hasBody = msg.parts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image');
+  // The null branch covers rows saved before the server started assigning
+  // 'incomplete': a finished reply with nothing to read is cut short regardless.
   const cutShort = !isStreaming && msg.status === 'done'
-    && (msg.finishReason === 'length' || msg.finishReason === 'content_filter');
+    && (msg.finishReason === 'length' || msg.finishReason === 'content_filter' || msg.finishReason === 'incomplete'
+      || (msg.finishReason == null && !hasBody && !msg.parts.some((p) => p.type === 'tool_call')));
+  const cutShortWhy = msg.finishReason === 'length' ? '已达到模型单次输出长度上限。'
+    : msg.finishReason === 'content_filter' ? '模型或服务商的内容策略中止了输出。'
+    : !hasBody ? '模型只返回了思考过程,没有正文,通常是上游服务中途断流了。'
+    : '上游服务在回复结束前断流,没有收到正常的结束信号。';
   const regenerateCta = onRegenerate && !isStreaming ? (
     <button
       type="button"
@@ -854,7 +861,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           <div className="my-2 flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-2.5 text-[13px] leading-relaxed text-warn">
             <TriangleAlert size={15} className="mt-0.5 shrink-0" />
             <span className="min-w-0 flex-1 break-words">
-              输出可能不完整:{msg.finishReason === 'length' ? '已达到模型单次输出长度上限。' : '模型或服务商的内容策略中止了输出。'}
+              {hasBody ? '输出可能不完整:' : '没有收到回复:'}{cutShortWhy}
             </span>
             {regenerateCta}
           </div>

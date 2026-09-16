@@ -701,7 +701,10 @@ export default function Chat() {
       onError(message) { applyToAssistant((m) => ({ ...m, status: 'error', error: message })); },
       onDone(status, finishReason) { finalize(status, finishReason); },
     }, controller.signal)
-      .then(() => finalize('done'))
+      // The SSE stream closed without a 'done' event (server or proxy dropped
+      // it mid-reply): finalize() is a no-op if 'done' already ran, otherwise
+      // flag the reply as incomplete rather than letting it pass as finished.
+      .then(() => finalize('done', 'incomplete'))
       .catch((e) => {
         if (controller.signal.aborted) { finalize('stopped'); return; }
         if (e instanceof ApiError) {

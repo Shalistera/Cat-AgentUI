@@ -212,8 +212,9 @@ export const messages = sqliteTable('messages', {
   model: text('model'),
   providerId: text('provider_id'),
   status: text('status').notNull().default('done'), // 'done' | 'error' | 'stopped' | 'streaming'
-  // Provider stop reason of the last model turn ('stop' | 'length' | 'content_filter' | 'other' | 'tool_calls').
-  // 'length' / 'content_filter' on a 'done' row = the reply was cut short.
+  // Provider stop reason of the last model turn ('stop' | 'length' | 'content_filter' | 'other' | 'tool_calls'),
+  // or 'incomplete' (route-assigned: done reply with no visible body / no proper finish signal).
+  // 'length' / 'content_filter' / 'incomplete' on a 'done' row = the reply was cut short.
   finishReason: text('finish_reason'),
   error: text('error'),
   promptTokens: integer('prompt_tokens'),
