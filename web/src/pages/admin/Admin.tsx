@@ -107,12 +107,12 @@ export default function Admin() {
             </nav>
           </aside>
 
-          <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="hidden items-center justify-between border-b border-line px-6 py-3.5 sm:flex">
               <h2 className="text-sm font-semibold tracking-tight text-tx">{active.label}</h2>
               <Button variant="ghost" size="iconSm" onClick={close} title="关闭"><X size={15} /></Button>
             </div>
-            <div ref={scrollRef} className="flex-1 overflow-y-auto bg-bg0/40">
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-bg0/40">
               <Routes>
                 <Route index element={<Dashboard />} />
                 <Route path="users" element={<Users />} />

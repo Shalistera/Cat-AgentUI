@@ -657,12 +657,12 @@ export function SettingsDialog() {
         </aside>
 
         {/* content */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="hidden items-center justify-between border-b border-line px-6 py-3.5 sm:flex">
             <h2 className="text-sm font-semibold tracking-tight text-tx">{active.label}</h2>
             <Button variant="ghost" size="iconSm" onClick={close} title="关闭"><X size={15} /></Button>
           </div>
-          <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
             {/* key remounts the section so each visit refetches (devices, usage) */}
             <div key={active.id} className="fade-up mx-auto max-w-2xl">
               {active.id === 'account' && <AccountSection />}
