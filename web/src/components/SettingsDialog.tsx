@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowUpDown, BarChart3, Check, FlaskConical, HardDrive, LayoutTemplate, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, Trash2, UserRound, X,
 } from 'lucide-react';
-import { api, fmtBytes, fmtCost, fmtModelName, fmtTime, fmtTokens } from '../api';
+import { api, fmtBytes, fmtCost, fmtDate, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
 import { useAuth, useChats, useUi, type SettingsTab } from '../store';
 import { Badge, Button, Field, Input, Spinner, Stat, Textarea, ToggleRow, confirmDialog, toast } from './ui';
@@ -649,7 +649,7 @@ function StorageSection() {
                               {c.title || '未命名对话'}
                             </button>
                             <div className="mt-0.5 text-[11px] text-tx3">
-                              <span className="tabular-nums">{fmtBytes(c.bytes)}</span> · {c.count} 个附件 · 最后活跃 {fmtTime(c.updatedAt)}
+                              <span className="tabular-nums">{fmtBytes(c.bytes)}</span> · {c.count} 个附件 · 最后活跃 {fmtDate(c.updatedAt)}
                             </div>
                           </div>
                           <Button variant="dangerGhost" size="xs" disabled={busy === c.id} onClick={() => removeChat(c)}>删除这段对话</Button>
@@ -669,7 +669,7 @@ function StorageSection() {
                         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-tx3">
                           <span className="tabular-nums">{fmtBytes(f.size)}</span>
                           <span>·</span>
-                          <span>{fmtTime(f.createdAt)}</span>
+                          <span>{fmtDate(f.createdAt)}</span>
                           {f.chat && (
                             <>
                               <span>·</span>
