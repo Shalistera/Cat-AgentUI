@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
-  BarChart3, Check, FlaskConical, HardDrive, LayoutTemplate, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, Trash2, UserRound, X,
+  ArrowUpDown, BarChart3, Check, FlaskConical, HardDrive, LayoutTemplate, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, Trash2, UserRound, X,
 } from 'lucide-react';
 import { api, fmtBytes, fmtCost, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
@@ -525,6 +525,9 @@ function StorageSection() {
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [view, setView] = useState<'chats' | 'files'>('chats');
+  // Biggest first answers "what do I delete to get unblocked"; oldest first
+  // surfaces the conversations nobody has opened in months.
+  const [chatSort, setChatSort] = useState<'size' | 'age'>('size');
   const navigate = useNavigate();
   const close = useUi((s) => s.closeSettings);
   const removeChatFromList = useChats((s) => s.remove);
@@ -613,7 +616,19 @@ function StorageSection() {
                   <button type="button" className={segBtn(view === 'chats')} onClick={() => setView('chats')}>按对话</button>
                   <button type="button" className={segBtn(view === 'files')} onClick={() => setView('files')}>按文件</button>
                 </div>
-                <span className="text-[11px] text-tx3">{view === 'chats' ? '老对话排在前面' : '大文件排在前面'}</span>
+                {view === 'chats' ? (
+                  <button
+                    type="button"
+                    onClick={() => setChatSort((v) => (v === 'size' ? 'age' : 'size'))}
+                    className="flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-tx3 transition-colors hover:bg-bg2 hover:text-tx"
+                    title="切换排序"
+                  >
+                    <ArrowUpDown size={12} />
+                    {chatSort === 'size' ? '占用最多在前' : '最久没用在前'}
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-tx3">大文件排在前面</span>
+                )}
               </div>
 
               {view === 'chats' && (
@@ -621,9 +636,9 @@ function StorageSection() {
                   <p className="py-6 text-center text-xs text-tx3">附件都还没发进对话</p>
                 ) : (
                   <>
-                    <p className="mb-2 text-xs leading-relaxed text-tx3">很久不用的对话还占着空间。不再需要的可以整段删除,附件会一起释放。</p>
+                    <p className="mb-2 text-xs leading-relaxed text-tx3">不再需要的对话可以整段删除,附件会一起释放;很久不用的老对话也还占着空间。</p>
                     <ul className="divide-y divide-line rounded-lg border border-line">
-                      {data.chats.map((c) => (
+                      {[...data.chats].sort((a, b) => (chatSort === 'size' ? b.bytes - a.bytes : a.updatedAt - b.updatedAt)).map((c) => (
                         <li key={c.id} className="flex items-center gap-3 px-3 py-2.5">
                           <div className="min-w-0 flex-1">
                             <button
