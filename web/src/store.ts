@@ -32,7 +32,7 @@ function initialThemeMode(): ThemeMode {
   return 'system';
 }
 
-export type SettingsTab = 'account' | 'chat' | 'appearance' | 'devices' | 'usage' | 'labs';
+export type SettingsTab = 'account' | 'chat' | 'appearance' | 'devices' | 'usage' | 'storage' | 'labs';
 
 interface UiState {
   /** Effective theme — what is on screen right now. */

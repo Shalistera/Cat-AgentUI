@@ -3,14 +3,16 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
-import { eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth.js';
 import {
-  quotaErrorMessage, sniffUpload, tryReserveStorage, uploadIsReferenced,
+  maxUserUploadMb, quotaErrorMessage, sniffUpload, tryReserveStorage, uploadIdsFromPartsJson, uploadIsReferenced,
 } from '../storage.js';
+
+const MIB = 1024 * 1024;
 
 export async function uploadRoutes(app: FastifyInstance) {
   await app.register(multipart, { limits: { fileSize: config.maxUploadBytes, files: 5 } });
@@ -85,6 +87,43 @@ export async function uploadRoutes(app: FastifyInstance) {
     } finally {
       reserved.reservation.release();
     }
+  });
+
+  // The user's own attachment ledger: quota, total, and every file with the
+  // chat that references it. Referenced files can't be deleted directly (the
+  // message would lose its attachment), so the UI sends people to that chat
+  // instead — deleting the message or chat releases the file.
+  app.get('/api/uploads/me', async (req, reply) => {
+    requireAuth(req, reply);
+    const userId = req.user!.id;
+    const rows = db.select({
+      id: schema.uploads.id, name: schema.uploads.origName, mime: schema.uploads.mime,
+      size: schema.uploads.size, createdAt: schema.uploads.createdAt,
+    }).from(schema.uploads).where(eq(schema.uploads.userId, userId))
+      .orderBy(desc(schema.uploads.size), desc(schema.uploads.createdAt)).all();
+
+    // One pass over the user's messages that carry attachments, instead of a
+    // LIKE query per upload. Scoped through chats so nobody else's parts are read.
+    const chatOf = new Map<string, { id: string; title: string }>();
+    if (rows.length > 0) {
+      const msgs = db.select({ parts: schema.messages.parts, chatId: schema.chats.id, title: schema.chats.title })
+        .from(schema.messages)
+        .innerJoin(schema.chats, eq(schema.messages.chatId, schema.chats.id))
+        .where(sql`${schema.chats.userId} = ${userId} and ${schema.messages.parts} like '%uploadId%'`)
+        .all();
+      for (const m of msgs) {
+        for (const uid of uploadIdsFromPartsJson(m.parts)) {
+          if (!chatOf.has(uid)) chatOf.set(uid, { id: m.chatId, title: m.title });
+        }
+      }
+    }
+
+    const used = rows.reduce((n, r) => n + r.size, 0);
+    return {
+      limit: maxUserUploadMb() * MIB,
+      used,
+      files: rows.map((r) => ({ ...r, chat: chatOf.get(r.id) ?? null })),
+    };
   });
 
   app.get('/api/uploads/:id/file', async (req, reply) => {

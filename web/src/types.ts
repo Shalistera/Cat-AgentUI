@@ -307,6 +307,13 @@ export interface AdminUserUsage {
   currency: string;
 }
 
+export interface MyUploadFile {
+  id: string; name: string | null; mime: string; size: number; createdAt: number;
+  /** 引用该附件的对话;null = 未发进任何对话,可直接删除。 */
+  chat: { id: string; title: string } | null;
+}
+export interface MyUploads { limit: number; used: number; files: MyUploadFile[] }
+
 export interface MyUsage {
   byDay: UsageByDay[]; byModel: UsageByModel[]; totals: UsageTotals;
   currency: string;

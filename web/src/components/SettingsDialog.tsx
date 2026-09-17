@@ -1,14 +1,15 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import {
-  BarChart3, Check, FlaskConical, LayoutTemplate, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, UserRound, X,
+  BarChart3, Check, FlaskConical, HardDrive, LayoutTemplate, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, Trash2, UserRound, X,
 } from 'lucide-react';
-import { api, fmtCost, fmtModelName, fmtTime, fmtTokens } from '../api';
+import { api, fmtBytes, fmtCost, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
 import { useAuth, useUi, type SettingsTab } from '../store';
 import { Badge, Button, Field, Input, Spinner, Stat, Textarea, ToggleRow, confirmDialog, toast } from './ui';
 import { TokensBarChart } from './TokensBarChart';
-import type { MyUsage, SessionInfo, User } from '../types';
+import type { MyUploadFile, MyUploads, MyUsage, SessionInfo, User } from '../types';
 
 /* claude.ai-style settings: one dialog, sections down the left, content on the
    right. Nothing here is a page any more — /settings just opens this. Each
@@ -20,6 +21,7 @@ const TABS: { id: SettingsTab; label: string; icon: typeof UserRound }[] = [
   { id: 'appearance', label: '外观', icon: Palette },
   { id: 'devices', label: '登录设备', icon: Monitor },
   { id: 'usage', label: '我的用量', icon: BarChart3 },
+  { id: 'storage', label: '附件存储', icon: HardDrive },
 ];
 // 实验性功能 lives apart from the regular sections: pinned to the bottom of
 // the rail, dashed, with a Beta tag — it should read as a side door, not as
@@ -513,6 +515,123 @@ function UsageSection() {
   );
 }
 
+// ---------- 附件存储 ----------
+/* Where the "attachment quota full" error sends people. Files still attached
+   to a message can't be removed on their own — the chat is the way to free
+   them — so each such row links to its chat instead of offering delete. */
+function StorageSection() {
+  const [data, setData] = useState<MyUploads | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const close = useUi((s) => s.closeSettings);
+
+  useEffect(() => {
+    api.get<MyUploads>('/api/uploads/me')
+      .then(setData)
+      .catch(() => { setFailed(true); toast('加载附件列表失败', 'err'); });
+  }, []);
+
+  async function remove(f: MyUploadFile) {
+    if (busy) return;
+    const ok = await confirmDialog('删除附件', `删除「${f.name || '未命名文件'}」(${fmtBytes(f.size)})?此操作不可撤销。`);
+    if (!ok) return;
+    setBusy(f.id);
+    try {
+      await api.del(`/api/uploads/${f.id}`);
+      setData((d) => d && { ...d, used: d.used - f.size, files: d.files.filter((x) => x.id !== f.id) });
+      toast('附件已删除', 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '删除失败', 'err');
+    } finally { setBusy(null); }
+  }
+
+  function goToChat(chatId: string) {
+    close();
+    navigate(`/chat/${chatId}`);
+  }
+
+  const full = data ? data.used >= data.limit : false;
+  const pct = data ? Math.min(100, (data.used / data.limit) * 100) : 0;
+  const loose = data?.files.filter((f) => !f.chat) ?? [];
+
+  return (
+    <Section title="附件存储" desc="你上传到对话里的文件都计入这个配额。已发进对话的附件不能单独删除:打开那段对话,删掉带附件的消息或整段对话即可释放空间。">
+      {!data ? (
+        <div className="flex justify-center py-10 text-tx3">
+          {failed ? <p className="text-xs">附件列表加载失败</p> : <Spinner />}
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="space-y-1.5">
+            <div className="h-1.5 overflow-hidden rounded-full bg-bg3">
+              <div
+                className={`h-full rounded-full transition-[width] ${full ? 'bg-err' : pct >= 85 ? 'bg-warn' : 'bg-acc'}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <p className="text-xs text-tx3">
+              已用 <span className="tabular-nums text-tx2">{fmtBytes(data.used)}</span>
+              {' / '}<span className="tabular-nums text-tx2">{fmtBytes(data.limit)}</span>
+              ,共 {data.files.length} 个文件
+              {full && <span className="text-err">;配额已满,新附件无法上传</span>}
+            </p>
+          </div>
+
+          {data.files.length === 0 ? (
+            <p className="py-6 text-center text-xs text-tx3">还没有上传过附件</p>
+          ) : (
+            <div>
+              <div className="eyebrow mb-1.5">全部附件(按大小排序)</div>
+              <ul className="divide-y divide-line rounded-lg border border-line">
+                {data.files.map((f) => (
+                  <li key={f.id} className="flex items-center gap-3 px-3 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13px] text-tx">{f.name || '未命名文件'}</div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-tx3">
+                        <span className="tabular-nums">{fmtBytes(f.size)}</span>
+                        <span>·</span>
+                        <span>{fmtTime(f.createdAt)}</span>
+                        {f.chat && (
+                          <>
+                            <span>·</span>
+                            <button
+                              type="button" onClick={() => goToChat(f.chat!.id)}
+                              className="max-w-[16rem] cursor-pointer truncate text-acc hover:underline"
+                              title="打开这段对话"
+                            >
+                              在对话「{f.chat.title || '未命名对话'}」中
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {f.chat ? (
+                      <Button variant="ghost" size="xs" onClick={() => goToChat(f.chat!.id)}>去对话删除</Button>
+                    ) : (
+                      <Button
+                        variant="dangerGhost" size="iconSm" title="删除附件"
+                        disabled={busy === f.id} onClick={() => remove(f)}
+                      >
+                        <Trash2 size={14} />
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {loose.length > 0 && (
+                <p className="mt-2 text-[11px] text-tx3">
+                  未发进对话的附件有 {loose.length} 个,可以直接删除。
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 // ---------- 实验性功能 ----------
 function LabsSection() {
   const user = useAuth((s) => s.user);
@@ -670,6 +789,7 @@ export function SettingsDialog() {
               {active.id === 'appearance' && <AppearanceSection />}
               {active.id === 'devices' && <DevicesSection />}
               {active.id === 'usage' && <UsageSection />}
+              {active.id === 'storage' && <StorageSection />}
               {active.id === 'labs' && <LabsSection />}
             </div>
           </div>

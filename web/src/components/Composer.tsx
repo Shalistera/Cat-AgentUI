@@ -4,11 +4,11 @@ import {
   ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAgentCaps, useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
-import { api, errMsg, uploadFile, fmtUsageLimit, fmtUsageLimitShort, usageLimitExhausted } from '../api';
+import { ApiError, api, errMsg, uploadFile, fmtUsageLimit, fmtUsageLimitShort, usageLimitExhausted } from '../api';
 import { ModelAvatar } from './ModelAvatar';
 import { rampAt, rampTextAt, ReasoningSlider } from './ReasoningSlider';
 import { SortableList } from './SortableList';
-import { Button, Field, Popover, toast, Toggle } from './ui';
+import { Button, Field, Popover, confirmDialog, toast, Toggle } from './ui';
 import { sttSupported, startDictation, type SpeechRecognitionLike } from '../speech';
 import type { ModelInfo, ReasoningEffort, ReasoningLevel, User } from '../types';
 
@@ -309,6 +309,13 @@ export function Composer(props: ComposerProps) {
           }]);
           room--;
         } catch (e) {
+          // Personal quota full: the message alone leaves people stuck (nothing
+          // in the UI lists their files), so offer the storage page directly.
+          if (e instanceof ApiError && e.status === 413 && /附件存储配额/.test(e.message)) {
+            const go = await confirmDialog('附件存储配额已满', `「${f.name}」无法上传。到「设置 › 附件存储」查看占用并删除不再需要的附件?`, false);
+            if (go) useUi.getState().openSettings('storage');
+            continue;
+          }
           toast(`「${f.name}」${e instanceof Error ? e.message : '上传失败'}`, 'err');
         }
       }

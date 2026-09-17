@@ -112,7 +112,38 @@ try {
     `const { maxUserUploadMb } = await import(${JSON.stringify(storageUrl)}); console.log(maxUserUploadMb());`,
   ], { env: { ...process.env, MAX_USER_UPLOAD_MB: '9' }, encoding: 'utf8' });
   assert.equal(persisted.trim(), '3');
-  console.log('Upload quota regression passed: defaults, permissions, validation, live enforcement, retention, reservations, global cap, persistence.');
+
+  // --- /api/uploads/me: the user's own ledger, used by 设置 › 附件存储 ---
+  const mine = (session = member) => request('GET', '/api/uploads/me', undefined, session);
+  assert.equal((await mine('')).statusCode, 401);
+  const before = (await mine()).json();
+  assert.equal(before.limit, 3 * MIB, 'limit reflects the live admin setting');
+  assert.equal(before.used, before.files.reduce((n, f) => n + f.size, 0), 'used sums the listed files');
+  assert.ok(before.files.every((f) => f.chat === null), 'nothing attached to a chat yet');
+  const adminIds = new Set((await mine(admin)).json().files.map((f) => f.id));
+  assert.ok(adminIds.size > 0 && before.files.every((f) => !adminIds.has(f.id)), 'each account sees only its own files');
+
+  // Attach the biggest file to a chat: it must show that chat and refuse deletion.
+  const referenced = before.files[0];
+  const uid = rawDb.prepare('select id from users where username = ?').get('member').id;
+  rawDb.prepare('insert into chats (id, user_id, title, created_at, updated_at) values (?, ?, ?, ?, ?)')
+    .run('chat-1', uid, '带附件的对话', Date.now(), Date.now());
+  rawDb.prepare('insert into messages (id, chat_id, role, parts, created_at) values (?, ?, ?, ?, ?)')
+    .run('msg-1', 'chat-1', 'user', JSON.stringify([{ type: 'file', uploadId: referenced.id }, { type: 'text', text: 'hi' }]), Date.now());
+  const after = (await mine()).json();
+  const shown = after.files.find((f) => f.id === referenced.id);
+  assert.deepEqual(shown.chat, { id: 'chat-1', title: '带附件的对话' }, 'referenced file names its chat');
+  assert.ok(after.files.filter((f) => f.id !== referenced.id).every((f) => f.chat === null));
+  assert.equal((await request('DELETE', `/api/uploads/${referenced.id}`, undefined, member)).statusCode, 409, 'referenced file cannot be deleted directly');
+
+  // A loose file deletes and drops out of the ledger.
+  const loose = after.files.find((f) => f.chat === null);
+  assert.equal((await request('DELETE', `/api/uploads/${loose.id}`, undefined, member)).statusCode, 200);
+  const final = (await mine()).json();
+  assert.ok(!final.files.some((f) => f.id === loose.id));
+  assert.equal(final.used, after.used - loose.size, 'used shrinks by the deleted size');
+
+  console.log('Upload quota regression passed: defaults, permissions, validation, live enforcement, retention, reservations, global cap, persistence, user ledger.');
 } finally {
   await app?.close();
   rawDb?.close();

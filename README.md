@@ -95,7 +95,7 @@ npx pm2 save
 | `MAX_TURN_OUTPUT_CHARS` | 单轮回复累计字符硬上限(含思考和工具结果) | `500000` |
 | `CHAT_TURN_TIMEOUT_SECONDS` | 普通文本对话单轮总超时 | `900` |
 | `CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS` | Provider 流连续无事件的空闲超时 | `120` |
-| `MAX_USER_UPLOAD_MB` | 单用户附件存储配额默认值;管理员可在「站点设置 → 存储空间」覆盖,保存后立即生效 | `512` |
+| `MAX_USER_UPLOAD_MB` | 单用户附件存储配额默认值;管理员可在「站点设置 → 存储空间」覆盖,保存后立即生效;用户在「设置 → 附件存储」能看到自己的占用并删除附件 | `512` |
 | `MAX_USER_IMAGE_MB` | 单用户生成图片存储配额 | `1024` |
 | `MAX_TOTAL_STORAGE_MB` | 全站附件与生成图片总配额 | `10240` |
 | `MAX_GENERATED_IMAGE_MB` | 单张生成图片大小上限 | `20` |
