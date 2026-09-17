@@ -89,10 +89,9 @@ export async function uploadRoutes(app: FastifyInstance) {
     }
   });
 
-  // The user's own attachment ledger: quota, total, and every file with the
-  // chat that references it. Referenced files can't be deleted directly (the
-  // message would lose its attachment), so the UI sends people to that chat
-  // instead — deleting the message or chat releases the file.
+  // The user's own attachment ledger: quota, total, every file with the chat
+  // that references it, and the same bytes grouped per chat (oldest first, so
+  // forgotten conversations that still hold space surface at the top).
   app.get('/api/uploads/me', async (req, reply) => {
     requireAuth(req, reply);
     const userId = req.user!.id;
@@ -105,24 +104,47 @@ export async function uploadRoutes(app: FastifyInstance) {
     // One pass over the user's messages that carry attachments, instead of a
     // LIKE query per upload. Scoped through chats so nobody else's parts are read.
     const chatOf = new Map<string, { id: string; title: string }>();
+    const chatMeta = new Map<string, { id: string; title: string; updatedAt: number; uploadIds: Set<string> }>();
     if (rows.length > 0) {
-      const msgs = db.select({ parts: schema.messages.parts, chatId: schema.chats.id, title: schema.chats.title })
+      const msgs = db.select({
+        parts: schema.messages.parts, chatId: schema.chats.id, title: schema.chats.title, updatedAt: schema.chats.updatedAt,
+      })
         .from(schema.messages)
         .innerJoin(schema.chats, eq(schema.messages.chatId, schema.chats.id))
         .where(sql`${schema.chats.userId} = ${userId} and ${schema.messages.parts} like '%uploadId%'`)
         .all();
       for (const m of msgs) {
-        for (const uid of uploadIdsFromPartsJson(m.parts)) {
+        const ids = uploadIdsFromPartsJson(m.parts);
+        if (ids.length === 0) continue;
+        let meta = chatMeta.get(m.chatId);
+        if (!meta) {
+          meta = { id: m.chatId, title: m.title, updatedAt: m.updatedAt, uploadIds: new Set() };
+          chatMeta.set(m.chatId, meta);
+        }
+        for (const uid of ids) {
+          meta.uploadIds.add(uid);
           if (!chatOf.has(uid)) chatOf.set(uid, { id: m.chatId, title: m.title });
         }
       }
     }
+
+    const sizeOf = new Map(rows.map((r) => [r.id, r.size]));
+    const chats = [...chatMeta.values()].map((c) => {
+      let bytes = 0; let count = 0;
+      for (const uid of c.uploadIds) {
+        const size = sizeOf.get(uid);
+        if (size === undefined) continue; // referenced by a message but already gone
+        bytes += size; count++;
+      }
+      return { id: c.id, title: c.title, updatedAt: c.updatedAt, bytes, count };
+    }).filter((c) => c.count > 0).sort((a, b) => a.updatedAt - b.updatedAt);
 
     const used = rows.reduce((n, r) => n + r.size, 0);
     return {
       limit: maxUserUploadMb() * MIB,
       used,
       files: rows.map((r) => ({ ...r, chat: chatOf.get(r.id) ?? null })),
+      chats,
     };
   });
 

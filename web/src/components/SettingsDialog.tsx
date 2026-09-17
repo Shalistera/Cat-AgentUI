@@ -6,10 +6,10 @@ import {
 } from 'lucide-react';
 import { api, fmtBytes, fmtCost, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
-import { useAuth, useUi, type SettingsTab } from '../store';
+import { useAuth, useChats, useUi, type SettingsTab } from '../store';
 import { Badge, Button, Field, Input, Spinner, Stat, Textarea, ToggleRow, confirmDialog, toast } from './ui';
 import { TokensBarChart } from './TokensBarChart';
-import type { MyUploadFile, MyUploads, MyUsage, SessionInfo, User } from '../types';
+import type { MyUploadChat, MyUploadFile, MyUploads, MyUsage, SessionInfo, User } from '../types';
 
 /* claude.ai-style settings: one dialog, sections down the left, content on the
    right. Nothing here is a page any more — /settings just opens this. Each
@@ -516,23 +516,27 @@ function UsageSection() {
 }
 
 // ---------- 附件存储 ----------
-/* Where the "attachment quota full" error sends people. Files still attached
-   to a message can't be removed on their own — the chat is the way to free
-   them — so each such row links to its chat instead of offering delete. */
+/* Where the "attachment quota full" error sends people. Two views of the same
+   bytes: per chat (oldest first — the forgotten ones are what usually fill the
+   quota) with a delete-chat action, and per file for loose uploads. A file still
+   attached to a message can't go on its own, so those rows point at the chat. */
 function StorageSection() {
   const [data, setData] = useState<MyUploads | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [view, setView] = useState<'chats' | 'files'>('chats');
   const navigate = useNavigate();
   const close = useUi((s) => s.closeSettings);
+  const removeChatFromList = useChats((s) => s.remove);
 
-  useEffect(() => {
-    api.get<MyUploads>('/api/uploads/me')
+  function load() {
+    return api.get<MyUploads>('/api/uploads/me')
       .then(setData)
       .catch(() => { setFailed(true); toast('加载附件列表失败', 'err'); });
-  }, []);
+  }
+  useEffect(() => { void load(); }, []);
 
-  async function remove(f: MyUploadFile) {
+  async function removeFile(f: MyUploadFile) {
     if (busy) return;
     const ok = await confirmDialog('删除附件', `删除「${f.name || '未命名文件'}」(${fmtBytes(f.size)})?此操作不可撤销。`);
     if (!ok) return;
@@ -546,6 +550,25 @@ function StorageSection() {
     } finally { setBusy(null); }
   }
 
+  // Deleting a whole conversation to free space is the one irreversible action
+  // here that also takes text with it, hence the second confirmation.
+  async function removeChat(c: MyUploadChat) {
+    if (busy) return;
+    const name = c.title || '未命名对话';
+    if (!(await confirmDialog('删除这段对话', `确定要删掉这段对话吗?「${name}」及其中 ${c.count} 个附件(${fmtBytes(c.bytes)})会一起删除。`))) return;
+    if (!(await confirmDialog('再确认一次', `真的要删掉「${name}」吗?对话内容和附件删除后无法恢复。`))) return;
+    setBusy(c.id);
+    try {
+      await api.del(`/api/chats/${c.id}`);
+      removeChatFromList(c.id);
+      if (location.pathname === `/chat/${c.id}`) navigate('/');
+      await load();
+      toast(`已删除对话,释放 ${fmtBytes(c.bytes)}`, 'ok');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '删除失败', 'err');
+    } finally { setBusy(null); }
+  }
+
   function goToChat(chatId: string) {
     close();
     navigate(`/chat/${chatId}`);
@@ -553,10 +576,12 @@ function StorageSection() {
 
   const full = data ? data.used >= data.limit : false;
   const pct = data ? Math.min(100, (data.used / data.limit) * 100) : 0;
-  const loose = data?.files.filter((f) => !f.chat) ?? [];
+  const inChats = data?.chats.reduce((n, c) => n + c.bytes, 0) ?? 0;
+  const segBtn = (active: boolean) => `cursor-pointer rounded-md px-2.5 py-1 text-xs transition-colors ${
+    active ? 'bg-bg2 font-medium text-tx shadow-xs' : 'text-tx3 hover:text-tx'}`;
 
   return (
-    <Section title="附件存储" desc="你上传到对话里的文件都计入这个配额。已发进对话的附件不能单独删除:打开那段对话,删掉带附件的消息或整段对话即可释放空间。">
+    <Section title="附件存储" desc="上传到对话里的文件都计入这个配额。">
       {!data ? (
         <div className="flex justify-center py-10 text-tx3">
           {failed ? <p className="text-xs">附件列表加载失败</p> : <Spinner />}
@@ -574,6 +599,7 @@ function StorageSection() {
               已用 <span className="tabular-nums text-tx2">{fmtBytes(data.used)}</span>
               {' / '}<span className="tabular-nums text-tx2">{fmtBytes(data.limit)}</span>
               ,共 {data.files.length} 个文件
+              {data.chats.length > 0 && <>,其中 <span className="tabular-nums text-tx2">{fmtBytes(inChats)}</span> 在 {data.chats.length} 段对话里</>}
               {full && <span className="text-err">;配额已满,新附件无法上传</span>}
             </p>
           </div>
@@ -582,47 +608,80 @@ function StorageSection() {
             <p className="py-6 text-center text-xs text-tx3">还没有上传过附件</p>
           ) : (
             <div>
-              <div className="eyebrow mb-1.5">全部附件(按大小排序)</div>
-              <ul className="divide-y divide-line rounded-lg border border-line">
-                {data.files.map((f) => (
-                  <li key={f.id} className="flex items-center gap-3 px-3 py-2.5">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13px] text-tx">{f.name || '未命名文件'}</div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-tx3">
-                        <span className="tabular-nums">{fmtBytes(f.size)}</span>
-                        <span>·</span>
-                        <span>{fmtTime(f.createdAt)}</span>
-                        {f.chat && (
-                          <>
-                            <span>·</span>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="flex gap-0.5 rounded-lg bg-bg0 p-0.5">
+                  <button type="button" className={segBtn(view === 'chats')} onClick={() => setView('chats')}>按对话</button>
+                  <button type="button" className={segBtn(view === 'files')} onClick={() => setView('files')}>按文件</button>
+                </div>
+                <span className="text-[11px] text-tx3">{view === 'chats' ? '老对话排在前面' : '大文件排在前面'}</span>
+              </div>
+
+              {view === 'chats' && (
+                data.chats.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-tx3">附件都还没发进对话</p>
+                ) : (
+                  <>
+                    <p className="mb-2 text-xs leading-relaxed text-tx3">很久不用的对话还占着空间。不再需要的可以整段删除,附件会一起释放。</p>
+                    <ul className="divide-y divide-line rounded-lg border border-line">
+                      {data.chats.map((c) => (
+                        <li key={c.id} className="flex items-center gap-3 px-3 py-2.5">
+                          <div className="min-w-0 flex-1">
                             <button
-                              type="button" onClick={() => goToChat(f.chat!.id)}
-                              className="max-w-[16rem] cursor-pointer truncate text-acc hover:underline"
+                              type="button" onClick={() => goToChat(c.id)}
+                              className="block max-w-full cursor-pointer truncate text-left text-[13px] text-tx hover:text-acc hover:underline"
                               title="打开这段对话"
                             >
-                              在对话「{f.chat.title || '未命名对话'}」中
+                              {c.title || '未命名对话'}
                             </button>
-                          </>
-                        )}
+                            <div className="mt-0.5 text-[11px] text-tx3">
+                              <span className="tabular-nums">{fmtBytes(c.bytes)}</span> · {c.count} 个附件 · 最后活跃 {fmtTime(c.updatedAt)}
+                            </div>
+                          </div>
+                          <Button variant="dangerGhost" size="xs" disabled={busy === c.id} onClick={() => removeChat(c)}>删除这段对话</Button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )
+              )}
+
+              {view === 'files' && (
+                <ul className="divide-y divide-line rounded-lg border border-line">
+                  {data.files.map((f) => (
+                    <li key={f.id} className="flex items-center gap-3 px-3 py-2.5">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13px] text-tx">{f.name || '未命名文件'}</div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-tx3">
+                          <span className="tabular-nums">{fmtBytes(f.size)}</span>
+                          <span>·</span>
+                          <span>{fmtTime(f.createdAt)}</span>
+                          {f.chat && (
+                            <>
+                              <span>·</span>
+                              <button
+                                type="button" onClick={() => goToChat(f.chat!.id)}
+                                className="max-w-[16rem] cursor-pointer truncate text-acc hover:underline"
+                                title="打开这段对话"
+                              >
+                                在对话「{f.chat.title || '未命名对话'}」中
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    {f.chat ? (
-                      <Button variant="ghost" size="xs" onClick={() => goToChat(f.chat!.id)}>去对话删除</Button>
-                    ) : (
-                      <Button
-                        variant="dangerGhost" size="iconSm" title="删除附件"
-                        disabled={busy === f.id} onClick={() => remove(f)}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              {loose.length > 0 && (
-                <p className="mt-2 text-[11px] text-tx3">
-                  未发进对话的附件有 {loose.length} 个,可以直接删除。
-                </p>
+                      {f.chat ? (
+                        <Button variant="ghost" size="xs" onClick={() => goToChat(f.chat!.id)}>去对话删除</Button>
+                      ) : (
+                        <Button
+                          variant="dangerGhost" size="iconSm" title="删除附件"
+                          disabled={busy === f.id} onClick={() => removeFile(f)}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           )}

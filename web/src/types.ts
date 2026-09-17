@@ -312,7 +312,9 @@ export interface MyUploadFile {
   /** 引用该附件的对话;null = 未发进任何对话,可直接删除。 */
   chat: { id: string; title: string } | null;
 }
-export interface MyUploads { limit: number; used: number; files: MyUploadFile[] }
+/** 按对话汇总的附件占用,按最后活跃时间升序(老对话在前)。 */
+export interface MyUploadChat { id: string; title: string; updatedAt: number; bytes: number; count: number }
+export interface MyUploads { limit: number; used: number; files: MyUploadFile[]; chats: MyUploadChat[] }
 
 export interface MyUsage {
   byDay: UsageByDay[]; byModel: UsageByModel[]; totals: UsageTotals;

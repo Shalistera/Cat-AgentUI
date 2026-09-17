@@ -135,6 +135,8 @@ try {
   assert.deepEqual(shown.chat, { id: 'chat-1', title: '带附件的对话' }, 'referenced file names its chat');
   assert.ok(after.files.filter((f) => f.id !== referenced.id).every((f) => f.chat === null));
   assert.equal((await request('DELETE', `/api/uploads/${referenced.id}`, undefined, member)).statusCode, 409, 'referenced file cannot be deleted directly');
+  assert.deepEqual(after.chats.map(({ updatedAt, ...c }) => c), [{ id: 'chat-1', title: '带附件的对话', bytes: referenced.size, count: 1 }], 'per-chat totals');
+  assert.deepEqual(before.chats, [], 'no chats listed before anything was attached');
 
   // A loose file deletes and drops out of the ledger.
   const loose = after.files.find((f) => f.chat === null);
