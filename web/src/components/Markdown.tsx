@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useId, useMemo, useState, type ReactNode } from 'react';
+import { createContext, memo, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -102,6 +102,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const bodyId = useId();
+  const headToggleRef = useRef<HTMLButtonElement>(null);
+  const returnToHead = useRef(false);
   // Snapshot of the code at the moment preview was toggled on (null = source view).
   // Freezing it keeps the sandboxed iframe from reloading on every streamed token.
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
@@ -117,17 +119,33 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   // can straddle newlines, so the code is never split per line, and numbers
   // stay out of what a person selects and copies.
   const lineCount = Math.max(1, code.split('\n').length);
+  // Keep the expand control if a previously folded block becomes shorter.
+  const canCollapse = lineCount > 5 || collapsed;
+  const showFooter = lineCount > 15;
 
-  const toggle = () => setCollapsed((v) => !v);
+  const toggle = (fromBottom = false) => {
+    returnToHead.current = fromBottom && !collapsed;
+    setCollapsed((v) => !v);
+  };
+  useLayoutEffect(() => {
+    if (!collapsed || !returnToHead.current) return;
+    returnToHead.current = false;
+    // The footer just disappeared. Restore both reading position and keyboard
+    // focus to this block instead of leaving the reader in another message.
+    headToggleRef.current?.focus({ preventScroll: true });
+    headToggleRef.current?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  }, [collapsed]);
+
   const toolbar = (bottom = false) => (
       <div className={`codeblock-head relative gap-2 ${bottom ? 'codeblock-foot flex-row-reverse' : ''}`}>
         {/* A full-bar button underneath independent action buttons avoids
             nested buttons and makes the empty space keyboard-accessible too. */}
-        <button
+        {canCollapse && <button
+          ref={bottom ? undefined : headToggleRef}
           type="button" className="absolute inset-0 cursor-pointer rounded-[inherit] hover:bg-bg3/40 focus-visible:outline-2 focus-visible:outline-acc focus-visible:-outline-offset-2"
           aria-label={`${collapsed ? '展开' : '折叠'} ${lang || 'code'} 代码块`}
-          aria-expanded={!collapsed} aria-controls={bodyId} onClick={toggle}
-        />
+          aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => toggle(bottom)}
+        />}
         <span className="pointer-events-none relative min-w-0 truncate">{lang || 'code'} · {lineCount} 行</span>
         <div className={`relative flex shrink-0 items-center ${bottom ? '' : 'flex-row-reverse'}`}>
           <div className="flex items-center">
@@ -166,13 +184,13 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
             {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
             {copied ? '已复制' : '复制'}
           </button>
-          <button
+          {canCollapse && <button
             type="button" className={headBtn}
-            aria-expanded={!collapsed} aria-controls={bodyId} onClick={toggle}
+            aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => toggle(bottom)}
           >
             {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
             {collapsed ? '展开' : '折叠'}
-          </button>
+          </button>}
         </div>
       </div>
   );
@@ -195,7 +213,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
               : <pre><code>{code}</code></pre>}
           </div>
         )}
-        {toolbar(true)}
+        {showFooter && toolbar(true)}
       </div>
     </div>
   );
