@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { maxAttachmentsPerMessage } from '../attachment-settings.js';
 
 class RegistrationBlocked extends Error { constructor(message: string, readonly code: number) { super(message); } }
 import { z } from 'zod';
@@ -37,6 +38,7 @@ export async function authRoutes(app: FastifyInstance) {
       needsSetup: !anyUser,
       signupEnabled: getSetting('signup_enabled', false),
       brand: getSetting('brand', 'Cat-AgentUI'),
+      maxAttachmentsPerMessage: maxAttachmentsPerMessage(),
     };
   });
 

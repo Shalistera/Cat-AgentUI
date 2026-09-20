@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PanelLeft, ScanText, Upload, X, Copy, Check, Download, Square, FileText, Image as ImageIcon, Eye, Code,
 } from 'lucide-react';
-import { useModels, useUi } from '../store';
+import { useAuth, useModels, useUi } from '../store';
 import { streamSse, uploadFile, fmtDuration, fmtTokens } from '../api';
 import {
   Button, Card, Field, Select, Spinner, PageHeader, EmptyState, SegmentedControl, toast,
@@ -14,7 +14,6 @@ import { Markdown } from '../components/Markdown';
    server afterwards), so re-running with another format is just another
    upload. Gemini-only by design: see server/src/routes/ocr.ts. */
 
-const MAX_FILES = 4;
 const MAX_TOTAL_MB = 20;
 const ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,application/pdf';
 
@@ -29,6 +28,7 @@ function isAcceptable(f: File): boolean {
 }
 
 export default function Ocr() {
+  const maxFiles = useAuth((s) => s.bootstrap?.maxAttachmentsPerMessage ?? 20);
   const { sidebarOpen, setSidebarOpen } = useUi();
   const { models: allModels, loaded, load } = useModels();
   useEffect(() => { void load(); }, [load]);
@@ -77,7 +77,7 @@ export default function Ocr() {
     setFiles((prev) => {
       const next = [...prev];
       for (const f of incoming.filter(isAcceptable)) {
-        if (next.length >= MAX_FILES) { toast(`最多 ${MAX_FILES} 个文件`, 'err'); break; }
+        if (next.length >= maxFiles) { toast(`最多 ${maxFiles} 个文件`, 'err'); break; }
         if (next.some((x) => x.name === f.name && x.size === f.size)) continue;
         next.push(f);
       }
@@ -87,6 +87,7 @@ export default function Ocr() {
 
   async function run() {
     if (running || !files.length || !modelId) return;
+    if (files.length > maxFiles) { toast(`最多 ${maxFiles} 个文件,请移除多余附件`, 'err'); return; }
     if (totalBytes > MAX_TOTAL_MB * 1024 * 1024) {
       toast(`附件总大小不能超过 ${MAX_TOTAL_MB} MB`, 'err');
       return;
@@ -152,7 +153,7 @@ export default function Ocr() {
 
       <div className="flex-1 overflow-y-auto bg-bg0">
         <div className="mx-auto max-w-5xl space-y-5 p-6">
-          <Card title="识别文件" desc="支持 PDF、PNG、JPG、WebP、GIF,最多 4 个文件、共 20 MB。文件仅用于本次识别,完成后即从服务器删除。"
+          <Card title="识别文件" desc={`支持 PDF、PNG、JPG、WebP、GIF,最多 ${maxFiles} 个文件、共 ${MAX_TOTAL_MB} MB。文件仅用于本次识别,完成后即从服务器删除。`}
             flush={loaded && models.length === 0}>
             {!loaded ? (
               <div className="flex justify-center py-10 text-tx3"><Spinner className="h-5 w-5" /></div>

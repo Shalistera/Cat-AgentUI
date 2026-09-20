@@ -6,6 +6,7 @@ import { and, asc, desc, eq, gte, inArray, sql, type SQL } from 'drizzle-orm';
 import { db, schema, now, getSetting, setSetting } from '../db/index.js';
 import { hashPassword, newId } from '../crypto.js';
 import { requireAdmin, requireAuth } from '../auth.js';
+import { ATTACHMENT_COUNT_KEY, ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import {
   QUOTA_ACTION_KEY, QUOTA_DEFAULT_KEY, QUOTA_FALLBACK_KEY,
   effectiveQuota, monthStartDay, monthTokens, quotaSettings,
@@ -166,6 +167,7 @@ const settingsSchema = z.object({
   chatImageRetentionDays: z.number().int().min(0).max(3650).optional(), // 对话图,0 = keep forever
   uploadRetentionDays: z.number().int().min(0).max(3650).optional(), // 未被消息引用的附件,0 = keep forever
   maxUserUploadMb: z.number().int().min(1).max(MAX_USER_UPLOAD_MB).optional(),
+  maxAttachmentsPerMessage: z.number().int().min(1).max(ATTACHMENT_COUNT_MAX).optional(),
   quotaMonthlyTokens: z.number().int().min(0).max(1e15).optional(), // 默认月度配额,0 = 不限
   quotaAction: z.enum(['block', 'downgrade']).optional(),
   quotaFallbackModelId: z.string().max(64).nullish(), // models.id,空 = 未设置
@@ -512,6 +514,7 @@ export async function adminRoutes(app: FastifyInstance) {
       chatImageRetentionDays: getSetting(CHAT_IMAGE_RETENTION_KEY, 0),
       uploadRetentionDays: getSetting(UPLOAD_RETENTION_KEY, 0),
       maxUserUploadMb: maxUserUploadMb(),
+      maxAttachmentsPerMessage: maxAttachmentsPerMessage(),
       quotaMonthlyTokens: quota.defaultQuota,
       quotaAction: quota.action,
       quotaFallbackModelId: quota.fallbackModelId || null,
@@ -601,6 +604,10 @@ export async function adminRoutes(app: FastifyInstance) {
       sweepExpiredImages();
     }
     if (body.data.uploadRetentionDays !== undefined) void sweepUnreferencedUploads();
+    if (body.data.maxAttachmentsPerMessage !== undefined) {
+      setSetting(ATTACHMENT_COUNT_KEY, body.data.maxAttachmentsPerMessage);
+      broadcast('attachment-settings-updated');
+    }
     return settingsView();
   });
 

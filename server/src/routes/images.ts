@@ -6,6 +6,7 @@ import { and, desc, eq, getTableColumns, sql } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { config } from '../config.js';
+import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import { requireAuth } from '../auth.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
@@ -29,7 +30,7 @@ const generateSchema = z.object({
   size: z.string().max(20).optional(),
   quality: z.string().max(20).optional(),
   n: z.number().int().min(1).max(4).optional(),
-  inputUploadIds: z.array(z.string().min(1).max(64)).max(config.maxAttachmentsPerMessage).optional(),
+  inputUploadIds: z.array(z.string().min(1).max(64)).max(ATTACHMENT_COUNT_MAX).optional(),
   // Earlier turns of a workshop conversation: a conversational image model
   // (Gemini) may answer a prompt with text — "here are two options, which
   // one?" — and the follow-up ("方案一") only makes sense with that exchange
@@ -170,6 +171,10 @@ export async function imageRoutes(app: FastifyInstance) {
     const body = generateSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const { modelId, prompt, size, quality, n, inputUploadIds, history = [] } = body.data;
+    const attachmentLimit = maxAttachmentsPerMessage();
+    if ((inputUploadIds?.length ?? 0) > attachmentLimit) {
+      return reply.code(413).send({ error: `每次最多添加 ${attachmentLimit} 个附件` });
+    }
     if (history.length && !validHistory(history)) return reply.code(400).send({ error: '参数错误' });
 
     const model = db.select().from(schema.models)

@@ -133,6 +133,7 @@ interface ComposerProps {
 
 export function Composer(props: ComposerProps) {
   const { streaming, model, compact = false } = props;
+  const attachmentLimit = useAuth((s) => s.bootstrap?.maxAttachmentsPerMessage ?? 20);
   const [text, setText] = useState('');
 
   // —— 语音输入 —— dictation is all in-browser (Chrome/Edge); the transcript
@@ -154,6 +155,7 @@ export function Composer(props: ComposerProps) {
   useEffect(() => () => { dictationRef.current?.stop(); }, []);
   const [atts, setAtts] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  const uploadingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   // dragenter/dragleave fire for every child the cursor crosses; only a
   // depth counter can tell "left the window" apart from "moved over a div".
@@ -252,6 +254,11 @@ export function Composer(props: ComposerProps) {
   function send() {
     const t = text.trim();
     if ((!t && atts.length === 0) || props.disabled) return;
+    if (uploadingRef.current) return;
+    if (atts.length > attachmentLimit) {
+      toast(`每条消息最多 ${attachmentLimit} 个附件,请移除多余附件`, 'err');
+      return;
+    }
     if (streaming) {
       // Generation in progress: queue the follow-up instead of dropping it.
       if (!props.onEnqueue) return;
@@ -281,12 +288,13 @@ export function Composer(props: ComposerProps) {
   }
 
   async function pickFiles(files: FileList | File[] | null) {
-    if (!files?.length) return;
+    if (!files?.length || uploadingRef.current) return;
+    uploadingRef.current = true;
     setUploading(true);
     try {
-      let room = 4 - atts.length;
+      let room = attachmentLimit - atts.length;
       for (const f of Array.from(files)) {
-        if (room <= 0) { toast('每条消息最多 4 个附件', 'err'); break; }
+        if (room <= 0) { toast(`每条消息最多 ${attachmentLimit} 个附件`, 'err'); break; }
         // Per-file capability gate, so one wrong file in a batch doesn't
         // block the rest — each rejection says which file and why.
         if (imageMode && !isImageFile(f)) {
@@ -320,6 +328,7 @@ export function Composer(props: ComposerProps) {
         }
       }
     } finally {
+      uploadingRef.current = false;
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
     }
@@ -347,17 +356,17 @@ export function Composer(props: ComposerProps) {
   // to prompt text server-side, so every chat model takes them.
   const canAttachImages = !!model?.vision || imageMode;
   const canAttach = !props.disabled;
-  const attachFull = atts.length >= 4;
+  const attachFull = atts.length >= attachmentLimit;
   // Why the drop target can't take files right now — the overlay says it out
   // loud instead of silently swallowing the drop. Kind-specific limits are
   // enforced per file inside pickFiles.
   const dropBlocked = props.disabled ? '管理员尚未配置模型'
-    : attachFull ? '最多添加 4 个附件' : null;
+    : attachFull ? `最多添加 ${attachmentLimit} 个附件` : null;
   const dropHint = imageMode
-    ? { title: '松开鼠标，添加参考图', sub: '支持 PNG / JPEG / WebP / GIF，最多 4 张' }
+    ? { title: '松开鼠标，添加参考图', sub: `支持 PNG / JPEG / WebP / GIF，最多 ${attachmentLimit} 张` }
     : canAttachImages
-      ? { title: '松开鼠标，附件将随消息发送', sub: '支持图片、PDF、Word(docx)与各类文本文件，最多 4 个' }
-      : { title: '松开鼠标，添加文档附件', sub: '当前模型不支持图片和 PDF；支持 txt / md / docx 等文本，最多 4 个' };
+      ? { title: '松开鼠标，附件将随消息发送', sub: `支持图片、PDF、Word(docx)与各类文本文件，最多 ${attachmentLimit} 个` }
+      : { title: '松开鼠标，添加文档附件', sub: `当前模型不支持图片和 PDF；支持 txt / md / docx 等文本，最多 ${attachmentLimit} 个` };
 
   // The whole window is the drop zone: listeners live on `window` so a file
   // dragged anywhere over the app raises the overlay, which in turn shows

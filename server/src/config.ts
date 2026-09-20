@@ -62,7 +62,7 @@ export const config = {
   trustProxy: env('TRUST_PROXY', 'false') === 'true',
   // Request/context budgets. Image bytes are raw bytes before base64 expansion.
   maxUploadBytes: intEnv('MAX_UPLOAD_MB', 20, 1, 100) * MIB,
-  maxAttachmentsPerMessage: intEnv('MAX_ATTACHMENTS_PER_MESSAGE', 4, 1, 10),
+  maxAttachmentsPerMessage: intEnv('MAX_ATTACHMENTS_PER_MESSAGE', 20, 1, 100),
   maxMessageAttachmentBytes: intEnv('MAX_MESSAGE_ATTACHMENT_MB', 20, 1, 100) * MIB,
   maxMessageTextChars: intEnv('MAX_MESSAGE_TEXT_CHARS', 64_000, 1_000, 500_000),
   maxContextMessages: intEnv('MAX_CONTEXT_MESSAGES', 40, 2, 500),

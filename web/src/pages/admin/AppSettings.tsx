@@ -263,9 +263,10 @@ function UsageRows({ users }: { users: StorageOverview['topUsers'] }) {
   );
 }
 
-function StorageCard({ uploadRetentionDays, onUploadRetentionChange, maxUserUploadMb, onMaxUserUploadChange, savedMaxUserUploadMb, saving, onSave }: {
+function StorageCard({ uploadRetentionDays, onUploadRetentionChange, maxUserUploadMb, onMaxUserUploadChange, savedMaxUserUploadMb, attachmentCount, onAttachmentCountChange, saving, onSave }: {
   uploadRetentionDays: string; onUploadRetentionChange(v: string): void; saving: boolean; onSave?(): void;
   maxUserUploadMb: string; onMaxUserUploadChange(v: string): void; savedMaxUserUploadMb: number;
+  attachmentCount: string; onAttachmentCountChange(v: string): void;
 }) {
   const [data, setData] = useState<StorageOverview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -354,6 +355,17 @@ function StorageCard({ uploadRetentionDays, onUploadRetentionChange, maxUserUplo
           </div>
 
           <Field
+            label="单次附件数量上限"
+            hint="默认 20 个,可设为 1–100 个。适用于每条对话消息及工坊单次提交的附件,保存后立即生效。附件总大小和模型上下文仍受各自的限制。"
+          >
+            <Input
+              type="number" min={1} max={100} step={1} inputMode="numeric" className="max-w-40"
+              value={attachmentCount} disabled={saving}
+              onChange={(e) => onAttachmentCountChange(e.target.value)}
+            />
+          </Field>
+
+          <Field
             label="每用户附件上限(MB)"
             hint="适用于所有用户的附件累计存储量,可设为 1–100000 MB。保存后立即生效;调低上限不会删除已有附件,已超额用户需清理空间后才能继续上传。"
           >
@@ -404,6 +416,7 @@ export default function AppSettings() {
   const [uploadRetentionDays, setUploadRetentionDays] = useState('0');
   const [maxUserUploadMb, setMaxUserUploadMb] = useState('');
   const [savedMaxUserUploadMb, setSavedMaxUserUploadMb] = useState(0);
+  const [attachmentCount, setAttachmentCount] = useState('20');
   const [quotaTokens, setQuotaTokens] = useState('0');
   const [quotaAction, setQuotaAction] = useState<AppSettingsDto['quotaAction']>('block');
   const [quotaFallback, setQuotaFallback] = useState('');
@@ -424,6 +437,7 @@ export default function AppSettings() {
     setUploadRetentionDays(String(r.uploadRetentionDays ?? 0));
     setMaxUserUploadMb(String(r.maxUserUploadMb));
     setSavedMaxUserUploadMb(r.maxUserUploadMb);
+    setAttachmentCount(String(r.maxAttachmentsPerMessage));
     setQuotaTokens(String(r.quotaMonthlyTokens ?? 0));
     setQuotaAction(r.quotaAction ?? 'block');
     setQuotaFallback(r.quotaFallbackModelId ?? '');
@@ -450,6 +464,11 @@ export default function AppSettings() {
     if (busy) return;
     const name = brand.trim();
     if (!name) { toast('站点名称不能为空', 'err'); return; }
+    const countLimit = Number(attachmentCount);
+    if (!Number.isInteger(countLimit) || countLimit < 1 || countLimit > 100) {
+      toast('单次附件数量上限须为 1–100 的整数', 'err');
+      return;
+    }
     const uploadLimit = Number(maxUserUploadMb);
     if (!Number.isInteger(uploadLimit) || uploadLimit < 1 || uploadLimit > 100000) {
       toast('每用户附件上限须为 1–100000 MB 的整数', 'err');
@@ -469,6 +488,7 @@ export default function AppSettings() {
         chatImageRetentionDays: clampDays(chatRetentionDays),
         uploadRetentionDays: clampDays(uploadRetentionDays),
         maxUserUploadMb: uploadLimit,
+        maxAttachmentsPerMessage: countLimit,
         quotaMonthlyTokens: Math.max(0, Math.round(Number(quotaTokens)) || 0),
         quotaAction,
         quotaFallbackModelId: quotaFallback || null,
@@ -664,6 +684,7 @@ export default function AppSettings() {
         uploadRetentionDays={uploadRetentionDays} onUploadRetentionChange={setUploadRetentionDays}
         maxUserUploadMb={maxUserUploadMb} onMaxUserUploadChange={setMaxUserUploadMb}
         savedMaxUserUploadMb={savedMaxUserUploadMb} saving={busy} onSave={save}
+        attachmentCount={attachmentCount} onAttachmentCountChange={setAttachmentCount}
       />
 
       <BackupsCard />

@@ -141,6 +141,54 @@ async function run() {
   const model = providers.json.find((p) => p.id === provider.json.id).models.find((m) => m.modelId === 'mock-gpt');
   assert(model, 'model id');
 
+  // Real uploads and provider requests catch the old 4-file UI / 20-part
+  // schema / 6-image context limits rejecting an otherwise valid batch.
+  const bootstrap = await jsonReq('GET', '/api/auth/bootstrap');
+  assert(bootstrap.json.maxAttachmentsPerMessage === 20, 'default attachment count is 20');
+  const docs = [];
+  for (let i = 0; i < 100; i++) {
+    const uploaded = await uploadText(`BATCH-DOC-${i}-END`, `file-${i}.txt`, cookie);
+    assert(uploaded.status === 200, `upload batch document ${i}`);
+    docs.push({ type: 'file', uploadId: uploaded.json.id });
+  }
+  async function batchTurn(label, attachments, expected = 200) {
+    const created = await jsonReq('POST', '/api/chats', { modelId: model.id }, cookie);
+    const turn = await stream(created.json.chat.id, {
+      modelId: model.id, content: [{ type: 'text', text: label }, ...attachments],
+    }, cookie);
+    assert(turn.status === expected && (expected !== 200 || !turn.text.includes('event: error')),
+      `${label}: expected ${expected}, got ${turn.status}: ${turn.text.slice(0, 500)}`);
+    return expected === 200 ? requestFor(label) : null;
+  }
+  const twentyDocs = await batchTurn('twenty documents plus text', docs.slice(0, 20));
+  for (let i = 0; i < 20; i++) assert(sentText(twentyDocs).includes(`BATCH-DOC-${i}-END`), `doc ${i} reaches provider`);
+  await batchTurn('reject twenty one', docs.slice(0, 21), 413);
+  async function countLimit(value) {
+    const changed = await jsonReq('PUT', '/api/admin/settings', { maxAttachmentsPerMessage: value }, cookie);
+    assert(changed.status === 200, `set attachment count ${value}`);
+    const current = await jsonReq('GET', '/api/auth/bootstrap');
+    assert(current.json.maxAttachmentsPerMessage === value, 'bootstrap count follows admin change');
+  }
+  await countLimit(100);
+  const hundred = await batchTurn('hundred documents plus text', docs);
+  assert(sentText(hundred).includes('BATCH-DOC-99-END'), '100th attachment reaches provider');
+  await countLimit(5);
+  await batchTurn('lowered cap rejects six', docs.slice(0, 6), 413);
+  await countLimit(20);
+
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
+  const images = [];
+  for (let i = 0; i < 20; i++) {
+    const form = new FormData();
+    form.append('file', new Blob([png], { type: 'image/png' }), `image-${i}.png`);
+    const uploaded = await fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'x-csrf': '1', cookie }, body: form });
+    assert(uploaded.ok, `upload batch image ${i}`);
+    images.push({ type: 'image', uploadId: (await uploaded.json()).id });
+  }
+  const twentyImages = await batchTurn('twenty images plus text', images);
+  const lastUserImages = twentyImages.messages.filter((m) => m.role === 'user').at(-1).content;
+  assert(lastUserImages.filter((p) => p.type === 'image_url').length === 20, 'all 20 images reach provider');
+
   const MARK = 'CONTRACT-MARK-7f3e9a';
   const doc = await uploadText(`合同编号 ${MARK}\n甲方:测试公司\n乙方:另一家公司\n付款条款:30 天。`, 'contract.txt', cookie);
   assert(doc.status === 200 && doc.json.id, `upload text doc (${doc.status} ${JSON.stringify(doc.json)})`);
@@ -191,7 +239,7 @@ async function run() {
   assert(sentText(req22).split(MARK).length === 2 && !sentText(req22).includes('早前上传'),
     'in-window document appears exactly once, uncarried');
 
-  return { documentInPlace: 'pass', documentCarriedPastWindow: 'pass', documentCarriedOnRegenerate: 'pass', noDuplicateCarry: 'pass' };
+  return { attachmentCount: 'pass', twentyImages: 'pass', documentInPlace: 'pass', documentCarriedPastWindow: 'pass', documentCarriedOnRegenerate: 'pass', noDuplicateCarry: 'pass' };
 }
 
 try {

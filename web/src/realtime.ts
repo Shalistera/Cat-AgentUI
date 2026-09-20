@@ -1,4 +1,4 @@
-import { useAnnouncement, useModels } from './store';
+import { useAnnouncement, useAuth, useModels } from './store';
 
 // A single long-lived /api/events stream per signed-in session. The server
 // sends bare invalidation events (no payload); we answer by refetching the
@@ -31,6 +31,8 @@ function dispatch(event: string) {
     if (s.loaded) void s.load(true).catch(() => { /* next event retries */ });
   } else if (event === 'announcement-updated') {
     void useAnnouncement.getState().load(true).catch(() => { /* next event retries */ });
+  } else if (event === 'attachment-settings-updated') {
+    void useAuth.getState().refreshBootstrap().catch(() => { /* reconnect retries */ });
   }
 }
 
@@ -47,6 +49,8 @@ async function loop(c: AbortController) {
       if (res.status === 401) return;
       if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
       retry = 1000;
+      // Catch settings changes missed while this tab was disconnected.
+      void useAuth.getState().refreshBootstrap().catch(() => { /* next reconnect retries */ });
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();

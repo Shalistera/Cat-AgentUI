@@ -203,9 +203,10 @@ function ImagesInner() {
   async function addFiles(files: File[]) {
     const imgs = files.filter((f) => f.type.startsWith('image/'));
     if (!imgs.length) return;
-    const room = refSlots.filter((s) => !s).length;
-    if (!room) { toast(`参考图最多 ${MAX_REFS} 张`, 'err'); return; }
-    if (imgs.length > room) toast(`参考图最多 ${MAX_REFS} 张`, 'err');
+    const limit = Math.min(MAX_REFS, useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20);
+    const room = limit - refSlots.filter(Boolean).length;
+    if (room <= 0) { toast(`参考图最多 ${limit} 张`, 'err'); return; }
+    if (imgs.length > room) toast(`参考图最多 ${limit} 张`, 'err');
     setUploading(true);
     try {
       for (const f of imgs.slice(0, room)) {
@@ -237,6 +238,10 @@ function ImagesInner() {
     e.target.value = '';
     const idx = slotTargetRef.current;
     if (!f || !f.type.startsWith('image/')) return;
+    const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
+    if (!refSlots[idx] && refSlots.filter(Boolean).length >= limit) {
+      toast(`参考图最多 ${limit} 张`, 'err'); return;
+    }
     setUploading(true);
     try {
       const r = await uploadFile(f);
@@ -382,6 +387,10 @@ function ImagesInner() {
 
   async function submit(mid: string, p: string, history?: ConvoTurn[]) {
     if (uploading || busyModels.has(mid)) return;
+    const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
+    if (refSlots.filter(Boolean).length > limit) {
+      toast(`参考图最多 ${limit} 张,请移除多余附件`, 'err'); return;
+    }
     setGenError(null);
     setSubmitting((prev) => [...prev, mid]);
     const start = Date.now();

@@ -1,6 +1,6 @@
 // API DTOs — mirror of server responses.
 
-export interface Bootstrap { needsSetup: boolean; signupEnabled: boolean; brand: string }
+export interface Bootstrap { needsSetup: boolean; signupEnabled: boolean; brand: string; maxAttachmentsPerMessage: number }
 
 export interface User {
   id: string; username: string; role: 'admin' | 'user';
@@ -410,6 +410,8 @@ export interface AppSettings {
   uploadRetentionDays: number;
   /** 每用户附件存储上限(MB),适用于所有用户。 */
   maxUserUploadMb: number;
+  /** 单次提交的附件数量上限,对话与工坊共用。 */
+  maxAttachmentsPerMessage: number;
   /** 默认月度 token 配额,0 = 不限。用户可单独覆盖。 */
   quotaMonthlyTokens: number;
   /** 超额动作:拒绝,或对话降级到指定模型。 */

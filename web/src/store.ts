@@ -146,6 +146,7 @@ interface AuthState {
   bootstrap: Bootstrap | null;
   loaded: boolean;
   refresh(): Promise<void>;
+  refreshBootstrap(): Promise<void>;
   setUser(u: User | null): void;
   logout(): Promise<void>;
 }
@@ -154,6 +155,10 @@ export const useAuth = create<AuthState>((set) => ({
   user: null,
   bootstrap: null,
   loaded: false,
+  async refreshBootstrap() {
+    const bootstrap = await api.get<Bootstrap>('/api/auth/bootstrap');
+    set({ bootstrap });
+  },
   async refresh() {
     const bootstrap = await api.get<Bootstrap>('/api/auth/bootstrap').catch(() => null);
     let user: User | null = null;

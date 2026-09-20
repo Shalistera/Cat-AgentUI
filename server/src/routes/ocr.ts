@@ -11,6 +11,7 @@ import { db, schema } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
+import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
 import { canUseModel } from '../model-access.js';
@@ -22,7 +23,7 @@ import type { AdapterMessagePart } from '../types.js';
 
 const bodySchema = z.object({
   modelId: z.string().max(64),
-  uploadIds: z.array(z.string().max(64)).min(1).max(config.maxAttachmentsPerMessage),
+  uploadIds: z.array(z.string().max(64)).min(1).max(ATTACHMENT_COUNT_MAX),
   format: z.enum(['text', 'markdown']),
 });
 
@@ -74,6 +75,10 @@ export async function ocrRoutes(app: FastifyInstance) {
     const body = bodySchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const { modelId, uploadIds, format } = body.data;
+    const attachmentLimit = maxAttachmentsPerMessage();
+    if (uploadIds.length > attachmentLimit) {
+      return reply.code(413).send({ error: `每次最多添加 ${attachmentLimit} 个附件` });
+    }
     const userId = req.user!.id;
 
     const row = db.select().from(schema.models)

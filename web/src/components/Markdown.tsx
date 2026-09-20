@@ -1,10 +1,10 @@
-import { memo, useMemo, useState, type ReactNode } from 'react';
+import { createContext, memo, useContext, useId, useMemo, useState, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import remarkCjkFriendly from 'remark-cjk-friendly';
 import rehypeKatex from 'rehype-katex';
-import { Check, Code, Copy, Eye, PanelRight } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Code, Copy, Eye, PanelRight } from 'lucide-react';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -100,6 +100,8 @@ const CANVAS_LANGS = new Set(['html', 'htm']);
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const bodyId = useId();
   // Snapshot of the code at the moment preview was toggled on (null = source view).
   // Freezing it keeps the sandboxed iframe from reloading on every streamed token.
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
@@ -116,15 +118,23 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   // stay out of what a person selects and copies.
   const lineCount = Math.max(1, code.split('\n').length);
 
-  return (
-    <div className="codeblock">
-      <div className="codeblock-head">
-        <span>{lang || 'code'}</span>
-        <div className="flex items-center">
+  const toggle = () => setCollapsed((v) => !v);
+  const toolbar = (bottom = false) => (
+      <div className={`codeblock-head relative gap-2 ${bottom ? 'codeblock-foot flex-row-reverse' : ''}`}>
+        {/* A full-bar button underneath independent action buttons avoids
+            nested buttons and makes the empty space keyboard-accessible too. */}
+        <button
+          type="button" className="absolute inset-0 cursor-pointer rounded-[inherit] hover:bg-bg3/40 focus-visible:outline-2 focus-visible:outline-acc focus-visible:-outline-offset-2"
+          aria-label={`${collapsed ? '展开' : '折叠'} ${lang || 'code'} 代码块`}
+          aria-expanded={!collapsed} aria-controls={bodyId} onClick={toggle}
+        />
+        <span className="pointer-events-none relative min-w-0 truncate">{lang || 'code'} · {lineCount} 行</span>
+        <div className={`relative flex shrink-0 items-center ${bottom ? '' : 'flex-row-reverse'}`}>
+          <div className="flex items-center">
           {canPreview && (
             <button
-              className={headBtn}
-              onClick={() => setPreviewSrc(previewSrc === null ? code : null)}
+              type="button" className={headBtn}
+              onClick={() => { setPreviewSrc(previewSrc === null ? code : null); setCollapsed(false); }}
             >
               {previewSrc === null ? <Eye size={12} /> : <Code size={12} />}
               {previewSrc === null ? '预览' : '代码'}
@@ -132,8 +142,9 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           )}
           {canPreview && (
             <button
-              className={headBtn}
+              type="button" className={headBtn}
               title="在右侧面板预览"
+              aria-label="在右侧面板预览"
               onClick={() => {
                 useHtmlPreview.getState().open(code);
                 setPreviewSrc(null); // 弹出后行内回到代码视图
@@ -142,8 +153,9 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
               <PanelRight size={12} />
             </button>
           )}
+          </div>
           <button
-            className={headBtn}
+            type="button" className={headBtn}
             onClick={() => {
               navigator.clipboard.writeText(code).then(() => {
                 setCopied(true);
@@ -154,8 +166,22 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
             {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
             {copied ? '已复制' : '复制'}
           </button>
+          <button
+            type="button" className={headBtn}
+            aria-expanded={!collapsed} aria-controls={bodyId} onClick={toggle}
+          >
+            {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+            {collapsed ? '展开' : '折叠'}
+          </button>
         </div>
       </div>
+  );
+
+  return (
+    <div className="codeblock">
+      {toolbar()}
+      {collapsed && <div className="px-4 py-2 text-xs text-tx3">已折叠 {lineCount} 行代码</div>}
+      <div id={bodyId} hidden={collapsed}>
       {previewSrc !== null
         // No allow-same-origin: previewed HTML must not reach our cookies/localStorage.
         ? <iframe sandbox="allow-scripts allow-modals" srcDoc={previewSrc} title="HTML 预览" className="block h-[420px] w-full border-0 bg-white" />
@@ -169,6 +195,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
               : <pre><code>{code}</code></pre>}
           </div>
         )}
+        {toolbar(true)}
+      </div>
     </div>
   );
 }
@@ -180,6 +208,30 @@ function extractText(node: ReactNode): string {
     return extractText((node as { props: { children?: ReactNode } }).props.children);
   }
   return '';
+}
+
+const MarkdownContext = createContext({ streaming: false, canvas: false, normalized: '' });
+
+// Keep the renderer identity stable: an inline `pre` component remounts every
+// streamed token, losing the user's fold/preview state.
+function MarkdownPre({ children }: { children?: ReactNode }) {
+  const { streaming, canvas, normalized } = useContext(MarkdownContext);
+  const child = Array.isArray(children) ? children[0] : children;
+  let lang = '';
+  let code = '';
+  if (child && typeof child === 'object' && 'props' in child) {
+    const props = (child as { props: { className?: string; children?: ReactNode } }).props;
+    lang = /language-([\w+-]+)/.exec(props.className || '')?.[1] ?? '';
+    code = extractText(props.children).replace(/\n$/, '');
+  } else {
+    code = extractText(children);
+  }
+  if (lang.toLowerCase() === 'mermaid') return <MermaidBlock code={code} streaming={streaming} />;
+  if (canvas && CANVAS_LANGS.has(lang.toLowerCase())) {
+    const open = streaming && normalized.trimEnd().endsWith(code.trimEnd());
+    return <CanvasAnswer code={code} streaming={open} />;
+  }
+  return <CodeBlock lang={lang} code={code} />;
 }
 
 export interface Citation { uri: string; title: string }
@@ -229,6 +281,7 @@ export const Markdown = memo(function Markdown({ text, streaming = false, canvas
 }) {
   const normalized = useMemo(() => normalizeMath(text), [text]);
   return (
+    <MarkdownContext.Provider value={{ streaming, canvas, normalized }}>
     <div className="md">
       <ReactMarkdown
         // remark-cjk-friendly: CommonMark's flanking rule treats CJK quotes/brackets as punctuation, so
@@ -239,26 +292,7 @@ export const Markdown = memo(function Markdown({ text, streaming = false, canvas
         // keep our internal cite: scheme; everything else goes through the default sanitiser
         urlTransform={(url) => (url.startsWith('cite:') ? url : defaultUrlTransform(url))}
         components={{
-          pre({ children }) {
-            const child = Array.isArray(children) ? children[0] : children;
-            let lang = '';
-            let code = '';
-            if (child && typeof child === 'object' && 'props' in child) {
-              const props = (child as { props: { className?: string; children?: ReactNode } }).props;
-              lang = /language-([\w+-]+)/.exec(props.className || '')?.[1] ?? '';
-              code = extractText(props.children).replace(/\n$/, '');
-            } else {
-              code = extractText(children);
-            }
-            if (lang.toLowerCase() === 'mermaid') return <MermaidBlock code={code} streaming={streaming} />;
-            if (canvas && CANVAS_LANGS.has(lang.toLowerCase())) {
-              // The fence still open at the tail of a streaming reply is the one
-              // being written; anything the text continues past is complete.
-              const open = streaming && normalized.trimEnd().endsWith(code.trimEnd());
-              return <CanvasAnswer code={code} streaming={open} />;
-            }
-            return <CodeBlock lang={lang} code={code} />;
-          },
+          pre: MarkdownPre,
           a({ children, href }) {
             if (typeof href === 'string' && href.startsWith('cite:') && citations) {
               const n = Number(href.slice(5));
@@ -288,5 +322,6 @@ export const Markdown = memo(function Markdown({ text, streaming = false, canvas
         {normalized}
       </ReactMarkdown>
     </div>
+    </MarkdownContext.Provider>
   );
 });

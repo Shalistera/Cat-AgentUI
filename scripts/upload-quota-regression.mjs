@@ -51,6 +51,7 @@ try {
   const settings = () => request('GET', '/api/admin/settings', undefined, admin);
   const overview = () => request('GET', '/api/admin/storage', undefined, admin);
   const setLimit = (maxUserUploadMb, session = admin) => request('PUT', '/api/admin/settings', { maxUserUploadMb }, session);
+  const setCount = (maxAttachmentsPerMessage, session = admin) => request('PUT', '/api/admin/settings', { maxAttachmentsPerMessage }, session);
   const upload = (bytes, session = member) => {
     const boundary = 'quota-regression-boundary';
     const payload = Buffer.concat([
@@ -68,6 +69,20 @@ try {
   };
 
   assert.equal((await settings()).json().maxUserUploadMb, 7, 'environment fallback');
+  assert.equal((await setCount(25, member)).statusCode, 403, 'only admins change attachment count');
+  assert.equal((await setCount(25, '')).statusCode, 401);
+  for (const value of [0, -1, 1.5, 101, '20', null]) {
+    assert.equal((await setCount(value)).statusCode, 400, `reject invalid count ${value}`);
+  }
+  assert.equal((await setCount(1)).statusCode, 200);
+  assert.equal((await setCount(100)).statusCode, 200);
+  assert.equal((await setCount(25)).json().maxAttachmentsPerMessage, 25);
+  assert.equal((await request('GET', '/api/auth/bootstrap')).json().maxAttachmentsPerMessage, 25, 'clients receive the live count');
+  const countUrl = new URL('../server/dist/attachment-settings.js', import.meta.url).href;
+  const persistedCount = execFileSync(process.execPath, ['--input-type=module', '-e',
+    `const { maxAttachmentsPerMessage } = await import(${JSON.stringify(countUrl)}); console.log(maxAttachmentsPerMessage());`,
+  ], { env: { ...process.env, MAX_ATTACHMENTS_PER_MESSAGE: '9' }, encoding: 'utf8' });
+  assert.equal(persistedCount.trim(), '25', 'attachment count survives restart and overrides environment');
   assert.equal((await overview()).json().limits.perUserUploads, 7 * MIB);
   assert.equal((await setLimit(2, member)).statusCode, 403, 'only admins can change the limit');
   assert.equal((await setLimit(2, '')).statusCode, 401);

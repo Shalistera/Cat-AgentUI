@@ -6,6 +6,7 @@ import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
+import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch, supportsVertexSearchWithFunctions } from '../providers/gemini.js';
 import { getToolsForServers, callTool, toolNeedsConfirm, type McpCapabilities } from '../mcp/manager.js';
@@ -200,6 +201,7 @@ class InputBudgetError extends Error {
 }
 
 async function normalizeIncomingParts(parts: MessagePart[], ownerId: string): Promise<MessagePart[]> {
+  const attachmentLimit = maxAttachmentsPerMessage();
   const out: MessagePart[] = [];
   const seenUploads = new Set<string>();
   let textChars = 0;
@@ -216,8 +218,8 @@ async function normalizeIncomingParts(parts: MessagePart[], ownerId: string): Pr
     }
     if ((part.type !== 'image' && part.type !== 'file') || !part.uploadId || seenUploads.has(part.uploadId)) continue;
     seenUploads.add(part.uploadId);
-    if (seenUploads.size > config.maxAttachmentsPerMessage) {
-      throw new InputBudgetError(`每条消息最多添加 ${config.maxAttachmentsPerMessage} 个附件`);
+    if (seenUploads.size > attachmentLimit) {
+      throw new InputBudgetError(`每条消息最多添加 ${attachmentLimit} 个附件`);
     }
     const media = await getOwnedUploadMedia(part.uploadId, ownerId);
     if (!media) throw new InputBudgetError('附件不存在或不属于当前账号', 400);
@@ -286,6 +288,9 @@ function historyWindow(chain: MessageRow[], max: number): { window: MessageRow[]
 async function buildBoundedHistory(
   rows: { role: string; parts: string }[], ownerId: string, includeImages: boolean, carried: FilePart[] = [],
 ): Promise<{ messages: AdapterMessage[]; mediaLease: AdmissionLease }> {
+  // The history count budget must fit one permitted batch of images/PDFs.
+  // Byte and text budgets still bound the total provider payload.
+  const contextMediaLimit = Math.max(config.maxContextImages, maxAttachmentsPerMessage());
   let chosen: { role: 'user' | 'assistant'; parts: PlannedPart[] }[] = [];
   const seenMedia = new Set<string>();
   const mediaCache = new Map<string, Promise<OwnedMedia | null>>();
@@ -416,7 +421,7 @@ async function buildBoundedHistory(
       if (!planned.length) continue;
       const over = textChars + rowText > config.maxContextTextChars
         || imageBytes + rowImageBytes > config.maxContextImageBytes
-        || imageCount + rowImageCount > config.maxContextImages;
+        || imageCount + rowImageCount > contextMediaLimit;
       if (over) {
         if (!chosen.length) return false;
         break;
@@ -630,7 +635,8 @@ const partSchema = z.union([
 ]);
 
 const streamBodySchema = z.object({
-  content: z.array(partSchema).min(1).max(20).optional(),
+  // Leave room for text alongside the largest permitted attachment batch.
+  content: z.array(partSchema).min(1).max(ATTACHMENT_COUNT_MAX + 20).optional(),
   modelId: z.string().max(64).optional(),
   regenerateMessageId: z.string().max(64).optional(),
   editMessageId: z.string().max(64).optional(),

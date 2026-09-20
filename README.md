@@ -81,13 +81,13 @@ npx pm2 save
 | `TRUST_PROXY` | 反代(nginx 等)后设为 `true` | `false` |
 | `SESSION_TTL_DAYS` | 会话有效期 | `30` |
 | `MAX_UPLOAD_MB` | 图片上传上限 | `20` |
-| `MAX_ATTACHMENTS_PER_MESSAGE` | 每条消息最多附件数 | `4` |
+| `MAX_ATTACHMENTS_PER_MESSAGE` | 每条消息最多附件数默认值(1–100);管理员可在「应用设置 → 存储空间」覆盖,保存后立即生效,OCR/绘图附件校验共用 | `20` |
 | `MAX_MESSAGE_ATTACHMENT_MB` | 每条消息附件原始字节总量 | `20` |
 | `MAX_MESSAGE_TEXT_CHARS` | 每条消息文字字符上限 | `64000` |
 | `MAX_CONTEXT_MESSAGES` | 发给模型的最近消息条数 | `40` |
 | `MAX_CONTEXT_TEXT_CHARS` | 模型上下文文字字符预算 | `240000` |
 | `MAX_CONTEXT_IMAGE_MB` | 模型上下文图片原始字节预算 | `24` |
-| `MAX_CONTEXT_IMAGES` | 模型上下文图片数量预算 | `6` |
+| `MAX_CONTEXT_IMAGES` | 上下文图片/PDF 数量预算;实际取此值与当前单次附件上限的较大值,保证一批附件可进入上下文 | `6` |
 | `MAX_CONTEXT_IMAGE_MB_PER_USER` | 单用户同时驻留的上下文图片字节预算 | `48` |
 | `MAX_CONTEXT_IMAGE_MB_GLOBAL` | 全站同时驻留的上下文图片字节预算 | `96` |
 | `DEFAULT_MODEL_OUTPUT_TOKENS` | 未单独设置时发送给模型的输出 token 上限 | `8192` |
