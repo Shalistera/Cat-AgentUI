@@ -54,6 +54,8 @@ export type MessagePart =
   | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; supports?: { text: string; start: number; sources: number[] }[]; label?: string }
   | { type: 'followups'; questions: string[] };
 
+export interface ProviderRetry { attempt: number; maxAttempts: number; delayMs: number }
+
 export interface Message {
   id: string;
   /** Tree link — the message this one replies to; null = conversation root. */
@@ -67,6 +69,9 @@ export interface Message {
       without a proper finish signal — e.g. only the thought chain arrived). */
   finishReason: string | null;
   error: string | null;
+  errorCode?: 'provider_busy';
+  /** Ephemeral upstream retry status, never part of model context. */
+  retry?: ProviderRetry | null;
   promptTokens: number | null;
   completionTokens: number | null;
   totalTokens: number | null;
@@ -458,9 +463,10 @@ export interface StreamHandlers {
   onImage?(d: { imageId: string; mime?: string }): void;
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;
   onNotice?(message: string): void;
+  onRetry?(state: ProviderRetry | null): void;
   onTitle?(title: string): void;
   onFollowups?(d: { messageId?: string; questions: string[] }): void;
-  onError?(message: string): void;
+  onError?(message: string, code?: 'provider_busy'): void;
   onDone?(status: 'done' | 'error' | 'stopped', finishReason: string | null): void;
 }
 

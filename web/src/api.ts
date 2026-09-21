@@ -112,9 +112,10 @@ export async function streamChat(
       case 'image': handlers.onImage?.(data); break;
       case 'usage': handlers.onUsage?.(data); break;
       case 'notice': handlers.onNotice?.(data.message ?? ''); break;
+      case 'retry': handlers.onRetry?.(data); break;
       case 'title': handlers.onTitle?.(data.title ?? ''); break;
       case 'followups': handlers.onFollowups?.(data); break;
-      case 'error': handlers.onError?.(data.message ?? '发生错误'); break;
+      case 'error': handlers.onError?.(data.message ?? '发生错误', data.code); break;
       case 'done': handlers.onDone?.(data.status ?? 'done', data.finishReason ?? null); break;
     }
     event = null; dataLines = [];

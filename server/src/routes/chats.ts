@@ -6,6 +6,7 @@ import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
+import { PROVIDER_BUSY_MESSAGE, ProviderBusyError } from '../providers/sse.js';
 import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch, supportsVertexSearchWithFunctions } from '../providers/gemini.js';
@@ -26,7 +27,7 @@ import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsF
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
-  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef,
+  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderRetry,
 } from '../types.js';
 import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
@@ -493,6 +494,7 @@ export function messageDto(m: typeof schema.messages.$inferSelect, bookmarked?: 
   return {
     id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
     status: m.status, finishReason: m.finishReason ?? null, error: m.error,
+    errorCode: m.error === PROVIDER_BUSY_MESSAGE ? 'provider_busy' : undefined,
     promptTokens: m.promptTokens, completionTokens: m.completionTokens, totalTokens: m.totalTokens,
     durationMs: m.durationMs, ttftMs: m.ttftMs, createdAt: m.createdAt,
     bookmarked: bookmarked?.has(m.id) ?? false,
@@ -1607,6 +1609,17 @@ export async function chatRoutes(app: FastifyInstance) {
       textTurnTimer = null;
       clearProviderIdleTimer();
     };
+    const onRetry = (state: ProviderRetry | null) => {
+      sse.send('retry', state);
+      if (!model.imageGen && !controller.signal.aborted) {
+        if (state?.delayMs) clearProviderIdleTimer();
+        else resetProviderIdleTimer();
+      }
+      if (state?.delayMs) req.log.warn({
+        providerId: provider.id, model: model.modelId,
+        attempt: state.attempt, delayMs: state.delayMs,
+      }, 'Provider busy; retry scheduled');
+    };
 
     try {
       if (model.imageGen) {
@@ -1619,6 +1632,7 @@ export async function chatRoutes(app: FastifyInstance) {
             model: model.modelId,
             prompt,
             n: 1,
+            onRetry,
             signal: AbortSignal.any([controller.signal, AbortSignal.timeout(IMAGE_TIMEOUT_MS)]),
             inputImages: refImages.length ? refImages : undefined,
             system: chat.systemPrompt || undefined,
@@ -1690,6 +1704,7 @@ export async function chatRoutes(app: FastifyInstance) {
               hardMaxTokens: config.maxModelOutputTokens,
               reasoning: resolveReasoning(chat.reasoningEffort, model, provider.type as ProviderType),
               signal: controller.signal,
+              onRetry,
             })) {
               resetProviderIdleTimer();
               if (ev.type === 'text') {
@@ -1885,7 +1900,12 @@ export async function chatRoutes(app: FastifyInstance) {
       } else {
         status = 'error';
         errMsg = redactSensitiveText(e instanceof Error ? e.message : String(e), secretValues);
-        sse.send('error', { message: errMsg });
+        const code = e instanceof ProviderBusyError ? 'provider_busy' : undefined;
+        if (e instanceof ProviderBusyError) req.log.warn({
+          providerId: provider.id, model: model.modelId,
+          detail: redactSensitiveText(e.detail, secretValues),
+        }, 'Provider retry budget exhausted');
+        sse.send('error', { message: errMsg, code });
       }
     }
     clearTextTimers();

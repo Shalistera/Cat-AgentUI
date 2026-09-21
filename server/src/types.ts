@@ -121,6 +121,13 @@ export interface ReasoningRequest {
   ratio: number;
 }
 
+export interface ProviderRetry {
+  attempt: number;
+  maxAttempts: number;
+  /** Zero means the retry is now being sent rather than waiting. */
+  delayMs: number;
+}
+
 export interface ChatRequest {
   model: string;
   system?: string;
@@ -133,6 +140,7 @@ export interface ChatRequest {
   hardMaxTokens?: number;
   reasoning?: ReasoningRequest;
   signal: AbortSignal;
+  onRetry?: (state: ProviderRetry | null) => void;
 }
 
 export type AdapterEvent =
@@ -152,6 +160,7 @@ export interface ImageGenRequest {
   quality?: string;
   n?: number;
   signal: AbortSignal;
+  onRetry?: (state: ProviderRetry | null) => void;
   // optional input images for editing (nano banana & gpt-image support image input)
   inputImages?: { mime: string; dataBase64: string }[];
   system?: string;

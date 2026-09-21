@@ -121,7 +121,7 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
 
   const res = await fetchRetry(`${base(cfg)}/chat/completions`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-  });
+  }, req.onRetry);
   if (!res.ok) throw await providerError('OpenAI', res);
 
   // accumulate tool calls by index
@@ -239,7 +239,7 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
 
   const res = await fetchRetry(`${base(cfg)}/responses`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-  });
+  }, req.onRetry);
   if (!res.ok) throw await providerError('OpenAI(Responses)', res);
 
   let sawToolCall = false;
@@ -316,17 +316,17 @@ export const openaiAdapter: ChatAdapter = {
         const ext = img.mime.includes('jpeg') ? 'jpg' : img.mime.includes('webp') ? 'webp' : 'png';
         form.append('image[]', new Blob([new Uint8Array(bytes)], { type: img.mime }), `input${i}.${ext}`);
       });
-      res = await fetch(`${base(cfg)}/images/edits`, {
+      res = await fetchRetry(`${base(cfg)}/images/edits`, {
         method: 'POST', headers: headers(cfg, false), body: form, signal: req.signal,
-      });
+      }, req.onRetry);
     } else {
       const body: Record<string, unknown> = { model: req.model, prompt, n: req.n || 1 };
       if (req.size && req.size !== 'auto') body.size = req.size;
       if (req.quality && req.quality !== 'auto') body.quality = req.quality;
       if (isDallE) body.response_format = 'b64_json'; // gpt-image-* returns b64 by default and rejects this param
-      res = await fetch(`${base(cfg)}/images/generations`, {
+      res = await fetchRetry(`${base(cfg)}/images/generations`, {
         method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-      });
+      }, req.onRetry);
     }
     if (!res.ok) throw await providerError('OpenAI', res);
     const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * (req.n || 1) * 4 / 3) + 1024 * 1024;

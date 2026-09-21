@@ -13,7 +13,8 @@ import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
 import { accessibleOnly, canUseModel, imageModelsAllowed, imageWorkshopAllowed } from '../model-access.js';
 import { checkModelLimit, checkQuota, modelLimitBlockMessage, quotaBlockMessage } from '../quota.js';
-import type { AdapterMessage, GeneratedImage } from '../types.js';
+import type { AdapterMessage, GeneratedImage, ProviderRetry } from '../types.js';
+import { ProviderBusyError } from '../providers/sse.js';
 import { tryAcquireImageJob } from '../admission.js';
 import {
   decodeGeneratedImage, extForMime, getOwnedUploadMedia,
@@ -60,13 +61,17 @@ interface ImageJob {
   modelId: string;
   prompt: string;
   createdAt: number;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'done' | 'error' | 'stopped';
+  controller: AbortController;
+  retry?: ProviderRetry | null;
+  request: z.infer<typeof generateSchema>;
   images?: SavedImage[];
   /** The model answered in words instead of (or besides) pictures. */
   reply?: string;
   /** Whole exchange so far, prompt included — the client continues from it. */
   turns: ConvoTurn[];
   error?: string;
+  errorCode?: 'provider_busy';
 }
 
 const jobs = new Map<string, ImageJob>();
@@ -248,6 +253,7 @@ export async function imageRoutes(app: FastifyInstance) {
       const job: ImageJob = {
         id: newId(), userId, modelId: model.id, prompt, turns,
         createdAt: Date.now(), status: 'running',
+        controller: new AbortController(), request: body.data,
       };
       jobs.set(job.id, job);
       cleanupJobs();
@@ -275,11 +281,14 @@ export async function imageRoutes(app: FastifyInstance) {
         const t0 = Date.now();
         const saved: SavedImage[] = [];
         const secretValues = allConfiguredSecretValues();
+        const signal = AbortSignal.any([job.controller.signal, AbortSignal.timeout(GENERATE_TIMEOUT_MS)]);
         try {
           const result = await adapter.generateImages!(toRuntimeConfig(provider), {
             model: model.modelId, prompt, size, quality, n: requestedN,
-            signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS), inputImages, context,
+            signal, inputImages, context,
+            onRetry(state) { job.retry = state; },
           });
+          signal.throwIfAborted();
           const durationMs = Date.now() - t0;
           if (!result.images.length && !result.text) throw new Error('Provider 返回的图片数量异常');
           // A follow-up like "两个方案各一张" can legitimately bring back more
@@ -289,6 +298,7 @@ export async function imageRoutes(app: FastifyInstance) {
             console.log(`[img] job ${job.id}: provider returned ${result.images.length} images, keeping ${requestedN}`);
           }
           for (const img of generated) {
+            signal.throwIfAborted();
             saved.push(await saveGeneratedImage({
               userId,
               providerId: provider.id,
@@ -300,6 +310,8 @@ export async function imageRoutes(app: FastifyInstance) {
               source: 'workshop',
             }));
           }
+
+          signal.throwIfAborted();
 
           const usage = generated[0]?.usage ?? result.usage;
           recordUsage({
@@ -325,13 +337,20 @@ export async function imageRoutes(app: FastifyInstance) {
             result.text ? `, text reply ${result.text.length} chars` : ''}`);
         } catch (err) {
           if (saved.length) await rollbackSavedImages(saved);
+          if (job.controller.signal.aborted) { job.status = 'stopped'; return; }
+          if (err instanceof ProviderBusyError) req.log.warn({
+            providerId: provider.id, model: model.modelId,
+            detail: redactSensitiveText(err.detail, secretValues),
+          }, 'Image provider retry budget exhausted');
           const rawError = err instanceof Error && err.name === 'TimeoutError'
             ? '图片生成超时(超过 10 分钟)'
             : err instanceof Error ? err.message : String(err);
           job.error = redactSensitiveText(rawError, secretValues);
+          job.errorCode = err instanceof ProviderBusyError ? 'provider_busy' : undefined;
           job.status = 'error';
           console.log(`[img] job ${job.id} error after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${job.error}`);
         } finally {
+          job.retry = null;
           reservation.release();
           imageLease.release();
         }
@@ -354,7 +373,7 @@ export async function imageRoutes(app: FastifyInstance) {
     const running = [...jobs.values()]
       .filter((j) => j.userId === req.user!.id && j.status === 'running')
       .sort((a, b) => a.createdAt - b.createdAt)
-      .map((j) => ({ jobId: j.id, modelId: j.modelId, prompt: j.prompt, createdAt: j.createdAt }));
+      .map((j) => ({ jobId: j.id, modelId: j.modelId, prompt: j.prompt, createdAt: j.createdAt, request: j.request, retry: j.retry }));
     return { jobs: running };
   });
 
@@ -365,7 +384,15 @@ export async function imageRoutes(app: FastifyInstance) {
     if (!job || job.userId !== req.user!.id) {
       return reply.code(404).send({ error: '任务不存在(服务可能已重启)' });
     }
-    return { status: job.status, images: job.images, reply: job.reply, turns: job.turns, error: job.error };
+    return { status: job.status, images: job.images, reply: job.reply, turns: job.turns, error: job.error, errorCode: job.errorCode, retry: job.retry };
+  });
+
+  app.post('/api/images/jobs/:id/cancel', async (req, reply) => {
+    requireWorkshop(req, reply);
+    const job = jobs.get((req.params as { id: string }).id);
+    if (!job || job.userId !== req.user!.id) return reply.code(404).send({ error: '任务不存在' });
+    if (job.status === 'running') job.controller.abort();
+    return { ok: true };
   });
 
   app.get('/api/images', async (req, reply) => {

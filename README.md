@@ -144,6 +144,7 @@ npm run dev:server     # tsx watch, :3000
 npm run dev:web        # vite dev, :5173(代理 /api → :3000)
 npm run test:security  # 临时数据库 + Mock Provider/MCP 的隔离安全回归
 npm run test:upload-quota # 临时数据库的附件配额设置与上传回归
+npm run test:provider-retry # 模拟 429:有限重试、取消、附件保留与断流保护
 node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即可联调
                                # 提供对话流式、工具调用、生图 / 改图(images/generations 与 images/edits)
 ```

@@ -15,7 +15,7 @@ import {
 import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGallery';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import { Markdown } from '../components/Markdown';
-import type { ImageModel, ImageRecord } from '../types';
+import type { ImageModel, ImageRecord, ProviderRetry } from '../types';
 
 const PAGE_SIZE = 24;
 const MAX_REFS = 3;
@@ -29,9 +29,10 @@ const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: '去背景', prompt: '去
 
 // A generation in flight. The server admits one job per model per user, so
 // several of these can run side by side — one per model.
-type RunningJob = { id: string; modelId: string; prompt: string; startedAt: number };
-type ActiveJobs = { jobs?: { jobId: string; modelId: string; prompt: string; createdAt: number }[] };
-type JobStatus = { status: string; images?: ImageRecord[]; reply?: string; turns?: ConvoTurn[]; error?: string };
+type ImageRequest = { modelId: string; prompt: string; n?: number; size?: string; quality?: string; inputUploadIds?: string[]; history?: ConvoTurn[] };
+type RunningJob = { id: string; modelId: string; prompt: string; startedAt: number; request?: ImageRequest; retry?: ProviderRetry | null; cancelling?: boolean };
+type ActiveJobs = { jobs?: { jobId: string; modelId: string; prompt: string; createdAt: number; request?: ImageRequest; retry?: ProviderRetry | null }[] };
+type JobStatus = { status: string; images?: ImageRecord[]; reply?: string; turns?: ConvoTurn[]; error?: string; errorCode?: 'provider_busy'; retry?: ProviderRetry | null };
 
 // Conversational image models (Gemini) sometimes answer in words instead of
 // pictures — "here are two options, which one?". The exchange is kept here so
@@ -94,7 +95,7 @@ function ImagesInner() {
   // time, so picking another model lets the user start a second one right away.
   const [running, setRunning] = useState<RunningJob[]>([]);
   const [submitting, setSubmitting] = useState<string[]>([]);
-  const [genError, setGenError] = useState<{ label: string; message: string } | null>(null);
+  const [genError, setGenError] = useState<{ label: string; message: string; request?: ImageRequest; busy?: boolean } | null>(null);
   const [convo, setConvo] = useState<Convo | null>(null);
   const [replyText, setReplyText] = useState('');
   // One ticker drives every job's elapsed counter.
@@ -297,6 +298,7 @@ function ImagesInner() {
     trackedRef.current.add(job.id);
     setRunning((prev) => (prev.some((j) => j.id === job.id) ? prev : [...prev, job]));
     const { id: jobId, startedAt } = job;
+    let providerBusy = false;
     try {
       for (;;) {
         await new Promise((r) => setTimeout(r, 2500));
@@ -309,7 +311,9 @@ function ImagesInner() {
           if (Date.now() - startedAt > 12 * 60_000) throw new Error('等待超时,已放弃');
           continue;
         }
-        if (st.status === 'error') throw new Error(st.error || '生成失败');
+        if (st.status === 'stopped') { toast('已取消生成', 'info'); return; }
+        if (st.status === 'error') { providerBusy = st.errorCode === 'provider_busy'; throw new Error(st.error || '生成失败'); }
+        setRunning((prev) => prev.map((j) => j.id === jobId ? { ...j, retry: st.retry } : j));
         if (st.status === 'done') {
           const imgs = st.images ?? [];
           if (!imgs.length) {
@@ -346,8 +350,8 @@ function ImagesInner() {
         return;
       }
       const msg = err instanceof Error ? err.message : '生成失败';
-      if (aliveRef.current) setGenError({ label: modelLabel(job.modelId), message: msg });
-      toast(msg, 'err');
+      if (aliveRef.current) setGenError({ label: modelLabel(job.modelId), message: msg, request: job.request, busy: providerBusy });
+      if (!providerBusy) toast(msg, 'err');
       tabAlert();
       notifyDone('绘图失败', `${modelLabel(job.modelId)}:${msg}`, '/images');
     } finally {
@@ -363,7 +367,7 @@ function ImagesInner() {
     api.get<ActiveJobs>('/api/images/jobs/active')
       .then((r) => {
         for (const j of r.jobs ?? []) {
-          void runJob({ id: j.jobId, modelId: j.modelId, prompt: j.prompt, startedAt: j.createdAt });
+          void runJob({ id: j.jobId, modelId: j.modelId, prompt: j.prompt, startedAt: j.createdAt, request: j.request, retry: j.retry });
         }
       })
       .catch(() => { /* ignore */ });
@@ -385,22 +389,22 @@ function ImagesInner() {
     void submit(convo.modelId, t, convo.turns);
   }
 
-  async function submit(mid: string, p: string, history?: ConvoTurn[]) {
+  async function submit(mid: string, p: string, history?: ConvoTurn[], retryRequest?: ImageRequest) {
     if (uploading || busyModels.has(mid)) return;
     const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
-    if (refSlots.filter(Boolean).length > limit) {
+    if ((retryRequest?.inputUploadIds ?? refSlots.filter(Boolean)).length > limit) {
       toast(`参考图最多 ${limit} 张,请移除多余附件`, 'err'); return;
     }
     setGenError(null);
     setSubmitting((prev) => [...prev, mid]);
     const start = Date.now();
     try {
-      const body: Record<string, unknown> = { modelId: mid, prompt: p, n };
-      const refIds = refSlots.filter((x): x is string => !!x);
-      if (refIds.length) body.inputUploadIds = refIds;
-      if (history?.length) body.history = history;
+      const body: ImageRequest = retryRequest ?? {
+        modelId: mid, prompt: p, n, history,
+        inputUploadIds: refSlots.filter((x): x is string => !!x),
+      };
       const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
-      void runJob({ id: jobId, modelId: mid, prompt: p, startedAt: start });
+      void runJob({ id: jobId, modelId: mid, prompt: p, startedAt: start, request: body });
     } catch (err) {
       // Pick up anything this window doesn't know about yet — typically a job
       // the same user started in another tab, which is also why a refusal
@@ -408,7 +412,7 @@ function ImagesInner() {
       const active = await api.get<ActiveJobs>('/api/images/jobs/active').catch(() => null);
       const untracked = (active?.jobs ?? []).filter((j) => !trackedRef.current.has(j.jobId));
       for (const j of untracked) {
-        void runJob({ id: j.jobId, modelId: j.modelId, prompt: j.prompt, startedAt: j.createdAt });
+        void runJob({ id: j.jobId, modelId: j.modelId, prompt: j.prompt, startedAt: j.createdAt, request: j.request, retry: j.retry });
       }
       // An ApiError means the server answered and refused: nothing was queued,
       // so report it. Anything else is a lost response (e.g. a proxy cutting
@@ -420,6 +424,15 @@ function ImagesInner() {
       tabAlert();
     } finally {
       setSubmitting((prev) => prev.filter((x) => x !== mid));
+    }
+  }
+
+  async function cancelJob(id: string) {
+    setRunning((prev) => prev.map((j) => j.id === id ? { ...j, cancelling: true } : j));
+    try { await api.post(`/api/images/jobs/${id}/cancel`); }
+    catch (err) {
+      toast(err instanceof Error ? err.message : '取消失败', 'err');
+      setRunning((prev) => prev.map((j) => j.id === id ? { ...j, cancelling: false } : j));
     }
   }
 
@@ -625,8 +638,13 @@ function ImagesInner() {
                 </div>
 
                 {genError && (
-                  <div className="whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
-                    生成失败({genError.label}):{genError.message}
+                  <div className={`rounded-md border px-3 py-2 text-[13px] leading-relaxed ${genError.busy ? 'border-line bg-bg2 text-tx2' : 'border-err/30 bg-err/5 text-err'}`}>
+                    <p className="whitespace-pre-wrap">{genError.label}: {genError.message}</p>
+                    {genError.request && <div className="mt-1.5 flex items-center justify-between gap-2">
+                      <span className="text-xs text-tx3">本次提示词和参考图已保留。</span>
+                      <Button size="xs" variant="outline" disabled={busyModels.has(genError.request.modelId) || uploading}
+                        onClick={() => { const r = genError.request!; void submit(r.modelId, r.prompt, r.history, r); }}>重试</Button>
+                    </div>}
                   </div>
                 )}
 
@@ -703,14 +721,20 @@ function ImagesInner() {
                     {running.map((j) => (
                       <div
                         key={j.id}
-                        className="flex items-center gap-2 rounded-md border border-line bg-bg1 px-3 py-2 text-[13px]"
+                        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line bg-bg1 px-3 py-2 text-[13px]"
                       >
                         <Spinner className="h-3.5 w-3.5 shrink-0 text-tx3" />
-                        <span className="shrink-0 font-medium text-tx">{modelLabel(j.modelId)}</span>
-                        <span className="truncate text-tx3">{j.prompt}</span>
+                        <span className="max-w-[45%] truncate font-medium text-tx">{modelLabel(j.modelId)}</span>
+                        <span className="hidden min-w-0 flex-1 truncate text-tx3 sm:block">{j.prompt}</span>
                         <span className="ml-auto shrink-0 tabular-nums text-tx3">
                           {((Date.now() - j.startedAt) / 1000).toFixed(1)}s
                         </span>
+                        <Button size="xs" variant="ghost" disabled={j.cancelling} onClick={() => void cancelJob(j.id)}>取消</Button>
+                        <span className="basis-full truncate text-xs text-tx3 sm:hidden">{j.prompt}</span>
+                        {(j.retry || j.cancelling) && <span role="status" className="basis-full text-xs leading-relaxed text-tx2">
+                          {j.cancelling ? '正在取消…' : j.retry?.delayMs === 0 ? '正在重新请求模型…'
+                            : `模型当前繁忙，正在自动重试… (${j.retry!.attempt}/${j.retry!.maxAttempts})`}
+                        </span>}
                       </div>
                     ))}
                   </div>

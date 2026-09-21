@@ -601,6 +601,7 @@ interface Props {
   msg: Message;
   isStreaming: boolean; // this message is currently being generated
   pendingLabel?: string; // shown while waiting for the first output
+  onCancel?: () => void;
   onRegenerate?: () => void;
   /** Regenerate with a different model, side-by-side against this reply. */
   onRegenerateWith?: (m: ModelInfo) => void;
@@ -624,7 +625,7 @@ interface Props {
   onToolDecision?: (decisions: Record<string, 'allow' | 'deny'>, rememberChat: boolean) => void;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
@@ -792,6 +793,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   // filter) — and errors that interrupted a partial answer — get a banner with
   // an inline 重新生成 so the user doesn't have to hunt for the hover action.
   const hasBody = msg.parts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image');
+  const providerBusy = msg.errorCode === 'provider_busy';
   // The null branch covers rows saved before the server started assigning
   // 'incomplete': a finished reply with nothing to read is cut short regardless.
   const cutShort = !isStreaming && msg.status === 'done'
@@ -807,7 +809,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
       onClick={onRegenerate}
       className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-current/30 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-bg1/60"
     >
-      <RefreshCw size={11} />重新生成
+      <RefreshCw size={11} />{providerBusy || (msg.status === 'stopped' && !hasBody) ? '重试' : '重新生成'}
     </button>
   ) : null;
   return (
@@ -842,16 +844,28 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         {isStreaming && toolConfirm && onToolDecision && (
           <ToolConfirmCard key={toolConfirm.calls.map((c) => c.id).join('|')} req={toolConfirm} onDecide={onToolDecision} />
         )}
-        {isStreaming && msg.parts.length === 0 && (
+        {isStreaming && msg.retry && (
+          <div className="my-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg2 px-3.5 py-2.5 text-[13px] text-tx2">
+            <Spinner className="h-3.5 w-3.5" />
+            <span role="status" className="min-w-0 flex-1">
+              {msg.retry.delayMs === 0 ? '正在重新请求模型…' : msg.retry.attempt === 1
+                ? '模型当前繁忙，正在自动重试…' : '仍在等待模型响应，稍后将再次尝试…'}
+              <span className="ml-1 text-xs text-tx3">({msg.retry.attempt}/{msg.retry.maxAttempts})</span>
+            </span>
+            {onCancel && <button type="button" className="cursor-pointer rounded-md border border-line px-2 py-1 text-xs hover:bg-bg3" onClick={onCancel}>取消</button>}
+          </div>
+        )}
+        {isStreaming && msg.parts.length === 0 && !msg.retry && (
           <div className="flex items-center gap-2 py-1 text-[13px] text-tx3">
             <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在思考…'}
           </div>
         )}
         {msg.status === 'error' && msg.error && (
-          <div className="my-2 flex items-start gap-2 rounded-lg border border-err/30 bg-err/10 px-3.5 py-2.5 text-[13px] leading-relaxed text-err">
+          <div className={`my-2 flex items-start gap-2 rounded-lg border px-3.5 py-2.5 text-[13px] leading-relaxed ${providerBusy ? 'border-line bg-bg2 text-tx2' : 'border-err/30 bg-err/10 text-err'}`}>
             <CircleAlert size={15} className="mt-0.5 shrink-0" />
             <span className="min-w-0 flex-1 break-words">
               {msg.error}
+              {providerBusy && <span className="mt-0.5 block text-xs text-tx3">你的问题和附件已保留，可直接重试。</span>}
               {hasBody && <span className="mt-0.5 block text-xs opacity-80">上面的内容可能不完整。</span>}
             </span>
             {regenerateCta}
@@ -867,7 +881,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           </div>
         )}
         {msg.status === 'stopped' && (
-          <div className="my-1.5 flex items-center gap-1.5 text-xs text-tx3"><Ban size={12} />已停止生成</div>
+          <div className="my-1.5 flex items-center gap-1.5 text-xs text-tx3"><Ban size={12} />已停止生成{regenerateCta}</div>
         )}
         {!isStreaming && !editing && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tx3">

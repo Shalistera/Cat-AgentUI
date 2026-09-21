@@ -56,12 +56,13 @@ interface CompareState {
   challengerModel: ModelInfo;
 }
 
-function CompareView({ original, challenger, challengerModel, streaming, onKeep }: {
+function CompareView({ original, challenger, challengerModel, streaming, onKeep, onStop }: {
   original: Message;
   challenger: Message | null;
   challengerModel: ModelInfo;
   streaming: boolean;
   onKeep(side: 'original' | 'challenger'): void;
+  onStop(): void;
 }) {
   const card = 'flex min-w-0 flex-col overflow-hidden rounded-xl border bg-bg1';
   const head = 'flex items-center gap-2 border-b border-line bg-bg2/45 px-3 py-2 text-xs font-medium text-tx';
@@ -90,7 +91,7 @@ function CompareView({ original, challenger, challengerModel, streaming, onKeep 
         </div>
         <div className={body}>
           {challenger
-            ? <ChatMessage msg={challenger} isStreaming={streaming} />
+            ? <ChatMessage msg={challenger} isStreaming={streaming} onCancel={onStop} />
             : <p className="py-2 text-[13px] text-tx3">正在准备…</p>}
         </div>
         <button className={`${keepBtn} border-acc/50 text-acc hover:bg-acc/10`}
@@ -610,7 +611,7 @@ export default function Chat() {
       finished = true;
       if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
       flush();
-      applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status, finishReason }));
+      applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status, finishReason, retry: null }));
       setStreaming(false);
       sendingRef.current = false;
       setToolConfirm(null);
@@ -688,6 +689,7 @@ export default function Chat() {
         }));
       },
       onNotice(msg) { toast(msg, 'info'); },
+      onRetry(retry) { if (!finished) applyToAssistant((m) => ({ ...m, retry })); },
       onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c ? { ...c, title } : c)); },
       onFollowups(d) {
         if (!d.questions?.length || !d.messageId) return;
@@ -698,7 +700,7 @@ export default function Chat() {
           ? { ...m, parts: [...m.parts, { type: 'followups', questions: d.questions }] }
           : m)));
       },
-      onError(message) { applyToAssistant((m) => ({ ...m, status: 'error', error: message })); },
+      onError(message, errorCode) { applyToAssistant((m) => ({ ...m, status: 'error', error: message, errorCode, retry: null })); },
       onDone(status, finishReason) { finalize(status, finishReason); },
     }, controller.signal)
       // The SSE stream closed without a 'done' event (server or proxy dropped
@@ -1181,6 +1183,7 @@ export default function Chat() {
                       challengerModel={compare.challengerModel}
                       streaming={streaming}
                       onKeep={keepCompare}
+                      onStop={stop}
                     />
                   );
                 }
@@ -1192,6 +1195,7 @@ export default function Chat() {
                     msg={m}
                     isStreaming={streaming && m.id === streamMsgIdRef.current}
                     pendingLabel={modelSel?.imageGen ? '正在生成图片,可能需要 1–3 分钟…' : undefined}
+                    onCancel={stop}
                     siblingInfo={sibs.length > 1 ? { index: sibIdx, total: sibs.length } : undefined}
                     onSiblingPrev={!streaming && sibIdx > 0 ? () => switchSibling(m, -1) : undefined}
                     onSiblingNext={!streaming && sibIdx < sibs.length - 1 ? () => switchSibling(m, 1) : undefined}

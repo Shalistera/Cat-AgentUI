@@ -1,9 +1,12 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+import type { ProviderRetry } from '../types.js';
+
 // Minimal SSE parser over a fetch Response body.
 export interface SseMessage { event: string | null; data: string }
 
-// Retrying a POST is only safe when the request PROVABLY never reached the
-// upstream — otherwise a duplicate could double-bill a completion. Two classes
-// qualify:
+// For network failures, only retry a POST when it provably wasn't sent.
+// Explicit HTTP 429 rejections are handled separately below. Two classes of
+// connection failures qualify:
 //   * connection-phase failures (DNS / connect / connect-timeout): no bytes
 //     were ever written;
 //   * undici picking a pooled keep-alive socket that the peer had already
@@ -23,15 +26,63 @@ function isPreSendError(err: unknown): boolean {
   return false;
 }
 
-export async function fetchRetry(url: string, init: RequestInit & { signal?: AbortSignal }): Promise<Response> {
+const MAX_RATE_RETRIES = 3;
+const MAX_RETRY_WAIT_MS = 20_000;
+
+function retryAfterMs(value: string | null): number {
+  if (!value) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
+}
+
+/** Retry explicit HTTP 429 rejections before reading any generated output.
+ * Never replay a successful response body, a partial stream, or a tool turn.
+ */
+export async function fetchRetry(
+  url: string, init: RequestInit & { signal?: AbortSignal },
+  onRetry?: (state: ProviderRetry | null) => void,
+): Promise<Response> {
+  let retries = 0;
+  let waitedMs = 0;
+  let connectionRetried = false;
   try {
-    return await fetch(url, init);
-  } catch (err) {
-    if (init.signal?.aborted || !isPreSendError(err)) throw err;
-    await new Promise((r) => setTimeout(r, 300));
-    if (init.signal?.aborted) throw err;
-    return fetch(url, init);
+    for (;;) {
+      init.signal?.throwIfAborted();
+      let res: Response;
+      try {
+        res = await fetch(url, init);
+      } catch (err) {
+        if (init.signal?.aborted || connectionRetried || !isPreSendError(err)) throw err;
+        connectionRetried = true;
+        await sleep(300, undefined, { signal: init.signal });
+        continue;
+      }
+      if (res.status !== 429 || retries >= MAX_RATE_RETRIES) return res;
+      // 1–2s, 2–4s, 4–8s with jitter; respect longer server hints within the
+      // total wait budget. Don't retry early when Retry-After exceeds it.
+      const delayMs = Math.max(
+        Math.round(1000 * 2 ** retries * (1 + Math.random())),
+        retryAfterMs(res.headers.get('retry-after')),
+      );
+      if (waitedMs + delayMs > MAX_RETRY_WAIT_MS) return res;
+      try { await res.body?.cancel(); } catch { /* rejected response discarded */ }
+      retries++;
+      waitedMs += delayMs;
+      onRetry?.({ attempt: retries, maxAttempts: MAX_RATE_RETRIES, delayMs });
+      await sleep(delayMs, undefined, { signal: init.signal });
+      init.signal?.throwIfAborted();
+      onRetry?.({ attempt: retries, maxAttempts: MAX_RATE_RETRIES, delayMs: 0 });
+    }
+  } finally {
+    if (retries) onRetry?.(null);
   }
+}
+
+export const PROVIDER_BUSY_MESSAGE = '模型暂时无法响应，请稍后重试。';
+export class ProviderBusyError extends Error {
+  constructor(readonly detail: string) { super(PROVIDER_BUSY_MESSAGE); }
 }
 
 const MAX_SSE_BUFFER_CHARS = 2 * 1024 * 1024;
@@ -102,7 +153,7 @@ export async function providerError(name: string, res: Response): Promise<Error>
   const body = await readErrorBody(res);
   const gateway = GATEWAY_STATUS[res.status];
   if (gateway) return new Error(`${name}: ${gateway} (${res.status})`);
-  if (res.status === 429) return new Error(`${name}: 上游服务暂时繁忙,请稍等片刻后重试 (429)`);
+  if (res.status === 429) return new ProviderBusyError(body);
   if (looksLikeHtml(body) || !body.trim()) return new Error(`${name}: 上游返回了错误 (${res.status}),请稍后再试`);
   return new Error(`${name} ${res.status}: ${body}`);
 }
