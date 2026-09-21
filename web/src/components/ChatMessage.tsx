@@ -3,7 +3,7 @@ import {
   Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
   Info, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
-import type { Message, MessagePart, ModelInfo, ToolConfirmRequest } from '../types';
+import type { Message, MessagePart, ModelInfo, ProviderRetry, ToolConfirmRequest } from '../types';
 import { useLightbox } from './Lightbox';
 import { fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
@@ -625,6 +625,15 @@ interface Props {
   onToolDecision?: (decisions: Record<string, 'allow' | 'deny'>, rememberChat: boolean) => void;
 }
 
+/** Upstream backoff status line. Retries are numbered; waiting behind a
+ * limit another request already hit is not (attempt 0). */
+export function retryStatusText(r: ProviderRetry): string {
+  if (r.delayMs === 0) return '正在重新请求模型…';
+  const secs = Math.max(1, Math.round(r.delayMs / 1000));
+  if (r.queued) return `模型提供方正在限流，排队等待约 ${secs} 秒后再发送…`;
+  return `模型提供方当前繁忙（限流），约 ${secs} 秒后自动重试…`;
+}
+
 export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -794,6 +803,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
   // an inline 重新生成 so the user doesn't have to hunt for the hover action.
   const hasBody = msg.parts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image');
   const providerBusy = msg.errorCode === 'provider_busy';
+  const ranTools = msg.parts.some((p) => p.type === 'tool_call');
   // The null branch covers rows saved before the server started assigning
   // 'incomplete': a finished reply with nothing to read is cut short regardless.
   const cutShort = !isStreaming && msg.status === 'done'
@@ -848,9 +858,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
           <div className="my-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg2 px-3.5 py-2.5 text-[13px] text-tx2">
             <Spinner className="h-3.5 w-3.5" />
             <span role="status" className="min-w-0 flex-1">
-              {msg.retry.delayMs === 0 ? '正在重新请求模型…' : msg.retry.attempt === 1
-                ? '模型当前繁忙，正在自动重试…' : '仍在等待模型响应，稍后将再次尝试…'}
-              <span className="ml-1 text-xs text-tx3">({msg.retry.attempt}/{msg.retry.maxAttempts})</span>
+              {retryStatusText(msg.retry)}
+              {msg.retry.attempt > 0 && <span className="ml-1 text-xs text-tx3">({msg.retry.attempt}/{msg.retry.maxAttempts})</span>}
             </span>
             {onCancel && <button type="button" className="cursor-pointer rounded-md border border-line px-2 py-1 text-xs hover:bg-bg3" onClick={onCancel}>取消</button>}
           </div>
@@ -865,7 +874,9 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
             <CircleAlert size={15} className="mt-0.5 shrink-0" />
             <span className="min-w-0 flex-1 break-words">
               {msg.error}
-              {providerBusy && <span className="mt-0.5 block text-xs text-tx3">你的问题和附件已保留，可直接重试。</span>}
+              {providerBusy && <span className="mt-0.5 block text-xs text-tx3">
+                {ranTools ? '重试会从头重新生成，已执行过的工具操作会再次运行。' : '这是模型提供方的限流，不是你的问题；问题和附件已保留，可直接重试。'}
+              </span>}
               {hasBody && <span className="mt-0.5 block text-xs opacity-80">上面的内容可能不完整。</span>}
             </span>
             {regenerateCta}

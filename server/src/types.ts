@@ -126,6 +126,8 @@ export interface ProviderRetry {
   maxAttempts: number;
   /** Zero means the retry is now being sent rather than waiting. */
   delayMs: number;
+  /** Waiting behind a limit another request already hit, not our own retry. */
+  queued?: boolean;
 }
 
 export interface ChatRequest {

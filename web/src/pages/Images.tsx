@@ -15,6 +15,7 @@ import {
 import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGallery';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import { Markdown } from '../components/Markdown';
+import { retryStatusText } from '../components/ChatMessage';
 import type { ImageModel, ImageRecord, ProviderRetry } from '../types';
 
 const PAGE_SIZE = 24;
@@ -641,7 +642,7 @@ function ImagesInner() {
                   <div className={`rounded-md border px-3 py-2 text-[13px] leading-relaxed ${genError.busy ? 'border-line bg-bg2 text-tx2' : 'border-err/30 bg-err/5 text-err'}`}>
                     <p className="whitespace-pre-wrap">{genError.label}: {genError.message}</p>
                     {genError.request && <div className="mt-1.5 flex items-center justify-between gap-2">
-                      <span className="text-xs text-tx3">本次提示词和参考图已保留。</span>
+                      <span className="text-xs text-tx3">{genError.busy ? '这是模型提供方的限流；' : ''}本次提示词和参考图已保留。</span>
                       <Button size="xs" variant="outline" disabled={busyModels.has(genError.request.modelId) || uploading}
                         onClick={() => { const r = genError.request!; void submit(r.modelId, r.prompt, r.history, r); }}>重试</Button>
                     </div>}
@@ -732,8 +733,8 @@ function ImagesInner() {
                         <Button size="xs" variant="ghost" disabled={j.cancelling} onClick={() => void cancelJob(j.id)}>取消</Button>
                         <span className="basis-full truncate text-xs text-tx3 sm:hidden">{j.prompt}</span>
                         {(j.retry || j.cancelling) && <span role="status" className="basis-full text-xs leading-relaxed text-tx2">
-                          {j.cancelling ? '正在取消…' : j.retry?.delayMs === 0 ? '正在重新请求模型…'
-                            : `模型当前繁忙，正在自动重试… (${j.retry!.attempt}/${j.retry!.maxAttempts})`}
+                          {j.cancelling ? '正在取消…' : retryStatusText(j.retry!)}
+                          {!j.cancelling && j.retry!.attempt > 0 && ` (${j.retry!.attempt}/${j.retry!.maxAttempts})`}
                         </span>}
                       </div>
                     ))}

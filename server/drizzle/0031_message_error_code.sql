@@ -1,0 +1,1 @@
+ALTER TABLE `messages` ADD `error_code` text;

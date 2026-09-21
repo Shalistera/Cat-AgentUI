@@ -7,7 +7,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fetchRetry } from '../server/dist/providers/sse.js';
+import { fetchRetry, resetProviderBusyGates } from '../server/dist/providers/sse.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const realFetch = globalThis.fetch;
@@ -24,19 +24,42 @@ let admin;
 async function transportChecks() {
   let calls = 0;
   try {
-    for (const retryAfter of ['60', new Date(Date.now() + 120_000).toUTCString()]) {
-      calls = 0;
+    for (const retryAfter of ['120', new Date(Date.now() + 180_000).toUTCString()]) {
+      calls = 0; resetProviderBusyGates();
       globalThis.fetch = async () => { calls++; return new Response('{}', { status: 429, headers: { 'retry-after': retryAfter } }); };
       assert.equal((await fetchRetry('http://test', {})).status, 429);
       assert.equal(calls, 1, 'never retry before a Retry-After that exceeds the wait budget');
     }
-    for (const status of [400, 401, 403, 500]) {
-      calls = 0;
+    for (const status of [400, 401, 403, 500, 502, 504]) {
+      calls = 0; resetProviderBusyGates();
       globalThis.fetch = async () => { calls++; return new Response('{}', { status }); };
       assert.equal((await fetchRetry('http://test', {})).status, status);
-      assert.equal(calls, 1, 'first version only retries explicit 429 responses');
+      assert.equal(calls, 1, 'only busy rejections (429/503/529) are retried');
     }
-    calls = 0;
+    for (const status of [503, 529]) {
+      calls = 0; resetProviderBusyGates();
+      globalThis.fetch = async () => { calls++; return new Response('{}', { status: calls === 1 ? status : 200 }); };
+      const states = [];
+      assert.equal((await fetchRetry('http://test', {}, (s) => states.push(s))).status, 200);
+      assert.equal(calls, 2, `${status} is retried like 429`);
+      assert.equal(states[0].attempt, 1);
+    }
+    // A limit one request hit makes the next request to the same endpoint
+    // queue locally instead of sending into the same window.
+    calls = 0; resetProviderBusyGates();
+    globalThis.fetch = async () => { calls++; return new Response('{}', { status: calls === 1 ? 429 : 200, headers: calls === 1 ? { 'retry-after': '1' } : {} }); };
+    const first = fetchRetry('http://test/a?x=1', {});
+    await sleep(50);
+    const queuedStates = [];
+    const t0 = Date.now();
+    const second = fetchRetry('http://test/a?x=2', {}, (s) => queuedStates.push(s));
+    assert.equal((await first).status, 200);
+    assert.equal((await second).status, 200);
+    assert.equal(calls, 3, 'the queued request is sent once, after the shared backoff');
+    assert(queuedStates[0]?.queued && queuedStates[0].attempt === 0, 'queued waiter reports queued state');
+    assert(Date.now() - t0 >= 900, 'queued waiter really waited');
+    assert.equal(queuedStates.at(-1), null, 'queued waiter clears its status');
+    calls = 0; resetProviderBusyGates();
     globalThis.fetch = async () => { calls++; return new Response('{}', { status: 429, headers: { 'retry-after': '10' } }); };
     const abort = new AbortController();
     await assert.rejects(fetchRetry('http://test', { signal: abort.signal }, (state) => {
@@ -49,6 +72,7 @@ async function transportChecks() {
       calls++;
       throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
     };
+    resetProviderBusyGates();
     await assert.rejects(fetchRetry('http://test', {}));
     assert.equal(calls, 1, 'ambiguous mid-flight network errors are not replayed');
   } finally { globalThis.fetch = realFetch; }
@@ -116,7 +140,7 @@ try {
   await new Promise((r) => portProbe.close(r));
   base = `http://127.0.0.1:${port}`;
   app = spawn(process.execPath, ['server/dist/index.js'], {
-    cwd: root, env: { ...process.env, DATA_DIR: dataDir, SECRET_KEY: 'retry-test-database-secret', HOST: '127.0.0.1', PORT: String(port), COOKIE_SECURE: 'false' },
+    cwd: root, env: { ...process.env, DATA_DIR: dataDir, SECRET_KEY: 'retry-test-database-secret', HOST: '127.0.0.1', PORT: String(port), COOKIE_SECURE: 'false', PROVIDER_RETRY_MAX_WAIT_SECONDS: '12' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   app.stdout.on('data', (s) => { appLogs += s; }); app.stderr.on('data', (s) => { appLogs += s; });

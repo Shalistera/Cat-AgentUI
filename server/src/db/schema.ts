@@ -217,6 +217,7 @@ export const messages = sqliteTable('messages', {
   // 'length' / 'content_filter' / 'incomplete' on a 'done' row = the reply was cut short.
   finishReason: text('finish_reason'),
   error: text('error'),
+  errorCode: text('error_code'), // 'provider_busy' | null
   promptTokens: integer('prompt_tokens'),
   completionTokens: integer('completion_tokens'),
   totalTokens: integer('total_tokens'),

@@ -6,7 +6,7 @@ import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
-import { PROVIDER_BUSY_MESSAGE, ProviderBusyError } from '../providers/sse.js';
+import { ProviderBusyError } from '../providers/sse.js';
 import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch, supportsVertexSearchWithFunctions } from '../providers/gemini.js';
@@ -494,7 +494,7 @@ export function messageDto(m: typeof schema.messages.$inferSelect, bookmarked?: 
   return {
     id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
     status: m.status, finishReason: m.finishReason ?? null, error: m.error,
-    errorCode: m.error === PROVIDER_BUSY_MESSAGE ? 'provider_busy' : undefined,
+    errorCode: m.errorCode === 'provider_busy' ? 'provider_busy' : undefined,
     promptTokens: m.promptTokens, completionTokens: m.completionTokens, totalTokens: m.totalTokens,
     durationMs: m.durationMs, ttftMs: m.ttftMs, createdAt: m.createdAt,
     bookmarked: bookmarked?.has(m.id) ?? false,
@@ -1577,6 +1577,7 @@ export async function chatRoutes(app: FastifyInstance) {
     let status: 'done' | 'error' | 'stopped' = 'done';
     let finishReason: FinishReason | null = null;
     let errMsg: string | null = null;
+    let errCode: 'provider_busy' | null = null;
     let imageCount = 0;
     let outputChars = 0;
     let textTimeoutError: string | null = null;
@@ -1617,8 +1618,8 @@ export async function chatRoutes(app: FastifyInstance) {
       }
       if (state?.delayMs) req.log.warn({
         providerId: provider.id, model: model.modelId,
-        attempt: state.attempt, delayMs: state.delayMs,
-      }, 'Provider busy; retry scheduled');
+        attempt: state.attempt, delayMs: state.delayMs, queued: !!state.queued,
+      }, state.queued ? 'Provider busy; queued behind shared backoff' : 'Provider busy; retry scheduled');
     };
 
     try {
@@ -1900,12 +1901,14 @@ export async function chatRoutes(app: FastifyInstance) {
       } else {
         status = 'error';
         errMsg = redactSensitiveText(e instanceof Error ? e.message : String(e), secretValues);
-        const code = e instanceof ProviderBusyError ? 'provider_busy' : undefined;
-        if (e instanceof ProviderBusyError) req.log.warn({
-          providerId: provider.id, model: model.modelId,
-          detail: redactSensitiveText(e.detail, secretValues),
-        }, 'Provider retry budget exhausted');
-        sse.send('error', { message: errMsg, code });
+        if (e instanceof ProviderBusyError) {
+          errCode = e.code;
+          req.log.warn({
+            providerId: provider.id, model: model.modelId, status: e.status,
+            detail: redactSensitiveText(e.detail, secretValues),
+          }, 'Provider retry budget exhausted');
+        }
+        sse.send('error', { message: errMsg, code: errCode ?? undefined });
       }
     }
     clearTextTimers();
@@ -1968,7 +1971,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const durationMs = Date.now() - t0;
     db.update(schema.messages).set({
       parts: JSON.stringify(finalParts),
-      status, finishReason, error: errMsg,
+      status, finishReason, error: errMsg, errorCode: errCode,
       promptTokens: usage.prompt || null,
       completionTokens: usage.completion || null,
       totalTokens: usage.total || null,

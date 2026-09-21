@@ -54,7 +54,7 @@ export type MessagePart =
   | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; supports?: { text: string; start: number; sources: number[] }[]; label?: string }
   | { type: 'followups'; questions: string[] };
 
-export interface ProviderRetry { attempt: number; maxAttempts: number; delayMs: number }
+export interface ProviderRetry { attempt: number; maxAttempts: number; delayMs: number; queued?: boolean }
 
 export interface Message {
   id: string;

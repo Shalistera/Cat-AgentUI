@@ -339,7 +339,7 @@ export async function imageRoutes(app: FastifyInstance) {
           if (saved.length) await rollbackSavedImages(saved);
           if (job.controller.signal.aborted) { job.status = 'stopped'; return; }
           if (err instanceof ProviderBusyError) req.log.warn({
-            providerId: provider.id, model: model.modelId,
+            providerId: provider.id, model: model.modelId, status: err.status,
             detail: redactSensitiveText(err.detail, secretValues),
           }, 'Image provider retry budget exhausted');
           const rawError = err instanceof Error && err.name === 'TimeoutError'

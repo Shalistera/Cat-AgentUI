@@ -1,11 +1,12 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { ProviderRetry } from '../types.js';
+import { config } from '../config.js';
 
 // Minimal SSE parser over a fetch Response body.
 export interface SseMessage { event: string | null; data: string }
 
 // For network failures, only retry a POST when it provably wasn't sent.
-// Explicit HTTP 429 rejections are handled separately below. Two classes of
+// Explicit busy rejections (429/503/529) are handled separately below. Two classes of
 // connection failures qualify:
 //   * connection-phase failures (DNS / connect / connect-timeout): no bytes
 //     were ever written;
@@ -26,8 +27,11 @@ function isPreSendError(err: unknown): boolean {
   return false;
 }
 
-const MAX_RATE_RETRIES = 3;
-const MAX_RETRY_WAIT_MS = 20_000;
+const MAX_RATE_RETRIES = 5;
+/** Upstream statuses that mean "rejected before doing any work": rate limit
+ * (429), Google "model is overloaded" (503) and Anthropic overloaded (529).
+ * Nothing was generated or billed, so resending is as safe as for 429. */
+export const BUSY_STATUSES = new Set([429, 503, 529]);
 
 function retryAfterMs(value: string | null): number {
   if (!value) return 0;
@@ -37,19 +41,58 @@ function retryAfterMs(value: string | null): number {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
 }
 
-/** Retry explicit HTTP 429 rejections before reading any generated output.
- * Never replay a successful response body, a partial stream, or a tool turn.
+// One rejection means every request to the same endpoint sent in the same
+// window will be rejected too. Remember until when each endpoint asked us to
+// back off, so later callers queue locally instead of piling more requests
+// onto the limit and each learning about it separately.
+const busyUntil = new Map<string, number>();
+function busyKey(url: string): string {
+  try { const u = new URL(url); return u.origin + u.pathname; } catch { return url; }
+}
+function markBusy(key: string, delayMs: number) {
+  busyUntil.set(key, Math.max(busyUntil.get(key) ?? 0, Date.now() + delayMs));
+}
+/** How long callers to this endpoint should hold off right now. */
+function busyWaitMs(key: string): number {
+  const until = busyUntil.get(key);
+  if (!until) return 0;
+  const wait = until - Date.now();
+  if (wait <= 0) { busyUntil.delete(key); return 0; }
+  return wait;
+}
+/** Test hook: forget every remembered backoff. */
+export function resetProviderBusyGates() { busyUntil.clear(); }
+
+/** Retry upstream busy rejections (see BUSY_STATUSES) before reading any
+ * generated output. Never replay a successful response body, a partial
+ * stream, or a tool turn.
  */
 export async function fetchRetry(
   url: string, init: RequestInit & { signal?: AbortSignal },
   onRetry?: (state: ProviderRetry | null) => void,
 ): Promise<Response> {
+  const key = busyKey(url);
+  const budgetMs = config.providerRetryMaxWaitMs;
   let retries = 0;
   let waitedMs = 0;
   let connectionRetried = false;
+  let reported = false;
+  const report = (state: ProviderRetry) => { reported = true; onRetry?.(state); };
   try {
     for (;;) {
       init.signal?.throwIfAborted();
+      // Someone else already hit the limit on this endpoint: wait our turn
+      // (a little spread so the queue doesn't fire as one burst) as long as
+      // the budget allows; otherwise send and let the response decide.
+      const queueMs = busyWaitMs(key);
+      if (queueMs > 0 && waitedMs + queueMs <= budgetMs) {
+        const spread = Math.round(Math.random() * 500);
+        waitedMs += queueMs + spread;
+        report({ attempt: retries, maxAttempts: MAX_RATE_RETRIES, delayMs: queueMs + spread, queued: true });
+        await sleep(queueMs + spread, undefined, { signal: init.signal });
+        init.signal?.throwIfAborted();
+        report({ attempt: retries, maxAttempts: MAX_RATE_RETRIES, delayMs: 0 });
+      }
       let res: Response;
       try {
         res = await fetch(url, init);
@@ -59,30 +102,34 @@ export async function fetchRetry(
         await sleep(300, undefined, { signal: init.signal });
         continue;
       }
-      if (res.status !== 429 || retries >= MAX_RATE_RETRIES) return res;
-      // 1–2s, 2–4s, 4–8s with jitter; respect longer server hints within the
-      // total wait budget. Don't retry early when Retry-After exceeds it.
+      if (!BUSY_STATUSES.has(res.status) || retries >= MAX_RATE_RETRIES) return res;
+      // 1–2s, 2–4s, 4–8s, 8–16s, 16–32s with jitter; respect longer server
+      // hints within the total wait budget. Don't retry early when
+      // Retry-After exceeds it.
       const delayMs = Math.max(
         Math.round(1000 * 2 ** retries * (1 + Math.random())),
         retryAfterMs(res.headers.get('retry-after')),
       );
-      if (waitedMs + delayMs > MAX_RETRY_WAIT_MS) return res;
+      if (waitedMs + delayMs > budgetMs) return res;
       try { await res.body?.cancel(); } catch { /* rejected response discarded */ }
+      markBusy(key, delayMs);
       retries++;
       waitedMs += delayMs;
-      onRetry?.({ attempt: retries, maxAttempts: MAX_RATE_RETRIES, delayMs });
+      report({ attempt: retries, maxAttempts: MAX_RATE_RETRIES, delayMs });
       await sleep(delayMs, undefined, { signal: init.signal });
       init.signal?.throwIfAborted();
-      onRetry?.({ attempt: retries, maxAttempts: MAX_RATE_RETRIES, delayMs: 0 });
+      report({ attempt: retries, maxAttempts: MAX_RATE_RETRIES, delayMs: 0 });
     }
   } finally {
-    if (retries) onRetry?.(null);
+    if (reported) onRetry?.(null);
   }
 }
 
-export const PROVIDER_BUSY_MESSAGE = '模型暂时无法响应，请稍后重试。';
 export class ProviderBusyError extends Error {
-  constructor(readonly detail: string) { super(PROVIDER_BUSY_MESSAGE); }
+  readonly code = 'provider_busy' as const;
+  constructor(name: string, readonly status: number, readonly detail: string) {
+    super(`${name} 的上游模型服务当前繁忙（被限流），已自动等待重试仍未成功，请稍后再试。`);
+  }
 }
 
 const MAX_SSE_BUFFER_CHARS = 2 * 1024 * 1024;
@@ -135,7 +182,6 @@ export async function* sseMessages(res: Response): AsyncGenerator<SseMessage> {
 // plain-language message; real API errors keep the provider's own wording.
 const GATEWAY_STATUS: Record<number, string> = {
   502: '服务暂时不可用,请过一会再试',
-  503: '服务暂时不可用,请过一会再试',
   504: '请求超时,请过一会再试',
   520: '服务暂时不可用,请过一会再试',
   521: '服务暂时不可用,请过一会再试',
@@ -153,7 +199,7 @@ export async function providerError(name: string, res: Response): Promise<Error>
   const body = await readErrorBody(res);
   const gateway = GATEWAY_STATUS[res.status];
   if (gateway) return new Error(`${name}: ${gateway} (${res.status})`);
-  if (res.status === 429) return new ProviderBusyError(body);
+  if (BUSY_STATUSES.has(res.status)) return new ProviderBusyError(name, res.status, body);
   if (looksLikeHtml(body) || !body.trim()) return new Error(`${name}: 上游返回了错误 (${res.status}),请稍后再试`);
   return new Error(`${name} ${res.status}: ${body}`);
 }
