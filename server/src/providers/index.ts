@@ -49,6 +49,9 @@ export interface ProviderRow {
   extraHeadersEnc: string | null;
   failoverThreshold?: number;
   failoverCooldownSeconds?: number;
+  primaryName?: string | null;
+  stripModelPrefix?: string;
+  addModelPrefix?: string;
 }
 
 export type EndpointRow = typeof schema.providerEndpoints.$inferSelect;
@@ -98,7 +101,9 @@ export function toPrimaryRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig 
     vertexLocation: row.vertexLocation,
     vertexSaJson: row.vertexSaJsonEnc ? decryptSecret(row.vertexSaJsonEnc) : null,
     extraHeaders: providerExtraHeaders(row),
-    endpointName: '主线路',
+    endpointName: row.primaryName || '主线路',
+    stripModelPrefix: row.stripModelPrefix ?? '',
+    addModelPrefix: row.addModelPrefix ?? '',
   };
 }
 

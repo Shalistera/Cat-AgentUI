@@ -126,6 +126,9 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: E
     sortOrder: p.sortOrder,
     failoverThreshold: p.failoverThreshold,
     failoverCooldownSeconds: p.failoverCooldownSeconds,
+    primaryName: p.primaryName,
+    stripModelPrefix: p.stripModelPrefix,
+    addModelPrefix: p.addModelPrefix,
     health: publicHealth(primaryLineKey(p.id)),
     endpoints: (endpointRows ?? endpointsOf(p.id)).map(publicEndpoint),
     ...(modelRows ? { models: modelRows.map((m) => publicModel(m, p.type as ProviderType)) } : {}),
@@ -212,6 +215,9 @@ const providerPatchSchema = z.object({
   sortOrder: z.number().int().optional(),
   failoverThreshold: z.number().int().min(1).max(100).optional(),
   failoverCooldownSeconds: z.number().int().min(5).max(86400).optional(),
+  primaryName: z.string().max(64).nullish(),
+  stripModelPrefix: z.string().max(100).nullish(),
+  addModelPrefix: z.string().max(100).nullish(),
 });
 
 const endpointCreateSchema = z.object({
@@ -395,6 +401,9 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.sortOrder !== undefined) patch.sortOrder = d.sortOrder;
     if (d.failoverThreshold !== undefined) patch.failoverThreshold = d.failoverThreshold;
     if (d.failoverCooldownSeconds !== undefined) patch.failoverCooldownSeconds = d.failoverCooldownSeconds;
+    if (d.primaryName !== undefined) patch.primaryName = d.primaryName?.trim() || null;
+    if (d.stripModelPrefix !== undefined) patch.stripModelPrefix = d.stripModelPrefix?.trim() ?? '';
+    if (d.addModelPrefix !== undefined) patch.addModelPrefix = d.addModelPrefix?.trim() ?? '';
 
     if (Object.keys(patch).length) {
       db.update(schema.providers).set(patch).where(eq(schema.providers.id, id)).run();
@@ -509,6 +518,52 @@ export async function providerRoutes(app: FastifyInstance) {
       }
     });
     return { ok: true };
+  });
+
+  // Swap a backup with the provider's own line: the backup's address, key,
+  // headers, Responses setting, label and model rewrite move onto the
+  // provider; the old primary lands in the backup's slot. The model roster,
+  // permissions and usage stay where they are.
+  app.post('/api/admin/provider-endpoints/:id/promote', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const ep = getEndpoint(id);
+    if (!ep) return reply.code(404).send({ error: '备用线路不存在' });
+    const provider = getProvider(ep.providerId);
+    if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
+    if (provider.type === 'gemini' && provider.useVertex) {
+      return reply.code(400).send({ error: 'Vertex AI 鉴权的主线路不能与 API Key 线路互换,请先关闭 Vertex 模式' });
+    }
+    db.transaction(() => {
+      db.update(schema.providers).set({
+        baseUrl: ep.baseUrl,
+        apiKeyEnc: ep.apiKeyEnc,
+        extraHeaders: '{}',
+        extraHeadersEnc: ep.extraHeadersEnc,
+        useResponses: ep.useResponses === null ? provider.useResponses : ep.useResponses,
+        primaryName: ep.name,
+        stripModelPrefix: ep.stripModelPrefix,
+        addModelPrefix: ep.addModelPrefix,
+      }).where(eq(schema.providers.id, provider.id)).run();
+      let legacyHeaders: string | null = provider.extraHeadersEnc;
+      // Pre-0012 plaintext headers, if any survived, move over encrypted.
+      if (!legacyHeaders) {
+        try { legacyHeaders = encryptSecretRecord(providerExtraHeaders(provider)); } catch { legacyHeaders = null; }
+      }
+      db.update(schema.providerEndpoints).set({
+        name: provider.primaryName || '原主线路',
+        baseUrl: provider.baseUrl,
+        apiKeyEnc: provider.apiKeyEnc,
+        extraHeadersEnc: legacyHeaders,
+        useResponses: provider.useResponses,
+        stripModelPrefix: provider.stripModelPrefix,
+        addModelPrefix: provider.addModelPrefix,
+      }).where(eq(schema.providerEndpoints.id, ep.id)).run();
+    });
+    resetLineHealth(primaryLineKey(provider.id));
+    resetLineHealth(ep.id);
+    broadcast('models-updated');
+    return publicProvider(getProvider(provider.id)!);
   });
 
   app.post('/api/admin/provider-endpoints/:id/test', async (req, reply) => {

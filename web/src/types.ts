@@ -404,6 +404,7 @@ export interface AdminProvider {
   enabled: boolean; sortOrder: number;
   avatarUrl: string | null;
   failoverThreshold: number; failoverCooldownSeconds: number;
+  primaryName: string | null; stripModelPrefix: string; addModelPrefix: string;
   health: LineHealth;
   endpoints: AdminProviderEndpoint[];
   models: AdminModel[];

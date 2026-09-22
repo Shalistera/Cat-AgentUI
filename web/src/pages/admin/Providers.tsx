@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  ArrowDown, ArrowUp, Check, ChevronDown, Download, FlaskConical, Pencil, Plus, RotateCcw, Server, Trash2, Upload, X,
+  ArrowDown, ArrowUp, ArrowUpToLine, Check, ChevronDown, Download, FlaskConical, Pencil, Plus, RotateCcw, Server, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
@@ -36,6 +36,9 @@ function ProviderModal({ provider, onClose, onSaved }: {
   const [hasVertexSa, setHasVertexSa] = useState(provider?.hasVertexSa ?? false);
   const [failoverThreshold, setFailoverThreshold] = useState(String(provider?.failoverThreshold ?? 3));
   const [failoverCooldown, setFailoverCooldown] = useState(String(provider?.failoverCooldownSeconds ?? 60));
+  const [primaryName, setPrimaryName] = useState(provider?.primaryName ?? '');
+  const [strip, setStrip] = useState(provider?.stripModelPrefix ?? '');
+  const [add, setAdd] = useState(provider?.addModelPrefix ?? '');
   const [busy, setBusy] = useState(false);
   const saFileRef = useRef<HTMLInputElement>(null);
   const hasBackups = (provider?.endpoints.length ?? 0) > 0;
@@ -94,6 +97,9 @@ function ProviderModal({ provider, onClose, onSaved }: {
       if (!Number.isInteger(cooldown) || cooldown < 5 || cooldown > 86400) { toast('熔断时长需为 5–86400 秒', 'err'); return; }
       body.failoverThreshold = threshold;
       body.failoverCooldownSeconds = cooldown;
+      body.primaryName = primaryName.trim() || null;
+      body.stripModelPrefix = strip.trim();
+      body.addModelPrefix = add.trim();
     }
     if (vertexSaJson.trim()) {
       // Validate here, with a message that says what's wrong — the server
@@ -216,6 +222,21 @@ function ProviderModal({ provider, onClose, onSaved }: {
             valuePlaceholder={isEdit ? '留空保持原值' : 'Header 值'} valueType="password" />
         </Field>
 
+        {isEdit && (
+          <div className="space-y-4 rounded-lg border border-line bg-bg2/30 p-3">
+            <Field label="主线路名称" hint="只在备用线路列表和切换提示里显示;留空显示为「主线路」">
+              <Input value={primaryName} onChange={(e) => setPrimaryName(e.target.value)} placeholder="如 OpenRouter" maxLength={64} />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="去掉模型名前缀" hint="发送前从模型 ID 去掉;一般留空">
+                <Input value={strip} onChange={(e) => setStrip(e.target.value)} placeholder="留空不处理" maxLength={100} />
+              </Field>
+              <Field label="加上模型名前缀" hint="去掉前缀后再加上这个">
+                <Input value={add} onChange={(e) => setAdd(e.target.value)} placeholder="留空不处理" maxLength={100} />
+              </Field>
+            </div>
+          </div>
+        )}
         {isEdit && (
           <div className="grid grid-cols-2 gap-3">
             <Field label="故障切换阈值" hint={hasBackups ? '同一线路连续失败这么多次后暂停使用' : '添加备用线路后生效'}>
@@ -414,6 +435,12 @@ function EndpointRow({ endpoint, provider, index, count, reload, onEdit }: {
     run(async () => { await api.del(`/api/admin/provider-endpoints/${endpoint.id}`); toast('已删除', 'ok'); });
   }
 
+  async function promote() {
+    const primary = provider.primaryName || '主线路';
+    if (!(await confirmDialog('设为主线路', `把「${endpoint.name}」的地址、Key、Headers 和模型名前缀设为主线路,原「${primary}」降为备用线路并占用这个位置。模型列表、权限和用量不变。`))) return;
+    run(async () => { await api.post(`/api/admin/provider-endpoints/${endpoint.id}/promote`); toast('已互换主线路', 'ok'); });
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line px-2.5 py-2">
       <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">{index + 2}</span>
@@ -427,6 +454,7 @@ function EndpointRow({ endpoint, provider, index, count, reload, onEdit }: {
       <div className="ml-auto flex items-center gap-0.5">
         <Button variant="ghost" size="iconXs" title="提高优先级" disabled={busy || index === 0} onClick={() => move(-1)}><ArrowUp size={12} /></Button>
         <Button variant="ghost" size="iconXs" title="降低优先级" disabled={busy || index === count - 1} onClick={() => move(1)}><ArrowDown size={12} /></Button>
+        <Button variant="ghost" size="iconXs" title="与主线路互换(设为主线路)" disabled={busy} onClick={promote}><ArrowUpToLine size={12} /></Button>
         <Button variant="ghost" size="iconXs" title="测试连接" disabled={busy} onClick={test}><FlaskConical size={12} /></Button>
         <Button variant="ghost" size="iconXs" title="编辑" disabled={busy} onClick={onEdit}><Pencil size={12} /></Button>
         <Toggle checked={endpoint.enabled} disabled={busy}
@@ -478,7 +506,8 @@ function BackupLines({ provider, reload }: { provider: AdminProvider; reload(): 
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line bg-bg1 px-2.5 py-2">
         <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">1</span>
         <StatusDot tone={provider.health.state === 'ok' ? 'ok' : provider.health.state === 'open' ? 'err' : 'warn'} />
-        <span className="text-xs font-medium text-tx">主线路</span>
+        <span className="text-xs font-medium text-tx">{provider.primaryName || '主线路'}</span>
+        {provider.primaryName && <Badge>主</Badge>}
         <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block">
           {usesVertex ? 'Vertex AI' : (provider.baseUrl || DEFAULT_URLS[provider.type])}
         </span>

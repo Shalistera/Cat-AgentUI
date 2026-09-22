@@ -56,6 +56,12 @@ export const providers = sqliteTable('providers', {
   // then probed once. See providers/failover.ts.
   failoverThreshold: integer('failover_threshold').notNull().default(3),
   failoverCooldownSeconds: integer('failover_cooldown_seconds').notNull().default(60),
+  // The provider's own line, described the same way a backup is so the two
+  // can trade places: an optional label (null = "主线路") and the model-id
+  // rewrite applied before sending (see providerEndpoints).
+  primaryName: text('primary_name'),
+  stripModelPrefix: text('strip_model_prefix').notNull().default(''),
+  addModelPrefix: text('add_model_prefix').notNull().default(''),
   enabled: integer('enabled').notNull().default(1),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').notNull(),

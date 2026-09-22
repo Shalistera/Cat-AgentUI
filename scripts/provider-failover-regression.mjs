@@ -338,6 +338,24 @@ try {
   listed = (await request('GET', '/api/admin/providers')).json.find((p) => p.id === provider.id);
   assert.equal(listed.health.state, 'ok'); assert.equal(listed.health.served, 1);
 
+  // Promote: the backup becomes the provider's own line, the old primary its backup.
+  await request('PATCH', `/api/admin/providers/${provider.id}`, { primaryName: 'OpenRouter' });
+  const promoted = (await request('POST', `/api/admin/provider-endpoints/${ep.id}/promote`)).json;
+  assert.equal(promoted.primaryName, 'LiteLLM');
+  assert.equal(promoted.baseUrl, `http://127.0.0.1:${backupPort}/v1`);
+  assert.equal(promoted.stripModelPrefix, 'openai/');
+  const demoted = promoted.endpoints.find((e) => e.id === ep.id);
+  assert.equal(demoted.name, 'OpenRouter'); assert.equal(demoted.baseUrl, `http://127.0.0.1:${primaryPort}/v1`);
+  assert.equal(demoted.stripModelPrefix, ''); assert.equal(demoted.hasKey, true);
+  seen.backup.length = 0; seen.primary.length = 0;
+  evs = await turn();
+  assert(evs.some((e) => e.type === 'delta' && e.data.text.includes('answer from backup')), 'traffic follows the promoted line');
+  assert.deepEqual(seen.backup, ['gpt-x'], 'the promoted line keeps its model rewrite');
+  assert.equal(seen.primary.length, 0);
+  assert.equal((await request('POST', `/api/admin/provider-endpoints/${ep.id}/test`)).json.ok, true, 'demoted line kept the old key');
+  await request('POST', `/api/admin/provider-endpoints/${ep.id}/promote`); // swap back
+  assert.equal((await request('GET', '/api/admin/providers')).json.find((p) => p.id === provider.id).primaryName, 'OpenRouter');
+
   // Deleting the line leaves the provider working on its own.
   await request('DELETE', `/api/admin/provider-endpoints/${ep.id}`);
   await request('DELETE', `/api/admin/provider-endpoints/${second.id}`);
