@@ -61,21 +61,43 @@ export function lineStatus(key: string): LineHealth & { state: LineState } {
   return { ...h, state };
 }
 
-/** Failures that say "this line is unreachable or refusing us", as opposed
- * to "this request is malformed" — only the former justify trying another
- * line, and only they count towards opening the breaker. */
-export function isFallbackWorthy(err: unknown): boolean {
-  if (isNetworkError(err)) return true;
+/** How gateways phrase "I don't serve that model": OpenRouter "unknown
+ * provider for model x" (400), LiteLLM "Invalid model name passed in" (400),
+ * OpenAI "The model `x` does not exist" (404), Gemini "models/x is not found"
+ * (404), Anthropic not_found_error "model: x" (404). */
+const UNKNOWN_MODEL_RE = /model/i;
+const UNKNOWN_MODEL_HINT_RE = /unknown|not found|does not exist|doesn't exist|invalid|not supported|unsupported|no such|not available|unavailable|not_found/i;
+
+export type FailureKind =
+  /** The line is unreachable or refusing us: switch lines, count it. */
+  | 'line'
+  /** This line does not carry the model: switch lines, but it says nothing
+   * about the line's health, so do not count it. */
+  | 'model'
+  /** The request itself is bad: no other line would do better. */
+  | 'request';
+
+export function classifyFailure(err: unknown): FailureKind {
+  if (isNetworkError(err)) return 'line';
   if (err instanceof ProviderHttpError) {
     const s = err.status;
     // 429/503/529 arrive here only after the retry budget ran out.
-    return s >= 500 || s === 401 || s === 403 || s === 408 || s === 429;
+    if (s >= 500 || s === 401 || s === 403 || s === 408 || s === 429) return 'line';
+    if (s === 404) return 'model';
+    if (s === 400 && UNKNOWN_MODEL_RE.test(err.message) && UNKNOWN_MODEL_HINT_RE.test(err.message)) return 'model';
   }
-  return false;
+  return 'request';
+}
+
+/** Failures that justify trying another line. */
+export function isFallbackWorthy(err: unknown): boolean {
+  return classifyFailure(err) !== 'request';
 }
 
 function describe(err: unknown): string {
-  if (err instanceof ProviderHttpError) return `HTTP ${err.status}`;
+  if (err instanceof ProviderHttpError) {
+    return classifyFailure(err) === 'model' ? `该线路没有此模型 (HTTP ${err.status})` : `HTTP ${err.status}`;
+  }
   if (isNetworkError(err)) {
     const cause = (err as { cause?: { code?: string } }).cause;
     return cause?.code ? `网络错误 ${cause.code}` : '网络错误';
@@ -153,15 +175,18 @@ async function* runLines<T>(
       first(); // an empty-but-OK answer still counts as the line working
       return;
     } catch (err) {
-      if (produced || req.signal.aborted || !isFallbackWorthy(err)) {
+      const kind = produced || req.signal.aborted ? 'request' : classifyFailure(err);
+      if (kind === 'request') {
         if (probe) h.probing = false;
         throw err;
       }
-      markFailure(key, err, threshold, cooldownMs);
+      if (kind === 'line') markFailure(key, err, threshold, cooldownMs);
+      else if (probe) h.probing = false; // the line answered; the probe is settled either way
       const next = order[i + 1];
       const from = line.endpointName ?? '主线路';
       console.warn(`[failover] provider ${cfg.id} line "${from}" failed (${describe(err)}), `
-        + `${h.failures}/${threshold} consecutive${h.openUntil > Date.now() ? ', breaker open' : ''}`
+        + (kind === 'model' ? 'model unknown on this line (not counted)'
+          : `${h.failures}/${threshold} consecutive${h.openUntil > Date.now() ? ', breaker open' : ''}`)
         + (next ? `; trying "${next.line.endpointName ?? '主线路'}"` : '; no line left'));
       if (!next) throw err;
       req.onFailover?.({ from, to: next.line.endpointName ?? '主线路', reason: describe(err) });

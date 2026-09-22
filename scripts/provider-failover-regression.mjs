@@ -83,6 +83,31 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
   assert.equal(lineStatus('prov:primary').failures, 0);
 }
 
+// 2b. "this line doesn't carry the model" switches lines but never counts toward the breaker
+{
+  resetLineHealth();
+  const unknown = [
+    new ProviderHttpError('OpenAI 400: unknown provider for model gpt-image-2.5-sunburst', 400),
+    new ProviderHttpError('OpenAI 400: Invalid model name passed in model=gpt-x', 400),
+    new ProviderHttpError('OpenAI 404: The model `gpt-x` does not exist', 404),
+    new ProviderHttpError('Gemini 404: models/gpt-x is not found for API version v1beta', 404),
+  ];
+  for (const err of unknown) {
+    const { adapter, calls } = fake({ primary: [err] });
+    const notices = [];
+    const out = await collect(adapter.streamChat(cfg(), req({ onFailover: (i) => notices.push(i) })));
+    assert.equal(out[0].text, 'b1-hi', err.message);
+    assert.deepEqual(calls.map((c) => c.key), ['primary', 'b1']);
+    assert.match(notices[0].reason, /没有此模型/);
+  }
+  assert.equal(lineStatus('prov:primary').failures, 0, 'unknown-model answers do not open the breaker');
+  assert.equal(lineStatus('prov:primary').state, 'ok');
+  // Other 400s (bad payload) still stay put.
+  const { adapter, calls } = fake({ primary: [new ProviderHttpError('OpenAI 400: messages[0].content is required', 400)] });
+  await assert.rejects(collect(adapter.streamChat(cfg(), req())), { status: 400 });
+  assert.equal(calls.length, 1);
+}
+
 // 3. a failure after output started belongs to the request, not the line
 {
   resetLineHealth();
