@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { withCanvasCsp } from '../sandboxedHtml';
 import {
-  ChevronLeft, Download, FileCode, FileImage, FileText, File as FileIcon, FolderOpen, Pencil,
+  ChevronLeft, Copy, Download, FileCode, FileImage, FileText, File as FileIcon, FolderOpen, Pencil,
   RefreshCw, Save, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, errMsg, uploadWorkspaceFile } from '../api';
@@ -76,6 +76,7 @@ function FileView({ chatId, file, onBack, onChanged }: {
 
   const load = useCallback(() => {
     if (!isText) { setText(null); return; }
+    setText(null);
     setError(null);
     api.get<{ text: string }>(`${fileUrl(chatId, file.path)}&text=1`)
       .then((r) => setText(r.text))
@@ -95,6 +96,17 @@ function FileView({ chatId, file, onBack, onChanged }: {
       onChanged();
       toast('已保存', 'ok');
     } catch (e) { toast(errMsg(e), 'err'); } finally { setSaving(false); }
+  }
+
+  const copyLabel = editing ? '复制草稿' : isMd || isHtml ? '复制源码' : ext === 'docx' ? '复制文本' : '复制内容';
+  async function copy() {
+    if (text === null || error) return;
+    try {
+      await navigator.clipboard.writeText(editing ? draft : text);
+      toast('已复制', 'ok');
+    } catch {
+      toast('复制失败，请检查浏览器剪贴板权限，或手动选择内容复制。', 'err');
+    }
   }
 
   let body: ReactNode;
@@ -140,6 +152,12 @@ function FileView({ chatId, file, onBack, onChanged }: {
         {(isMd || isHtml) && !editing && (
           <button className="h-7 cursor-pointer rounded-md px-2 text-[11px] text-tx2 hover:bg-bg3 hover:text-tx" onClick={() => setRendered((v) => !v)}>
             {rendered ? '源码' : '预览'}
+          </button>
+        )}
+        {isText && (
+          <button type="button" className={`${headBtn} shrink-0`} title={copyLabel} aria-label={copyLabel}
+            onClick={copy} disabled={text === null || error !== null}>
+            <Copy size={13} />
           </button>
         )}
         {editable && !editing && (
@@ -273,7 +291,7 @@ export function WorkspacePanel() {
       onDrop={(e) => { e.preventDefault(); dragDepth.current = 0; setDragging(false); uploadFiles(e.dataTransfer.files); }}
     >
       {selectedFile ? (
-        <FileView chatId={chatId} file={selectedFile} onBack={() => setSelected(null)} onChanged={bump} />
+        <FileView key={`${chatId}:${selectedFile.path}`} chatId={chatId} file={selectedFile} onBack={() => setSelected(null)} onChanged={bump} />
       ) : (
         <>
           <div className="flex items-center justify-between border-b border-line bg-bg2 py-1.5 pl-4 pr-2">

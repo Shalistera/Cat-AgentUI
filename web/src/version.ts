@@ -19,6 +19,12 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-09-22',
+    items: [
+      '工作区文件预览新增复制按钮:可复制文本、代码、Markdown/HTML 源码和 Word 文档提取的文本;编辑时复制当前草稿。',
+    ],
+  },
+  {
     date: '2026-09-21',
     items: [
       '模型繁忙时自动等待并有限重试,对话和绘图显示重试进度并可取消。持续繁忙时保留问题、附件或参考图,可在原位置一键重试;已输出的内容和工具调用不会自动从头重跑。',
