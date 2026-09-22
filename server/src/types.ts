@@ -61,6 +61,27 @@ export interface ProviderRuntimeConfig {
   vertexLocation: string | null;
   vertexSaJson: string | null; // decrypted
   extraHeaders: Record<string, string>;
+  /** Which line this config points at: the provider's own ('primary') or a
+   * backup endpoint's row id. Keys the circuit-breaker state. */
+  endpointId?: string;
+  /** Admin-facing name of the line, for notices and logs. */
+  endpointName?: string;
+  /** Model-id rewrite for gateways that name the same model differently. */
+  stripModelPrefix?: string;
+  addModelPrefix?: string;
+  /** Cap on the busy-retry wait for this line; unset = PROVIDER_RETRY_MAX_WAIT_SECONDS. */
+  retryBudgetMs?: number;
+  /** Lines to try, in order, when this one fails before producing output. */
+  fallbacks?: ProviderRuntimeConfig[];
+  failoverThreshold?: number;
+  failoverCooldownMs?: number;
+}
+
+export interface ProviderFailover {
+  /** The line that just failed and the one now being tried. */
+  from: string;
+  to: string;
+  reason: string;
 }
 
 export interface ToolDef {
@@ -143,6 +164,7 @@ export interface ChatRequest {
   reasoning?: ReasoningRequest;
   signal: AbortSignal;
   onRetry?: (state: ProviderRetry | null) => void;
+  onFailover?: (info: ProviderFailover) => void;
 }
 
 export type AdapterEvent =
@@ -163,6 +185,7 @@ export interface ImageGenRequest {
   n?: number;
   signal: AbortSignal;
   onRetry?: (state: ProviderRetry | null) => void;
+  onFailover?: (info: ProviderFailover) => void;
   // optional input images for editing (nano banana & gpt-image support image input)
   inputImages?: { mime: string; dataBase64: string }[];
   system?: string;

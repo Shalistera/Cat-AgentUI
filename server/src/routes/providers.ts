@@ -6,12 +6,15 @@ import { db, schema, now } from '../db/index.js';
 import { encryptSecret, newId } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import {
-  allConfiguredSecretValues, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
+  allConfiguredSecretValues, decryptSecretRecord, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
 } from '../secrets.js';
 import { accessUserIds, accessibleOnly, imageModelsAllowed, replaceModelAccess } from '../model-access.js';
 import { checkModelLimit, hasModelLimit, parseLimitPeriod } from '../quota.js';
 import { broadcast } from './events.js';
-import { getAdapter, toRuntimeConfig } from '../providers/index.js';
+import {
+  endpointRuntimeConfig, getRawAdapter, primaryLineKey, toPrimaryRuntimeConfig, type EndpointRow,
+} from '../providers/index.js';
+import { lineStatus, resetLineHealth } from '../providers/failover.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
 import {
   MAX_LEVELS, defaultLevels, effectiveLevels, normalizeLevels, parseLevels, parseMode,
@@ -59,8 +62,48 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
   };
 }
 
+function publicHealth(key: string) {
+  const h = lineStatus(key);
+  return {
+    state: h.state,
+    failures: h.failures,
+    openUntil: h.openUntil > Date.now() ? h.openUntil : null,
+    lastError: h.lastError,
+    lastFailureAt: h.lastFailureAt,
+    served: h.served,
+    tookOver: h.tookOver,
+  };
+}
+
+// SECURITY: like providers, a line's key and header values are write-only.
+function publicEndpoint(e: EndpointRow) {
+  let extraHeaderKeys: string[] = [];
+  try { extraHeaderKeys = Object.keys(decryptSecretRecord(e.extraHeadersEnc)); } catch { /* keep editor usable */ }
+  return {
+    id: e.id,
+    providerId: e.providerId,
+    name: e.name,
+    baseUrl: e.baseUrl,
+    hasKey: !!e.apiKeyEnc,
+    extraHeaderKeys,
+    useResponses: e.useResponses === null ? null : !!e.useResponses,
+    stripModelPrefix: e.stripModelPrefix,
+    addModelPrefix: e.addModelPrefix,
+    priority: e.priority,
+    enabled: !!e.enabled,
+    health: publicHealth(e.id),
+  };
+}
+
+function endpointsOf(providerId: string): EndpointRow[] {
+  return db.select().from(schema.providerEndpoints)
+    .where(eq(schema.providerEndpoints.providerId, providerId))
+    .orderBy(asc(schema.providerEndpoints.priority), asc(schema.providerEndpoints.createdAt))
+    .all();
+}
+
 // SECURITY: API keys, Vertex SA JSON, and custom header values are write-only.
-function publicProvider(p: ProviderRow, modelRows?: ModelRow[]) {
+function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: EndpointRow[]) {
   let extraHeaderKeys: string[] = [];
   try { extraHeaderKeys = Object.keys(providerExtraHeaders(p)); } catch { /* keep editor usable */ }
   return {
@@ -81,6 +124,10 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[]) {
     avatarUrl: p.avatar ? avatarUrl(p.id, p.avatar) : null,
     enabled: !!p.enabled,
     sortOrder: p.sortOrder,
+    failoverThreshold: p.failoverThreshold,
+    failoverCooldownSeconds: p.failoverCooldownSeconds,
+    health: publicHealth(primaryLineKey(p.id)),
+    endpoints: (endpointRows ?? endpointsOf(p.id)).map(publicEndpoint),
     ...(modelRows ? { models: modelRows.map((m) => publicModel(m, p.type as ProviderType)) } : {}),
   };
 }
@@ -163,6 +210,23 @@ const providerPatchSchema = z.object({
   preserveExtraHeaderKeys: z.array(z.string().max(200)).max(200).optional(),
   enabled: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
+  failoverThreshold: z.number().int().min(1).max(100).optional(),
+  failoverCooldownSeconds: z.number().int().min(5).max(86400).optional(),
+});
+
+const endpointCreateSchema = z.object({
+  name: z.string().min(1).max(64),
+  baseUrl: z.string().max(300).nullish(),
+  apiKey: z.string().max(500).nullish(),
+  extraHeaders: z.record(z.string(), z.string()).nullish(),
+  useResponses: z.boolean().nullish(),
+  stripModelPrefix: z.string().max(100).nullish(),
+  addModelPrefix: z.string().max(100).nullish(),
+  enabled: z.boolean().optional(),
+});
+
+const endpointPatchSchema = endpointCreateSchema.partial().extend({
+  preserveExtraHeaderKeys: z.array(z.string().max(200)).max(200).optional(),
 });
 
 const modelsAddSchema = z.object({
@@ -236,7 +300,14 @@ export async function providerRoutes(app: FastifyInstance) {
       const list = byProvider.get(m.providerId);
       if (list) list.push(m); else byProvider.set(m.providerId, [m]);
     }
-    return provRows.map((p) => publicProvider(p, byProvider.get(p.id) ?? []));
+    const endpointRows = db.select().from(schema.providerEndpoints)
+      .orderBy(asc(schema.providerEndpoints.priority), asc(schema.providerEndpoints.createdAt)).all();
+    const endpointsBy = new Map<string, EndpointRow[]>();
+    for (const e of endpointRows) {
+      const list = endpointsBy.get(e.providerId);
+      if (list) list.push(e); else endpointsBy.set(e.providerId, [e]);
+    }
+    return provRows.map((p) => publicProvider(p, byProvider.get(p.id) ?? [], endpointsBy.get(p.id) ?? []));
   });
 
   app.post('/api/admin/providers', async (req, reply) => {
@@ -322,12 +393,150 @@ export async function providerRoutes(app: FastifyInstance) {
     }
     if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
     if (d.sortOrder !== undefined) patch.sortOrder = d.sortOrder;
+    if (d.failoverThreshold !== undefined) patch.failoverThreshold = d.failoverThreshold;
+    if (d.failoverCooldownSeconds !== undefined) patch.failoverCooldownSeconds = d.failoverCooldownSeconds;
 
     if (Object.keys(patch).length) {
       db.update(schema.providers).set(patch).where(eq(schema.providers.id, id)).run();
       broadcast('models-updated');
     }
     return publicProvider(getProvider(id)!);
+  });
+
+  // --- admin: backup lines (provider endpoints) ---
+
+  /** Merge write-only header values the same way the provider editor does. */
+  function mergeHeaders(
+    current: Record<string, string>, incoming: Record<string, string> | null | undefined, preserve: string[] | undefined,
+  ): Record<string, string> {
+    const next: Record<string, string> = Object.create(null) as Record<string, string>;
+    for (const key of preserve ?? []) {
+      if (Object.hasOwn(current, key)) next[key] = current[key];
+    }
+    for (const [key, value] of Object.entries(incoming ?? {})) {
+      if (key) next[key] = value;
+    }
+    return next;
+  }
+
+  function getEndpoint(id: string): EndpointRow | undefined {
+    return db.select().from(schema.providerEndpoints).where(eq(schema.providerEndpoints.id, id)).get();
+  }
+
+  app.post('/api/admin/providers/:id/endpoints', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const provider = getProvider(id);
+    if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
+    const body = endpointCreateSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const d = body.data;
+    const existing = endpointsOf(id);
+    if (existing.length >= 10) return reply.code(400).send({ error: '备用线路最多 10 条' });
+    const eid = newId();
+    db.insert(schema.providerEndpoints).values({
+      id: eid,
+      providerId: id,
+      name: d.name,
+      baseUrl: d.baseUrl ? d.baseUrl : null,
+      apiKeyEnc: d.apiKey ? encryptSecret(d.apiKey) : null,
+      extraHeadersEnc: encryptSecretRecord(d.extraHeaders ?? {}),
+      useResponses: d.useResponses == null ? null : d.useResponses ? 1 : 0,
+      stripModelPrefix: d.stripModelPrefix?.trim() ?? '',
+      addModelPrefix: d.addModelPrefix?.trim() ?? '',
+      priority: existing.length ? Math.max(...existing.map((e) => e.priority)) + 1 : 0,
+      enabled: d.enabled === false ? 0 : 1,
+      createdAt: now(),
+    }).run();
+    return publicEndpoint(getEndpoint(eid)!);
+  });
+
+  app.patch('/api/admin/provider-endpoints/:id', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const row = getEndpoint(id);
+    if (!row) return reply.code(404).send({ error: '备用线路不存在' });
+    const body = endpointPatchSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const d = body.data;
+    const patch: Partial<typeof schema.providerEndpoints.$inferInsert> = {};
+    if (d.name !== undefined) patch.name = d.name;
+    if (d.baseUrl !== undefined) patch.baseUrl = d.baseUrl || null;
+    if (d.apiKey !== undefined) patch.apiKeyEnc = d.apiKey ? encryptSecret(d.apiKey) : null;
+    if (d.useResponses !== undefined) patch.useResponses = d.useResponses == null ? null : d.useResponses ? 1 : 0;
+    if (d.stripModelPrefix !== undefined) patch.stripModelPrefix = d.stripModelPrefix?.trim() ?? '';
+    if (d.addModelPrefix !== undefined) patch.addModelPrefix = d.addModelPrefix?.trim() ?? '';
+    if (d.enabled !== undefined) patch.enabled = d.enabled ? 1 : 0;
+    if (d.extraHeaders !== undefined || d.preserveExtraHeaderKeys !== undefined) {
+      let current: Record<string, string> = Object.create(null) as Record<string, string>;
+      try { current = decryptSecretRecord(row.extraHeadersEnc); } catch { /* explicit replacement can repair it */ }
+      patch.extraHeadersEnc = encryptSecretRecord(mergeHeaders(current, d.extraHeaders, d.preserveExtraHeaderKeys));
+    }
+    if (Object.keys(patch).length) {
+      db.update(schema.providerEndpoints).set(patch).where(eq(schema.providerEndpoints.id, id)).run();
+      // Address or credentials changed: the old failure streak says nothing
+      // about the new line.
+      if (patch.baseUrl !== undefined || patch.apiKeyEnc !== undefined || patch.extraHeadersEnc !== undefined) {
+        resetLineHealth(id);
+      }
+    }
+    return publicEndpoint(getEndpoint(id)!);
+  });
+
+  app.delete('/api/admin/provider-endpoints/:id', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const row = getEndpoint(id);
+    if (!row) return reply.code(404).send({ error: '备用线路不存在' });
+    db.delete(schema.providerEndpoints).where(eq(schema.providerEndpoints.id, id)).run();
+    resetLineHealth(id);
+    return { ok: true };
+  });
+
+  // Priority order for one provider's lines, first item tried first.
+  app.put('/api/admin/providers/:id/endpoints/order', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    if (!getProvider(id)) return reply.code(404).send({ error: 'Provider 不存在' });
+    const body = orderSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const mine = new Set(endpointsOf(id).map((e) => e.id));
+    db.transaction(() => {
+      let i = 0;
+      for (const eid of body.data.ids) {
+        if (!mine.has(eid)) continue;
+        db.update(schema.providerEndpoints).set({ priority: i++ }).where(eq(schema.providerEndpoints.id, eid)).run();
+      }
+    });
+    return { ok: true };
+  });
+
+  app.post('/api/admin/provider-endpoints/:id/test', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const row = getEndpoint(id);
+    if (!row) return reply.code(404).send({ error: '备用线路不存在' });
+    const provider = getProvider(row.providerId);
+    if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
+    try {
+      const cfg = endpointRuntimeConfig(toPrimaryRuntimeConfig(provider), row);
+      const list = await getRawAdapter(provider.type).listModels(cfg);
+      return { ok: true, modelCount: list.length };
+    } catch (err) {
+      return { ok: false, error: redactSensitiveText(errMessage(err), allConfiguredSecretValues()) };
+    }
+  });
+
+  // Close a breaker by hand (the provider's own line or a backup), e.g. after
+  // the operator fixed the gateway and does not want to wait out the cooldown.
+  app.post('/api/admin/providers/:id/health/reset', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const provider = getProvider(id);
+    if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
+    resetLineHealth(primaryLineKey(id));
+    for (const e of endpointsOf(id)) resetLineHealth(e.id);
+    return publicProvider(provider);
   });
 
   // One request per drag/click: renumber in list order instead of a PATCH
@@ -490,7 +699,7 @@ export async function providerRoutes(app: FastifyInstance) {
     const row = getProvider(id);
     if (!row) return reply.code(404).send({ error: 'Provider 不存在' });
     try {
-      const list = await getAdapter(row.type).listModels(toRuntimeConfig(row));
+      const list = await getRawAdapter(row.type).listModels(toPrimaryRuntimeConfig(row));
       const secretValues = allConfiguredSecretValues();
       return {
         ok: true,
@@ -510,7 +719,7 @@ export async function providerRoutes(app: FastifyInstance) {
     const row = getProvider(id);
     if (!row) return reply.code(404).send({ error: 'Provider 不存在' });
     try {
-      const list = await getAdapter(row.type).listModels(toRuntimeConfig(row));
+      const list = await getRawAdapter(row.type).listModels(toPrimaryRuntimeConfig(row));
       return { ok: true, modelCount: list.length };
     } catch (err) {
       return { ok: false, error: redactSensitiveText(errMessage(err), allConfiguredSecretValues()) };

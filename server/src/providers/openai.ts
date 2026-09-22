@@ -121,7 +121,7 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
 
   const res = await fetchRetry(`${base(cfg)}/chat/completions`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-  }, req.onRetry);
+  }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
   if (!res.ok) throw await providerError('OpenAI', res);
 
   // accumulate tool calls by index
@@ -239,7 +239,7 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
 
   const res = await fetchRetry(`${base(cfg)}/responses`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-  }, req.onRetry);
+  }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
   if (!res.ok) throw await providerError('OpenAI(Responses)', res);
 
   let sawToolCall = false;
@@ -318,7 +318,7 @@ export const openaiAdapter: ChatAdapter = {
       });
       res = await fetchRetry(`${base(cfg)}/images/edits`, {
         method: 'POST', headers: headers(cfg, false), body: form, signal: req.signal,
-      }, req.onRetry);
+      }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
     } else {
       const body: Record<string, unknown> = { model: req.model, prompt, n: req.n || 1 };
       if (req.size && req.size !== 'auto') body.size = req.size;
@@ -326,7 +326,7 @@ export const openaiAdapter: ChatAdapter = {
       if (isDallE) body.response_format = 'b64_json'; // gpt-image-* returns b64 by default and rejects this param
       res = await fetchRetry(`${base(cfg)}/images/generations`, {
         method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-      }, req.onRetry);
+      }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
     }
     if (!res.ok) throw await providerError('OpenAI', res);
     const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * (req.n || 1) * 4 / 3) + 1024 * 1024;

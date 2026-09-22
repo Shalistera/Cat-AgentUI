@@ -11,6 +11,7 @@ const tables = {
   users: schema.users,
   sessions: schema.sessions,
   providers: schema.providers,
+  providerEndpoints: schema.providerEndpoints,
   models: schema.models,
   chats: schema.chats,
   messages: schema.messages,

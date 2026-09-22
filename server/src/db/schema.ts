@@ -51,10 +51,37 @@ export const providers = sqliteTable('providers', {
   // brand mark for this provider's type. Stored inline rather than on disk so
   // it survives a plain db copy and needs no cleanup path.
   avatar: text('avatar'),
+  // Failover: after this many consecutive fallback-worthy failures an endpoint
+  // (the provider's own line or a backup) is skipped for cooldown seconds,
+  // then probed once. See providers/failover.ts.
+  failoverThreshold: integer('failover_threshold').notNull().default(3),
+  failoverCooldownSeconds: integer('failover_cooldown_seconds').notNull().default(60),
   enabled: integer('enabled').notNull().default(1),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 });
+
+// Backup lines for a provider: same vendor type and the same model roster, a
+// different gateway. Tried in priority order only when the line before it is
+// unreachable — never round-robin, so prompt caches keep hitting one host.
+export const providerEndpoints = sqliteTable('provider_endpoints', {
+  id: text('id').primaryKey(),
+  providerId: text('provider_id').notNull().references(() => providers.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  baseUrl: text('base_url'),
+  apiKeyEnc: text('api_key_enc'),
+  extraHeadersEnc: text('extra_headers_enc'),
+  // null = follow the provider's setting.
+  useResponses: integer('use_responses'),
+  // Gateways name the same model differently (OpenRouter `openai/gpt-4o`,
+  // LiteLLM `gpt-4o`): strip this prefix from the roster's model id, then add
+  // that one, before sending. Empty = send as-is.
+  stripModelPrefix: text('strip_model_prefix').notNull().default(''),
+  addModelPrefix: text('add_model_prefix').notNull().default(''),
+  priority: integer('priority').notNull().default(0),
+  enabled: integer('enabled').notNull().default(1),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [index('idx_provider_endpoints_provider').on(t.providerId, t.priority)]);
 
 export const models = sqliteTable('models', {
   id: text('id').primaryKey(),

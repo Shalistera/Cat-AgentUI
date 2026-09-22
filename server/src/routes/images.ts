@@ -287,6 +287,9 @@ export async function imageRoutes(app: FastifyInstance) {
             model: model.modelId, prompt, size, quality, n: requestedN,
             signal, inputImages, context,
             onRetry(state) { job.retry = state; },
+            onFailover(info) {
+              console.warn(`[img] job ${job.id}: line "${info.from}" failed (${info.reason}), switched to "${info.to}"`);
+            },
           });
           signal.throwIfAborted();
           const durationMs = Date.now() - t0;

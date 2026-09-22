@@ -225,6 +225,13 @@
       "when": 1789960495044,
       "tag": "0031_message_error_code",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1790063629042,
+      "tag": "0032_provider_endpoints",
+      "breakpoints": true
     }
   ]
 }

@@ -373,6 +373,28 @@ export interface AdminModel {
   };
 }
 
+// In-memory circuit-breaker state of one line (the provider's own or a backup).
+export interface LineHealth {
+  state: 'ok' | 'degraded' | 'open' | 'probing';
+  failures: number;
+  openUntil: number | null;
+  lastError: string | null;
+  lastFailureAt: number | null;
+  served: number;
+  tookOver: number;
+}
+
+// A backup line: same vendor type and model roster, a different gateway.
+// Key/header values are write-only, like the provider's.
+export interface AdminProviderEndpoint {
+  id: string; providerId: string; name: string;
+  baseUrl: string | null; hasKey: boolean; extraHeaderKeys: string[];
+  useResponses: boolean | null;
+  stripModelPrefix: string; addModelPrefix: string;
+  priority: number; enabled: boolean;
+  health: LineHealth;
+}
+
 export interface AdminProvider {
   id: string; name: string; type: 'openai' | 'anthropic' | 'gemini';
   baseUrl: string | null; hasKey: boolean;
@@ -381,6 +403,9 @@ export interface AdminProvider {
   hasExtraHeaders: boolean; extraHeaderKeys: string[];
   enabled: boolean; sortOrder: number;
   avatarUrl: string | null;
+  failoverThreshold: number; failoverCooldownSeconds: number;
+  health: LineHealth;
+  endpoints: AdminProviderEndpoint[];
   models: AdminModel[];
 }
 

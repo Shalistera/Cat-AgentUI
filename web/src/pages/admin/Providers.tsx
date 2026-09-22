@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Check, ChevronDown, Download, FlaskConical, Pencil, Plus, Server, Trash2, Upload, X,
+  ArrowDown, ArrowUp, Check, ChevronDown, Download, FlaskConical, Pencil, Plus, RotateCcw, Server, Trash2, Upload, X,
 } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
@@ -10,7 +10,7 @@ import {
 } from '../../components/ui';
 import { KeyValueEditor, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
 import { ProviderAvatar } from '../../components/ModelAvatar';
-import type { AdminModel, AdminProvider } from '../../types';
+import type { AdminModel, AdminProvider, AdminProviderEndpoint, LineHealth } from '../../types';
 import { DEFAULT_URLS, TYPE_LABELS, type ProviderType } from './provider-common';
 
 // ---------- provider create / edit modal ----------
@@ -34,8 +34,11 @@ function ProviderModal({ provider, onClose, onSaved }: {
   );
   const [hasKey, setHasKey] = useState(provider?.hasKey ?? false);
   const [hasVertexSa, setHasVertexSa] = useState(provider?.hasVertexSa ?? false);
+  const [failoverThreshold, setFailoverThreshold] = useState(String(provider?.failoverThreshold ?? 3));
+  const [failoverCooldown, setFailoverCooldown] = useState(String(provider?.failoverCooldownSeconds ?? 60));
   const [busy, setBusy] = useState(false);
   const saFileRef = useRef<HTMLInputElement>(null);
+  const hasBackups = (provider?.endpoints.length ?? 0) > 0;
 
   const vertexMode = type === 'gemini' && useVertex;
 
@@ -84,6 +87,14 @@ function ProviderModal({ provider, onClose, onSaved }: {
         .map((p) => p.k);
     }
     if (apiKey) body.apiKey = apiKey;
+    if (isEdit) {
+      const threshold = Number(failoverThreshold);
+      const cooldown = Number(failoverCooldown);
+      if (!Number.isInteger(threshold) || threshold < 1 || threshold > 100) { toast('切换阈值需为 1–100 的整数', 'err'); return; }
+      if (!Number.isInteger(cooldown) || cooldown < 5 || cooldown > 86400) { toast('熔断时长需为 5–86400 秒', 'err'); return; }
+      body.failoverThreshold = threshold;
+      body.failoverCooldownSeconds = cooldown;
+    }
     if (vertexSaJson.trim()) {
       // Validate here, with a message that says what's wrong — the server
       // would only answer with a generic 400.
@@ -205,6 +216,19 @@ function ProviderModal({ provider, onClose, onSaved }: {
             valuePlaceholder={isEdit ? '留空保持原值' : 'Header 值'} valueType="password" />
         </Field>
 
+        {isEdit && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="故障切换阈值" hint={hasBackups ? '同一线路连续失败这么多次后暂停使用' : '添加备用线路后生效'}>
+              <Input type="number" min={1} max={100} value={failoverThreshold}
+                onChange={(e) => setFailoverThreshold(e.target.value)} />
+            </Field>
+            <Field label="熔断时长(秒)" hint="暂停多久后再试探一次;成功即回到该线路">
+              <Input type="number" min={5} max={86400} value={failoverCooldown}
+                onChange={(e) => setFailoverCooldown(e.target.value)} />
+            </Field>
+          </div>
+        )}
+
         <ModalActions>
           <Button variant="outline" onClick={onClose}>取消</Button>
           <Button variant="primary" disabled={busy} onClick={submit}>
@@ -213,6 +237,268 @@ function ProviderModal({ provider, onClose, onSaved }: {
         </ModalActions>
       </div>
     </Modal>
+  );
+}
+
+// ---------- backup line create / edit modal ----------
+function EndpointModal({ provider, endpoint, onClose, onSaved }: {
+  provider: AdminProvider; endpoint: AdminProviderEndpoint | null; onClose(): void; onSaved(): Promise<void>;
+}) {
+  const isEdit = endpoint !== null;
+  const [name, setName] = useState(endpoint?.name ?? '');
+  const [baseUrl, setBaseUrl] = useState(endpoint?.baseUrl ?? '');
+  const [apiKey, setApiKey] = useState('');
+  const [hasKey, setHasKey] = useState(endpoint?.hasKey ?? false);
+  const [useResponses, setUseResponses] = useState<'inherit' | 'on' | 'off'>(
+    endpoint?.useResponses == null ? 'inherit' : endpoint.useResponses ? 'on' : 'off',
+  );
+  const [strip, setStrip] = useState(endpoint?.stripModelPrefix ?? '');
+  const [add, setAdd] = useState(endpoint?.addModelPrefix ?? '');
+  const [headers, setHeaders] = useState<KVPair[]>(
+    (endpoint?.extraHeaderKeys ?? []).map((k) => ({ k, v: '' })),
+  );
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (busy) return;
+    if (!name.trim()) { toast('请填写名称', 'err'); return; }
+    if (!isEdit && !baseUrl.trim()) { toast('请填写 API 地址', 'err'); return; }
+    const existingHeaderKeys = new Set(endpoint?.extraHeaderKeys ?? []);
+    const body: Record<string, unknown> = {
+      name: name.trim(),
+      baseUrl: baseUrl.trim() || null,
+      useResponses: useResponses === 'inherit' ? null : useResponses === 'on',
+      stripModelPrefix: strip.trim(),
+      addModelPrefix: add.trim(),
+      extraHeaders: pairsToObject(headers.filter((p) => p.v.length > 0 || !existingHeaderKeys.has(p.k))),
+    };
+    if (isEdit) {
+      body.preserveExtraHeaderKeys = headers
+        .filter((p) => existingHeaderKeys.has(p.k) && p.v.length === 0)
+        .map((p) => p.k);
+    }
+    if (apiKey) body.apiKey = apiKey;
+    setBusy(true);
+    try {
+      if (isEdit) await api.patch(`/api/admin/provider-endpoints/${endpoint.id}`, body);
+      else await api.post(`/api/admin/providers/${provider.id}/endpoints`, body);
+      toast(isEdit ? '已保存' : '已添加备用线路', 'ok');
+      await onSaved();
+      onClose();
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  async function clearKey() {
+    if (!endpoint) return;
+    try {
+      await api.patch(`/api/admin/provider-endpoints/${endpoint.id}`, { apiKey: '' });
+      setHasKey(false); setApiKey('');
+      toast('已清除 API Key', 'ok');
+      await onSaved();
+    } catch (e) { toast(errMsg(e), 'err'); }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={isEdit ? '编辑备用线路' : '添加备用线路'} wide>
+      <div className="space-y-4">
+        <p className="text-xs leading-relaxed text-tx3">
+          备用线路与「{provider.name}」同类型({TYPE_LABELS[provider.type]}),共用同一份模型列表、权限和用量统计。
+          主线路在返回内容前失败时才会用到它,主线路恢复后自动切回。
+        </p>
+        <Field label="名称">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="如 LiteLLM 备用" autoFocus maxLength={64} />
+        </Field>
+        <Field label="API 地址" hint="该线路的网关地址,写到 /v1 或整条接口地址都能识别">
+          <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={DEFAULT_URLS[provider.type]} />
+        </Field>
+        <Field label="API Key">
+          <div className="flex items-center gap-2">
+            <Input
+              type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+              autoComplete="new-password"
+              placeholder={isEdit && hasKey ? '●●●●●●(已保存,留空保持不变)' : 'sk-…'}
+            />
+            {isEdit && hasKey && (
+              <Button variant="outline" size="sm" className="shrink-0 whitespace-nowrap" onClick={clearKey}>清除 Key</Button>
+            )}
+          </div>
+        </Field>
+        {provider.type === 'openai' && (
+          <Field label="Responses API" hint="该网关不支持新版接口时可在这里单独关掉">
+            <Select value={useResponses} onChange={(e) => setUseResponses(e.target.value as 'inherit' | 'on' | 'off')}>
+              <option value="inherit">跟随主线路({provider.useResponses ? '开' : '关'})</option>
+              <option value="on">开</option>
+              <option value="off">关</option>
+            </Select>
+          </Field>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="去掉模型名前缀" hint="如主线路用 openai/gpt-4o,这里填 openai/">
+            <Input value={strip} onChange={(e) => setStrip(e.target.value)} placeholder="留空不处理" maxLength={100} />
+          </Field>
+          <Field label="加上模型名前缀" hint="去掉前缀后再加上这个">
+            <Input value={add} onChange={(e) => setAdd(e.target.value)} placeholder="留空不处理" maxLength={100} />
+          </Field>
+        </div>
+        <Field label="自定义 Headers" hint={isEdit ? '已保存值不回显;留空保持,填写替换,删除行即移除' : undefined}>
+          <KeyValueEditor pairs={headers} onChange={setHeaders} keyPlaceholder="Header 名称"
+            valuePlaceholder={isEdit ? '留空保持原值' : 'Header 值'} valueType="password" />
+        </Field>
+        <ModalActions>
+          <Button variant="outline" onClick={onClose}>取消</Button>
+          <Button variant="primary" disabled={busy} onClick={submit}>
+            {busy && <Spinner className="h-3.5 w-3.5" />}{isEdit ? '保存更改' : '添加备用线路'}
+          </Button>
+        </ModalActions>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------- line health ----------
+function HealthBadge({ health, compact }: { health: LineHealth; compact?: boolean }) {
+  if (health.state === 'open') {
+    const left = health.openUntil ? Math.max(1, Math.ceil((health.openUntil - Date.now()) / 1000)) : 0;
+    return <Badge tone="err">{compact ? '熔断中' : `熔断中 · ${left} 秒后试探`}</Badge>;
+  }
+  if (health.state === 'probing') return <Badge tone="warn">试探中</Badge>;
+  if (health.state === 'degraded') return <Badge tone="warn">{compact ? '有失败' : `连续失败 ${health.failures} 次`}</Badge>;
+  return compact ? null : <Badge tone="ok">正常</Badge>;
+}
+
+function healthDetail(h: LineHealth): string {
+  const bits: string[] = [];
+  if (h.lastError) bits.push(`最近错误:${h.lastError}`);
+  if (h.lastFailureAt) bits.push(`时间 ${new Date(h.lastFailureAt).toLocaleString()}`);
+  if (h.served) bits.push(`已承接 ${h.served} 次`);
+  if (h.tookOver) bits.push(`其中接替 ${h.tookOver} 次`);
+  return bits.join(' · ');
+}
+
+// ---------- backup lines section inside the provider card ----------
+function EndpointRow({ endpoint, provider, index, count, reload, onEdit }: {
+  endpoint: AdminProviderEndpoint; provider: AdminProvider; index: number; count: number;
+  reload(): Promise<void>; onEdit(): void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function run(fn: () => Promise<void>) {
+    if (busy) return;
+    setBusy(true);
+    try { await fn(); await reload(); } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  function move(delta: number) {
+    const ids = provider.endpoints.map((e) => e.id);
+    const j = index + delta;
+    if (j < 0 || j >= ids.length) return;
+    [ids[index], ids[j]] = [ids[j], ids[index]];
+    run(async () => { await api.put(`/api/admin/providers/${provider.id}/endpoints/order`, { ids }); });
+  }
+
+  async function test() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await api.post<{ ok: boolean; modelCount?: number; error?: string }>(`/api/admin/provider-endpoints/${endpoint.id}/test`);
+      if (r.ok) toast(`连接成功,发现 ${r.modelCount ?? 0} 个模型`, 'ok');
+      else toast(r.error || '连接失败', 'err');
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(false); }
+  }
+
+  async function remove() {
+    if (!(await confirmDialog('删除备用线路', `确定删除「${endpoint.name}」?`))) return;
+    run(async () => { await api.del(`/api/admin/provider-endpoints/${endpoint.id}`); toast('已删除', 'ok'); });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line px-2.5 py-2">
+      <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">{index + 2}</span>
+      <StatusDot tone={!endpoint.enabled ? 'idle' : endpoint.health.state === 'ok' ? 'ok' : endpoint.health.state === 'open' ? 'err' : 'warn'} />
+      <span className="text-xs font-medium text-tx">{endpoint.name}</span>
+      <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block" title={endpoint.baseUrl ?? ''}>
+        {endpoint.baseUrl || DEFAULT_URLS[provider.type]}
+      </span>
+      {!endpoint.hasKey && <Badge tone="err">未配置 Key</Badge>}
+      {endpoint.enabled && <HealthBadge health={endpoint.health} />}
+      <div className="ml-auto flex items-center gap-0.5">
+        <Button variant="ghost" size="iconXs" title="提高优先级" disabled={busy || index === 0} onClick={() => move(-1)}><ArrowUp size={12} /></Button>
+        <Button variant="ghost" size="iconXs" title="降低优先级" disabled={busy || index === count - 1} onClick={() => move(1)}><ArrowDown size={12} /></Button>
+        <Button variant="ghost" size="iconXs" title="测试连接" disabled={busy} onClick={test}><FlaskConical size={12} /></Button>
+        <Button variant="ghost" size="iconXs" title="编辑" disabled={busy} onClick={onEdit}><Pencil size={12} /></Button>
+        <Toggle checked={endpoint.enabled} disabled={busy}
+          onChange={(v) => run(async () => { await api.patch(`/api/admin/provider-endpoints/${endpoint.id}`, { enabled: v }); })} />
+        <Button variant="dangerGhost" size="iconXs" title="删除" disabled={busy} onClick={remove}><Trash2 size={12} /></Button>
+      </div>
+      {endpoint.health.lastError && (
+        <p className="basis-full pl-7 text-[11px] text-tx3">{healthDetail(endpoint.health)}</p>
+      )}
+    </div>
+  );
+}
+
+function BackupLines({ provider, reload }: { provider: AdminProvider; reload(): Promise<void> }) {
+  const [editing, setEditing] = useState<AdminProviderEndpoint | null | undefined>(undefined);
+  const [resetting, setResetting] = useState(false);
+  const anyTrouble = provider.health.state !== 'ok' || provider.endpoints.some((e) => e.health.state !== 'ok');
+  const usesVertex = provider.type === 'gemini' && provider.useVertex;
+
+  async function resetHealth() {
+    if (resetting) return;
+    setResetting(true);
+    try {
+      await api.post(`/api/admin/providers/${provider.id}/health/reset`);
+      toast('已重置线路状态', 'ok');
+      await reload();
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setResetting(false); }
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-line bg-bg2/30 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold text-tx">备用线路</span>
+        <span className="text-[11px] text-tx3">
+          主线路连续失败 {provider.failoverThreshold} 次后暂停 {provider.failoverCooldownSeconds} 秒,按顺序改走下面的线路
+        </span>
+        <div className="ml-auto flex items-center gap-1.5">
+          {anyTrouble && (
+            <Button variant="outline" size="sm" disabled={resetting} onClick={resetHealth}>
+              {resetting ? <Spinner className="h-3.5 w-3.5" /> : <RotateCcw size={13} />}重置状态
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={() => setEditing(null)}>
+            <Plus size={13} />添加线路
+          </Button>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line bg-bg1 px-2.5 py-2">
+        <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">1</span>
+        <StatusDot tone={provider.health.state === 'ok' ? 'ok' : provider.health.state === 'open' ? 'err' : 'warn'} />
+        <span className="text-xs font-medium text-tx">主线路</span>
+        <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block">
+          {usesVertex ? 'Vertex AI' : (provider.baseUrl || DEFAULT_URLS[provider.type])}
+        </span>
+        <HealthBadge health={provider.health} />
+        {provider.health.lastError && (
+          <p className="basis-full pl-7 text-[11px] text-tx3">{healthDetail(provider.health)}</p>
+        )}
+      </div>
+      {provider.endpoints.map((e, i) => (
+        <EndpointRow key={e.id} endpoint={e} provider={provider} index={i} count={provider.endpoints.length}
+          reload={reload} onEdit={() => setEditing(e)} />
+      ))}
+      {provider.endpoints.length === 0 && (
+        <p className="px-1 text-[11px] text-tx3">还没有备用线路。加一条同类型的网关(如 LiteLLM),主线路出故障时会自动接替。</p>
+      )}
+      {editing !== undefined && (
+        <EndpointModal key={editing?.id ?? 'new'} provider={provider} endpoint={editing}
+          onClose={() => setEditing(undefined)} onSaved={reload} />
+      )}
+    </div>
   );
 }
 
@@ -522,6 +808,13 @@ function ProviderCard({ provider, reload, onEdit }: {
         <span className="text-[13px] font-semibold text-tx">{provider.name}</span>
         <Badge>{TYPE_LABELS[provider.type]}</Badge>
         {usesVertex && <Badge>Vertex</Badge>}
+        {provider.enabled && provider.endpoints.length > 0 && (
+          provider.health.state === 'open' || provider.health.state === 'probing'
+            ? <Badge tone="err">主线路熔断 · 走备用</Badge>
+            : provider.endpoints.some((e) => e.enabled)
+              ? <Badge tone="acc">{provider.endpoints.filter((e) => e.enabled).length} 条备用线路</Badge>
+              : null
+        )}
         {/* Phones keep only name/type/toggle in the header — the status dot
             already encodes the credential state the hidden badge spells out. */}
         <span className="hidden min-w-0 max-w-[16rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block" title={provider.baseUrl || DEFAULT_URLS[provider.type]}>
@@ -589,6 +882,8 @@ function ProviderCard({ provider, reload, onEdit }: {
               </table>
             </div>
           )}
+
+          <BackupLines provider={provider} reload={reload} />
 
           <p className="text-[11px] leading-relaxed text-tx3">
             视觉/工具/推理等能力与可见性在

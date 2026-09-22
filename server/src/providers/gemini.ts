@@ -248,7 +248,7 @@ export const geminiAdapter: ChatAdapter = {
     const { url, headers } = await endpoint(cfg, req.model, 'streamGenerateContent?alt=sse');
     const res = await fetchRetry(url, {
       method: 'POST', headers, body: JSON.stringify(buildChatBody(req)), signal: req.signal,
-    }, req.onRetry);
+    }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
     if (!res.ok) throw await providerError('Gemini', res);
 
     let usage: any = null;
@@ -375,7 +375,7 @@ export const geminiAdapter: ChatAdapter = {
     for (let i = 0; i < n; i++) {
       const res = await fetchRetry(url, {
         method: 'POST', headers, body: JSON.stringify(body), signal: req.signal,
-      }, req.onRetry);
+      }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
       if (!res.ok) throw await providerError('Gemini', res);
       const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * 4 / 3) + 1024 * 1024;
       const j: any = await readJsonLimited(res, maxJsonBytes);

@@ -16,7 +16,8 @@
     "test:context": "npm run build -w server && node scripts/doc-context-regression.mjs",
     "test:upload-quota": "npm run build -w server && node scripts/upload-quota-regression.mjs",
     "test:provider-retry": "npm run build -w server && node scripts/provider-retry-regression.mjs",
-    "start": "npm run start -w server"
+    "start": "npm run start -w server",
+    "test:provider-failover": "npm run build -w server && node scripts/provider-failover-regression.mjs"
   },
   "devDependencies": {
     "pm2": "^7.0.3"

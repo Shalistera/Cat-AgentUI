@@ -27,6 +27,13 @@ function isPreSendError(err: unknown): boolean {
   return false;
 }
 
+/** A fetch that never reached the peer (DNS / connect / refused / dead
+ * pooled socket) or a mid-flight transport failure. Either way this line did
+ * not answer, which is what failover cares about. */
+export function isNetworkError(err: unknown): boolean {
+  return err instanceof TypeError && err.message === 'fetch failed';
+}
+
 const MAX_RATE_RETRIES = 5;
 /** Upstream statuses that mean "rejected before doing any work": rate limit
  * (429), Google "model is overloaded" (503) and Anthropic overloaded (529).
@@ -70,9 +77,10 @@ export function resetProviderBusyGates() { busyUntil.clear(); }
 export async function fetchRetry(
   url: string, init: RequestInit & { signal?: AbortSignal },
   onRetry?: (state: ProviderRetry | null) => void,
+  opts?: { budgetMs?: number },
 ): Promise<Response> {
   const key = busyKey(url);
-  const budgetMs = config.providerRetryMaxWaitMs;
+  const budgetMs = Math.min(config.providerRetryMaxWaitMs, opts?.budgetMs ?? Infinity);
   let retries = 0;
   let waitedMs = 0;
   let connectionRetried = false;
@@ -125,10 +133,18 @@ export async function fetchRetry(
   }
 }
 
-export class ProviderBusyError extends Error {
+/** Any non-2xx answer from a provider, with the status kept so the failover
+ * layer can tell "this line is down" (5xx, auth) from "this request is bad". */
+export class ProviderHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+export class ProviderBusyError extends ProviderHttpError {
   readonly code = 'provider_busy' as const;
-  constructor(name: string, readonly status: number, readonly detail: string) {
-    super(`${name} 的上游模型服务当前繁忙（被限流），已自动等待重试仍未成功，请稍后再试。`);
+  constructor(name: string, status: number, readonly detail: string) {
+    super(`${name} 的上游模型服务当前繁忙（被限流），已自动等待重试仍未成功，请稍后再试。`, status);
   }
 }
 
@@ -198,10 +214,10 @@ function looksLikeHtml(text: string): boolean {
 export async function providerError(name: string, res: Response): Promise<Error> {
   const body = await readErrorBody(res);
   const gateway = GATEWAY_STATUS[res.status];
-  if (gateway) return new Error(`${name}: ${gateway} (${res.status})`);
+  if (gateway) return new ProviderHttpError(`${name}: ${gateway} (${res.status})`, res.status);
   if (BUSY_STATUSES.has(res.status)) return new ProviderBusyError(name, res.status, body);
-  if (looksLikeHtml(body) || !body.trim()) return new Error(`${name}: 上游返回了错误 (${res.status}),请稍后再试`);
-  return new Error(`${name} ${res.status}: ${body}`);
+  if (looksLikeHtml(body) || !body.trim()) return new ProviderHttpError(`${name}: 上游返回了错误 (${res.status}),请稍后再试`, res.status);
+  return new ProviderHttpError(`${name} ${res.status}: ${body}`, res.status);
 }
 
 export async function readErrorBody(res: Response): Promise<string> {

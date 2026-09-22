@@ -80,6 +80,9 @@ export const config = {
   chatProviderIdleTimeoutMs: intEnv('CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS', 120, 1, 600) * 1000,
   // Total time a single upstream call may spend waiting out 429/503/529 before giving up.
   providerRetryMaxWaitMs: intEnv('PROVIDER_RETRY_MAX_WAIT_SECONDS', 60, 0, 600) * 1000,
+  // With a backup line configured, how long a line may sit in busy-retry
+  // before the request moves on to the next line.
+  failoverRetryWaitMs: intEnv('FAILOVER_RETRY_WAIT_SECONDS', 10, 0, 600) * 1000,
 
   // Persistent-storage quotas.
   maxUserUploadBytes: intEnv('MAX_USER_UPLOAD_MB', 512, 1, 100_000) * MIB,

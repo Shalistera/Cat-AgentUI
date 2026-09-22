@@ -1,18 +1,36 @@
+import { and, asc, eq } from 'drizzle-orm';
 import type { ChatAdapter, ProviderRuntimeConfig, ProviderType } from '../types.js';
+import { config } from '../config.js';
 import { decryptSecret } from '../crypto.js';
-import { providerExtraHeaders } from '../secrets.js';
+import { db, schema } from '../db/index.js';
+import { decryptSecretRecord, providerExtraHeaders } from '../secrets.js';
 import { openaiAdapter } from './openai.js';
 import { anthropicAdapter } from './anthropic.js';
 import { geminiAdapter } from './gemini.js';
+import { withFailover } from './failover.js';
 
-const adapters: Record<ProviderType, ChatAdapter> = {
+const rawAdapters: Record<ProviderType, ChatAdapter> = {
   openai: openaiAdapter,
   anthropic: anthropicAdapter,
   gemini: geminiAdapter,
 };
 
+const adapters: Record<ProviderType, ChatAdapter> = {
+  openai: withFailover(openaiAdapter),
+  anthropic: withFailover(anthropicAdapter),
+  gemini: withFailover(geminiAdapter),
+};
+
+/** The adapter callers use: walks the provider's backup lines on failure. */
 export function getAdapter(type: string): ChatAdapter {
   const a = adapters[type as ProviderType];
+  if (!a) throw new Error(`未知的 Provider 类型: ${type}`);
+  return a;
+}
+
+/** The bare vendor adapter, for testing one specific line. */
+export function getRawAdapter(type: string): ChatAdapter {
+  const a = rawAdapters[type as ProviderType];
   if (!a) throw new Error(`未知的 Provider 类型: ${type}`);
   return a;
 }
@@ -29,9 +47,46 @@ export interface ProviderRow {
   vertexSaJsonEnc: string | null;
   extraHeaders: string;
   extraHeadersEnc: string | null;
+  failoverThreshold?: number;
+  failoverCooldownSeconds?: number;
 }
 
-export function toRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
+export type EndpointRow = typeof schema.providerEndpoints.$inferSelect;
+
+export function primaryLineKey(providerId: string): string {
+  return `${providerId}:primary`;
+}
+
+/** A backup line's config: same vendor type as the provider, its own
+ * gateway address, key and headers, always API-key auth (never Vertex). */
+export function endpointRuntimeConfig(base: ProviderRuntimeConfig, e: EndpointRow): ProviderRuntimeConfig {
+  return {
+    id: base.id,
+    type: base.type,
+    baseUrl: e.baseUrl,
+    apiKey: e.apiKeyEnc ? decryptSecret(e.apiKeyEnc) : null,
+    useResponses: e.useResponses === null ? base.useResponses : !!e.useResponses,
+    useVertex: false,
+    vertexProject: null,
+    vertexLocation: null,
+    vertexSaJson: null,
+    extraHeaders: decryptSecretRecord(e.extraHeadersEnc, '备用线路自定义 Headers'),
+    endpointId: e.id,
+    endpointName: e.name,
+    stripModelPrefix: e.stripModelPrefix,
+    addModelPrefix: e.addModelPrefix,
+  };
+}
+
+function enabledEndpoints(providerId: string): EndpointRow[] {
+  return db.select().from(schema.providerEndpoints)
+    .where(and(eq(schema.providerEndpoints.providerId, providerId), eq(schema.providerEndpoints.enabled, 1)))
+    .orderBy(asc(schema.providerEndpoints.priority), asc(schema.providerEndpoints.createdAt))
+    .all();
+}
+
+/** The provider's own line only — what the admin "test" and model listing use. */
+export function toPrimaryRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
   return {
     id: row.id,
     type: row.type as ProviderType,
@@ -43,5 +98,22 @@ export function toRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
     vertexLocation: row.vertexLocation,
     vertexSaJson: row.vertexSaJsonEnc ? decryptSecret(row.vertexSaJsonEnc) : null,
     extraHeaders: providerExtraHeaders(row),
+    endpointName: '主线路',
   };
+}
+
+/** The provider's line plus its enabled backups, ready for getAdapter(). With
+ * a backup behind it, a line's busy-retry wait is capped so the user is not
+ * left staring at a countdown while a working line sits idle; the last line
+ * keeps the full budget since nothing comes after it. */
+export function toRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
+  const primary = toPrimaryRuntimeConfig(row);
+  const backups = enabledEndpoints(row.id).map((e) => endpointRuntimeConfig(primary, e));
+  if (!backups.length) return primary;
+  const lines = [primary, ...backups];
+  for (let i = 0; i < lines.length - 1; i++) lines[i].retryBudgetMs = config.failoverRetryWaitMs;
+  primary.fallbacks = backups;
+  primary.failoverThreshold = row.failoverThreshold ?? 3;
+  primary.failoverCooldownMs = (row.failoverCooldownSeconds ?? 60) * 1000;
+  return primary;
 }

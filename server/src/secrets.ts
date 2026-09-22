@@ -108,6 +108,12 @@ export function allConfiguredSecretValues(extra: readonly string[] = []): string
     for (const value of providerSecretValues(row)) out.add(value);
   }
   for (const row of db.select({
+    apiKeyEnc: schema.providerEndpoints.apiKeyEnc,
+    extraHeadersEnc: schema.providerEndpoints.extraHeadersEnc,
+  }).from(schema.providerEndpoints).all()) {
+    for (const value of providerSecretValues({ ...row, vertexSaJsonEnc: null, extraHeaders: '{}' })) out.add(value);
+  }
+  for (const row of db.select({
     envEnc: schema.mcpServers.envEnc,
     headersEnc: schema.mcpServers.headersEnc,
   }).from(schema.mcpServers).all()) {

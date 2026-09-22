@@ -27,7 +27,7 @@ import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsF
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
-  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderRetry,
+  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry,
 } from '../types.js';
 import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
@@ -1610,6 +1610,14 @@ export async function chatRoutes(app: FastifyInstance) {
       textTurnTimer = null;
       clearProviderIdleTimer();
     };
+    // A backup line took over: say so once per switch so a slower or
+    // differently-cached answer has an explanation, and reset the idle clock
+    // since the new line starts from zero.
+    const onFailover = (info: ProviderFailover) => {
+      sse.send('notice', { message: `线路「${info.from}」暂时不可用(${info.reason}),已切换到「${info.to}」` });
+      if (!model.imageGen && !controller.signal.aborted) resetProviderIdleTimer();
+      req.log.warn({ providerId: provider.id, model: model.modelId, ...info }, 'Provider line failover');
+    };
     const onRetry = (state: ProviderRetry | null) => {
       sse.send('retry', state);
       if (!model.imageGen && !controller.signal.aborted) {
@@ -1634,6 +1642,7 @@ export async function chatRoutes(app: FastifyInstance) {
             prompt,
             n: 1,
             onRetry,
+            onFailover,
             signal: AbortSignal.any([controller.signal, AbortSignal.timeout(IMAGE_TIMEOUT_MS)]),
             inputImages: refImages.length ? refImages : undefined,
             system: chat.systemPrompt || undefined,
@@ -1706,6 +1715,7 @@ export async function chatRoutes(app: FastifyInstance) {
               reasoning: resolveReasoning(chat.reasoningEffort, model, provider.type as ProviderType),
               signal: controller.signal,
               onRetry,
+              onFailover,
             })) {
               resetProviderIdleTimer();
               if (ev.type === 'text') {
