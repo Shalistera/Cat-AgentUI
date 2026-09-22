@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
   Info, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
@@ -9,6 +9,8 @@ import { fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
 import { useAuth, useModels, useSubagentProgress } from '../store';
 import { Markdown } from './Markdown';
+import { WorkspaceFileLink } from './WorkspaceFileLink';
+import { normalizeWorkspacePath } from '../workspaceLinks';
 import { injectCitations } from '../citations';
 import { ModelAvatar } from './ModelAvatar';
 import { Button, Popover, Spinner } from './ui';
@@ -248,15 +250,19 @@ function Disclosure({ open, onToggle, icon, label, meta, children }: {
 }) {
   return (
     <div className="my-2.5 overflow-hidden rounded-lg border border-line bg-bg2/40">
-      <button
+      <div
         className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-xs transition-colors hover:bg-bg2"
         onClick={onToggle}
       >
         {icon}
         {label}
         {meta}
-        {open ? <ChevronDown size={13} className="ml-auto shrink-0 text-tx3" /> : <ChevronRight size={13} className="ml-auto shrink-0 text-tx3" />}
-      </button>
+        <button type="button" className="ml-auto flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-tx3 hover:text-tx"
+          aria-label={open ? '收起详情' : '展开详情'} aria-expanded={open}
+          onClick={(e) => { e.stopPropagation(); onToggle(); }}>
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </button>
+      </div>
       {open && children}
     </div>
   );
@@ -360,11 +366,20 @@ function pathOf(call: ToolCallPart): string {
   } catch { return ''; }
 }
 
-function workspaceLabel(call: ToolCallPart, done: boolean): string {
+function workspaceFileName(call: ToolCallPart, chatId?: string, result?: ToolResultPart): ReactNode {
+  const p = pathOf(call);
+  const path = normalizeWorkspacePath(p);
+  const canOpen = ['workspace_read', 'workspace_write', 'workspace_edit', 'convert_file'].includes(call.name);
+  return chatId && path && canOpen && result && !result.isError
+    ? <WorkspaceFileLink chatId={chatId} path={path} className="pointer-events-auto text-acc underline decoration-acc/40 underline-offset-2 hover:decoration-acc">「{p}」</WorkspaceFileLink>
+    : <>「{p}」</>;
+}
+
+function workspaceLabel(call: ToolCallPart, done: boolean, chatId?: string, result?: ToolResultPart): ReactNode {
   const v = WORKSPACE_VERBS[call.name];
   const p = pathOf(call);
   const verb = done ? v.done : v.doing;
-  return p ? `${verb}「${p}」` : verb;
+  return p ? <>{verb}{workspaceFileName(call, chatId, result)}</> : verb;
 }
 
 function queryOf(call: ToolCallPart): string {
@@ -378,9 +393,10 @@ function queryOf(call: ToolCallPart): string {
 // One compact status line for a whole run of consecutive tool calls. Users see
 // what the model is doing, never how (no raw params/results) — expanding shows
 // one row per call, and error text only when a call actually failed.
-function ToolRun({ calls, results, organizing }: {
+function ToolRun({ calls, results, organizing, chatId }: {
   calls: ToolCallPart[];
   results: Map<string, ToolResultPart>;
+  chatId?: string;
   /** All calls answered but the model hasn't produced anything after them yet. */
   organizing: boolean;
 }) {
@@ -395,7 +411,7 @@ function ToolRun({ calls, results, organizing }: {
   const busy = active || organizing;
   const noun = searching ? '搜索' : '调用工具';
 
-  let label: string;
+  let label: ReactNode;
   const lastPending = pending[pending.length - 1];
   if (workspaceOnly && active && lastPending.name === SPAWN_SUBAGENT) {
     label = `子代理正在处理「${subagentTitle(lastPending)}」…`;
@@ -407,7 +423,7 @@ function ToolRun({ calls, results, organizing }: {
     label = subs.length === 1 ? `子代理完成了「${subagentTitle(subs[0])}」` : `${subs.length} 个子任务已完成`;
     if (failedSubs) label += `,${failedSubs} 个失败`;
   } else if (workspaceOnly && active) {
-    label = `${workspaceLabel(lastPending, false)}…`;
+    label = <>{workspaceLabel(lastPending, false)}…</>;
   } else if (hasCommand && !organizing) {
     const cmds = calls.filter((c) => c.name === RUN_COMMAND);
     const failedCmds = cmds.filter((c) => results.get(c.id)?.isError).length;
@@ -421,11 +437,14 @@ function ToolRun({ calls, results, organizing }: {
     const shown = writes.length ? writes : calls;
     const names = [...new Set(shown.map((c) => pathOf(c)).filter(Boolean))];
     label = shown.length === 1
-      ? workspaceLabel(shown[0], true)
+      ? workspaceLabel(shown[0], true, chatId, results.get(shown[0].id))
       : names.length
-        ? `${WORKSPACE_VERBS[shown[shown.length - 1].name].done}「${names.slice(0, 3).join('」「')}」${names.length > 3 ? ` 等 ${names.length} 个文件` : ''}`
+        ? <>{WORKSPACE_VERBS[shown[shown.length - 1].name].done}{names.slice(0, 3).map((name) => {
+          const call = shown.filter((c) => pathOf(c) === name).at(-1)!;
+          return <Fragment key={name}>{workspaceFileName(call, chatId, results.get(call.id))}</Fragment>;
+        })}{names.length > 3 ? ` 等 ${names.length} 个文件` : ''}</>
         : `操作了工作区 ${calls.length} 次`;
-    if (failed.length) label += `,${failed.length} 次失败`;
+    if (failed.length) label = <>{label},{failed.length} 次失败</>;
   } else if (active) {
     const q = queryOf(pending[pending.length - 1]);
     label = q ? `正在${noun}「${q}」…` : `正在${noun}…`;
@@ -467,7 +486,7 @@ function ToolRun({ calls, results, organizing }: {
                 <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
                 {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">「{subagentTitle(c)}」</span>}
                 {q && <span className="truncate text-tx3">「{q}」</span>}
-                {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">「{pathOf(c)}」</span>}
+                {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">{workspaceFileName(c, chatId, r)}</span>}
               </div>
               {c.name === SPAWN_SUBAGENT && (
                 <>
@@ -599,6 +618,7 @@ function partSrc(p: Extract<MessagePart, { type: 'image' }>): string | null {
 
 interface Props {
   msg: Message;
+  workspaceChatId?: string;
   isStreaming: boolean; // this message is currently being generated
   pendingLabel?: string; // shown while waiting for the first output
   onCancel?: () => void;
@@ -634,7 +654,7 @@ export function retryStatusText(r: ProviderRetry): string {
   return `模型提供方当前繁忙（限流），约 ${secs} 秒后自动重试…`;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
@@ -742,7 +762,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
       const shown = streamingThis ? p.text : injectCitations(p.text, supports);
       rendered.push(
         <div key={i} data-quotable className={streamingThis ? 'blink-cursor' : ''}>
-          <Markdown text={shown} streaming={streamingThis} canvas={canvas} citations={citations} />
+          <Markdown text={shown} streaming={streamingThis} canvas={canvas} citations={citations} workspaceChatId={workspaceChatId} />
         </div>,
       );
     } else if (p.type === 'tool_call' || p.type === 'tool_result') {
@@ -762,7 +782,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, isStreaming, pending
         const trailing = end === msg.parts.length;
         const allDone = calls.every((c) => resultsByCallId.has(c.id));
         rendered.push(
-          <ToolRun key={start} calls={calls} results={resultsByCallId}
+          <ToolRun key={start} calls={calls} results={resultsByCallId} chatId={workspaceChatId}
             organizing={isStreaming && trailing && allDone} />,
         );
       }

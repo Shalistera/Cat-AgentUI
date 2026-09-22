@@ -134,7 +134,7 @@ function FileView({ chatId, file, onBack, onChanged }: {
       />
     );
   } else if (isMd && rendered) {
-    body = <div className="p-4"><Markdown text={text} /></div>;
+    body = <div className="p-4"><Markdown text={text} workspaceChatId={chatId} /></div>;
   } else if (isHtml && rendered) {
     // No allow-same-origin: a model-written page must not reach our cookies.
     body = <iframe sandbox="allow-scripts allow-modals" srcDoc={withCanvasCsp(text)} title={file.path} className="h-full w-full border-0 bg-white" />;
@@ -214,30 +214,38 @@ function Starters({ compact = false }: { compact?: boolean }) {
 export function WorkspacePanel() {
   const chatId = useWorkspacePanel((s) => s.chatId);
   const home = useWorkspacePanel((s) => s.home);
+  if (!chatId && !home) return null;
+  return <WorkspacePanelContent key={chatId ?? 'home'} chatId={chatId} />;
+}
+
+function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
   const version = useWorkspacePanel((s) => s.version);
   const close = useWorkspacePanel((s) => s.close);
   const bump = useWorkspacePanel((s) => s.bump);
   const [data, setData] = useState<WorkspaceListing | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const selected = useWorkspacePanel((s) => s.selectedPath);
+  const setSelected = useWorkspacePanel((s) => s.selectFile);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
+  const requestId = useRef(0);
 
   const reload = useCallback(() => {
     if (!chatId) return;
+    const id = ++requestId.current;
     api.get<WorkspaceListing>(`/api/chats/${chatId}/workspace`)
-      .then((r) => { setData(r); setError(null); useWorkspacePanel.getState().setCount(chatId, r.files.length); })
-      .catch((e) => setError(errMsg(e)));
+      .then((r) => {
+        if (id !== requestId.current) return;
+        setData(r); setError(null); useWorkspacePanel.getState().setCount(chatId, r.files.length);
+      })
+      .catch((e) => { if (id === requestId.current) setError(errMsg(e)); });
   }, [chatId]);
 
-  useEffect(() => { setData(null); setSelected(null); reload(); }, [chatId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { reload(); }, [version, reload]);
+  useEffect(() => { reload(); return () => { requestId.current += 1; }; }, [version, reload]);
 
   const selectedFile = useMemo(() => data?.files.find((f) => f.path === selected) ?? null, [data, selected]);
-  // The open file vanished (model or person deleted it) → back to the list.
-  useEffect(() => { if (data && selected && !selectedFile) setSelected(null); }, [data, selected, selectedFile]);
 
   async function uploadFiles(files: FileList | File[] | null) {
     if (!chatId || !files || !files.length) return;
@@ -260,7 +268,6 @@ export function WorkspacePanel() {
     } catch (e) { toast(errMsg(e), 'err'); }
   }
 
-  if (!chatId && !home) return null;
   // Home (no chat yet): guidance only; uploads need a chat and appear once
   // the first message creates one.
   if (!chatId) {
@@ -296,6 +303,7 @@ export function WorkspacePanel() {
         <>
           <div className="flex items-center justify-between border-b border-line bg-bg2 py-1.5 pl-4 pr-2">
             <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3">
+              {selected && <button className={headBtn} title="返回文件列表" onClick={() => setSelected(null)}><ChevronLeft size={15} /></button>}
               <FolderOpen size={13} /> 工作区
             </span>
             <div className="flex items-center gap-1">
@@ -313,6 +321,11 @@ export function WorkspacePanel() {
               <p className="p-4 text-sm text-err">{error}</p>
             ) : !data ? (
               <div className="flex justify-center py-10 text-tx3"><Spinner /></div>
+            ) : selected ? (
+              <div className="p-4 text-sm text-tx2" role="status">
+                <p className="break-words">无法打开「{selected}」：文件不存在或已被删除。</p>
+                <button className="mt-3 cursor-pointer text-acc hover:underline" onClick={() => setSelected(null)}>返回文件列表</button>
+              </div>
             ) : data.files.length === 0 ? (
               <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-sm text-tx3">
                 <FolderOpen size={26} className="text-tx3/70" />

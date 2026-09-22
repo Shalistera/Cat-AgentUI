@@ -34,6 +34,8 @@ import { useHtmlPreview } from '../store';
 import { MermaidBlock } from './Mermaid';
 import { CanvasAnswer } from './CanvasAnswer';
 import { useLightbox } from './Lightbox';
+import { WorkspaceFileLink } from './WorkspaceFileLink';
+import { resolveWorkspaceLink } from '../workspaceLinks';
 
 for (const [name, lang] of Object.entries({
   javascript, typescript, python, java, c, cpp, csharp, go, rust, json, yaml,
@@ -290,12 +292,14 @@ function CiteChip({ n, citations }: { n: number; citations: Citation[] }) {
   );
 }
 
-export const Markdown = memo(function Markdown({ text, streaming = false, canvas = false, citations }: {
+export const Markdown = memo(function Markdown({ text, streaming = false, canvas = false, citations, workspaceChatId }: {
   text: string; streaming?: boolean;
   /** 互动画布: render ```html fences as live pages (settings.canvasAnswers). */
   canvas?: boolean;
   /** Google 搜索 sources, 1-based in `cite:n` links (see citations.ts). */
   citations?: Citation[];
+  /** Context for legacy replies that linked directly to a relative filename. */
+  workspaceChatId?: string;
 }) {
   const normalized = useMemo(() => normalizeMath(text), [text]);
   return (
@@ -321,6 +325,10 @@ export const Markdown = memo(function Markdown({ text, streaming = false, canvas
             if (typeof href === 'string' && citations?.length) {
               const idx = citationIndex(href, citations);
               if (idx >= 0) return <CiteChip n={idx + 1} citations={citations} />;
+            }
+            if (href) {
+              const file = resolveWorkspaceLink(href, window.location.origin, workspaceChatId);
+              if (file) return <WorkspaceFileLink chatId={file.chatId} path={file.path}>{children}</WorkspaceFileLink>;
             }
             return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
           },

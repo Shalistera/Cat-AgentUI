@@ -16,6 +16,7 @@ import { Button, Modal, ModalActions, PageHeader, Textarea, confirmDialog, toast
 import { tabAlert } from '../tabAlert';
 import { notifyDone } from '../notify';
 import { FindBar } from '../components/FindBar';
+import { normalizeWorkspacePath } from '../workspaceLinks';
 import type { ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, ToolConfirmRequest, User } from '../types';
 
 /** First line-ish of a reply's text, for the notification body. */
@@ -56,7 +57,8 @@ interface CompareState {
   challengerModel: ModelInfo;
 }
 
-function CompareView({ original, challenger, challengerModel, streaming, onKeep, onStop }: {
+function CompareView({ original, challenger, challengerModel, streaming, onKeep, onStop, chatId }: {
+  chatId?: string;
   original: Message;
   challenger: Message | null;
   challengerModel: ModelInfo;
@@ -76,7 +78,7 @@ function CompareView({ original, challenger, challengerModel, streaming, onKeep,
           {original.model && <span className="truncate font-mono text-[11px] text-tx3">{fmtModelName(original.model)}</span>}
         </div>
         <div className={body}>
-          <ChatMessage msg={original} isStreaming={false} />
+          <ChatMessage msg={original} isStreaming={false} workspaceChatId={chatId} />
         </div>
         <button className={`${keepBtn} border-line2 text-tx2 hover:bg-bg2 hover:text-tx`}
           disabled={streaming} onClick={() => onKeep('original')}>
@@ -91,7 +93,7 @@ function CompareView({ original, challenger, challengerModel, streaming, onKeep,
         </div>
         <div className={body}>
           {challenger
-            ? <ChatMessage msg={challenger} isStreaming={streaming} onCancel={onStop} />
+            ? <ChatMessage msg={challenger} isStreaming={streaming} onCancel={onStop} workspaceChatId={chatId} />
             : <p className="py-2 text-[13px] text-tx3">正在准备…</p>}
         </div>
         <button className={`${keepBtn} border-acc/50 text-acc hover:bg-acc/10`}
@@ -290,6 +292,13 @@ export default function Chat() {
   const queueStore = useQueue();
 
   const [chat, setChat] = useState<ChatDetail | null>(null);
+  const workspaceFileParam = searchParams.get('file');
+  useEffect(() => {
+    if (!chat || chat.id !== routeId || workspaceFileParam === null) return;
+    const path = normalizeWorkspacePath(workspaceFileParam);
+    if (path) useWorkspacePanel.getState().openFile(chat.id, path);
+    else toast('工作区文件链接无效', 'err');
+  }, [chat?.id, routeId, workspaceFileParam]); // eslint-disable-line react-hooks/exhaustive-deps
   // ALL messages of the chat — every branch. The rendered conversation is the
   // chain ending at leafId (computed below as `path`).
   const [messages, setMessages] = useState<Message[]>([]);
@@ -401,7 +410,10 @@ export default function Chat() {
         if (msgParam) { jumpToRef.current = msgParam; setStick(false); }
         else setStick(true);
         if (findParam) { setFindSeed(findParam); setFindOpen(true); setStick(false); }
-        if (msgParam || findParam) nav(`/chat/${routeId}`, { replace: true });
+        if (msgParam || findParam) {
+          params.delete('msg'); params.delete('find');
+          nav({ pathname: `/chat/${routeId}`, search: params.toString() }, { replace: true });
+        }
       })
       .catch((e) => {
         if (cancelled) return;
@@ -1178,6 +1190,7 @@ export default function Chat() {
                   return (
                     <CompareView
                       key={`compare-${m.id}`}
+                      chatId={chat?.id}
                       original={m}
                       challenger={challenger}
                       challengerModel={compare.challengerModel}
@@ -1193,6 +1206,7 @@ export default function Chat() {
                   <ChatMessage
                     key={m.id}
                     msg={m}
+                    workspaceChatId={chat?.id}
                     isStreaming={streaming && m.id === streamMsgIdRef.current}
                     pendingLabel={modelSel?.imageGen ? '正在生成图片,可能需要 1–3 分钟…' : undefined}
                     onCancel={stop}

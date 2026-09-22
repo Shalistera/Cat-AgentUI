@@ -25,6 +25,7 @@ import { config } from './config.js';
 import { db, schema } from './db/index.js';
 import type { ToolDef } from './types.js';
 import { withChatLock } from './workspace-lock.js';
+import { workspaceFileLink } from './workspace-link.js';
 
 const READ_WINDOW = 20_000; // chars per workspace_read call
 const LIST_LIMIT = 300; // entries shown to the model / in the prompt manifest
@@ -614,8 +615,8 @@ function fmtBytes(n: number): string {
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 
-function manifestLines(listing: WorkspaceListing): string {
-  const lines = listing.files.map((f) => `- ${f.path}(${fmtBytes(f.size)})`);
+function manifestLines(listing: WorkspaceListing, chatId: string): string {
+  const lines = listing.files.map((f) => `- ${workspaceFileLink(chatId, f.path)}(${fmtBytes(f.size)})`);
   if (listing.truncated) lines.push(`…(文件过多,仅列出前 ${listing.files.length} 个)`);
   return lines.join('\n');
 }
@@ -624,7 +625,7 @@ function manifestLines(listing: WorkspaceListing): string {
     current manifest so the model knows what already exists without a call. */
 export function buildWorkspacePrompt(chatId: string): string {
   const listing = listWorkspace(chatId, LIST_LIMIT);
-  const manifest = listing.files.length ? manifestLines(listing) : '(工作区目前为空)';
+  const manifest = listing.files.length ? manifestLines(listing, chatId) : '(工作区目前为空)';
   return [
     '[工作区]',
     '本对话有一个私有的文件工作区,用户能在界面右侧的「工作区」面板查看、预览、下载、上传和删除其中的文件。你通过 workspace_* 工具读写它。用法:',
@@ -632,6 +633,7 @@ export function buildWorkspacePrompt(chatId: string): string {
     '- 修改已有文件时,先 workspace_read 核对原文,再用 workspace_edit 做局部替换;不要为了改几句话就用 workspace_write 整篇重写。',
     '- 文件名要有意义并带扩展名(如 方案.md、数据.csv、index.html)。用户上传到工作区的文件,先读取再处理。',
     '- 文件已经写好后,不要再把整份内容复制到回复里。',
+    `- 提及工作区成果时,用可点击的 Markdown 文件链接。优先原样使用工具结果或下方文件清单给出的链接;格式为 [文件名](/chat/${chatId}?file=URL编码后的工作区相对路径),例如 ${workspaceFileLink(chatId, '方案.md')}。点击会打开工作区中的该文件。不要把文件名拼成 /chat/文件名,不要编造域名、下载地址或本地磁盘地址。文件尚未成功生成时不要声称已可打开。`,
     `当前文件:\n${manifest}`,
   ].join('\n');
 }
@@ -647,7 +649,7 @@ export async function callWorkspaceTool(chatId: string, name: string, argsJson: 
       case 'workspace_list': {
         const listing = listWorkspace(chatId, LIST_LIMIT);
         if (!listing.files.length) return { result: '工作区目前为空。', isError: false };
-        return { result: `${manifestLines(listing)}\n共 ${listing.files.length} 个文件,${fmtBytes(listing.bytes)}`, isError: false };
+        return { result: `${manifestLines(listing, chatId)}\n共 ${listing.files.length} 个文件,${fmtBytes(listing.bytes)}`, isError: false };
       }
       case 'workspace_read': {
         const rel = str('path');
@@ -660,14 +662,14 @@ export async function callWorkspaceTool(chatId: string, name: string, argsJson: 
         const footer = end < text.length
           ? `</file>\n(未完,继续读取请传 offset=${end})`
           : '</file>';
-        return { result: `${header}\n${slice}\n${footer}`, isError: false };
+        return { result: `${header}\n${slice}\n${footer}\n文件链接:${workspaceFileLink(chatId, resolveSafe(chatId, rel).rel)}`, isError: false };
       }
       case 'workspace_write': {
         const rel = str('path');
         if (!rel) return { result: '缺少 path 参数', isError: true };
         if (typeof args.content !== 'string') return { result: '缺少 content 参数', isError: true };
         const r = await writeWorkspaceFile(chatId, rel, args.content);
-        return { result: `已写入 ${r.rel}(${fmtBytes(r.size)})`, isError: false };
+        return { result: `已写入 ${r.rel}(${fmtBytes(r.size)})\n文件链接:${workspaceFileLink(chatId, r.rel)}`, isError: false };
       }
       case 'workspace_edit': {
         const rel = str('path');
@@ -677,7 +679,7 @@ export async function callWorkspaceTool(chatId: string, name: string, argsJson: 
         }
         const r = await editWorkspaceFile(chatId, rel, args.old_string, args.new_string, args.replace_all === true);
         return {
-          result: `已替换 ${r.replacements} 处,${r.rel} 现为 ${fmtBytes(r.size)}。修改处附近的新内容:\n…${r.context}…`,
+          result: `已替换 ${r.replacements} 处,${r.rel} 现为 ${fmtBytes(r.size)}。\n文件链接:${workspaceFileLink(chatId, r.rel)}\n修改处附近的新内容:\n…${r.context}…`,
           isError: false,
         };
       }

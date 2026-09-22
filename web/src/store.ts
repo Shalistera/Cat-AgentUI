@@ -102,6 +102,7 @@ export const useHtmlPreview = create<HtmlPreviewState>((set) => ({
 // the panel refetches without polling.
 interface WorkspacePanelState {
   chatId: string | null;
+  selectedPath: string | null;
   /** Open on the new-chat page before any chat exists: shows guidance; the
       first send re-points it to the created chat. */
   home: boolean;
@@ -111,6 +112,8 @@ interface WorkspacePanelState {
   /** File count per chat, for the header chip. */
   counts: Record<string, number>;
   open(chatId: string): void;
+  openFile(chatId: string, path: string): void;
+  selectFile(path: string | null): void;
   openHome(): void;
   /** Auto-open on first file write; a no-op once the person has dismissed it. */
   autoOpen(chatId: string): void;
@@ -121,20 +124,26 @@ interface WorkspacePanelState {
 
 export const useWorkspacePanel = create<WorkspacePanelState>((set, get) => ({
   chatId: null,
+  selectedPath: null,
   home: false,
   version: 0,
   dismissed: {},
   counts: {},
-  open(chatId) { set((s) => { const d = { ...s.dismissed }; delete d[chatId]; return { chatId, home: false, dismissed: d }; }); },
-  openHome() { set({ chatId: null, home: true }); },
+  open(chatId) { set((s) => { const d = { ...s.dismissed }; delete d[chatId]; return { chatId, selectedPath: s.chatId === chatId ? s.selectedPath : null, home: false, dismissed: d }; }); },
+  openFile(chatId, path) {
+    get().open(chatId);
+    set((s) => ({ selectedPath: path, version: s.version + 1 }));
+  },
+  selectFile(path) { set({ selectedPath: path }); },
+  openHome() { set({ chatId: null, selectedPath: null, home: true }); },
   autoOpen(chatId) {
     const s = get();
     if (s.dismissed[chatId] || s.chatId === chatId) return;
-    set({ chatId });
+    set({ chatId, selectedPath: null, home: false });
   },
   close() {
     const cur = get().chatId;
-    set((s) => ({ chatId: null, home: false, dismissed: cur ? { ...s.dismissed, [cur]: true } : s.dismissed }));
+    set((s) => ({ chatId: null, selectedPath: null, home: false, dismissed: cur ? { ...s.dismissed, [cur]: true } : s.dismissed }));
   },
   bump() { set((s) => ({ version: s.version + 1 })); },
   setCount(chatId, n) { set((s) => ({ counts: { ...s.counts, [chatId]: n } })); },

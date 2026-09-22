@@ -4,6 +4,7 @@ import { cachedSandboxEnv } from './env.js';
 import { formatRunResult, runInSandbox, SandboxBusyError } from './exec.js';
 import { getSandboxSettings, userMayUseSandbox, type SandboxUser } from './settings.js';
 import { installedPackageNamesSync, venvExists } from './venv.js';
+import { workspaceFileLink } from '../workspace-link.js';
 
 export const RUN_COMMAND_TOOL = 'run_command';
 
@@ -132,7 +133,9 @@ export async function callSandboxTool(
         command: `python3 /opt/tools/convert.py ${shellQuote(input)} ${shellQuote(output)}`,
       });
       const msg = (r.exitCode === 0 ? r.stdout : r.stderr || r.stdout).trim();
-      return { result: msg || (r.exitCode === 0 ? `已生成 ${output}` : '转换失败'), isError: r.exitCode !== 0 || r.timedOut };
+      const isError = r.exitCode !== 0 || r.timedOut;
+      const result = msg || (isError ? '转换失败' : `已生成 ${output}`);
+      return { result: isError ? result : `${result}\n文件链接:${workspaceFileLink(ctx.chatId, output)}`, isError };
     } catch (err) {
       if (err instanceof SandboxBusyError) return { result: err.message, isError: true };
       return { result: `转换失败:${(err as Error).message}`, isError: true };
@@ -151,4 +154,3 @@ export async function callSandboxTool(
     return { result: `沙盒执行失败:${(err as Error).message}`, isError: true };
   }
 }
-

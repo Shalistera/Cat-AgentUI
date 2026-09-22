@@ -105,7 +105,7 @@ export default function Bookmarks() {
                 </header>
                 <div className={`relative px-4 py-3 ${long && !open ? 'max-h-64 overflow-hidden' : ''}`}>
                   {b.message.role === 'assistant'
-                    ? <Markdown text={plain || '(无文字内容)'} />
+                    ? <Markdown text={plain || '(无文字内容)'} workspaceChatId={b.chatId} />
                     : <div className="whitespace-pre-wrap wrap-anywhere text-[15px] leading-relaxed text-tx">{plain || '(无文字内容)'}</div>}
                   {long && !open && (
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-bg1 to-transparent" />
