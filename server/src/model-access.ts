@@ -6,7 +6,7 @@ export interface ModelAccessUser {
   role: string;
 }
 
-/** 图像模型使用权限 — gates seeing/using imageGen models anywhere. */
+/** Direct image-model access. Agent image generation has a separate explicit grant. */
 export function imageModelsAllowed(user: { role: string; allowImageModels: number }): boolean {
   return user.role === 'admin' || !!user.allowImageModels;
 }

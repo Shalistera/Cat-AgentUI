@@ -555,6 +555,7 @@ export interface AccessPolicy { enabled: boolean; accessMode: 'shared' | 'restri
 export interface AgentSettings {
   workspace: AccessPolicy;
   skills: AccessPolicy;
+  imageGeneration: AccessPolicy & { modelIds: string[]; maxPerTurn: number; dailyLimit: number };
   subagent: AccessPolicy & {
     modelId: string; maxPerTurn: number; maxIterations: number; timeoutSec: number; maxResultChars: number; allowSandbox: boolean;
   };
@@ -564,5 +565,4 @@ export interface AgentAdminData {
   limits: { workspaceBytes: number; workspaceFileBytes: number; workspaceFiles: number; toolIterations: number };
 }
 /** /api/agent/capabilities — what this person's chats may use right now. */
-export interface AgentCapabilities { agentTools: boolean; workspace: boolean; sandbox: boolean; convert: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean }
-
+export interface AgentCapabilities { agentTools: boolean; workspace: boolean; sandbox: boolean; convert: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean; imageGeneration: boolean }

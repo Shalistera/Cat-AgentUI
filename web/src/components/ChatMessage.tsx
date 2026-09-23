@@ -1,7 +1,7 @@
 import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
-  Info, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
+  Info, ImagePlus, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo, ProviderRetry, ToolConfirmRequest } from '../types';
 import { useLightbox } from './Lightbox';
@@ -319,6 +319,7 @@ function isWorkspaceTool(name: string): boolean {
 // 沙盒 run_command: the command itself is the label, and its output is shown
 // in the expanded row — for once the "how" is exactly what the person wants.
 const RUN_COMMAND = 'run_command';
+const GENERATE_IMAGE = 'generate_image';
 const SPAWN_SUBAGENT = 'spawn_subagent';
 function subagentTitle(call: ToolCallPart): string {
   try {
@@ -404,16 +405,21 @@ function ToolRun({ calls, results, organizing, chatId }: {
   const pending = calls.filter((c) => !results.has(c.id));
   const failed = calls.filter((c) => results.get(c.id)?.isError);
   const searching = calls.some((c) => isSearchTool(c.name));
-  const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name) || c.name === RUN_COMMAND || c.name === SPAWN_SUBAGENT);
+  const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name) || c.name === RUN_COMMAND || c.name === SPAWN_SUBAGENT || c.name === GENERATE_IMAGE);
   const hasCommand = calls.some((c) => c.name === RUN_COMMAND);
   const hasSubagent = calls.some((c) => c.name === SPAWN_SUBAGENT);
+  const hasImageGeneration = calls.some((c) => c.name === GENERATE_IMAGE);
   const active = pending.length > 0;
   const busy = active || organizing;
   const noun = searching ? '搜索' : '调用工具';
 
   let label: ReactNode;
   const lastPending = pending[pending.length - 1];
-  if (workspaceOnly && active && lastPending.name === SPAWN_SUBAGENT) {
+  if (workspaceOnly && active && lastPending.name === GENERATE_IMAGE) {
+    label = '正在生成图片…';
+  } else if (hasImageGeneration && !active && !organizing) {
+    label = failed.length ? '图片生成结束,部分调用未成功' : '图片生成完成';
+  } else if (workspaceOnly && active && lastPending.name === SPAWN_SUBAGENT) {
     label = `子代理正在处理「${subagentTitle(lastPending)}」…`;
   } else if (workspaceOnly && active && lastPending.name === RUN_COMMAND) {
     label = `正在执行「${commandSummary(commandOf(lastPending))}」…`;
@@ -456,7 +462,7 @@ function ToolRun({ calls, results, organizing, chatId }: {
     label = calls.length === 1 ? `${noun}完成` : `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次`;
   }
 
-  const Icon = searching ? Globe : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
+  const Icon = searching ? Globe : hasImageGeneration ? ImagePlus : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
 
   return (
     <Disclosure
@@ -483,7 +489,7 @@ function ToolRun({ calls, results, organizing, chatId }: {
                 {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
                   : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
                   : <Check size={13} className="shrink-0 text-ok" />}
-                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
+                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === GENERATE_IMAGE ? '生成图片' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
                 {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">「{subagentTitle(c)}」</span>}
                 {q && <span className="truncate text-tx3">「{q}」</span>}
                 {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">{workspaceFileName(c, chatId, r)}</span>}

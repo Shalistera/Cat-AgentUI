@@ -9,6 +9,7 @@ const DAY_OPTIONS = [7, 30, 90] as const;
 const KIND_LABELS: Record<string, string> = {
   chat: '对话',
   image: '绘图',
+  image_tool: '图片生成工具',
   title: '标题生成',
   followup: '快速追问',
   ocr: 'OCR 工坊',

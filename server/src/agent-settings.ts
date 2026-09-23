@@ -1,4 +1,4 @@
-// Agent 能力 master switches: 工作区, 技能, 子代理. (沙盒 keeps its own richer
+// Agent 能力 master switches: 工作区, 图片生成, 技能, 子代理. (沙盒 keeps its own richer
 // settings in sandbox/settings.ts.) One JSON blob in app_settings so the admin
 // page saves it atomically; every chat turn reads it fresh.
 import { getSetting, setSetting } from './db/index.js';
@@ -15,6 +15,13 @@ export interface AccessPolicy {
 export interface AgentSettings {
   workspace: AccessPolicy;
   skills: AccessPolicy;
+  imageGeneration: AccessPolicy & {
+    /** Explicit tool grant; independent of direct model/workshop visibility. */
+    modelIds: string[];
+    maxPerTurn: number;
+    /** Per ordinary user across all tool models, per server-local day; 0 = unlimited. */
+    dailyLimit: number;
+  };
   subagent: AccessPolicy & {
     /** models.id to run subagents on; '' = the parent chat's model. */
     modelId: string;
@@ -33,6 +40,7 @@ export interface AgentSettings {
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   workspace: { enabled: true, accessMode: 'shared', allowedUserIds: [] },
   skills: { enabled: true, accessMode: 'shared', allowedUserIds: [] },
+  imageGeneration: { enabled: false, accessMode: 'shared', allowedUserIds: [], modelIds: [], maxPerTurn: 2, dailyLimit: 20 },
   subagent: {
     enabled: false, accessMode: 'shared', allowedUserIds: [],
     modelId: '', maxPerTurn: 4, maxIterations: 12, timeoutSec: 300, maxResultChars: 12_000, allowSandbox: true,
@@ -60,9 +68,18 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]>
 export function normalizeAgentSettings(raw: DeepPartial<AgentSettings> | null | undefined): AgentSettings {
   const d = DEFAULT_AGENT_SETTINGS;
   const sub = raw?.subagent ?? {};
+  const images = raw?.imageGeneration ?? {};
   return {
     workspace: policy(raw?.workspace as Partial<AccessPolicy>, d.workspace),
     skills: policy(raw?.skills as Partial<AccessPolicy>, d.skills),
+    imageGeneration: {
+      ...policy(images as Partial<AccessPolicy>, d.imageGeneration),
+      modelIds: Array.isArray(images.modelIds)
+        ? [...new Set(images.modelIds.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 64))].slice(0, 50)
+        : [],
+      maxPerTurn: clamp(images.maxPerTurn, d.imageGeneration.maxPerTurn, 1, 10),
+      dailyLimit: clamp(images.dailyLimit, d.imageGeneration.dailyLimit, 0, 10000),
+    },
     subagent: {
       ...policy(sub as Partial<AccessPolicy>, d.subagent),
       modelId: typeof sub.modelId === 'string' ? sub.modelId.slice(0, 64) : d.subagent.modelId,
@@ -84,6 +101,7 @@ export function saveAgentSettings(patch: DeepPartial<AgentSettings>): AgentSetti
   const next = normalizeAgentSettings({
     workspace: { ...cur.workspace, ...(patch.workspace ?? {}) },
     skills: { ...cur.skills, ...(patch.skills ?? {}) },
+    imageGeneration: { ...cur.imageGeneration, ...(patch.imageGeneration ?? {}) },
     subagent: { ...cur.subagent, ...(patch.subagent ?? {}) },
   } as DeepPartial<AgentSettings>);
   setSetting(AGENT_SETTINGS_KEY, next);

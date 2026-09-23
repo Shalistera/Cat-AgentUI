@@ -25,6 +25,7 @@ import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspa
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
+import { GENERATE_IMAGE_TOOL, buildImageToolPrompt, callImageTool, imageToolDefinition, imageToolModelsFor } from '../image-tool.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry,
@@ -1483,6 +1484,11 @@ export async function chatRoutes(app: FastifyInstance) {
     if (subagentActive) toolDefs = [...(toolDefs ?? []), ...SUBAGENT_TOOL_DEFS];
     const subagentBlock = subagentActive ? buildSubagentPrompt() : null;
     let subagentSpawned = 0;
+    const imageToolModels = agentTools && model.tools && !model.imageGen ? imageToolModelsFor(user) : [];
+    const imageToolActive = imageToolModels.length > 0;
+    if (imageToolActive) toolDefs = [...(toolDefs ?? []), imageToolDefinition(imageToolModels)];
+    const imageToolBlock = imageToolActive ? buildImageToolPrompt(imageToolModels) : null;
+    let imageToolAttempts = 0;
     // Native search rides on the main request whenever Vertex lets it: the
     // model searches inside its own turn (fast, sentence-level citations).
     // Gemini 3.x accepts googleSearch next to functionDeclarations; 2.5 does
@@ -1529,6 +1535,7 @@ export async function chatRoutes(app: FastifyInstance) {
       workspaceBlock,
       skillsBlock,
       subagentBlock,
+      imageToolBlock,
       nativeSearchActive ? SEARCH_HINT_NATIVE : (mcpSearchActive || bridgedSearchActive) ? SEARCH_HINT_MCP : null,
       canvasAnswers ? CANVAS_PROMPT : null,
     ].filter(Boolean).join('\n\n') || undefined;
@@ -1813,8 +1820,25 @@ export async function chatRoutes(app: FastifyInstance) {
               }
               // Project knowledge tools are served in-process; everything else
               // goes out to its MCP server.
+              const toolImages: MessagePart[] = [];
               const { result, isError } = isProjectTool(call.name) && chat.projectId
                 ? callProjectTool(chat.projectId, call.name, call.args)
+                : call.name === GENERATE_IMAGE_TOOL && imageToolActive
+                ? await (async () => {
+                  clearProviderIdleTimer();
+                  try {
+                    const outcome = await callImageTool({
+                      userId: user.id, chatId, messageId: assistantId, attempt: ++imageToolAttempts, signal: controller.signal,
+                      onRetry: (retry) => sse.send('retry', retry),
+                      onFailover: (info) => sse.send('notice', { message: `图片生成线路「${info.from}」暂时不可用(${info.reason}),已切换到「${info.to}」` }),
+                    }, call.args);
+                    toolImages.push(...outcome.images);
+                    return outcome;
+                  } finally {
+                    sse.send('retry', null);
+                    if (!controller.signal.aborted) resetProviderIdleTimer();
+                  }
+                })()
                 : isWorkspaceTool(call.name) && workspaceActive
                 ? await callWorkspaceTool(chatId, call.name, call.args)
                 : call.name === GOOGLE_SEARCH_TOOL && bridgedSearchActive
@@ -1878,6 +1902,8 @@ export async function chatRoutes(app: FastifyInstance) {
                 // A built-in tool name the model remembers from earlier turns
                 // but that is switched off now (person's 智能工具 setting, or
                 // admin policy): say so plainly instead of the MCP "not found".
+                : call.name === GENERATE_IMAGE_TOOL
+                ? { result: '图片生成工具当前不可用:请检查智能工具开关,以及管理员配置的图片生成访问范围和模型列表', isError: true }
                 : isWorkspaceTool(call.name) || isSandboxTool(call.name) || isSkillTool(call.name) || isSubagentTool(call.name)
                 ? { result: `该工具当前不可用:${agentOffReason ?? '该能力未开启或未对你开放'}。请直接用文字回答,并如实告诉用户这个原因`, isError: true }
                 : await callTool(
@@ -1893,6 +1919,10 @@ export async function chatRoutes(app: FastifyInstance) {
               const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: trimmed, isError };
               parts.push(part);
               sse.send('tool_result', part);
+              for (const image of toolImages) {
+                parts.push(image);
+                sse.send('image', image);
+              }
             }
             continue;
           }

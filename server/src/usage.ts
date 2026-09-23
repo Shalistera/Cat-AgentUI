@@ -8,7 +8,7 @@ export interface UsageRecord {
   providerId?: string;
   providerType?: string;
   model?: string;
-  kind: 'chat' | 'image' | 'title' | 'followup' | 'ppt' | 'ocr' | 'translate' | 'subagent';
+  kind: 'chat' | 'image' | 'image_tool' | 'title' | 'followup' | 'ppt' | 'ocr' | 'translate' | 'subagent';
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
@@ -18,8 +18,9 @@ export interface UsageRecord {
 
 export function recordUsage(r: UsageRecord) {
   const total = r.totalTokens ?? ((r.promptTokens ?? 0) + (r.completionTokens ?? 0));
+  const id = newId();
   db.insert(schema.usageLog).values({
-    id: newId(),
+    id,
     userId: r.userId,
     chatId: r.chatId ?? null,
     messageId: r.messageId ?? null,
@@ -35,4 +36,5 @@ export function recordUsage(r: UsageRecord) {
     day: today(),
     createdAt: now(),
   }).run();
+  return id;
 }

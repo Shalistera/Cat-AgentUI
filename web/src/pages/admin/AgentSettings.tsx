@@ -54,7 +54,7 @@ export default function AgentSettingsPage() {
   useEffect(() => {
     api.get<AgentAdminData>('/api/admin/agent').then((r) => { setData(r); setS(r.settings); }).catch((e) => toast(errMsg(e), 'err'));
     api.get<AdminUser[]>('/api/admin/users').then(setUsers).catch(() => { /* optional */ });
-    api.get<ModelInfo[]>('/api/models').then((r) => setModels(r.filter((m) => m.tools && !m.imageGen))).catch(() => { /* optional */ });
+    api.get<ModelInfo[]>('/api/models').then(setModels).catch(() => { /* optional */ });
   }, []);
 
   if (!data || !s) return <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>;
@@ -80,7 +80,7 @@ export default function AgentSettingsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-base font-semibold tracking-tight text-tx">Agent 能力</h1>
-          <p className="mt-0.5 text-xs text-tx3">工作区、技能、子代理的总开关与访问范围。沙盒(命令执行)的开关、限额与运行库在<Link to="/admin/sandbox" className="mx-0.5 text-acc hover:underline">沙盒</Link>页;技能内容在<Link to="/admin/skills" className="mx-0.5 text-acc hover:underline">技能</Link>页。</p>
+          <p className="mt-0.5 text-xs text-tx3">工作区、图片生成、技能、子代理的总开关与访问范围。沙盒(命令执行)的开关、限额与运行库在<Link to="/admin/sandbox" className="mx-0.5 text-acc hover:underline">沙盒</Link>页;技能内容在<Link to="/admin/skills" className="mx-0.5 text-acc hover:underline">技能</Link>页。</p>
         </div>
         <Button variant="primary" size="sm" disabled={!dirty || saving} onClick={save}>{saving && <Spinner className="h-3.5 w-3.5" />}保存更改</Button>
       </div>
@@ -88,6 +88,46 @@ export default function AgentSettingsPage() {
       <Card title="工作区" desc="每个对话一个私有文件目录,模型通过 workspace_* 工具读写;关闭后输入栏不再出现「工作区」按钮,已有文件保留但模型不可用。沙盒、子代理都建立在工作区之上。">
         <AccessEditor value={s.workspace} onChange={(v) => setS({ ...s, workspace: v })} users={users} disabled={saving}
           enabledLabel="允许使用工作区" enabledDesc={`每对话上限 ${fmtMb(data.limits.workspaceBytes)} / ${data.limits.workspaceFiles} 个文件,单文件 ${fmtMb(data.limits.workspaceFileBytes)}(环境变量 MAX_WORKSPACE_*)`} />
+      </Card>
+
+      <Card title="图片生成" desc="普通聊天模型可按需要调用 generate_image,用下面选定的图片模型生成图片并直接展示在对话中。工具授权独立于模型可见权限:用户即使看不到这些模型、没有绘图工坊或直接使用图像模型的权限,也可通过此工具出图。">
+        <div className="space-y-4">
+          <AccessEditor value={s.imageGeneration} onChange={(v) => setS({ ...s, imageGeneration: { ...s.imageGeneration, ...v } })} users={users} disabled={saving}
+            enabledLabel="允许模型调用图片生成" enabledDesc="默认关闭;需要用户开启智能工具,当前聊天模型支持工具调用。无需开启工作区或命令执行;用量、模型次数限制和存储限额照常计入用户。" />
+          {s.imageGeneration.enabled && (
+            <>
+              <fieldset>
+                <legend className="mb-1.5 text-[13px] font-medium text-tx">工具可调用的图片模型</legend>
+                <div className="max-h-64 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-bg0">
+                  {models.filter((m) => m.imageGen).map((m) => (
+                    <label key={m.id} className="flex cursor-pointer items-center gap-3 px-3 py-2">
+                      <input type="checkbox" className="accent-acc" checked={s.imageGeneration.modelIds.includes(m.id)} disabled={saving}
+                        onChange={(e) => setS({ ...s, imageGeneration: { ...s.imageGeneration, modelIds: e.target.checked
+                          ? [...s.imageGeneration.modelIds, m.id] : s.imageGeneration.modelIds.filter((id) => id !== m.id) } })} />
+                      <span className="min-w-0 flex-1 text-[13px] text-tx">{m.displayName || m.modelId}<span className="ml-1 text-xs text-tx3">({m.providerName})</span></span>
+                      {s.imageGeneration.modelIds[0] === m.id && <Badge>默认</Badge>}
+                    </label>
+                  ))}
+                  {!models.some((m) => m.imageGen) && <div className="px-3 py-3 text-xs text-tx3">暂无可用的图片模型,请先在模型管理中添加并启用。</div>}
+                  {s.imageGeneration.modelIds.filter((id) => !models.some((m) => m.id === id && m.imageGen)).map((id) => (
+                    <div key={id} className="flex items-center gap-2 px-3 py-2 text-xs text-tx3">
+                      <span className="min-w-0 flex-1 break-all">模型不可用:{id}</span>
+                      <button type="button" className="cursor-pointer text-err hover:underline" disabled={saving}
+                        onClick={() => setS({ ...s, imageGeneration: { ...s.imageGeneration, modelIds: s.imageGeneration.modelIds.filter((x) => x !== id) } })}>移除</button>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-xs text-tx3">可以选择多个;第一个选中的模型为默认,聊天模型也可按需求选择其他已选模型。这里只列出当前启用的图片模型。</p>
+              </fieldset>
+              <Field label="每轮最多生成次数" hint="每次调用生成一张图片;失败的调用也计入本轮次数上限。">
+                {num(s.imageGeneration.maxPerTurn, (n) => setS({ ...s, imageGeneration: { ...s.imageGeneration, maxPerTurn: n } }), 1, 10)}
+              </Field>
+              <Field label="普通用户每日调用上限" hint="每人每天跨全部图片模型合并计数,按服务器时间 0 点重置;0 为不限,管理员不受此限。已发送到图片模型的请求计次(含失败或取消),自动重试不重复扣次;参数错误或权限拒绝不扣次。">
+                {num(s.imageGeneration.dailyLimit, (n) => setS({ ...s, imageGeneration: { ...s.imageGeneration, dailyLimit: n } }), 0, 10000)}
+              </Field>
+            </>
+          )}
+        </div>
       </Card>
 
       <Card title="技能" desc="总开关。关闭后所有对话都不再注入技能清单,也不提供 load_skill;各技能自己的启用与访问范围在技能页单独设置,两层都放行才可见。">
@@ -104,7 +144,7 @@ export default function AgentSettingsPage() {
               <Field label="子代理使用的模型" hint="留空 = 与主对话相同;指定一个便宜的工具模型可以控制成本">
                 <Select value={s.subagent.modelId} onChange={(e) => setS({ ...s, subagent: { ...s.subagent, modelId: e.target.value } })}>
                   <option value="">与主对话相同</option>
-                  {models.map((m) => <option key={m.id} value={m.id}>{m.displayName || m.modelId}({m.providerName})</option>)}
+                  {models.filter((m) => m.tools && !m.imageGen).map((m) => <option key={m.id} value={m.id}>{m.displayName || m.modelId}({m.providerName})</option>)}
                 </Select>
               </Field>
               <Field label="每轮最多委派次数" hint="一条回复里 spawn_subagent 的上限">{num(s.subagent.maxPerTurn, (n) => setS({ ...s, subagent: { ...s.subagent, maxPerTurn: n } }), 1, 20)}</Field>

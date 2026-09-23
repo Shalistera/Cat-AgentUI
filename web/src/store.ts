@@ -384,7 +384,7 @@ export const useAgentCaps = create<AgentCapsState>((set, get) => ({
   async load(force = false) {
     if (get().caps && !force) return;
     try { set({ caps: await api.get<AgentCapabilities>('/api/agent/capabilities') }); }
-    catch { set({ caps: { agentTools: true, workspace: false, sandbox: false, convert: false, sandboxConfirm: true, skills: 0, subagent: false } }); }
+    catch { set({ caps: { agentTools: true, workspace: false, sandbox: false, convert: false, sandboxConfirm: true, skills: 0, subagent: false, imageGeneration: false } }); }
   },
 }));
 

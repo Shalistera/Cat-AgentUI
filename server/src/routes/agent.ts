@@ -8,6 +8,10 @@ import { getAgentSettings, policyAllows, saveAgentSettings, userWantsAgentTools 
 import { convertAvailableFor, sandboxAvailableFor } from '../sandbox/tool.js';
 import { getSandboxSettings } from '../sandbox/settings.js';
 import { skillsFor } from '../skills.js';
+import { imageToolModelsFor } from '../image-tool.js';
+import { db, schema } from '../db/index.js';
+import { eq, inArray } from 'drizzle-orm';
+import { getAdapter } from '../providers/index.js';
 
 const policySchema = z.object({
   enabled: z.boolean().optional(),
@@ -30,6 +34,7 @@ export async function agentRoutes(app: FastifyInstance) {
       sandboxConfirm: getSandboxSettings().confirm,
       skills: on && policyAllows(a.skills, user) ? skillsFor(user).length : 0,
       subagent: on && policyAllows(a.subagent, user),
+      imageGeneration: imageToolModelsFor(user).length > 0,
     };
   });
 
@@ -49,6 +54,11 @@ export async function agentRoutes(app: FastifyInstance) {
     const body = z.object({
       workspace: policySchema.optional(),
       skills: policySchema.optional(),
+      imageGeneration: policySchema.extend({
+        modelIds: z.array(z.string().min(1).max(64)).max(50).optional(),
+        maxPerTurn: z.number().int().min(1).max(10).optional(),
+        dailyLimit: z.number().int().min(0).max(10000).optional(),
+      }).optional(),
       subagent: policySchema.extend({
         modelId: z.string().max(64).optional(),
         maxPerTurn: z.number().int().optional(),
@@ -59,6 +69,19 @@ export async function agentRoutes(app: FastifyInstance) {
       }).optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    if (body.data.imageGeneration) {
+      const images = { ...getAgentSettings().imageGeneration, ...body.data.imageGeneration };
+      if (images.enabled && !images.modelIds.length) return reply.code(400).send({ error: '请为图片生成工具至少选择一个图片模型' });
+      if (body.data.imageGeneration.modelIds?.length) {
+        const ids = [...new Set(body.data.imageGeneration.modelIds)];
+        const rows = db.select({ id: schema.models.id, imageGen: schema.models.imageGen, providerType: schema.providers.type })
+          .from(schema.models).innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
+          .where(inArray(schema.models.id, ids)).all();
+        if (rows.length !== ids.length || rows.some((r) => !r.imageGen || !getAdapter(r.providerType).generateImages)) {
+          return reply.code(400).send({ error: '图片生成工具只能选择仍然存在且支持图片生成的模型' });
+        }
+      }
+    }
     return { settings: saveAgentSettings(body.data) };
   });
 }
