@@ -15,6 +15,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-agentui-retry-'));
 const secret = 'sk-retry-regression-private-key';
 const counts = new Map();
+const heldTasks = [];
 let recovered = false;
 let app;
 let appLogs = '';
@@ -96,10 +97,20 @@ async function transportChecks() {
 }
 
 const upstream = http.createServer(async (req, res) => {
-  for await (const _ of req) { /* consume request */ }
+  let requestBody = '';
+  for await (const chunk of req) requestBody += chunk;
   const model = /models\/([^:]+):/.exec(req.url)?.[1] ?? 'unknown';
   const n = (counts.get(model) ?? 0) + 1;
   counts.set(model, n);
+  // Hold auxiliary generation open so the next turn tests admission while
+  // the previous request is still working on its title/follow-up questions.
+  const task = JSON.parse(requestBody).contents?.at(-1)?.parts?.[0]?.text ?? '';
+  if (model === 'stream-background' && /标题|追问/.test(task)) {
+    heldTasks.push(res);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.flushHeaders();
+    return;
+  }
   const busy = model.includes('cancel') || (model === 'retry-exhaust' && !recovered)
     || (model === 'retry-tool' && n === 2)
     || (model.includes('success') && n <= 2);
@@ -126,7 +137,13 @@ const upstream = http.createServer(async (req, res) => {
     setTimeout(() => res.destroy(), 150);
     return;
   }
-  res.end(`data: ${JSON.stringify({ candidates: [{ finishReason: 'STOP' }], usageMetadata: { totalTokenCount: 2 } })}\n\n`);
+  if (model === 'stream-eof') { res.end(); return; }
+  if (model === 'stream-delayed') await sleep(350);
+  if (model === 'stream-heartbeat') {
+    for (let i = 0; i < 9; i++) { await sleep(150); res.write(': still thinking\n\n'); }
+  }
+  if (model === 'stream-idle') await sleep(1400);
+  res.end(`data: ${JSON.stringify({ candidates: [{ finishReason: 'STOP' }], usageMetadata: { totalTokenCount: 2 } })}${model === 'stream-tail' ? '' : '\n\n'}`);
 });
 
 async function listen(server) {
@@ -157,7 +174,7 @@ try {
   await new Promise((r) => portProbe.close(r));
   base = `http://127.0.0.1:${port}`;
   app = spawn(process.execPath, ['server/dist/index.js'], {
-    cwd: root, env: { ...process.env, DATA_DIR: dataDir, SECRET_KEY: 'retry-test-database-secret', HOST: '127.0.0.1', PORT: String(port), COOKIE_SECURE: 'false', PROVIDER_RETRY_MAX_WAIT_SECONDS: '12' },
+    cwd: root, env: { ...process.env, DATA_DIR: dataDir, SECRET_KEY: 'retry-test-database-secret', HOST: '127.0.0.1', PORT: String(port), COOKIE_SECURE: 'false', PROVIDER_RETRY_MAX_WAIT_SECONDS: '12', CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   app.stdout.on('data', (s) => { appLogs += s; }); app.stderr.on('data', (s) => { appLogs += s; });
@@ -170,7 +187,8 @@ try {
   await request('PUT', '/api/admin/settings', { followupEnabled: false });
   const provider = await request('POST', '/api/admin/providers', { name: 'retry mock', type: 'gemini', apiKey: secret, baseUrl: `http://127.0.0.1:${upstreamPort}` });
   assert.equal(provider.status, 200);
-  const names = ['retry-success', 'retry-exhaust', 'retry-cancel', 'retry-partial', 'retry-tool', 'image-success', 'image-cancel'];
+  const names = ['retry-success', 'retry-exhaust', 'retry-cancel', 'retry-partial', 'retry-tool', 'image-success', 'image-cancel',
+    'stream-tail', 'stream-eof', 'stream-delayed', 'stream-background', 'stream-heartbeat', 'stream-idle'];
   await request('POST', '/api/admin/models', { providerId: provider.json.id, models: names.map((modelId) => ({ modelId, displayName: modelId, vision: true, tools: modelId === 'retry-tool', imageGen: modelId.startsWith('image-') })) });
   const providers = await request('GET', '/api/admin/providers');
   const models = Object.fromEntries(providers.json.find((p) => p.id === provider.json.id).models.map((m) => [m.modelId, m.id]));
@@ -189,6 +207,52 @@ try {
     assert.equal(res.status, 200);
     return { id, res };
   }
+  const tail = await turn('stream-tail');
+  assert.equal(events(await tail.res.text()).find((e) => e.type === 'done').data.finishReason, 'stop', 'EOF without a newline retains the finish event');
+  const delayedAt = Date.now();
+  const delayed = await turn('stream-delayed');
+  assert.equal(events(await delayed.res.text()).find((e) => e.type === 'done').data.finishReason, 'stop');
+  assert(Date.now() - delayedAt >= 350, 'wait for a delayed finish signal while the upstream stream stays open');
+  const heartbeat = await turn('stream-heartbeat');
+  assert.equal(events(await heartbeat.res.text()).find((e) => e.type === 'done').data.finishReason, 'stop', 'upstream heartbeats keep a thinking stream alive beyond the idle timeout');
+  const idle = await turn('stream-idle');
+  assert(events(await idle.res.text()).some((e) => e.type === 'error' && /连续 1 秒没有返回数据/.test(e.data.message)), 'genuinely silent streams still time out');
+  await request('PUT', '/api/admin/settings', { followupEnabled: true });
+  const eof = await turn('stream-eof');
+  assert.equal(events(await eof.res.text()).find((e) => e.type === 'done').data.finishReason, 'incomplete', 'a genuinely missing finish signal remains incomplete');
+  assert.equal(counts.get('stream-eof'), 1, 'incomplete replies do not launch follow-up generation or replay output');
+  const continued = await fetch(`${base}/api/chats/${eof.id}/stream`, {
+    method: 'POST', headers: { cookie: admin, 'x-csrf': '1', 'content-type': 'application/json' },
+    body: JSON.stringify({ content: [{ type: 'text', text: 'continue after incomplete reply' }] }),
+  });
+  assert.equal(continued.status, 200, 'an incomplete turn immediately releases its admission slot');
+  await continued.text();
+
+  // Test both title and follow-up work, with the first stream still open.
+  for (const title of ['', 'Already titled']) {
+    const backgroundChat = (await request('POST', '/api/chats', { modelId: models['stream-background'] })).json.chat.id;
+    if (title) await request('PATCH', `/api/chats/${backgroundChat}`, { title });
+    const start = (modelId) => fetch(`${base}/api/chats/${backgroundChat}/stream`, {
+      method: 'POST', headers: { cookie: admin, 'x-csrf': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ modelId, content: [{ type: 'text', text: 'first question' }] }),
+    });
+    const first = await start(models['stream-background']);
+    const reader = first.body.getReader();
+    let received = '';
+    while (!received.includes('event: done')) {
+      const chunk = await reader.read();
+      assert(!chunk.done, 'done must arrive before auxiliary generation finishes');
+      received += new TextDecoder().decode(chunk.value);
+    }
+    await poll(() => heldTasks.length);
+    const second = await start(models['stream-eof']);
+    assert.equal(second.status, 200, `${title ? 'follow-up' : 'title'} generation must not block the next turn`);
+    await second.text();
+    await reader.cancel();
+    heldTasks.splice(0).forEach((res) => res.destroy());
+  }
+  await request('PUT', '/api/admin/settings', { followupEnabled: false });
+  console.log('Passed: delayed/unterminated finish events, genuine EOF and immediate follow-up admission during auxiliary generation.');
   const success = await turn('retry-success');
   const successEvents = events(await success.res.text());
   assert.equal(counts.get('retry-success'), 3);
@@ -271,6 +335,13 @@ try {
   await poll(async () => (await request('GET', `/api/images/jobs/${cancelId}`)).json.status === 'stopped');
   await sleep(2200); assert.equal(counts.get('image-cancel'), 1);
   assert(!appLogs.includes(secret), 'provider diagnostics are redacted');
+  const diagnostics = appLogs.split('\n').flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } })
+    .filter((line) => line.msg === 'Provider stream ended');
+  assert(diagnostics.some((d) => d.model === 'stream-tail' && d.transport === 'eof' && d.finishReason === 'STOP' && d.events === 2));
+  assert(diagnostics.some((d) => d.model === 'stream-eof' && d.transport === 'eof' && d.finishReason === null && d.receivedBytes > 0));
+  assert(diagnostics.some((d) => d.model === 'retry-partial' && d.transport === 'error'));
+  assert(diagnostics.some((d) => d.model === 'stream-idle' && d.transport === 'aborted' && d.timeout));
+  assert(!JSON.stringify(diagnostics).includes('PRESERVED OUTPUT'), 'stream diagnostics contain metadata, never response text');
   console.log('Passed: image retry progress/success/cancel, owner checks, Retry-After budget, nonretryable errors and redacted diagnostics.');
 } finally {
   globalThis.fetch = realFetch;

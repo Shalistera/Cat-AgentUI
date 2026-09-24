@@ -863,8 +863,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
       || (msg.finishReason == null && !hasBody && !msg.parts.some((p) => p.type === 'tool_call')));
   const cutShortWhy = msg.finishReason === 'length' ? '已达到模型单次输出长度上限。'
     : msg.finishReason === 'content_filter' ? '模型或服务商的内容策略中止了输出。'
-    : !hasBody ? '模型只返回了思考过程,没有正文,通常是上游服务中途断流了。'
-    : '上游服务在回复结束前断流,没有收到正常的结束信号。';
+    : !hasBody ? '模型没有返回可显示的正文,可以重新生成。'
+    : '未收到正常的结束确认,可以继续对话或重新生成。';
   const regenerateCta = onRegenerate && !isStreaming ? (
     <button
       type="button"

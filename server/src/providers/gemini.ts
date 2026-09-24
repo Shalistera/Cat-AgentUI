@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { GoogleAuth } from 'google-auth-library';
 import type {
   AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, GroundingInfo, ImageGenRequest, ImageGenResult,
-  ProviderRuntimeConfig, UsageInfo,
+  ProviderRuntimeConfig, ProviderStreamEnd, UsageInfo,
 } from '../types.js';
 import { sseMessages, providerError, readJsonLimited, fetchRetry } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
@@ -260,36 +260,67 @@ export const geminiAdapter: ChatAdapter = {
     let sawToolCall = false;
     let callCounter = 0;
     let grounding: GroundingInfo | null = null;
+    const startedAt = Date.now();
+    let lastByteAt = startedAt;
+    let receivedBytes = 0;
+    let events = 0;
+    let invalidEvents = 0;
+    let transport: ProviderStreamEnd['transport'] = 'consumer_closed';
+    let promptBlockReason: string | null = null;
+    let errorCode: string | null = null;
 
-    for await (const msg of sseMessages(res)) {
-      let chunk: any;
-      try { chunk = JSON.parse(msg.data); } catch { continue; }
-      if (chunk.usageMetadata) usage = chunk.usageMetadata;
-      const cand = chunk.candidates?.[0];
-      if (!cand) continue;
-      grounding = groundingOf(cand.groundingMetadata) ?? grounding;
-      for (const part of cand.content?.parts ?? []) {
-        // Signatures may arrive on text or on a final, empty streaming part.
-        if (!part.functionCall && typeof part.thoughtSignature === 'string' && part.thoughtSignature) {
-          yield { type: 'thought_signature', signature: part.thoughtSignature,
-            source: part.thought === true ? 'thought' : typeof part.text === 'string' && part.text ? 'text' : 'standalone' };
-        }
-        if (part.thought === true && part.text) {
-          yield { type: 'reasoning', text: part.text };
-        } else if (typeof part.text === 'string' && part.text) {
-          yield { type: 'text', text: part.text };
-        } else if (part.functionCall) {
-          sawToolCall = true;
-          yield {
-            type: 'tool_call',
-            id: `fc_${callCounter++}`,
-            name: part.functionCall.name,
-            args: JSON.stringify(part.functionCall.args ?? {}),
-            sig: typeof part.thoughtSignature === 'string' ? part.thoughtSignature : undefined,
-          };
+    try {
+      for await (const msg of sseMessages(res, (bytes) => {
+        receivedBytes += bytes;
+        lastByteAt = Date.now();
+        req.onActivity?.();
+      })) {
+        events++;
+        let chunk: any;
+        try { chunk = JSON.parse(msg.data); } catch { invalidEvents++; continue; }
+        if (!chunk || typeof chunk !== 'object') { invalidEvents++; continue; }
+        if (chunk.usageMetadata) usage = chunk.usageMetadata;
+        if (typeof chunk.promptFeedback?.blockReason === 'string') promptBlockReason = chunk.promptFeedback.blockReason.slice(0, 80);
+        const cand = chunk.candidates?.[0];
+        if (!cand) continue;
+        if (typeof cand.finishReason === 'string' && cand.finishReason) finishReason = cand.finishReason.slice(0, 80);
+        grounding = groundingOf(cand.groundingMetadata) ?? grounding;
+        for (const part of cand.content?.parts ?? []) {
+          // Signatures may arrive on text or on a final, empty streaming part.
+          if (!part.functionCall && typeof part.thoughtSignature === 'string' && part.thoughtSignature) {
+            yield { type: 'thought_signature', signature: part.thoughtSignature,
+              source: part.thought === true ? 'thought' : typeof part.text === 'string' && part.text ? 'text' : 'standalone' };
+          }
+          if (part.thought === true && part.text) {
+            yield { type: 'reasoning', text: part.text };
+          } else if (typeof part.text === 'string' && part.text) {
+            yield { type: 'text', text: part.text };
+          } else if (part.functionCall) {
+            sawToolCall = true;
+            yield {
+              type: 'tool_call',
+              id: `fc_${callCounter++}`,
+              name: part.functionCall.name,
+              args: JSON.stringify(part.functionCall.args ?? {}),
+              sig: typeof part.thoughtSignature === 'string' ? part.thoughtSignature : undefined,
+            };
+          }
         }
       }
-      if (cand.finishReason) finishReason = cand.finishReason;
+      transport = 'eof';
+    } catch (err) {
+      transport = req.signal.aborted ? 'aborted' : 'error';
+      const e = err as { name?: string; cause?: { code?: string } };
+      errorCode = String(e?.cause?.code ?? e?.name ?? 'Error').slice(0, 80);
+      throw err;
+    } finally {
+      req.onStreamEnd?.({
+        endpointId: cfg.endpointId ?? `${cfg.id}:primary`,
+        location: cfg.useVertex ? cfg.vertexLocation ?? 'global' : null,
+        priority: gate === 'priority', transport, finishReason, promptBlockReason, errorCode,
+        receivedBytes, events, invalidEvents,
+        durationMs: Date.now() - startedAt, sinceLastByteMs: Date.now() - lastByteAt,
+      });
     }
 
     if (grounding) yield { type: 'grounding', grounding };

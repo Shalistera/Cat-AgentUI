@@ -151,7 +151,7 @@ async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): As
   let outputTokens: number | undefined;
   let stopReason: string | null = null;
 
-  for await (const msg of sseMessages(res)) {
+  for await (const msg of sseMessages(res, req.onActivity)) {
     let ev: any;
     try { ev = JSON.parse(msg.data); } catch { continue; }
     if (ev.type === 'message_start') {

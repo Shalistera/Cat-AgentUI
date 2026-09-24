@@ -117,7 +117,10 @@ interface ComposerProps {
   workspacePanelOpen?: boolean;
   settings: ComposerSettings;
   onSettingsChange(s: ComposerSettings): void;
-  onSend(text: string, attachments: PendingAttachment[]): void;
+  /** Async sends resolve once the server has persisted the message. */
+  onSend(text: string, attachments: PendingAttachment[]): void | Promise<boolean>;
+  recoveredDraft?: { text: string; attachments: PendingAttachment[] } | null;
+  onDraftRecovered?(): void;
   /** Present = sends during generation queue up instead of being blocked. */
   onEnqueue?(text: string, attachments: PendingAttachment[]): void;
   onStop(): void;
@@ -154,6 +157,10 @@ export function Composer(props: ComposerProps) {
   }
   useEffect(() => () => { dictationRef.current?.stop(); }, []);
   const [atts, setAtts] = useState<PendingAttachment[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const liveDraft = useRef({ text, atts, key: props.draftKey });
+  liveDraft.current = { text, atts, key: props.draftKey };
   const [uploading, setUploading] = useState(false);
   const uploadingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
@@ -223,6 +230,17 @@ export function Composer(props: ComposerProps) {
     return () => { if (draftTimer.current) clearTimeout(draftTimer.current); };
   }, [text, atts, props.draftKey]);
 
+  useEffect(() => {
+    const draft = props.recoveredDraft;
+    if (!draft) return;
+    // A rejected queued/first message may arrive at a freshly mounted
+    // composer. Preserve anything the person has started typing meanwhile.
+    setText((cur) => cur.trim() === draft.text.trim() ? cur
+      : [draft.text, cur].filter(Boolean).join('\n\n'));
+    setAtts((cur) => [...draft.attachments.filter((a) => !cur.some((b) => a.uploadId === b.uploadId)), ...cur]);
+    props.onDraftRecovered?.();
+  }, [props.recoveredDraft]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 划词引用 etc.: append the published text under whatever is typed, unfold
   // a compact composer, and put the caret at the end ready to type the question.
   const insertPending = useComposerInsert((s) => s.pending);
@@ -251,27 +269,48 @@ export function Composer(props: ComposerProps) {
     setModelQuery('');
   }, [panelOpen]);
 
-  function send() {
+  async function send() {
     const t = text.trim();
-    if ((!t && atts.length === 0) || props.disabled) return;
+    if ((!t && atts.length === 0) || props.disabled || submittingRef.current) return;
     if (uploadingRef.current) return;
     if (atts.length > attachmentLimit) {
       toast(`每条消息最多 ${attachmentLimit} 个附件,请移除多余附件`, 'err');
       return;
     }
-    if (streaming) {
-      // Generation in progress: queue the follow-up instead of dropping it.
-      if (!props.onEnqueue) return;
-      props.onEnqueue(t, atts);
-    } else {
-      props.onSend(t, atts);
+    const key = props.draftKey;
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    if (key) saveDraft(key, text, atts);
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      if (streaming) {
+        if (!props.onEnqueue) return;
+        props.onEnqueue(t, atts);
+      } else if (await props.onSend(t, atts) === false) {
+        return; // rejected before persistence: leave text and attachments here
+      }
+      const current = liveDraft.current;
+      if (current.key === key) {
+        const nextText = current.text === text ? '' : current.text;
+        const nextAtts = current.atts.filter((a) => !atts.some((sent) => sent.uploadId === a.uploadId));
+        setText(nextText);
+        setAtts(nextAtts);
+        // Cancel a pre-acknowledgement save so it cannot resurrect sent text.
+        if (draftTimer.current) clearTimeout(draftTimer.current);
+        if (key) saveDraft(key, nextText, nextAtts);
+        taRef.current?.blur();
+        props.onCollapse?.();
+      } else if (key) {
+        const saved = loadDraft(key);
+        if (saved.text === text && saved.atts.length === atts.length
+          && saved.atts.every((a, i) => a.uploadId === atts[i].uploadId)) clearDraft(key);
+      }
+    } catch (e) {
+      toast(errMsg(e), 'err');
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
-    setText('');
-    setAtts([]);
-    // Clear immediately — the debounced save must not race a navigation.
-    if (props.draftKey) clearDraft(props.draftKey);
-    taRef.current?.blur();
-    props.onCollapse?.();
   }
 
   // Blur-to-collapse must not fire for taps inside the composer itself —
@@ -980,7 +1019,7 @@ export function Composer(props: ComposerProps) {
               {props.onEnqueue && (
                 <button
                   title="加入队列:当前回复完成后自动发送"
-                  disabled={!text.trim() && atts.length === 0}
+                  disabled={submitting || (!text.trim() && atts.length === 0)}
                   className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx2 shadow-xs transition-colors hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none"
                   onClick={send}
                 >
@@ -998,7 +1037,7 @@ export function Composer(props: ComposerProps) {
           ) : (
             <button
               title="发送消息"
-              disabled={(!text.trim() && atts.length === 0) || props.disabled}
+              disabled={submitting || (!text.trim() && atts.length === 0) || props.disabled}
               className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md bg-pri text-prifg shadow-xs transition-colors hover:bg-pri2 disabled:opacity-40 disabled:pointer-events-none"
               onClick={send}
             >

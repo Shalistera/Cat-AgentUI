@@ -186,6 +186,25 @@ export interface ChatRequest {
   signal: AbortSignal;
   onRetry?: (state: ProviderRetry | null) => void;
   onFailover?: (info: ProviderFailover) => void;
+  /** Upstream bytes (including keepalives), not just generated tokens. */
+  onActivity?: () => void;
+  /** Metadata only: never includes prompts, response text or credentials. */
+  onStreamEnd?: (info: ProviderStreamEnd) => void;
+}
+
+export interface ProviderStreamEnd {
+  endpointId: string;
+  location: string | null;
+  priority: boolean;
+  transport: 'eof' | 'error' | 'aborted' | 'consumer_closed';
+  finishReason: string | null;
+  promptBlockReason: string | null;
+  errorCode: string | null;
+  receivedBytes: number;
+  events: number;
+  invalidEvents: number;
+  durationMs: number;
+  sinceLastByteMs: number;
 }
 
 export type AdapterEvent =

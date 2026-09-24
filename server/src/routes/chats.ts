@@ -39,7 +39,7 @@ import {
   type OwnedMedia, type StorageReservation, hasCompanionText } from '../storage.js';
 import { extractDocText, wrapDocAttachment } from '../doc-text.js';
 import {
-  allConfiguredSecretValues, redactSensitiveText, StreamingSecretRedactor,
+  allConfiguredSecretValues, redactSensitiveText, redactSensitiveValue, StreamingSecretRedactor,
 } from '../secrets.js';
 
 // ---- helpers ----
@@ -54,6 +54,7 @@ function createSse(reply: FastifyReply) {
     connection: 'keep-alive',
   });
   const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15000);
+  res.once('close', () => clearInterval(ping));
   return {
     send(event: string, data: unknown) {
       try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
@@ -1268,6 +1269,13 @@ export async function chatRoutes(app: FastifyInstance) {
     let imageLease: AdmissionLease | null = null;
     let imageReservation: StorageReservation | null = null;
     let contextMediaLease: AdmissionLease | null = null;
+    let endSse: (() => void) | undefined;
+    const releaseTurn = () => {
+      contextMediaLease?.release();
+      imageReservation?.release();
+      imageLease?.release();
+      chatLease.release();
+    };
 
     // From admission through MCP discovery and provider I/O, every exit path
     // releases all process-local leases/reservations.
@@ -1546,6 +1554,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // --- start streaming ---
     const sse = createSse(reply);
+    endSse = sse.end;
     const controller = new AbortController();
     let clientGone = false;
     // response 'close' with writableEnded=false → client disconnected mid-stream
@@ -1555,6 +1564,10 @@ export async function chatRoutes(app: FastifyInstance) {
     });
 
     const assistantId = newId();
+    // Keep completion metadata available even with the app's warn-level
+    // request logger: healthy upstream STOPs are needed to diagnose a lost
+    // downstream 'done' event. This logger never receives message contents.
+    const streamLog = req.log.child({ chatId, messageId: assistantId }, { level: 'info' });
     db.insert(schema.messages).values({
       id: assistantId, chatId, role: 'assistant', parts: '[]', seq: nextSeq(chatId),
       parentId: assistantParentId,
@@ -1727,6 +1740,16 @@ export async function chatRoutes(app: FastifyInstance) {
               signal: controller.signal,
               onRetry,
               onFailover,
+              onActivity: () => { if (!controller.signal.aborted) resetProviderIdleTimer(); },
+              onStreamEnd: (info) => {
+                const fields = redactSensitiveValue({
+                  chatId, messageId: assistantId, providerId: provider.id, model: model.modelId,
+                  ...info, clientGone, timeout: textTimeoutError,
+                }, secretValues);
+                if (info.transport !== 'eof' || !info.finishReason || info.invalidEvents) {
+                  streamLog.warn(fields, 'Provider stream ended');
+                } else streamLog.info(fields, 'Provider stream ended');
+              },
             })) {
               resetProviderIdleTimer();
               if (ev.type === 'text') {
@@ -2036,13 +2059,20 @@ export async function chatRoutes(app: FastifyInstance) {
       totalTokens: usage.total || null, durationMs, ttftMs: ttft,
     });
 
-    // 'done' goes out BEFORE the background tasks below (title, follow-ups):
-    // the client unblocks the moment the answer is complete, and their events
-    // simply arrive over the still-open SSE stream a moment later.
+    // The client can submit its next turn as soon as it receives 'done'.
+    // Release admission BEFORE that event; title/follow-up work must never
+    // keep a finished chat busy. The finally block remains the error fallback
+    // (all leases are idempotent).
+    releaseTurn();
+    streamLog.info({ status, finishReason, clientGone, durationMs }, 'Chat turn finished');
     sse.send('done', { status, finishReason });
 
+    // An interrupted/filtered/length-limited answer needs no extra model
+    // requests, especially when the provider is already struggling.
+    const completeAnswer = status === 'done' && (model.imageGen || finishReason === 'stop');
+
     // auto-title on first successful exchange
-    if (!chat.title && status === 'done' && !clientGone) {
+    if (!chat.title && completeAnswer && !clientGone) {
       // text-only replay: the title never needs the pictures, and non-vision
       // title models would choke on them
       const titleMessages: AdapterMessage[] = baseHistory.map((m) => ({
@@ -2061,7 +2091,7 @@ export async function chatRoutes(app: FastifyInstance) {
           const tAdapter = getAdapter(titlePick.provider.type);
           for await (const ev of tAdapter.streamChat(toRuntimeConfig(titlePick.provider), {
             model: titlePick.model.modelId, messages: titleMessages, maxTokens: 500,
-            signal: AbortSignal.timeout(20_000),
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]),
           })) {
             if (ev.type === 'text') title += ev.text;
             else if (ev.type === 'usage') {
@@ -2079,12 +2109,13 @@ export async function chatRoutes(app: FastifyInstance) {
           title = redactSensitiveText(title, secretValues)
             .trim().replace(/^["'「『]|["'」』]$/g, '').split('\n')[0].slice(0, 60);
           if (title) {
-            db.update(schema.chats).set({ title }).where(eq(schema.chats.id, chatId)).run();
-            sse.send('title', { title });
+            const updated = db.update(schema.chats).set({ title })
+              .where(and(eq(schema.chats.id, chatId), eq(schema.chats.title, ''))).run();
+            if (updated.changes) sse.send('title', { title });
             break;
           }
           // an empty title is a failed attempt too — fall through to the next model
-        } catch { /* best-effort: try the next candidate */ }
+        } catch { if (controller.signal.aborted) break; /* best-effort */ }
       }
     }
 
@@ -2092,7 +2123,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // exchange and suggests 3 follow-up questions. Best-effort, never blocks
     // or fails the turn; the result is appended to the saved message so
     // reloads keep the chips.
-    if (status === 'done' && !clientGone && !model.imageGen && getSetting(FOLLOWUP_ENABLED_KEY, true)) {
+    if (completeAnswer && !clientGone && !model.imageGen && getSetting(FOLLOWUP_ENABLED_KEY, true)) {
       const textOf = (ps: { type: string; text?: string }[]) => ps
         .filter((p) => p.type === 'text' && p.text).map((p) => p.text!).join('\n').trim();
       const question = textOf(baseHistory[baseHistory.length - 1]?.parts ?? []);
@@ -2110,7 +2141,7 @@ export async function chatRoutes(app: FastifyInstance) {
             const fAdapter = getAdapter(pick.provider.type);
             for await (const ev of fAdapter.streamChat(toRuntimeConfig(pick.provider), {
               model: pick.model.modelId, messages: followupMessages, maxTokens: 500,
-              signal: AbortSignal.timeout(20_000),
+              signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]),
             })) {
               if (ev.type === 'text') raw += ev.text;
               else if (ev.type === 'usage') {
@@ -2136,17 +2167,14 @@ export async function chatRoutes(app: FastifyInstance) {
               break;
             }
             // nothing parseable — fall through to the next candidate
-          } catch { /* best-effort: try the next candidate */ }
+          } catch { if (controller.signal.aborted) break; /* best-effort */ }
         }
       }
     }
 
-    sse.end();
     } finally {
-      contextMediaLease?.release();
-      imageReservation?.release();
-      imageLease?.release();
-      chatLease.release();
+      releaseTurn();
+      endSse?.();
     }
   });
 }

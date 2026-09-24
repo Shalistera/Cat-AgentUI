@@ -153,11 +153,22 @@ npm run dev:web        # vite dev, :5173(代理 /api → :3000)
 npm run test:security  # 临时数据库 + Mock Provider/MCP 的隔离安全回归
 npm run test:upload-quota # 临时数据库的附件配额设置与上传回归
 npm run test:provider-retry # 模拟 429:有限重试、取消、附件保留与断流保护
+npm run test:stream-parser # SSE 末尾结束事件、分片编码、延迟结束与真实断流
 npm run test:provider-failover # 备用线路:优先级切换、熔断阈值与冷却试探、不重放已开始的流;Vertex 区域顺序与 Priority
 npm run test:model-fallback   # 持续限流时推荐换用的模型:其他服务商、按个人排序、能力与额度
 node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即可联调
                                # 提供对话流式、工具调用、生图 / 改图(images/generations 与 images/edits)
 ```
+
+Gemini / Vertex 流结束时,服务端输出 `Provider stream ended` 结构化日志,按
+`chatId` / `messageId` 关联 `Chat turn finished`。前者记录实际 `location`、
+`endpointId`、`priority`、原始 `finishReason`、`transport`、`invalidEvents` 和
+`sinceLastByteMs`,不记录对话正文或密钥。`transport=eof` 且没有 `finishReason`
+只表示连接读完但未确认正常完成;`transport=error` 表示读取异常;
+`transport=aborted` 配合 `timeout` / `clientGone` 区分本地超时和客户端断开。
+若服务端记录 `finishReason=STOP` 且最终为 `stop`,浏览器仍提示不完整,
+应检查浏览器到面板之间的 SSE 链路。上游心跳也算连接活动,不会因没有新 token
+而触发空闲超时;总生成时限仍然生效。
 
 ## 🗄️ 数据与迁移
 

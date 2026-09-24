@@ -128,7 +128,7 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
   const calls = new Map<number, { id: string; name: string; args: string }>();
   let finish: string | null = null;
 
-  for await (const msg of sseMessages(res)) {
+  for await (const msg of sseMessages(res, req.onActivity)) {
     if (msg.data === '[DONE]') break;
     let chunk: any;
     try { chunk = JSON.parse(msg.data); } catch { continue; }
@@ -245,7 +245,7 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
   let sawToolCall = false;
   let incomplete: 'length' | 'content_filter' | null = null;
 
-  for await (const msg of sseMessages(res)) {
+  for await (const msg of sseMessages(res, req.onActivity)) {
     let ev: any;
     try { ev = JSON.parse(msg.data); } catch { continue; }
     const t = ev.type as string | undefined;

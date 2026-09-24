@@ -315,6 +315,9 @@ export default function Chat() {
   const [compare, setCompare] = useState<CompareState | null>(null);
   // 工具调用确认 waiting on this person (one batch at a time per turn).
   const [toolConfirm, setToolConfirm] = useState<ToolConfirmRequest | null>(null);
+  const [recoveredDraft, setRecoveredDraft] = useState<{
+    chatId: string | null; text: string; attachments: PendingAttachment[];
+  } | null>(null);
   // 对话内查找: open state + the term it opened with (?find= from the sidebar).
   const [findOpen, setFindOpen] = useState(false);
   const [findSeed, setFindSeed] = useState('');
@@ -582,7 +585,10 @@ export default function Chat() {
     return created;
   }
 
-  function runStream(chatId: string, payload: Parameters<typeof streamChat>[1], opts?: { busyRetries?: number }) {
+  function runStream(chatId: string, payload: Parameters<typeof streamChat>[1], opts?: { busyRetries?: number }): Promise<boolean> {
+    // Resolve on persistence acknowledgement, not when generation finishes.
+    let acknowledge!: (accepted: boolean | PromiseLike<boolean>) => void;
+    const accepted = new Promise<boolean>((resolve) => { acknowledge = resolve; });
     const controller = new AbortController();
     abortRef.current = controller;
     sendingRef.current = true;
@@ -594,9 +600,12 @@ export default function Chat() {
     const buf = { text: '', reasoning: '' };
     let flushTimer: ReturnType<typeof setInterval> | null = null;
     let finished = false;
+    let messageId = 'tmp-a';
+    const previousLeafId = leafId;
 
     const applyToAssistant = (fn: (m: Message) => Message) => {
-      setMessages((prev) => prev.map((m) => (m.id === streamMsgIdRef.current ? fn(m) : m)));
+      const targetId = messageId;
+      setMessages((prev) => prev.map((m) => (m.id === targetId ? fn(m) : m)));
     };
 
     const appendPart = (type: 'text' | 'reasoning', text: string) => {
@@ -624,6 +633,7 @@ export default function Chat() {
       if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
       flush();
       applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status, finishReason, retry: null }));
+      if (abortRef.current !== controller) return;
       setStreaming(false);
       sendingRef.current = false;
       setToolConfirm(null);
@@ -647,6 +657,8 @@ export default function Chat() {
 
     streamChat(chatId, payload, {
       onMeta(d) {
+        acknowledge(true);
+        messageId = d.messageId;
         streamMsgIdRef.current = d.messageId;
         setMessages((prev) => prev.map((m) => {
           let next = m;
@@ -704,7 +716,7 @@ export default function Chat() {
       onRetry(retry) {
         if (!finished) applyToAssistant((m) => ({ ...m, retry, retrySince: m.retrySince ?? (retry ? Date.now() : undefined) }));
       },
-      onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c ? { ...c, title } : c)); },
+      onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c?.id === chatId ? { ...c, title } : c)); },
       onFollowups(d) {
         if (!d.questions?.length || !d.messageId) return;
         flush();
@@ -720,41 +732,50 @@ export default function Chat() {
       // The SSE stream closed without a 'done' event (server or proxy dropped
       // it mid-reply): finalize() is a no-op if 'done' already ran, otherwise
       // flag the reply as incomplete rather than letting it pass as finished.
-      .then(() => finalize('done', 'incomplete'))
-      .catch((e) => {
-        if (controller.signal.aborted) { finalize('stopped'); return; }
+      .then(() => { finalize('done', 'incomplete'); acknowledge(false); })
+      .catch(async (e) => {
+        if (controller.signal.aborted) { finalize('stopped'); acknowledge(false); return; }
         if (e instanceof ApiError) {
           // A model switch right after stopping a turn can beat the server to
           // releasing this chat; wait a moment and send again.
           if (e.status === 429 && /对话并发/.test(e.message) && (opts?.busyRetries ?? 0) > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 400));
+            if (controller.signal.aborted || abortRef.current !== controller) {
+              finalize('stopped'); acknowledge(false); return;
+            }
             finished = true;
             if (flushTimer) clearInterval(flushTimer);
-            setTimeout(() => runStream(chatId, payload, { busyRetries: opts!.busyRetries! - 1 }), 400);
+            acknowledge(runStream(chatId, payload, { busyRetries: opts!.busyRetries! - 1 }));
             return;
           }
           // request rejected before anything was persisted — drop placeholders
           finished = true;
           if (flushTimer) clearInterval(flushTimer);
           setMessages((prev) => prev.filter((m) => m.id !== 'tmp-a' && m.id !== 'tmp-u'));
-          setLeafId((l) => (l === 'tmp-a' || l === 'tmp-u' ? null : l));
+          setLeafId((l) => (l === 'tmp-a' || l === 'tmp-u' ? previousLeafId : l));
           setStreaming(false);
           sendingRef.current = false;
           toast(e.message, 'err');
+          acknowledge(false);
           return;
         }
         finalize('error');
+        acknowledge(false);
       });
+    return accepted;
   }
 
   async function send(text: string, attachments: PendingAttachment[], o?: SendOverrides) {
-    if (sendingRef.current || streaming) return;
+    if (sendingRef.current || streaming) return false;
     sendingRef.current = true;
+    let targetId = chatRef.current?.id ?? null;
     // Sending while a comparison is open implicitly keeps the branch on screen
     // (the original) — the panel closes, both versions stay as siblings.
     setCompare(null);
     const sendModel = (o?.modelId ? models.find((m) => m.id === o.modelId) : null) ?? modelSel;
     try {
       const target = await ensureChat(o);
+      targetId = target.id;
       const content: ({ type: 'text'; text: string }
         | { type: 'image'; uploadId: string }
         | { type: 'file'; uploadId: string; name?: string; mime?: string })[] = [];
@@ -775,12 +796,18 @@ export default function Chat() {
         { id: 'tmp-a', parentId: 'tmp-u', role: 'assistant', parts: [], model: sendModel?.modelId ?? null, status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: nowTs + 1 },
       ]);
       setLeafId('tmp-a');
-      runStream(target.id, {
+      const accepted = await runStream(target.id, {
         content, modelId: sendModel?.id, parentMessageId: parentId ?? undefined,
       });
+      // New-chat navigation can remount the composer; queue/handoff sends do
+      // not come from that composer at all. Recover their payload here too.
+      if (!accepted) setRecoveredDraft({ chatId: targetId, text, attachments });
+      return accepted;
     } catch (e) {
       sendingRef.current = false;
+      setRecoveredDraft({ chatId: targetId, text, attachments });
       toast(e instanceof Error ? e.message : '发送失败', 'err');
+      return false;
     }
   }
 
@@ -1060,6 +1087,8 @@ export default function Chat() {
       settings={settings}
       onSettingsChange={persistSettings}
       onSend={send}
+      recoveredDraft={recoveredDraft?.chatId === (chat?.id ?? null) ? recoveredDraft : null}
+      onDraftRecovered={() => setRecoveredDraft(null)}
       onEnqueue={chat ? enqueue : undefined}
       onStop={stop}
       draftKey={draftKey}

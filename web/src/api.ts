@@ -98,7 +98,8 @@ export async function streamChat(
   const dispatch = () => {
     if (!dataLines.length) return;
     let data: any = {};
-    try { data = JSON.parse(dataLines.join('\n')); } catch { /* ignore */ }
+    try { data = JSON.parse(dataLines.join('\n')); }
+    catch { event = null; dataLines = []; return; }
     switch (event) {
       case 'meta': handlers.onMeta?.(data); break;
       case 'delta': handlers.onDelta?.(data.text ?? ''); break;
@@ -121,21 +122,27 @@ export async function streamChat(
     event = null; dataLines = [];
   };
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buf.indexOf('\n')) >= 0) {
-      let line = buf.slice(0, idx);
-      buf = buf.slice(idx + 1);
-      if (line.endsWith('\r')) line = line.slice(0, -1);
-      if (line === '') dispatch();
-      else if (line.startsWith('event:')) event = line.slice(6).trim();
-      else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      if (done && buf && !buf.endsWith('\n')) buf += '\n';
+      let idx: number;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        let line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.endsWith('\r')) line = line.slice(0, -1);
+        if (line === '') dispatch();
+        else if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+      }
+      if (done) break;
     }
+    dispatch();
+  } finally {
+    try { await reader.cancel(); } catch { /* stream already closed */ }
+    reader.releaseLock();
   }
-  dispatch();
 }
 
 /**

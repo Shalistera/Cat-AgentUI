@@ -157,7 +157,7 @@ export class ProviderBusyError extends ProviderHttpError {
 const MAX_SSE_BUFFER_CHARS = 2 * 1024 * 1024;
 const MAX_SSE_EVENT_CHARS = 2 * 1024 * 1024;
 
-export async function* sseMessages(res: Response): AsyncGenerator<SseMessage> {
+export async function* sseMessages(res: Response, onChunk?: (bytes: number) => void): AsyncGenerator<SseMessage> {
   if (!res.body) return;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -168,8 +168,11 @@ export async function* sseMessages(res: Response): AsyncGenerator<SseMessage> {
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
+      if (value?.byteLength) onChunk?.(value.byteLength);
+      // Some gateways close after the last data line without its newline.
+      // Drain it only at EOF; a delayed finish event must still be awaited.
+      buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      if (done && buf && !buf.endsWith('\n')) buf += '\n';
       if (buf.length > MAX_SSE_BUFFER_CHARS) throw new Error('Provider SSE 单行数据超过 2 MiB 限制');
       let idx: number;
       while ((idx = buf.indexOf('\n')) >= 0) {
@@ -191,6 +194,7 @@ export async function* sseMessages(res: Response): AsyncGenerator<SseMessage> {
         }
         // ignore comments / other fields
       }
+      if (done) break;
     }
     if (data.length) yield { event, data: data.join('\n') };
   } finally {
