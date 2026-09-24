@@ -239,6 +239,13 @@
       "when": 1790065944394,
       "tag": "0033_primary_line_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1790234253014,
+      "tag": "0034_vertex_priority",
+      "breakpoints": true
     }
   ]
 }

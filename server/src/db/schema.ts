@@ -41,7 +41,12 @@ export const providers = sqliteTable('providers', {
   useResponses: integer('use_responses').notNull().default(0), // openai: Responses API
   useVertex: integer('use_vertex').notNull().default(0), // gemini: Vertex AI
   vertexProject: text('vertex_project'),
+  // Comma-separated locations in priority order ("global,us,eu"); null =
+  // global. Rate-limited on one, the request moves on to the next.
   vertexLocation: text('vertex_location'),
+  // Priority PayGo: 'off' | 'fallback' (one last Priority attempt after the
+  // standard locations) | 'always'. See providers/vertex.ts.
+  vertexPriority: text('vertex_priority').notNull().default('off'),
   vertexSaJsonEnc: text('vertex_sa_json_enc'), // encrypted service account JSON
   // extra_headers is retained only as a one-start compatibility source for
   // pre-0012 rows. New values live encrypted in extra_headers_enc.

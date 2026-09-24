@@ -59,6 +59,23 @@ async function transportChecks() {
     assert(queuedStates[0]?.queued && queuedStates[0].attempt === 0, 'queued waiter reports queued state');
     assert(Date.now() - t0 >= 900, 'queued waiter really waited');
     assert.equal(queuedStates.at(-1), null, 'queued waiter clears its status');
+    // A separately gated request to the same URL (Vertex Priority PayGo)
+    // draws on other capacity and does not queue behind the standard backoff.
+    calls = 0; resetProviderBusyGates();
+    globalThis.fetch = async () => { calls++; return new Response('{}', { status: calls === 1 ? 429 : 200, headers: calls === 1 ? { 'retry-after': '1' } : {} }); };
+    const standard = fetchRetry('http://test/a', {});
+    await sleep(50);
+    const gatedStates = [];
+    const g0 = Date.now();
+    assert.equal((await fetchRetry('http://test/a', {}, (s) => gatedStates.push(s), { gate: 'priority' })).status, 200);
+    assert(Date.now() - g0 < 500 && gatedStates.length === 0, 'gated request is sent at once');
+    assert.equal((await standard).status, 200);
+    // A request-wide busy tally that fills up stops the retries at once.
+    calls = 0; resetProviderBusyGates();
+    globalThis.fetch = async () => { calls++; return new Response('{}', { status: 429 }); };
+    const counter = { busy: 3, limit: 5 };
+    assert.equal((await fetchRetry('http://test/b', {}, undefined, { counter })).status, 429);
+    assert.equal(calls, 2); assert.equal(counter.busy, 5);
     calls = 0; resetProviderBusyGates();
     globalThis.fetch = async () => { calls++; return new Response('{}', { status: 429, headers: { 'retry-after': '10' } }); };
     const abort = new AbortController();
@@ -190,6 +207,25 @@ try {
   assert.equal(failed.length, 2);
   assert(failed[0].parts.some((p) => p.uploadId === uploadId));
   assert.equal(failed[1].errorCode, 'provider_busy', 'friendly error state survives reload');
+  assert.equal(failed[1].providerId, provider.json.id, 'the reply records which provider failed');
+  assert.equal(events(exhaustedText).find((e) => e.type === 'meta').data.providerId, provider.json.id);
+
+  // Fallback to another provider: the failed reply is regenerated with that
+  // provider's model, stays as a sibling, and the chat keeps the new model.
+  const otherProvider = await request('POST', '/api/admin/providers', { name: 'other mock', type: 'gemini', apiKey: secret, baseUrl: `http://127.0.0.1:${upstreamPort}` });
+  await request('POST', '/api/admin/models', { providerId: otherProvider.json.id, models: [{ modelId: 'retry-success', displayName: 'other' }] });
+  const otherModel = (await request('GET', '/api/admin/providers')).json.find((p) => p.id === otherProvider.json.id).models[0].id;
+  const switched = await fetch(`${base}/api/chats/${exhausted.id}/stream`, {
+    method: 'POST', headers: { cookie: admin, 'x-csrf': '1', 'content-type': 'application/json' },
+    body: JSON.stringify({ regenerateMessageId: failed[1].id, modelId: otherModel }),
+  });
+  const switchedEvents = events(await switched.text());
+  assert.equal(switchedEvents.find((e) => e.type === 'meta').data.providerId, otherProvider.json.id);
+  assert.equal(switchedEvents.find((e) => e.type === 'done').data.status, 'done');
+  const afterSwitch = (await request('GET', `/api/chats/${exhausted.id}`)).json;
+  assert.equal(afterSwitch.chat.modelId, otherModel, 'the chat keeps the model it switched to');
+  assert.equal(afterSwitch.messages.filter((m) => m.parentId === failed[0].id).length, 2, 'the failed reply stays as a sibling');
+  console.log('Passed: provider recorded on replies; a busy reply can be regenerated on another provider.');
   recovered = true;
   const retry = await fetch(`${base}/api/chats/${exhausted.id}/stream`, {
     method: 'POST', headers: { cookie: admin, 'x-csrf': '1', 'content-type': 'application/json' },

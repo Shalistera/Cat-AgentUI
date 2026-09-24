@@ -494,7 +494,7 @@ export function chatSummary(c: typeof schema.chats.$inferSelect) {
 export function messageDto(m: typeof schema.messages.$inferSelect, bookmarked?: ReadonlySet<string>) {
   return {
     id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
-    status: m.status, finishReason: m.finishReason ?? null, error: m.error,
+    providerId: m.providerId, status: m.status, finishReason: m.finishReason ?? null, error: m.error,
     errorCode: m.errorCode === 'provider_busy' ? 'provider_busy' : undefined,
     promptTokens: m.promptTokens, completionTokens: m.completionTokens, totalTokens: m.totalTokens,
     durationMs: m.durationMs, ttftMs: m.ttftMs, createdAt: m.createdAt,
@@ -1568,7 +1568,7 @@ export async function chatRoutes(app: FastifyInstance) {
       ...(body.modelId && body.modelId !== chat.modelId ? { modelId: body.modelId } : {}),
     }).where(eq(schema.chats.id, chatId)).run();
 
-    sse.send('meta', { messageId: assistantId, userMessageId, model: model.modelId });
+    sse.send('meta', { messageId: assistantId, userMessageId, model: model.modelId, providerId: provider.id });
     if (downgradeNotice) sse.send('notice', { message: downgradeNotice });
     if (mcpAccess.denied.length) {
       sse.send('notice', { message: '部分 MCP 服务器已被禁用或撤销授权,本次不会调用' });
@@ -1621,7 +1621,11 @@ export async function chatRoutes(app: FastifyInstance) {
     // differently-cached answer has an explanation, and reset the idle clock
     // since the new line starts from zero.
     const onFailover = (info: ProviderFailover) => {
-      sse.send('notice', { message: `线路「${info.from}」暂时不可用(${info.reason}),已切换到「${info.to}」` });
+      sse.send('notice', {
+        message: info.priority
+          ? '标准通道持续限流,正在使用优先通道重试'
+          : `线路「${info.from}」暂时不可用(${info.reason}),已切换到「${info.to}」`,
+      });
       if (!model.imageGen && !controller.signal.aborted) resetProviderIdleTimer();
       req.log.warn({ providerId: provider.id, model: model.modelId, ...info }, 'Provider line failover');
     };

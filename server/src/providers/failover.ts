@@ -6,9 +6,9 @@
 // it fails before producing any output, and only loses its turn after a run
 // of such failures (a circuit breaker with a timed, single-probe reopen).
 import type {
-  AdapterEvent, ChatAdapter, ChatRequest, ImageGenRequest, ImageGenResult, ProviderRuntimeConfig,
+  AdapterEvent, BusyCounter, ChatAdapter, ChatRequest, ImageGenRequest, ImageGenResult, ProviderRuntimeConfig,
 } from '../types.js';
-import { ProviderHttpError, isNetworkError } from './sse.js';
+import { BUSY_STATUSES, ProviderHttpError, isNetworkError } from './sse.js';
 
 export interface LineHealth {
   /** Consecutive fallback-worthy failures; cleared by the next success. */
@@ -30,6 +30,21 @@ const DEFAULT_COOLDOWN_MS = 60_000;
 
 const health = new Map<string, LineHealth>();
 
+// Lines that answered "no such model", per model (`<line key>|<model>` →
+// until when). Such a line is skipped for that model so every request does
+// not pay the round trip — and show a switch notice — to learn it again:
+// a Vertex multi-region endpoint may lack a preview model the global one has.
+const missingModels = new Map<string, number>();
+const MISSING_MODEL_TTL_MS = 60 * 60_000;
+
+function isMissing(key: string, model: string, now: number): boolean {
+  const until = missingModels.get(`${key}|${model}`);
+  if (until === undefined) return false;
+  if (until > now) return true;
+  missingModels.delete(`${key}|${model}`);
+  return false;
+}
+
 function lineKey(line: ProviderRuntimeConfig): string {
   return line.endpointId ?? `${line.id}:primary`;
 }
@@ -45,20 +60,31 @@ export function lineHealth(key: string): LineHealth {
 
 /** Forget one line's state, or everything (tests, admin "重置"). */
 export function resetLineHealth(key?: string) {
-  if (key === undefined) health.clear();
-  else health.delete(key);
+  if (key === undefined) {
+    health.clear();
+    missingModels.clear();
+    return;
+  }
+  health.delete(key);
+  for (const k of missingModels.keys()) if (k.startsWith(`${key}|`)) missingModels.delete(k);
 }
 
 export type LineState = 'ok' | 'degraded' | 'open' | 'probing';
 
-export function lineStatus(key: string): LineHealth & { state: LineState } {
+export function lineStatus(key: string): LineHealth & { state: LineState; missingModels: string[] } {
   const h = lineHealth(key);
   const now = Date.now();
+  const missing: string[] = [];
+  for (const k of [...missingModels.keys()]) {
+    if (!k.startsWith(`${key}|`)) continue;
+    const model = k.slice(key.length + 1);
+    if (isMissing(key, model, now)) missing.push(model);
+  }
   let state: LineState = 'ok';
   if (h.probing) state = 'probing';
   else if (h.openUntil > now) state = 'open';
   else if (h.failures > 0) state = 'degraded';
-  return { ...h, state };
+  return { ...h, state, missingModels: missing };
 }
 
 /** How gateways phrase "I don't serve that model": OpenRouter "unknown
@@ -96,7 +122,9 @@ export function isFallbackWorthy(err: unknown): boolean {
 
 function describe(err: unknown): string {
   if (err instanceof ProviderHttpError) {
-    return classifyFailure(err) === 'model' ? `该线路没有此模型 (HTTP ${err.status})` : `HTTP ${err.status}`;
+    if (classifyFailure(err) === 'model') return `该线路没有此模型 (HTTP ${err.status})`;
+    if (BUSY_STATUSES.has(err.status)) return `${err.status === 429 ? '限流' : '过载'} HTTP ${err.status}`;
+    return `HTTP ${err.status}`;
   }
   if (isNetworkError(err)) {
     const cause = (err as { cause?: { code?: string } }).cause;
@@ -122,12 +150,16 @@ function markFailure(key: string, err: unknown, threshold: number, cooldownMs: n
   h.probing = false;
 }
 
-/** The lines to attempt, in priority order, skipping open breakers. A line
- * whose cooldown has elapsed is admitted once as a probe. If every line is
- * open, all are returned anyway — attempting beats failing flat. */
-function plan(cfg: ProviderRuntimeConfig): { line: ProviderRuntimeConfig; probe: boolean }[] {
-  const all = [cfg, ...(cfg.fallbacks ?? [])];
+/** The lines to attempt, in priority order, skipping open breakers and lines
+ * that don't serve this model (by configuration, or because they recently
+ * said so). A line whose cooldown has elapsed is admitted once as a probe.
+ * If every line is open, all are returned anyway — attempting beats failing
+ * flat. */
+function plan(cfg: ProviderRuntimeConfig, model: string): { line: ProviderRuntimeConfig; probe: boolean }[] {
   const now = Date.now();
+  const serving = [cfg, ...(cfg.fallbacks ?? [])].filter((line) => !line.servesModel || line.servesModel(model));
+  const known = serving.filter((line) => !isMissing(lineKey(line), model, now));
+  const all = known.length ? known : serving;
   const ready: { line: ProviderRuntimeConfig; probe: boolean }[] = [];
   for (const line of all) {
     const h = lineHealth(lineKey(line));
@@ -161,7 +193,16 @@ async function* runLines<T>(
   }
   const threshold = cfg.failoverThreshold ?? DEFAULT_THRESHOLD;
   const cooldownMs = cfg.failoverCooldownMs ?? DEFAULT_COOLDOWN_MS;
-  const order = plan(cfg);
+  const order = plan(cfg, req.model);
+  // The last failure that said something about capacity or reachability: if
+  // the lines after it merely lack the model, that is the error worth showing.
+  let lineErr: unknown = null;
+  // Standard lines share one tally of busy rejections; once it fills up the
+  // request skips ahead to the Priority PayGo retry instead of waiting out
+  // every remaining location.
+  const escalation = order.findIndex((o) => o.line.escalateAfterBusy);
+  const counter: BusyCounter | undefined = escalation > 0
+    ? { busy: 0, limit: order[escalation].line.escalateAfterBusy! } : undefined;
   for (let i = 0; i < order.length; i++) {
     const { line, probe } = order[i];
     const key = lineKey(line);
@@ -170,8 +211,14 @@ async function* runLines<T>(
     if (line !== cfg) h.tookOver++; // answered instead of the provider's own line
     let produced = false;
     const first = () => { if (!produced) { produced = true; markSuccess(key); } };
+    // Its busy-retry cap exists to hand over to the next line. When open
+    // breakers or model-specific lines leave nothing after it, the last line
+    // tried waits as long as a lone line would.
+    let target = line;
+    if (i === order.length - 1 && line.retryBudgetMs !== undefined) target = { ...target, retryBudgetMs: undefined };
+    if (counter && i < escalation) target = { ...target, busyCounter: counter };
     try {
-      yield* attempt(line, rewriteModel(line, req.model), first);
+      yield* attempt(target, rewriteModel(line, req.model), first);
       first(); // an empty-but-OK answer still counts as the line working
       return;
     } catch (err) {
@@ -180,16 +227,27 @@ async function* runLines<T>(
         if (probe) h.probing = false;
         throw err;
       }
-      if (kind === 'line') markFailure(key, err, threshold, cooldownMs);
-      else if (probe) h.probing = false; // the line answered; the probe is settled either way
-      const next = order[i + 1];
+      if (kind === 'line') {
+        markFailure(key, err, threshold, cooldownMs);
+        lineErr = err;
+      } else {
+        if (probe) h.probing = false; // the line answered; the probe is settled either way
+        missingModels.set(`${key}|${req.model}`, Date.now() + MISSING_MODEL_TTL_MS);
+      }
+      const skip = kind === 'line' && !!counter && i < escalation - 1 && counter.busy >= counter.limit;
+      const nextIndex = skip ? escalation : i + 1;
+      const next = order[nextIndex];
       const from = line.endpointName ?? '主线路';
       console.warn(`[failover] provider ${cfg.id} line "${from}" failed (${describe(err)}), `
         + (kind === 'model' ? 'model unknown on this line (not counted)'
           : `${h.failures}/${threshold} consecutive${h.openUntil > Date.now() ? ', breaker open' : ''}`)
         + (next ? `; trying "${next.line.endpointName ?? '主线路'}"` : '; no line left'));
-      if (!next) throw err;
-      req.onFailover?.({ from, to: next.line.endpointName ?? '主线路', reason: describe(err) });
+      if (!next) throw kind === 'model' && lineErr ? lineErr : err;
+      req.onFailover?.({
+        from, to: next.line.endpointName ?? '主线路', reason: describe(err),
+        ...(nextIndex === escalation ? { priority: true } : {}),
+      });
+      i = nextIndex - 1;
     }
   }
 }

@@ -54,7 +54,7 @@ export type MessagePart =
   | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; supports?: { text: string; start: number; sources: number[] }[]; label?: string }
   | { type: 'followups'; questions: string[] };
 
-export interface ProviderRetry { attempt: number; maxAttempts: number; delayMs: number; queued?: boolean }
+export interface ProviderRetry { attempt: number; maxAttempts: number; delayMs: number; queued?: boolean; priority?: boolean }
 
 export interface Message {
   id: string;
@@ -63,6 +63,8 @@ export interface Message {
   role: 'user' | 'assistant';
   parts: MessagePart[];
   model: string | null;
+  /** Which provider answered (assistant replies); absent on optimistic placeholders. */
+  providerId?: string | null;
   status: 'done' | 'error' | 'stopped' | 'streaming';
   /** Provider stop reason; 'length' / 'content_filter' / 'incomplete' on a done
       reply = cut short ('incomplete' = no visible body or the stream ended
@@ -72,6 +74,8 @@ export interface Message {
   errorCode?: 'provider_busy';
   /** Ephemeral upstream retry status, never part of model context. */
   retry?: ProviderRetry | null;
+  /** Ephemeral: when this reply first started waiting on upstream retries. */
+  retrySince?: number;
   promptTokens: number | null;
   completionTokens: number | null;
   totalTokens: number | null;
@@ -382,6 +386,8 @@ export interface LineHealth {
   lastFailureAt: number | null;
   served: number;
   tookOver: number;
+  /** Models this line recently answered "not found" for; skipped for them. */
+  missingModels: string[];
 }
 
 // A backup line: same vendor type and model roster, a different gateway.
@@ -400,14 +406,24 @@ export interface AdminProvider {
   baseUrl: string | null; hasKey: boolean;
   useResponses: boolean; useVertex: boolean;
   vertexProject: string | null; vertexLocation: string | null; hasVertexSa: boolean;
+  vertexPriority: 'off' | 'fallback' | 'always';
   hasExtraHeaders: boolean; extraHeaderKeys: string[];
   enabled: boolean; sortOrder: number;
   avatarUrl: string | null;
   failoverThreshold: number; failoverCooldownSeconds: number;
   primaryName: string | null; stripModelPrefix: string; addModelPrefix: string;
   health: LineHealth;
+  primaryLineName: string;
+  vertexLines: AdminVertexLine[];
   endpoints: AdminProviderEndpoint[];
   models: AdminModel[];
+}
+
+// A Vertex provider's built-in lines after its own: the other locations in
+// priority order and the Priority PayGo fallback.
+export interface AdminVertexLine {
+  key: string; location: string; priority: boolean; name: string;
+  health: LineHealth;
 }
 
 // env/headers 为敏感信息,后端只返回是否已配置及键名,不返回值。
@@ -476,7 +492,7 @@ export interface WorkspaceListing {
 
 // SSE stream handler callbacks
 export interface StreamHandlers {
-  onMeta?(d: { messageId: string; userMessageId: string | null; model: string }): void;
+  onMeta?(d: { messageId: string; userMessageId: string | null; model: string; providerId?: string }): void;
   onDelta?(text: string): void;
   onReasoning?(text: string): void;
   onThoughtSignature?(d: Extract<MessagePart, { type: 'thought_signature' }>): void;

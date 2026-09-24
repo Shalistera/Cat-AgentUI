@@ -631,6 +631,10 @@ interface Props {
   onRegenerate?: () => void;
   /** Regenerate with a different model, side-by-side against this reply. */
   onRegenerateWith?: (m: ModelInfo) => void;
+  /** Another provider's model to offer when this reply is stuck on rate limits. */
+  switchSuggestion?: ModelInfo | null;
+  /** Regenerate this reply with that model and keep using it (stops a stuck stream first). */
+  onSwitchModel?: (m: ModelInfo) => void;
   onEdit?: (text: string) => void;
   /** Remove this message from the conversation (and from all later context). */
   onDelete?: () => void;
@@ -651,19 +655,41 @@ interface Props {
   onToolDecision?: (decisions: Record<string, 'allow' | 'deny'>, rememberChat: boolean) => void;
 }
 
+/** How long a reply waits on rate-limit retries before the retry banner also
+ * offers another provider's model. */
+const SWITCH_OFFER_AFTER_MS = 10_000;
+
+/** True once `since` is at least `ms` in the past; re-renders at that moment. */
+function useElapsed(since: number | undefined, ms: number): boolean {
+  const [, tick] = useState(0);
+  const due = since !== undefined && Date.now() - since >= ms;
+  useEffect(() => {
+    if (since === undefined || due) return;
+    const t = setTimeout(() => tick((n) => n + 1), since + ms - Date.now());
+    return () => clearTimeout(t);
+  }, [since, ms, due]);
+  return due;
+}
+
 /** Upstream backoff status line. Retries are numbered; waiting behind a
  * limit another request already hit is not (attempt 0). */
 export function retryStatusText(r: ProviderRetry): string {
+  if (r.priority) {
+    if (r.delayMs === 0) return '正在通过优先通道重新请求模型…';
+    const secs = Math.max(1, Math.round(r.delayMs / 1000));
+    return `优先通道也在限流，约 ${secs} 秒后自动重试…`;
+  }
   if (r.delayMs === 0) return '正在重新请求模型…';
   const secs = Math.max(1, Math.round(r.delayMs / 1000));
   if (r.queued) return `模型提供方正在限流，排队等待约 ${secs} 秒后再发送…`;
   return `模型提供方当前繁忙（限流），约 ${secs} 秒后自动重试…`;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, switchSuggestion, onSwitchModel, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
+  const retriedLong = useElapsed(isStreaming ? msg.retrySince : undefined, SWITCH_OFFER_AFTER_MS);
   // 互动画布 (experimental): ```html fences in replies render as live pages.
   const showThoughtSignatures = useAuth((s) => s.user?.settings.showThoughtSignatures === true);
   const canvas = useAuth((s) => !!s.user?.settings.canvasAnswers);
@@ -848,6 +874,9 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
       <RefreshCw size={11} />{providerBusy || (msg.status === 'stopped' && !hasBody) ? '重试' : '重新生成'}
     </button>
   ) : null;
+  const switchTo = switchSuggestion && onSwitchModel ? switchSuggestion : null;
+  const switchTitle = switchTo
+    ? `用 ${switchTo.providerName} 的 ${switchTo.displayName} 重新生成这条回复,之后的对话也改用它` : undefined;
   return (
     // sm:pr mirrors the avatar column (30px + gap-3) so the text block sits
     // centered in the column and the composer overhangs it equally per side.
@@ -887,6 +916,12 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
               {retryStatusText(msg.retry)}
               {msg.retry.attempt > 0 && <span className="ml-1 text-xs text-tx3">({msg.retry.attempt}/{msg.retry.maxAttempts})</span>}
             </span>
+            {switchTo && retriedLong && (
+              <button type="button" title={switchTitle} onClick={() => onSwitchModel!(switchTo)}
+                className="inline-flex max-w-[16rem] cursor-pointer items-center gap-1 rounded-md border border-line px-2 py-1 text-xs hover:bg-bg3">
+                <Shuffle size={11} className="shrink-0" /><span className="truncate">改用 {switchTo.displayName}</span>
+              </button>
+            )}
             {onCancel && <button type="button" className="cursor-pointer rounded-md border border-line px-2 py-1 text-xs hover:bg-bg3" onClick={onCancel}>取消</button>}
           </div>
         )}
@@ -902,10 +937,20 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
               {msg.error}
               {providerBusy && <span className="mt-0.5 block text-xs text-tx3">
                 {ranTools ? '重试会从头重新生成，已执行过的工具操作会再次运行。' : '这是模型提供方的限流，不是你的问题；问题和附件已保留，可直接重试。'}
+                {switchTo && `也可以换用 ${switchTo.providerName} 的模型继续。`}
               </span>}
               {hasBody && <span className="mt-0.5 block text-xs opacity-80">上面的内容可能不完整。</span>}
             </span>
-            {regenerateCta}
+            {/* Two actions stack on phones so the message keeps its width. */}
+            <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-1.5">
+              {providerBusy && switchTo && !isStreaming && (
+                <button type="button" title={switchTitle} onClick={() => onSwitchModel!(switchTo)}
+                  className="inline-flex max-w-[14rem] cursor-pointer items-center gap-1 rounded-md border border-current/30 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-bg1/60">
+                  <Shuffle size={11} className="shrink-0" /><span className="truncate">改用 {switchTo.displayName}</span>
+                </button>
+              )}
+              {regenerateCta}
+            </div>
           </div>
         )}
         {cutShort && (

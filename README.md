@@ -13,6 +13,8 @@
 
 - **多模型对话**:OpenAI 兼容 API(可选新版 Responses API)、Anthropic、Gemini(可选 Vertex AI),每个 Provider 均可自定义 API 地址(Base URL)与自定义 Header,适配各类中转/网关
 - **备用线路(故障切换)**:一个 Provider 下可挂多条同类型网关(如主用 OpenRouter、备用 LiteLLM),共用同一份模型列表、权限与用量;按优先级顺序使用而非负载均衡(保住提示缓存),主线路在返回内容前失败即在同一请求内改走下一条(该线路没有此模型也算,但不计入熔断),连续失败达到阈值后熔断一段时间再单次试探,恢复即切回;支持按线路改写模型名前缀、单独开关 Responses API,管理后台可看各线路状态、手动重置,并可把备用线路一键设为主线路(整体对调)
+- **Vertex 多区域与 Priority PayGo**:Vertex 模式可按优先级排列多个区域(如 global → us → eu,us/eu 自动使用多区域专用地址),某个区域被限流或出故障时同一请求内自动换下一个区域,熔断与切换提示同备用线路;可选 Priority PayGo(单价更高、更不易被限流):关闭、限流时启用(标准请求累计被限流 5 次或各区域都试过后改走 Priority,并在对话里提示正在使用优先通道),或始终使用;某条线路没有该模型时记住一小时,期间该模型直接跳过这条线路
+- **限流兜底换模型**:模型提供方持续限流时,重试等待超过 10 秒或最终报错后,回复里会推荐一个其他服务商的模型(按个人模型排序取第一个,跳过图像模型、对话里有图片时不支持识图的、用到工具时不支持工具的和额度已用完的),一键改用它重新生成这条回复,之后的对话也改用它
 - **流式输出**:SSE 流式回复、思考过程(reasoning)展示、随时停止
 - **每条回复的透明统计**:耗时、首字延迟、输入/输出 tokens、tokens/s
 - **绘图工坊**:OpenAI `gpt-image-1` 与 Google Nano Banana(`gemini-*-image`)系列,支持参考图(图生图/编辑)、画廊管理
@@ -99,6 +101,8 @@ npx pm2 save
 | `CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS` | Provider 流连续无事件的空闲超时 | `120` |
 | `PROVIDER_RETRY_MAX_WAIT_SECONDS` | 上游 429/503/529 限流时单次请求最多等待重试的总时长 | `60` |
 | `FAILOVER_RETRY_WAIT_SECONDS` | 配置了备用线路时,前面的线路被限流最多等多久就改走下一条 | `10` |
+| `VERTEX_REGION_RETRY_WAIT_SECONDS` | Vertex 某个区域被限流时最多等多久就换下一个区域(或 Priority 重试) | `3` |
+| `VERTEX_PRIORITY_AFTER_RETRIES` | Priority PayGo 设为「限流时启用」时,一次请求里标准请求累计被限流几次就改走 Priority | `5` |
 | `MAX_USER_UPLOAD_MB` | 单用户附件存储配额默认值;管理员可在「站点设置 → 存储空间」覆盖,保存后立即生效;用户在「设置 → 附件存储」能看到自己的占用并删除附件 | `512` |
 | `MAX_USER_IMAGE_MB` | 单用户生成图片存储配额 | `1024` |
 | `MAX_TOTAL_STORAGE_MB` | 全站附件与生成图片总配额 | `10240` |
@@ -149,7 +153,8 @@ npm run dev:web        # vite dev, :5173(代理 /api → :3000)
 npm run test:security  # 临时数据库 + Mock Provider/MCP 的隔离安全回归
 npm run test:upload-quota # 临时数据库的附件配额设置与上传回归
 npm run test:provider-retry # 模拟 429:有限重试、取消、附件保留与断流保护
-npm run test:provider-failover # 备用线路:优先级切换、熔断阈值与冷却试探、不重放已开始的流
+npm run test:provider-failover # 备用线路:优先级切换、熔断阈值与冷却试探、不重放已开始的流;Vertex 区域顺序与 Priority
+npm run test:model-fallback   # 持续限流时推荐换用的模型:其他服务商、按个人排序、能力与额度
 node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即可联调
                                # 提供对话流式、工具调用、生图 / 改图(images/generations 与 images/edits)
 ```

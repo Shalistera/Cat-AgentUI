@@ -6,6 +6,7 @@ import type {
 } from '../types.js';
 import { sseMessages, providerError, readJsonLimited, fetchRetry } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
+import { PRIORITY_HEADER, vertexTarget } from './vertex.js';
 import { config } from '../config.js';
 
 const DEFAULT_STUDIO_BASE = 'https://generativelanguage.googleapis.com';
@@ -52,23 +53,26 @@ function vertexProjectOf(cfg: ProviderRuntimeConfig): string {
 }
 
 // Resolve URL + auth headers for a model verb ('streamGenerateContent?alt=sse' | 'generateContent').
-async function endpoint(cfg: ProviderRuntimeConfig, model: string, verb: string): Promise<{ url: string; headers: Record<string, string> }> {
+// `gate` separates the busy-backoff queue of Priority PayGo requests from the
+// standard ones on the same URL: they draw on different capacity.
+async function endpoint(cfg: ProviderRuntimeConfig, model: string, verb: string): Promise<{ url: string; headers: Record<string, string>; gate?: string }> {
   const h: Record<string, string> = { ...cfg.extraHeaders, 'content-type': 'application/json' };
   if (cfg.useVertex) {
-    const project = vertexProjectOf(cfg);
-    const location = cfg.vertexLocation || 'global';
-    const origin = (cfg.baseUrl || (location === 'global'
-      ? 'https://aiplatform.googleapis.com'
-      : `https://${location}-aiplatform.googleapis.com`)).replace(/\/+$/, '');
+    const { url, priority } = vertexTarget(cfg, vertexProjectOf(cfg), model, verb);
     const token = await getVertexAuth(cfg).getAccessToken();
     h['authorization'] = `Bearer ${token}`;
-    return {
-      url: `${origin}/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:${verb}`,
-      headers: h,
-    };
+    if (priority) h[PRIORITY_HEADER] = 'priority';
+    return { url, headers: h, gate: priority ? 'priority' : undefined };
   }
   if (cfg.apiKey) h['x-goog-api-key'] = cfg.apiKey;
   return { url: `${studioOrigin(cfg)}/v1beta/models/${model}:${verb}`, headers: h };
+}
+
+/** Tag retry progress on Priority PayGo requests, so the user can tell the
+ * premium lane is busy too. */
+function retryReporter(onRetry: ChatRequest['onRetry'], gate: string | undefined): ChatRequest['onRetry'] {
+  if (gate !== 'priority' || !onRetry) return onRetry;
+  return (state) => onRetry(state && { ...state, priority: true });
 }
 
 // ---- Request body ----
@@ -245,10 +249,10 @@ function toUsage(u: any): UsageInfo {
 
 export const geminiAdapter: ChatAdapter = {
   async *streamChat(cfg, req) {
-    const { url, headers } = await endpoint(cfg, req.model, 'streamGenerateContent?alt=sse');
+    const { url, headers, gate } = await endpoint(cfg, req.model, 'streamGenerateContent?alt=sse');
     const res = await fetchRetry(url, {
       method: 'POST', headers, body: JSON.stringify(buildChatBody(req)), signal: req.signal,
-    }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
+    }, retryReporter(req.onRetry, gate), { budgetMs: cfg.retryBudgetMs, gate, counter: cfg.busyCounter });
     if (!res.ok) throw await providerError('Gemini', res);
 
     let usage: any = null;
@@ -365,7 +369,7 @@ export const geminiAdapter: ChatAdapter = {
       },
     };
     if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
-    const { url, headers } = await endpoint(cfg, req.model, 'generateContent');
+    const { url, headers, gate } = await endpoint(cfg, req.model, 'generateContent');
 
     const images: GeneratedImage[] = [];
     // n calls with the same prompt tend to repeat the same commentary — keep distinct ones.
@@ -375,7 +379,7 @@ export const geminiAdapter: ChatAdapter = {
     for (let i = 0; i < n; i++) {
       const res = await fetchRetry(url, {
         method: 'POST', headers, body: JSON.stringify(body), signal: req.signal,
-      }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
+      }, retryReporter(req.onRetry, gate), { budgetMs: cfg.retryBudgetMs, gate, counter: cfg.busyCounter });
       if (!res.ok) throw await providerError('Gemini', res);
       const maxJsonBytes = Math.ceil(config.maxGeneratedImageBytes * 4 / 3) + 1024 * 1024;
       const j: any = await readJsonLimited(res, maxJsonBytes);

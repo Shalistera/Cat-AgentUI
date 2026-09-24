@@ -4,7 +4,7 @@ import {
   Archive, ArrowDown, Check, FolderClosed, FolderOpen, Ghost, ListOrdered, PanelLeft, Pencil,
   Plus, Search, Send, Trash2,
 } from 'lucide-react';
-import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, usageLimitExhausted, ApiError } from '../api';
+import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, suggestFallbackModel, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
@@ -582,7 +582,7 @@ export default function Chat() {
     return created;
   }
 
-  function runStream(chatId: string, payload: Parameters<typeof streamChat>[1]) {
+  function runStream(chatId: string, payload: Parameters<typeof streamChat>[1], opts?: { busyRetries?: number }) {
     const controller = new AbortController();
     abortRef.current = controller;
     sendingRef.current = true;
@@ -650,7 +650,7 @@ export default function Chat() {
         streamMsgIdRef.current = d.messageId;
         setMessages((prev) => prev.map((m) => {
           let next = m;
-          if (next.id === 'tmp-a') next = { ...next, id: d.messageId, model: d.model };
+          if (next.id === 'tmp-a') next = { ...next, id: d.messageId, model: d.model, providerId: d.providerId ?? null };
           else if (next.id === 'tmp-u' && d.userMessageId) next = { ...next, id: d.userMessageId };
           if (next.parentId === 'tmp-u' && d.userMessageId) next = { ...next, parentId: d.userMessageId };
           return next;
@@ -701,7 +701,9 @@ export default function Chat() {
         }));
       },
       onNotice(msg) { toast(msg, 'info'); },
-      onRetry(retry) { if (!finished) applyToAssistant((m) => ({ ...m, retry })); },
+      onRetry(retry) {
+        if (!finished) applyToAssistant((m) => ({ ...m, retry, retrySince: m.retrySince ?? (retry ? Date.now() : undefined) }));
+      },
       onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c ? { ...c, title } : c)); },
       onFollowups(d) {
         if (!d.questions?.length || !d.messageId) return;
@@ -722,6 +724,14 @@ export default function Chat() {
       .catch((e) => {
         if (controller.signal.aborted) { finalize('stopped'); return; }
         if (e instanceof ApiError) {
+          // A model switch right after stopping a turn can beat the server to
+          // releasing this chat; wait a moment and send again.
+          if (e.status === 429 && /对话并发/.test(e.message) && (opts?.busyRetries ?? 0) > 0) {
+            finished = true;
+            if (flushTimer) clearInterval(flushTimer);
+            setTimeout(() => runStream(chatId, payload, { busyRetries: opts!.busyRetries! - 1 }), 400);
+            return;
+          }
           // request rejected before anything was persisted — drop placeholders
           finished = true;
           if (flushTimer) clearInterval(flushTimer);
@@ -834,7 +844,7 @@ export default function Chat() {
     if (streaming) stop();
   }
 
-  function regenerate(msgId: string) {
+  function regenerate(msgId: string, withModel: ModelInfo | null = modelSel, busyRetries = 0) {
     if (streaming || sendingRef.current || !chatRef.current) return;
     const target = messages.find((m) => m.id === msgId);
     if (!target) return;
@@ -843,10 +853,40 @@ export default function Chat() {
     // version (and everything under it) stays reachable via the arrows.
     setMessages((prev) => [
       ...prev,
-      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: modelSel?.modelId ?? null, status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
+      { id: 'tmp-a', parentId: target.parentId, role: 'assistant', parts: [], model: withModel?.modelId ?? null, status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null, totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now() },
     ]);
     setLeafId('tmp-a');
-    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: modelSel?.id });
+    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: withModel?.id }, { busyRetries });
+  }
+
+  // 兜底:模型提供方持续限流时,推荐换用其他服务商排在最前面的模型。
+  // 换用 = 用它重新生成这条回复,对话模型一并切过去(服务端也记住),之后的
+  // 消息继续用它。还在等限流重试时先停下当前请求,停稳后再换。
+  const pendingSwitchRef = useRef<{ msgId: string; model: ModelInfo } | null>(null);
+  function switchModel(msgId: string, m: ModelInfo) {
+    if (streaming) {
+      pendingSwitchRef.current = { msgId, model: m };
+      stop();
+      return;
+    }
+    selectModel(m);
+    setChat((c) => (c ? { ...c, modelId: m.id } : c));
+    regenerate(msgId, m, 5);
+  }
+  useEffect(() => {
+    const pending = pendingSwitchRef.current;
+    if (streaming || !pending) return;
+    pendingSwitchRef.current = null;
+    switchModel(pending.msgId, pending.model);
+  }, [streaming]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fallbackNeeds = useMemo(() => ({
+    needsVision: path.some((m) => m.parts.some((p) => p.type === 'image')),
+    needsTools: mcpSelected.length > 0 || path.some((m) => m.parts.some((p) => p.type === 'tool_call')),
+  }), [path, mcpSelected]);
+  function fallbackFor(m: Message): ModelInfo | null {
+    const avoid = m.providerId ?? models.find((x) => x.modelId === m.model)?.providerId ?? modelSel?.providerId ?? null;
+    return suggestFallbackModel(models, { avoidProviderId: avoid, ...fallbackNeeds });
   }
 
   // 用其他模型对比生成:当前回复留在原位,挑战者作为隐藏兄弟并排流式输出,
@@ -1202,6 +1242,12 @@ export default function Chat() {
                 }
                 const sibs = messages.filter((x) => x.parentId === m.parentId);
                 const sibIdx = sibs.findIndex((x) => x.id === m.id);
+                // Offered on a reply that failed on rate limits, or on the one
+                // still waiting them out — never while another reply streams.
+                const stuck = m.role === 'assistant' && !!chat && !m.id.startsWith('tmp-')
+                  && ((m.errorCode === 'provider_busy' && !streaming)
+                    || (!!m.retry && streaming && m.id === streamMsgIdRef.current));
+                const suggestion = stuck ? fallbackFor(m) : null;
                 return (
                   <ChatMessage
                     key={m.id}
@@ -1215,6 +1261,8 @@ export default function Chat() {
                     onSiblingNext={!streaming && sibIdx < sibs.length - 1 ? () => switchSibling(m, 1) : undefined}
                     onRegenerate={m.role === 'assistant' && !streaming && !!chat ? () => regenerate(m.id) : undefined}
                     onRegenerateWith={m.role === 'assistant' && !streaming && !!chat ? (pick) => regenerateCompare(m.id, pick) : undefined}
+                    switchSuggestion={suggestion}
+                    onSwitchModel={suggestion ? (pick) => switchModel(m.id, pick) : undefined}
                     onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
                     onEditAssistant={m.role === 'assistant' && m.status !== 'streaming' && !streaming && !!chat
                       ? (t) => void editAssistant(m.id, t)

@@ -1,4 +1,4 @@
-import type { StreamHandlers, UsageLimit } from './types';
+import type { ModelInfo, StreamHandlers, UsageLimit } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -216,6 +216,22 @@ export function fmtTokens(n: number | null | undefined): string {
 export function usageLimitExhausted(l: UsageLimit): boolean {
   return (!!l.requests && l.requests.used >= l.requests.limit)
     || (!!l.tokens && l.tokens.used >= l.tokens.limit);
+}
+
+/** Who to hand a conversation to when its provider keeps rate-limiting: the
+ * first model in the person's own order (starred first, as the picker shows
+ * it) from a different provider that can carry this conversation — a text
+ * model, with vision when there are pictures, with tools when tools are in
+ * play — and still has allowance left. null = nothing suitable. */
+export function suggestFallbackModel(
+  models: ModelInfo[],
+  opts: { avoidProviderId: string | null; needsVision: boolean; needsTools: boolean },
+): ModelInfo | null {
+  return models.find((m) => !m.imageGen
+    && m.providerId !== opts.avoidProviderId
+    && (!opts.needsVision || m.vision)
+    && (!opts.needsTools || m.tools)
+    && !(m.usageLimit && usageLimitExhausted(m.usageLimit))) ?? null;
 }
 
 /** "今日已用 3 / 10 次 · 1.2k / 50.0k tokens" for the picker and new-chat page. */

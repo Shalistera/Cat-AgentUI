@@ -10,6 +10,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { withFailover, resetLineHealth, lineStatus, rewriteModel } from '../server/dist/providers/failover.js';
 import { ProviderHttpError } from '../server/dist/providers/sse.js';
+import {
+  normalizeVertexLocations, parseVertexLocations, vertexLines, vertexTarget,
+} from '../server/dist/providers/vertex.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const netErr = () => new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
@@ -93,6 +96,7 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
     new ProviderHttpError('Gemini 404: models/gpt-x is not found for API version v1beta', 404),
   ];
   for (const err of unknown) {
+    resetLineHealth();
     const { adapter, calls } = fake({ primary: [err] });
     const notices = [];
     const out = await collect(adapter.streamChat(cfg(), req({ onFailover: (i) => notices.push(i) })));
@@ -102,6 +106,27 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
   }
   assert.equal(lineStatus('prov:primary').failures, 0, 'unknown-model answers do not open the breaker');
   assert.equal(lineStatus('prov:primary').state, 'ok');
+  // Remembered: the next request for that model skips the line without a
+  // round trip or a notice; other models still use it.
+  assert.deepEqual(lineStatus('prov:primary').missingModels, ['openai/gpt-4o']);
+  {
+    const again = fake({});
+    const notices = [];
+    await collect(again.adapter.streamChat(cfg(), req({ onFailover: (i) => notices.push(i) })));
+    assert.deepEqual(again.calls.map((c) => c.key), ['b1']);
+    assert.equal(notices.length, 0);
+    await collect(again.adapter.streamChat(cfg(), req({ model: 'openai/gpt-5' })));
+    assert.equal(again.calls.at(-1).key, 'primary');
+    resetLineHealth('prov:primary');
+    assert.deepEqual(lineStatus('prov:primary').missingModels, [], 'reset forgets it');
+  }
+  // A busy line followed only by lines lacking the model surfaces the busy error.
+  {
+    resetLineHealth();
+    const { adapter } = fake({ primary: [httpErr(429)], b1: [unknown[2]], b2: [unknown[2]] });
+    await assert.rejects(collect(adapter.streamChat(cfg(), req())), { status: 429 });
+  }
+  resetLineHealth();
   // Other 400s (bad payload) still stay put.
   const { adapter, calls } = fake({ primary: [new ProviderHttpError('OpenAI 400: messages[0].content is required', 400)] });
   await assert.rejects(collect(adapter.streamChat(cfg(), req())), { status: 400 });
@@ -202,6 +227,109 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
   const { adapter } = fake({ primary: [httpErr(500)] });
   await assert.rejects(collect(adapter.streamChat(line('primary', '主线路'), req())), { status: 500 });
   assert.equal(lineStatus('prov:primary').failures, 0);
+}
+
+// 10. Vertex locations: parsing, hosts, Priority targeting, the line plan
+{
+  assert.deepEqual(parseVertexLocations(null), ['global']);
+  assert.deepEqual(parseVertexLocations(' US, global，eu us '), ['us', 'global', 'eu']);
+  assert.equal(normalizeVertexLocations('  '), null);
+  assert.equal(normalizeVertexLocations('us, global'), 'us,global');
+  assert.throws(() => normalizeVertexLocations('us_central1'), /格式不对/);
+  assert.throws(() => normalizeVertexLocations('aa,bb,cc,dd,ee,ff,gg'), /最多/);
+  const t = (line, model = 'gemini-3.1-pro-preview') => vertexTarget({ baseUrl: null, ...line }, 'proj', model, 'generateContent');
+  const tail = 'publishers/google/models/gemini-3.1-pro-preview:generateContent';
+  assert.equal(t({ vertexLocation: null }).url, `https://aiplatform.googleapis.com/v1/projects/proj/locations/global/${tail}`);
+  assert.equal(t({ vertexLocation: 'us' }).url, `https://aiplatform.us.rep.googleapis.com/v1/projects/proj/locations/us/${tail}`);
+  assert.equal(t({ vertexLocation: 'eu' }).url, `https://aiplatform.eu.rep.googleapis.com/v1/projects/proj/locations/eu/${tail}`);
+  assert.equal(t({ vertexLocation: 'us-central1' }).url, `https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/${tail}`);
+  assert.equal(t({ baseUrl: 'https://proxy.example/', vertexLocation: 'eu' }).url, `https://proxy.example/v1/projects/proj/locations/eu/${tail}`);
+  assert.equal(t({ vertexLocation: 'us', vertexPriority: true }).priority, true);
+  assert.equal(t({ vertexLocation: 'us-central1', vertexPriority: true }).priority, false, 'single regions have no Priority PayGo');
+  assert.equal(t({ vertexLocation: 'global', vertexPriority: true }, 'gemini-3.1-flash-image').priority, false, 'image models stay standard');
+  assert.equal(t({ vertexLocation: 'global', vertexPriority: false }).priority, false);
+
+  const plan = (p) => vertexLines({ id: 'g', vertexLocation: null, ...p }).map((l) => `${l.key}|${l.location}|${l.priority}|${l.name}`);
+  assert.deepEqual(plan({}), ['g:primary|global|false|主线路']);
+  assert.deepEqual(plan({ vertexLocation: 'us,global,eu', vertexPriority: 'fallback' }), [
+    'g:primary|us|false|Vertex us', 'g:vertex:global|global|false|Vertex global',
+    'g:vertex:eu|eu|false|Vertex eu', 'g:vertex:global:priority|global|true|Vertex global · Priority',
+  ]);
+  assert.equal(plan({ vertexLocation: 'us-central1,eu,us', vertexPriority: 'fallback' }).at(-1),
+    'g:vertex:eu:priority|eu|true|Vertex eu · Priority', 'without global, the first location offering Priority');
+  assert.equal(plan({ vertexLocation: 'us-central1,global', vertexPriority: 'fallback' }).at(-1),
+    'g:vertex:global:priority|global|true|Vertex global · Priority', 'Priority fallback prefers global');
+  assert.deepEqual(plan({ vertexLocation: 'us-central1', vertexPriority: 'fallback' }), ['g:primary|us-central1|false|主线路']);
+  assert.deepEqual(plan({ vertexLocation: 'global,us-central1', vertexPriority: 'always', primaryName: 'GCP' }), [
+    'g:primary|global|true|GCP', 'g:vertex:us-central1|us-central1|false|Vertex us-central1',
+  ]);
+}
+
+// 11. model-specific lines are skipped, and whichever line is tried last
+//     waits out the full busy budget instead of the hand-over cap
+{
+  resetLineHealth();
+  const calls = [];
+  const adapter = withFailover({
+    async *streamChat(c) { calls.push({ key: c.endpointId ?? 'primary', budget: c.retryBudgetMs }); throw httpErr(429); },
+    async listModels() { return []; },
+  });
+  const vertex = () => {
+    const primary = line('primary', 'Vertex global', { retryBudgetMs: 3000 });
+    primary.fallbacks = [
+      line('g:vertex:us', 'Vertex us', { retryBudgetMs: 3000 }),
+      line('g:vertex:global:priority', 'Vertex global · Priority', { servesModel: (m) => !m.includes('image') }),
+    ];
+    primary.failoverThreshold = 5; primary.failoverCooldownMs = 300;
+    return primary;
+  };
+  const notices = [];
+  await assert.rejects(collect(adapter.streamChat(vertex(), req({ model: 'gemini-3.1-pro-preview', onFailover: (i) => notices.push(i) }))), { status: 429 });
+  assert.deepEqual(calls, [
+    { key: 'primary', budget: 3000 }, { key: 'g:vertex:us', budget: 3000 }, { key: 'g:vertex:global:priority', budget: undefined },
+  ]);
+  assert.deepEqual(notices.map((n) => n.to), ['Vertex us', 'Vertex global · Priority']);
+  assert.equal(notices[0].reason, '限流 HTTP 429');
+  calls.length = 0;
+  await assert.rejects(collect(adapter.streamChat(vertex(), req({ model: 'gemini-3.1-flash-image' }))), { status: 429 });
+  assert.deepEqual(calls, [{ key: 'primary', budget: 3000 }, { key: 'g:vertex:us', budget: undefined }],
+    'no Priority attempt for a model without it; the last standard line waits in full');
+  // An open breaker behind the provider's line leaves it last: full budget too.
+  resetLineHealth();
+  const open = vertex();
+  open.fallbacks = [open.fallbacks[0]];
+  open.failoverThreshold = 1; open.failoverCooldownMs = 60_000;
+  await assert.rejects(collect(adapter.streamChat(open, req({ model: 'gemini-3.7-flash' }))));
+  calls.length = 0;
+  resetLineHealth('prov:primary');
+  await assert.rejects(collect(adapter.streamChat(open, req({ model: 'gemini-3.7-flash' }))));
+  assert.deepEqual(calls, [{ key: 'primary', budget: undefined }]);
+
+  // Busy tally shared by the standard lines: once it fills, skip the rest and
+  // go straight to the Priority retry, which is announced as such.
+  resetLineHealth();
+  const tally = [];
+  const escalating = withFailover({
+    async *streamChat(c) {
+      tally.push(c.endpointId ?? 'primary');
+      if (c.escalateAfterBusy) { yield { type: 'text', text: 'priority-hi' }; return; }
+      assert(c.busyCounter, 'standard lines share the counter');
+      c.busyCounter.busy += 3; // e.g. three 429s inside fetchRetry
+      throw httpErr(429);
+    },
+    async listModels() { return []; },
+  });
+  const four = line('primary', 'Vertex global', { retryBudgetMs: 3000 });
+  four.fallbacks = [
+    line('g:vertex:us', 'Vertex us', { retryBudgetMs: 3000 }),
+    line('g:vertex:eu', 'Vertex eu', { retryBudgetMs: 3000 }),
+    line('g:vertex:global:priority', 'Vertex global · Priority', { escalateAfterBusy: 5, servesModel: () => true }),
+  ];
+  const seenNotices = [];
+  const out = await collect(escalating.streamChat(four, req({ model: 'gemini-3.7-flash', onFailover: (i) => seenNotices.push(i) })));
+  assert.equal(out[0].text, 'priority-hi');
+  assert.deepEqual(tally, ['primary', 'g:vertex:us', 'g:vertex:global:priority'], 'eu skipped once 6 ≥ 5 busy');
+  assert.deepEqual(seenNotices.map((n) => [n.to, !!n.priority]), [['Vertex us', false], ['Vertex global · Priority', true]]);
 }
 
 assert.equal(rewriteModel({ stripModelPrefix: 'openai/', addModelPrefix: 'azure/' }, 'openai/gpt-4o'), 'azure/gpt-4o');
@@ -364,6 +492,19 @@ try {
   assert.equal(evs.find((e) => e.type === 'done').data.status, 'error');
   assert(!appLogs.includes(backupSecret) && !appLogs.includes('sk-wrong-key'), 'no line secrets in server logs');
   console.log('Passed: admin API, per-line test with redaction, in-request failover with notice and model rewrite, breaker open/reset, deletion.');
+
+  // Vertex: ordered locations and the Priority fallback show up as lines.
+  const bad = await request('POST', '/api/admin/providers', { name: 'g', type: 'gemini', useVertex: true, vertexLocation: 'us_central1' });
+  assert.equal(bad.status, 400); assert.match(bad.json.error, /格式不对/);
+  const g = (await request('POST', '/api/admin/providers', { name: 'Google', type: 'gemini', useVertex: true, vertexLocation: ' US, global ', vertexPriority: 'fallback' })).json;
+  assert.equal(g.vertexLocation, 'us,global'); assert.equal(g.vertexPriority, 'fallback');
+  assert.equal(g.primaryLineName, 'Vertex us');
+  assert.deepEqual(g.vertexLines.map((l) => [l.name, l.priority, l.health.state]), [['Vertex global', false, 'ok'], ['Vertex global · Priority', true, 'ok']]);
+  const g2 = (await request('PATCH', `/api/admin/providers/${g.id}`, { vertexLocation: 'eu', vertexPriority: 'off' })).json;
+  assert.equal(g2.primaryLineName, '主线路'); assert.deepEqual(g2.vertexLines, []);
+  assert.equal((await request('PATCH', `/api/admin/providers/${g.id}`, { vertexPriority: 'sometimes' })).status, 400);
+  assert.equal((await request('POST', `/api/admin/providers/${g.id}/health/reset`)).status, 200);
+  console.log('Passed: Vertex location validation, stored order, and built-in lines in the admin API.');
   console.log('provider-failover regression: OK');
 } finally {
   app?.kill();

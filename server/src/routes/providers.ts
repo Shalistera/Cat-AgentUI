@@ -16,6 +16,7 @@ import {
 } from '../providers/index.js';
 import { lineStatus, resetLineHealth } from '../providers/failover.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
+import { normalizeVertexLocations, parsePriorityMode, vertexLines } from '../providers/vertex.js';
 import {
   MAX_LEVELS, defaultLevels, effectiveLevels, normalizeLevels, parseLevels, parseMode,
 } from '../reasoning.js';
@@ -72,6 +73,7 @@ function publicHealth(key: string) {
     lastFailureAt: h.lastFailureAt,
     served: h.served,
     tookOver: h.tookOver,
+    missingModels: h.missingModels,
   };
 }
 
@@ -102,6 +104,24 @@ function endpointsOf(providerId: string): EndpointRow[] {
     .all();
 }
 
+/** A Vertex provider's lines after its own (other locations, the Priority
+ * fallback), each with its breaker state — built-in, so not editable rows. */
+function publicVertexLines(p: ProviderRow) {
+  if (p.type !== 'gemini' || !p.useVertex) return [];
+  return vertexLines(p).slice(1).map((v) => ({
+    key: v.key, location: v.location, priority: v.priority, name: v.name, health: publicHealth(v.key),
+  }));
+}
+
+/** Every breaker key the provider owns, for resets. */
+function providerLineKeys(p: ProviderRow, endpointRows?: EndpointRow[]): string[] {
+  return [
+    primaryLineKey(p.id),
+    ...(p.type === 'gemini' && p.useVertex ? vertexLines(p).slice(1).map((v) => v.key) : []),
+    ...(endpointRows ?? endpointsOf(p.id)).map((e) => e.id),
+  ];
+}
+
 // SECURITY: API keys, Vertex SA JSON, and custom header values are write-only.
 function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: EndpointRow[]) {
   let extraHeaderKeys: string[] = [];
@@ -116,6 +136,7 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: E
     useVertex: !!p.useVertex,
     vertexProject: p.vertexProject,
     vertexLocation: p.vertexLocation,
+    vertexPriority: parsePriorityMode(p.vertexPriority),
     hasVertexSa: !!p.vertexSaJsonEnc,
     hasExtraHeaders: !!p.extraHeadersEnc || extraHeaderKeys.length > 0,
     extraHeaderKeys,
@@ -130,6 +151,9 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: E
     stripModelPrefix: p.stripModelPrefix,
     addModelPrefix: p.addModelPrefix,
     health: publicHealth(primaryLineKey(p.id)),
+    // What notices and the lines panel call the provider's own line.
+    primaryLineName: p.type === 'gemini' && p.useVertex ? vertexLines(p)[0].name : p.primaryName || '主线路',
+    vertexLines: publicVertexLines(p),
     endpoints: (endpointRows ?? endpointsOf(p.id)).map(publicEndpoint),
     ...(modelRows ? { models: modelRows.map((m) => publicModel(m, p.type as ProviderType)) } : {}),
   };
@@ -192,7 +216,8 @@ const providerCreateSchema = z.object({
   useResponses: z.boolean().nullish(),
   useVertex: z.boolean().nullish(),
   vertexProject: z.string().max(100).nullish(),
-  vertexLocation: z.string().max(50).nullish(),
+  vertexLocation: z.string().max(300).nullish(),
+  vertexPriority: z.enum(['off', 'fallback', 'always']).optional(),
   vertexSaJson: z.string().max(20000).nullish(),
   extraHeaders: z.record(z.string(), z.string()).nullish(),
 });
@@ -205,7 +230,8 @@ const providerPatchSchema = z.object({
   useResponses: z.boolean().nullish(),
   useVertex: z.boolean().nullish(),
   vertexProject: z.string().max(100).nullish(),
-  vertexLocation: z.string().max(50).nullish(),
+  vertexLocation: z.string().max(300).nullish(),
+  vertexPriority: z.enum(['off', 'fallback', 'always']).optional(),
   vertexSaJson: z.string().max(20000).nullish(),
   extraHeaders: z.record(z.string(), z.string()).nullish(),
   // The admin API never returns saved values. The editor sends unchanged key
@@ -326,6 +352,10 @@ export async function providerRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Service Account JSON 无效' });
       }
     }
+    let vertexLocation: string | null;
+    try { vertexLocation = normalizeVertexLocations(d.vertexLocation); } catch (err) {
+      return reply.code(400).send({ error: errMessage(err) });
+    }
     const id = newId();
     db.insert(schema.providers).values({
       id,
@@ -336,7 +366,8 @@ export async function providerRoutes(app: FastifyInstance) {
       useResponses: d.useResponses ? 1 : 0,
       useVertex: d.useVertex ? 1 : 0,
       vertexProject: d.vertexProject ? d.vertexProject : null,
-      vertexLocation: d.vertexLocation ? d.vertexLocation : null,
+      vertexLocation,
+      vertexPriority: d.vertexPriority ?? 'off',
       vertexSaJsonEnc: d.vertexSaJson ? encryptSecret(d.vertexSaJson) : null,
       extraHeaders: '{}',
       extraHeadersEnc: encryptSecretRecord(d.extraHeaders ?? {}),
@@ -374,7 +405,12 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.useResponses !== undefined) patch.useResponses = d.useResponses ? 1 : 0;
     if (d.useVertex !== undefined) patch.useVertex = d.useVertex ? 1 : 0;
     if (d.vertexProject !== undefined) patch.vertexProject = d.vertexProject || null;
-    if (d.vertexLocation !== undefined) patch.vertexLocation = d.vertexLocation || null;
+    if (d.vertexLocation !== undefined) {
+      try { patch.vertexLocation = normalizeVertexLocations(d.vertexLocation); } catch (err) {
+        return reply.code(400).send({ error: errMessage(err) });
+      }
+    }
+    if (d.vertexPriority !== undefined) patch.vertexPriority = d.vertexPriority;
     if (d.extraHeaders !== undefined || d.preserveExtraHeaderKeys !== undefined) {
       let current: Record<string, string> = Object.create(null) as Record<string, string>;
       try { current = providerExtraHeaders(row); } catch { /* explicit replacement can repair it */ }
@@ -408,6 +444,11 @@ export async function providerRoutes(app: FastifyInstance) {
     if (Object.keys(patch).length) {
       db.update(schema.providers).set(patch).where(eq(schema.providers.id, id)).run();
       broadcast('models-updated');
+      // Vertex lines are keyed by location: a reordered list puts another
+      // location first, and its old streak says nothing about the new setup.
+      if (patch.vertexLocation !== undefined || patch.vertexPriority !== undefined || patch.useVertex !== undefined) {
+        for (const p of [row, getProvider(id)!]) for (const key of providerLineKeys(p, [])) resetLineHealth(key);
+      }
     }
     return publicProvider(getProvider(id)!);
   });
@@ -589,8 +630,7 @@ export async function providerRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const provider = getProvider(id);
     if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
-    resetLineHealth(primaryLineKey(id));
-    for (const e of endpointsOf(id)) resetLineHealth(e.id);
+    for (const key of providerLineKeys(provider)) resetLineHealth(key);
     return publicProvider(provider);
   });
 

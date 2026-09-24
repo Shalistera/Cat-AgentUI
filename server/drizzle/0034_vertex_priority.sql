@@ -1,0 +1,1 @@
+ALTER TABLE `providers` ADD `vertex_priority` text DEFAULT 'off' NOT NULL;

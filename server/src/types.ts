@@ -71,6 +71,18 @@ export interface ProviderRuntimeConfig {
   addModelPrefix?: string;
   /** Cap on the busy-retry wait for this line; unset = PROVIDER_RETRY_MAX_WAIT_SECONDS. */
   retryBudgetMs?: number;
+  /** Vertex: request Priority PayGo on this line (for models that offer it). */
+  vertexPriority?: boolean;
+  /** Lines that only make sense for some models — the Priority fallback line
+   * would just repeat a standard request for an image model — are skipped
+   * for the rest. Unset = serves every model. */
+  servesModel?: (model: string) => boolean;
+  /** Marks the Vertex Priority PayGo retry: once the standard lines before it
+   * were rate limited this many times in one request, skip straight here. */
+  escalateAfterBusy?: number;
+  /** Per-request tally of busy rejections on standard lines, shared by them
+   * (set by the failover layer, read by fetchRetry). */
+  busyCounter?: BusyCounter;
   /** Lines to try, in order, when this one fails before producing output. */
   fallbacks?: ProviderRuntimeConfig[];
   failoverThreshold?: number;
@@ -82,6 +94,13 @@ export interface ProviderFailover {
   from: string;
   to: string;
   reason: string;
+  /** The new line is the Priority PayGo retry after standard ones were rate limited. */
+  priority?: boolean;
+}
+
+export interface BusyCounter {
+  busy: number;
+  limit: number;
 }
 
 export interface ToolDef {
@@ -149,6 +168,8 @@ export interface ProviderRetry {
   delayMs: number;
   /** Waiting behind a limit another request already hit, not our own retry. */
   queued?: boolean;
+  /** The request being retried goes over Vertex Priority PayGo. */
+  priority?: boolean;
 }
 
 export interface ChatRequest {

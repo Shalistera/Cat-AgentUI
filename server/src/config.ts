@@ -83,6 +83,12 @@ export const config = {
   // With a backup line configured, how long a line may sit in busy-retry
   // before the request moves on to the next line.
   failoverRetryWaitMs: intEnv('FAILOVER_RETRY_WAIT_SECONDS', 10, 0, 600) * 1000,
+  // Same, when the next line is another Vertex location or the Priority
+  // PayGo attempt of the same provider.
+  vertexRegionRetryWaitMs: intEnv('VERTEX_REGION_RETRY_WAIT_SECONDS', 3, 0, 600) * 1000,
+  // Priority PayGo "限流时启用": after this many rate-limited standard
+  // attempts in one request (across locations), retry on Priority instead.
+  vertexPriorityAfterBusy: intEnv('VERTEX_PRIORITY_AFTER_RETRIES', 5, 1, 50),
 
   // Persistent-storage quotas.
   maxUserUploadBytes: intEnv('MAX_USER_UPLOAD_MB', 512, 1, 100_000) * MIB,

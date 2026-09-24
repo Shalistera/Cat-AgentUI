@@ -10,8 +10,88 @@ import {
 } from '../../components/ui';
 import { KeyValueEditor, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
 import { ProviderAvatar } from '../../components/ModelAvatar';
-import type { AdminModel, AdminProvider, AdminProviderEndpoint, LineHealth } from '../../types';
+import type { AdminModel, AdminProvider, AdminProviderEndpoint, AdminVertexLine, LineHealth } from '../../types';
 import { DEFAULT_URLS, TYPE_LABELS, type ProviderType } from './provider-common';
+
+// ---------- Vertex locations ----------
+const PRESET_LOCATIONS = ['global', 'us', 'eu'];
+const MAX_LOCATIONS = 6;
+
+function locationLabel(loc: string): string {
+  if (loc === 'global') return '全球 · 按空闲容量调度,容量最大';
+  if (loc === 'us') return '美国多区域 · 只在美国境内处理';
+  if (loc === 'eu') return '欧盟多区域 · 只在欧盟境内处理';
+  return '单区域 · 容量最小,不支持 Priority';
+}
+
+function vertexHost(loc: string): string {
+  if (loc === 'global') return 'aiplatform.googleapis.com';
+  if (loc === 'us' || loc === 'eu') return `aiplatform.${loc}.rep.googleapis.com`;
+  return `${loc}-aiplatform.googleapis.com`;
+}
+
+function parseLocations(raw: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const part of (raw ?? '').split(/[\s,，、]+/)) {
+    const loc = part.trim().toLowerCase();
+    if (loc && !out.includes(loc)) out.push(loc);
+  }
+  return out;
+}
+
+// Ordered list, first tried first. Not wrapped in <Field>: a <label> would
+// forward clicks on its blank area to the first button inside.
+function VertexLocationEditor({ locations, onChange }: { locations: string[]; onChange(v: string[]): void }) {
+  const [custom, setCustom] = useState('');
+  const shown = locations.length ? locations : ['global'];
+  const full = shown.length >= MAX_LOCATIONS;
+
+  function move(i: number, delta: number) {
+    const next = [...shown];
+    [next[i], next[i + delta]] = [next[i + delta], next[i]];
+    onChange(next);
+  }
+  function add(loc: string) {
+    const v = loc.trim().toLowerCase();
+    if (!v) return;
+    if (!/^[a-z][a-z0-9-]{1,39}$/.test(v)) { toast('区域名只能包含小写字母、数字和连字符,如 us-central1', 'err'); return; }
+    if (shown.includes(v)) { toast('已在列表中', 'err'); return; }
+    onChange([...shown, v]);
+    setCustom('');
+  }
+
+  return (
+    <div>
+      <div className="mb-1.5 text-[13px] font-medium text-tx">Vertex 区域(按优先级)</div>
+      <div className="space-y-1.5">
+        {shown.map((loc, i) => (
+          <div key={loc} className="flex items-center gap-2 rounded-md border border-line bg-bg1 px-2.5 py-1.5">
+            <span className="w-4 shrink-0 text-center text-[11px] tabular-nums text-tx3">{i + 1}</span>
+            <span className="font-mono text-xs font-medium text-tx">{loc}</span>
+            <span className="min-w-0 flex-1 truncate text-[11px] text-tx3">{locationLabel(loc)}</span>
+            <Button variant="ghost" size="iconXs" title="提前" disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp size={12} /></Button>
+            <Button variant="ghost" size="iconXs" title="延后" disabled={i === shown.length - 1} onClick={() => move(i, 1)}><ArrowDown size={12} /></Button>
+            <Button variant="dangerGhost" size="iconXs" title="移除" disabled={shown.length === 1}
+              onClick={() => onChange(shown.filter((x) => x !== loc))}><X size={12} /></Button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {PRESET_LOCATIONS.filter((loc) => !shown.includes(loc)).map((loc) => (
+          <Button key={loc} variant="outline" size="sm" disabled={full} onClick={() => add(loc)}><Plus size={12} />{loc}</Button>
+        ))}
+        <form className="flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); add(custom); }}>
+          <div className="w-36"><Input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="其他,如 us-central1" uiSize="sm" className="font-mono text-xs" /></div>
+          <Button variant="outline" size="sm" type="submit" disabled={full || !custom.trim()}>添加</Button>
+        </form>
+      </div>
+      <div className="mt-1.5 text-xs leading-relaxed text-tx3">
+        从第一个开始用;被限流或出故障时,同一次请求内自动换下一个。
+        global 会把请求调度到当时有空闲的区域,容量最大,Google 推荐优先用它减少 429;us、eu 只在对应地区内处理,容量是 global 的一部分。
+      </div>
+    </div>
+  );
+}
 
 // ---------- provider create / edit modal ----------
 function ProviderModal({ provider, onClose, onSaved }: {
@@ -25,7 +105,8 @@ function ProviderModal({ provider, onClose, onSaved }: {
   const [useResponses, setUseResponses] = useState(provider?.useResponses ?? false);
   const [useVertex, setUseVertex] = useState(provider?.useVertex ?? false);
   const [vertexProject, setVertexProject] = useState(provider?.vertexProject ?? '');
-  const [vertexLocation, setVertexLocation] = useState(provider?.vertexLocation ?? '');
+  const [vertexLocations, setVertexLocations] = useState<string[]>(parseLocations(provider?.vertexLocation));
+  const [vertexPriority, setVertexPriority] = useState<AdminProvider['vertexPriority']>(provider?.vertexPriority ?? 'off');
   const [vertexSaJson, setVertexSaJson] = useState('');
   // Saved header values are write-only. Blank values on existing key rows mean
   // "keep", while typing replaces that key and deleting the row removes it.
@@ -74,7 +155,8 @@ function ProviderModal({ provider, onClose, onSaved }: {
       useResponses: type === 'openai' ? useResponses : false,
       useVertex: type === 'gemini' ? useVertex : false,
       vertexProject: vertexProject.trim() || null,
-      vertexLocation: vertexLocation.trim() || null,
+      vertexLocation: vertexLocations.join(',') || null,
+      vertexPriority,
     };
     const existingHeaderKeys = new Set(provider?.extraHeaderKeys ?? []);
     // A blank existing row means "keep"; a newly-added blank row remains a
@@ -209,8 +291,15 @@ function ProviderModal({ provider, onClose, onSaved }: {
                 <Field label="Vertex 项目 ID" hint="留空自动使用 JSON 中的 project_id">
                   <Input value={vertexProject} onChange={(e) => setVertexProject(e.target.value)} placeholder="留空自动读取" />
                 </Field>
-                <Field label="Vertex 区域" hint="留空使用 global">
-                  <Input value={vertexLocation} onChange={(e) => setVertexLocation(e.target.value)} placeholder="global" />
+                <VertexLocationEditor locations={vertexLocations} onChange={setVertexLocations} />
+                <Field label="Priority PayGo" hint={vertexPriority === 'off'
+                  ? '按 token 计费、单价更高、更不容易被限流的付费方式,不用提前购买'
+                  : 'Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效(us-central1 这类单区域不支持),图像等不支持的模型自动按标准请求发送。限流时启用会在对话里提示用户正在使用优先通道'}>
+                  <Select value={vertexPriority} onChange={(e) => setVertexPriority(e.target.value as AdminProvider['vertexPriority'])}>
+                    <option value="off">关闭 · 只用标准按量付费</option>
+                    <option value="fallback">限流时启用 · 标准请求被限流 5 次或各区域都试过后改走 Priority</option>
+                    <option value="always">始终使用 · 所有请求都走 Priority</option>
+                  </Select>
                 </Field>
               </div>
             )}
@@ -224,7 +313,7 @@ function ProviderModal({ provider, onClose, onSaved }: {
 
         {isEdit && (
           <div className="space-y-4 rounded-lg border border-line bg-bg2/30 p-3">
-            <Field label="主线路名称" hint="只在备用线路列表和切换提示里显示;留空显示为「主线路」">
+            <Field label="主线路名称" hint={vertexMode ? '只在线路列表和切换提示里显示;留空显示为「主线路」,设置了多个区域或 Priority 时显示区域名' : '只在备用线路列表和切换提示里显示;留空显示为「主线路」'}>
               <Input value={primaryName} onChange={(e) => setPrimaryName(e.target.value)} placeholder="如 OpenRouter" maxLength={64} />
             </Field>
             <div className="grid grid-cols-2 gap-3">
@@ -394,12 +483,15 @@ function healthDetail(h: LineHealth): string {
   if (h.lastFailureAt) bits.push(`时间 ${new Date(h.lastFailureAt).toLocaleString()}`);
   if (h.served) bits.push(`已承接 ${h.served} 次`);
   if (h.tookOver) bits.push(`其中接替 ${h.tookOver} 次`);
+  if (h.missingModels.length) bits.push(`没有 ${h.missingModels.join('、')},这些模型暂时跳过此线路`);
   return bits.join(' · ');
 }
 
 // ---------- backup lines section inside the provider card ----------
-function EndpointRow({ endpoint, provider, index, count, reload, onEdit }: {
+function EndpointRow({ endpoint, provider, index, count, position, reload, onEdit }: {
   endpoint: AdminProviderEndpoint; provider: AdminProvider; index: number; count: number;
+  /** 1-based place among all of the provider's lines. */
+  position: number;
   reload(): Promise<void>; onEdit(): void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -443,7 +535,7 @@ function EndpointRow({ endpoint, provider, index, count, reload, onEdit }: {
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line px-2.5 py-2">
-      <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">{index + 2}</span>
+      <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">{position}</span>
       <StatusDot tone={!endpoint.enabled ? 'idle' : endpoint.health.state === 'ok' ? 'ok' : endpoint.health.state === 'open' ? 'err' : 'warn'} />
       <span className="text-xs font-medium text-tx">{endpoint.name}</span>
       <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block" title={endpoint.baseUrl ?? ''}>
@@ -461,8 +553,26 @@ function EndpointRow({ endpoint, provider, index, count, reload, onEdit }: {
           onChange={(v) => run(async () => { await api.patch(`/api/admin/provider-endpoints/${endpoint.id}`, { enabled: v }); })} />
         <Button variant="dangerGhost" size="iconXs" title="删除" disabled={busy} onClick={remove}><Trash2 size={12} /></Button>
       </div>
-      {endpoint.health.lastError && (
+      {(endpoint.health.lastError || endpoint.health.missingModels.length > 0) && (
         <p className="basis-full pl-7 text-[11px] text-tx3">{healthDetail(endpoint.health)}</p>
+      )}
+    </div>
+  );
+}
+
+// Built-in Vertex lines (other locations, the Priority fallback): state only —
+// their order and presence are set in the provider editor.
+function VertexLineRow({ line, position }: { line: AdminVertexLine; position: number }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line px-2.5 py-2">
+      <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">{position}</span>
+      <StatusDot tone={line.health.state === 'ok' ? 'ok' : line.health.state === 'open' ? 'err' : 'warn'} />
+      <span className="text-xs font-medium text-tx">{line.name}</span>
+      {line.priority && <Badge tone="warn">加价</Badge>}
+      <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block">{vertexHost(line.location)}</span>
+      <HealthBadge health={line.health} />
+      {(line.health.lastError || line.health.missingModels.length > 0) && (
+        <p className="basis-full pl-7 text-[11px] text-tx3">{healthDetail(line.health)}</p>
       )}
     </div>
   );
@@ -471,8 +581,11 @@ function EndpointRow({ endpoint, provider, index, count, reload, onEdit }: {
 function BackupLines({ provider, reload }: { provider: AdminProvider; reload(): Promise<void> }) {
   const [editing, setEditing] = useState<AdminProviderEndpoint | null | undefined>(undefined);
   const [resetting, setResetting] = useState(false);
-  const anyTrouble = provider.health.state !== 'ok' || provider.endpoints.some((e) => e.health.state !== 'ok');
+  const anyTrouble = provider.health.state !== 'ok'
+    || provider.vertexLines.some((l) => l.health.state !== 'ok')
+    || provider.endpoints.some((e) => e.health.state !== 'ok');
   const usesVertex = provider.type === 'gemini' && provider.useVertex;
+  const firstLocation = parseLocations(provider.vertexLocation)[0] ?? 'global';
 
   async function resetHealth() {
     if (resetting) return;
@@ -506,22 +619,31 @@ function BackupLines({ provider, reload }: { provider: AdminProvider; reload(): 
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line bg-bg1 px-2.5 py-2">
         <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">1</span>
         <StatusDot tone={provider.health.state === 'ok' ? 'ok' : provider.health.state === 'open' ? 'err' : 'warn'} />
-        <span className="text-xs font-medium text-tx">{provider.primaryName || '主线路'}</span>
-        {provider.primaryName && <Badge>主</Badge>}
+        <span className="text-xs font-medium text-tx">{provider.primaryLineName}</span>
+        {provider.primaryLineName !== '主线路' && <Badge>主</Badge>}
+        {usesVertex && provider.vertexPriority === 'always' && ['global', 'us', 'eu'].includes(firstLocation) && <Badge tone="warn">加价</Badge>}
         <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block">
-          {usesVertex ? 'Vertex AI' : (provider.baseUrl || DEFAULT_URLS[provider.type])}
+          {usesVertex ? (provider.baseUrl || vertexHost(firstLocation)) : (provider.baseUrl || DEFAULT_URLS[provider.type])}
         </span>
         <HealthBadge health={provider.health} />
-        {provider.health.lastError && (
+        {(provider.health.lastError || provider.health.missingModels.length > 0) && (
           <p className="basis-full pl-7 text-[11px] text-tx3">{healthDetail(provider.health)}</p>
         )}
       </div>
+      {provider.vertexLines.map((l, i) => <VertexLineRow key={l.key} line={l} position={i + 2} />)}
       {provider.endpoints.map((e, i) => (
         <EndpointRow key={e.id} endpoint={e} provider={provider} index={i} count={provider.endpoints.length}
-          reload={reload} onEdit={() => setEditing(e)} />
+          position={i + 2 + provider.vertexLines.length} reload={reload} onEdit={() => setEditing(e)} />
       ))}
+      {usesVertex && (
+        <p className="px-1 text-[11px] text-tx3">Vertex 的区域顺序和 Priority PayGo 在「编辑」里设置。</p>
+      )}
       {provider.endpoints.length === 0 && (
-        <p className="px-1 text-[11px] text-tx3">还没有备用线路。加一条同类型的网关(如 LiteLLM),主线路出故障时会自动接替。</p>
+        <p className="px-1 text-[11px] text-tx3">
+          {usesVertex
+            ? '还可以加一条 Gemini API Key(AI Studio)线路,Vertex 各区域都不可用时接替。'
+            : '还没有备用线路。加一条同类型的网关(如 LiteLLM),主线路出故障时会自动接替。'}
+        </p>
       )}
       {editing !== undefined && (
         <EndpointModal key={editing?.id ?? 'new'} provider={provider} endpoint={editing}
@@ -837,17 +959,19 @@ function ProviderCard({ provider, reload, onEdit }: {
         <span className="text-[13px] font-semibold text-tx">{provider.name}</span>
         <Badge>{TYPE_LABELS[provider.type]}</Badge>
         {usesVertex && <Badge>Vertex</Badge>}
-        {provider.enabled && provider.endpoints.length > 0 && (
+        {provider.enabled && provider.endpoints.length + provider.vertexLines.length > 0 && (
           provider.health.state === 'open' || provider.health.state === 'probing'
             ? <Badge tone="err">主线路熔断 · 走备用</Badge>
-            : provider.endpoints.some((e) => e.enabled)
-              ? <Badge tone="acc">{provider.endpoints.filter((e) => e.enabled).length} 条备用线路</Badge>
+            : provider.endpoints.some((e) => e.enabled) || provider.vertexLines.length > 0
+              ? <Badge tone="acc">{provider.endpoints.filter((e) => e.enabled).length + provider.vertexLines.length} 条备用线路</Badge>
               : null
         )}
         {/* Phones keep only name/type/toggle in the header — the status dot
             already encodes the credential state the hidden badge spells out. */}
         <span className="hidden min-w-0 max-w-[16rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block" title={provider.baseUrl || DEFAULT_URLS[provider.type]}>
-          {provider.baseUrl || DEFAULT_URLS[provider.type]}
+          {usesVertex
+            ? (provider.baseUrl || parseLocations(provider.vertexLocation).map(vertexHost)[0] || vertexHost('global'))
+            : (provider.baseUrl || DEFAULT_URLS[provider.type])}
         </span>
         <span className="hidden text-[11px] tabular-nums text-tx3 sm:inline">{models.length} 个模型 · {enabledCount} 已启用</span>
         <span className="hidden sm:contents">

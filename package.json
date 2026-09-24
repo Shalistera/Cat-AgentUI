@@ -13,6 +13,7 @@
     "build": "npm run build -w web && npm run build -w server",
     "test:security": "npm run build && node scripts/security-regression.mjs",
     "test:workspace-links": "node --import tsx scripts/workspace-links-regression.mjs",
+    "test:model-fallback": "node --import tsx scripts/model-fallback-regression.mjs",
     "test:image-tool": "npm run build -w server && node scripts/image-tool-regression.mjs",
     "test:signatures": "npm run build -w server && node scripts/thought-signature-regression.mjs",
     "test:context": "npm run build -w server && node scripts/doc-context-regression.mjs",

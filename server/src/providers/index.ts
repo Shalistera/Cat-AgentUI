@@ -8,6 +8,7 @@ import { openaiAdapter } from './openai.js';
 import { anthropicAdapter } from './anthropic.js';
 import { geminiAdapter } from './gemini.js';
 import { withFailover } from './failover.js';
+import { priorityModel, vertexLines } from './vertex.js';
 
 const rawAdapters: Record<ProviderType, ChatAdapter> = {
   openai: openaiAdapter,
@@ -44,6 +45,7 @@ export interface ProviderRow {
   useVertex: number;
   vertexProject: string | null;
   vertexLocation: string | null;
+  vertexPriority?: string | null;
   vertexSaJsonEnc: string | null;
   extraHeaders: string;
   extraHeadersEnc: string | null;
@@ -88,8 +90,14 @@ function enabledEndpoints(providerId: string): EndpointRow[] {
     .all();
 }
 
-/** The provider's own line only — what the admin "test" and model listing use. */
+function usesVertex(row: ProviderRow): boolean {
+  return row.type === 'gemini' && !!row.useVertex;
+}
+
+/** The provider's own line only — what the admin "test" and model listing use.
+ * For Vertex that is the first location in the admin's order. */
 export function toPrimaryRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
+  const vertex = usesVertex(row) ? vertexLines(row)[0] : null;
   return {
     id: row.id,
     type: row.type as ProviderType,
@@ -98,25 +106,50 @@ export function toPrimaryRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig 
     useResponses: !!row.useResponses,
     useVertex: !!row.useVertex,
     vertexProject: row.vertexProject,
-    vertexLocation: row.vertexLocation,
+    vertexLocation: vertex ? vertex.location : row.vertexLocation,
+    vertexPriority: vertex?.priority,
     vertexSaJson: row.vertexSaJsonEnc ? decryptSecret(row.vertexSaJsonEnc) : null,
     extraHeaders: providerExtraHeaders(row),
-    endpointName: row.primaryName || '主线路',
+    endpointName: vertex ? vertex.name : row.primaryName || '主线路',
     stripModelPrefix: row.stripModelPrefix ?? '',
     addModelPrefix: row.addModelPrefix ?? '',
   };
 }
 
+/** The Vertex locations after the first, plus the Priority fallback: same
+ * credentials and model ids, another capacity pool. */
+function vertexFallbacks(row: ProviderRow, primary: ProviderRuntimeConfig): ProviderRuntimeConfig[] {
+  if (!usesVertex(row)) return [];
+  return vertexLines(row).slice(1).map((v) => ({
+    ...primary,
+    vertexLocation: v.location,
+    vertexPriority: v.priority,
+    endpointId: v.key,
+    endpointName: v.name,
+    servesModel: v.onlyPriorityModels ? priorityModel : undefined,
+    escalateAfterBusy: v.onlyPriorityModels ? config.vertexPriorityAfterBusy : undefined,
+  }));
+}
+
 /** The provider's line plus its enabled backups, ready for getAdapter(). With
  * a backup behind it, a line's busy-retry wait is capped so the user is not
  * left staring at a countdown while a working line sits idle; the last line
- * keeps the full budget since nothing comes after it. */
+ * tried keeps the full budget since nothing comes after it (see failover.ts).
+ * Hopping between Vertex locations is cheaper still — same account, same
+ * model — so those lines give up sooner. */
 export function toRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
   const primary = toPrimaryRuntimeConfig(row);
-  const backups = enabledEndpoints(row.id).map((e) => endpointRuntimeConfig(primary, e));
+  const backups = [
+    ...vertexFallbacks(row, primary),
+    ...enabledEndpoints(row.id).map((e) => endpointRuntimeConfig(primary, e)),
+  ];
   if (!backups.length) return primary;
   const lines = [primary, ...backups];
-  for (let i = 0; i < lines.length - 1; i++) lines[i].retryBudgetMs = config.failoverRetryWaitMs;
+  for (let i = 0; i < lines.length - 1; i++) {
+    lines[i].retryBudgetMs = lines[i].useVertex && lines[i + 1].useVertex
+      ? Math.min(config.vertexRegionRetryWaitMs, config.failoverRetryWaitMs)
+      : config.failoverRetryWaitMs;
+  }
   primary.fallbacks = backups;
   primary.failoverThreshold = row.failoverThreshold ?? 3;
   primary.failoverCooldownMs = (row.failoverCooldownSeconds ?? 60) * 1000;
