@@ -368,6 +368,13 @@ export function Composer(props: ComposerProps) {
       ? { title: '松开鼠标，附件将随消息发送', sub: `支持图片、PDF、Word(docx)与各类文本文件，最多 ${attachmentLimit} 个` }
       : { title: '松开鼠标，添加文档附件', sub: `当前模型不支持图片和 PDF；支持 txt / md / docx 等文本，最多 ${attachmentLimit} 个` };
 
+  // The window listeners below are registered once, so they reach this
+  // render's model, attachments and limits through a ref. A closure captured
+  // at registration would judge drops against whatever model was selected
+  // then (often none yet — models load async) and wrongly refuse images/PDFs.
+  const dropRef = useRef({ pickFiles, dropBlocked });
+  dropRef.current = { pickFiles, dropBlocked };
+
   // The whole window is the drop zone: listeners live on `window` so a file
   // dragged anywhere over the app raises the overlay, which in turn shows
   // where things will land. Only real file drags count — text selections and
@@ -396,10 +403,11 @@ export function Composer(props: ComposerProps) {
       if (!hasFiles(e)) return;
       e.preventDefault(); // never let the browser navigate to the dropped file
       reset();
-      if (dropBlocked) return; // the overlay already explained why
+      const { pickFiles: pick, dropBlocked: blocked } = dropRef.current;
+      if (blocked) return; // the overlay already explained why
       // Type/capability rules live per-file in pickFiles, which also lets the
       // server's content sniffing be the final word on odd files.
-      void pickFiles(Array.from(e.dataTransfer?.files ?? []));
+      void pick(Array.from(e.dataTransfer?.files ?? []));
     };
     window.addEventListener('dragenter', onEnter);
     window.addEventListener('dragover', onOver);
@@ -413,8 +421,7 @@ export function Composer(props: ComposerProps) {
       window.removeEventListener('drop', onDrop);
       window.removeEventListener('dragend', reset);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- pickFiles is recreated per render
-  }, [dropBlocked, atts.length]);
+  }, []);
 
   // Personal model order: dragging a row rewrites the whole flat order and
   // saves it to the profile; the server then serves /api/models in that order
