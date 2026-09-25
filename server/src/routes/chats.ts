@@ -6,6 +6,7 @@ import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
+import { configuredModelFallback } from '../model-fallback.js';
 import { activeChatStream, beginChatStream, chatStreamReceipt, endChatStream, identifyChatStream } from '../chat-stream-state.js';
 import { ProviderBusyError } from '../providers/sse.js';
 import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
@@ -658,6 +659,8 @@ const partSchema = z.union([
 
 const streamBodySchema = z.object({
   requestId: z.string().uuid().optional(),
+  fallbackModelId: z.string().max(64).optional(),
+  automaticFallback: z.boolean().optional(),
   // Leave room for text alongside the largest permitted attachment batch.
   content: z.array(partSchema).min(1).max(ATTACHMENT_COUNT_MAX + 20).optional(),
   modelId: z.string().max(64).optional(),
@@ -870,6 +873,8 @@ export async function chatRoutes(app: FastifyInstance) {
     const marks = bookmarkedIdsIn(id, req.user!.id);
     return {
       active: !!matching, activeTurn: matching ? activeTurnDto(id) : null,
+      chatModelId: chat.modelId,
+      fallbackModelId: matching?.fallbackModelId ?? receipt?.fallbackModelId ?? null,
       message: row?.role === 'assistant' ? liveMessageDto(row, marks) : null,
       userMessage: userRow ? messageDto(userRow, marks) : null,
     };
@@ -1385,6 +1390,26 @@ export async function chatRoutes(app: FastifyInstance) {
     // a user message both insert a SIBLING node (same parentId), so the old
     // branch stays reachable through the version arrows.
     const rows = allChatMessages(chatId);
+    let fallbackMeta: Extract<MessagePart, { type: 'model_fallback' }> | undefined;
+    if (body.automaticFallback) {
+      const failed = rows.find((m) => m.id === body.regenerateMessageId && m.role === 'assistant');
+      const existing = failed && rows.find((m) => m.role === 'assistant' && parseParts(m.parts)
+        .some((p) => p.type === 'model_fallback' && p.sourceMessageId === failed.id));
+      if (existing) {
+        identifyChatStream(chatId, live, existing.id, null);
+        return reply.code(409).send({ error: '这条回复已尝试过自动兜底', code: 'request_exists' });
+      }
+      const source = failed && db.select().from(schema.models).where(and(
+        eq(schema.models.modelId, failed.model ?? ''), eq(schema.models.providerId, failed.providerId ?? ''),
+      )).get();
+      if (!failed || !source || failed.errorCode !== 'provider_busy'
+        || parseParts(failed.parts).some((p) => p.type !== 'service_tier')
+        || configuredModelFallback(source.id) !== model.id || !canUseModel(user, source.id)) {
+        return reply.code(400).send({ error: '这条回复不适合自动兜底,请手动选择模型重试' });
+      }
+      fallbackMeta = { type: 'model_fallback', sourceMessageId: failed.id, fromModelId: source.id, fromName: source.displayName || source.modelId,
+        toModelId: model.id, toName: model.displayName || model.modelId, adopted: false };
+    }
     // Replies that were cut short (stopped, errored mid-way, or ended on a
     // length / content-filter stop) are replayed with an explicit marker, so
     // the model doesn't treat the half-answer as something it finished saying.
@@ -1656,10 +1681,11 @@ export async function chatRoutes(app: FastifyInstance) {
     db.update(schema.chats).set({
       currentLeafId: assistantId,
       archived: 0,
-      ...(body.modelId && body.modelId !== chat.modelId ? { modelId: body.modelId } : {}),
+      ...(!body.automaticFallback && body.modelId && body.modelId !== chat.modelId ? { modelId: body.modelId } : {}),
     }).where(eq(schema.chats.id, chatId)).run();
 
-    sse.send('meta', { messageId: assistantId, userMessageId, model: model.modelId, providerId: provider.id });
+    if (fallbackMeta) live.parts.push(fallbackMeta);
+    sse.send('meta', { messageId: assistantId, userMessageId, model: model.modelId, providerId: provider.id, fallback: fallbackMeta });
     if (downgradeNotice) sse.send('notice', { message: downgradeNotice });
     if (mcpAccess.denied.length) {
       sse.send('notice', { message: '部分 MCP 服务器已被禁用或撤销授权,本次不会调用' });
@@ -1667,6 +1693,12 @@ export async function chatRoutes(app: FastifyInstance) {
     for (const te of toolErrors) sse.send('notice', { message: `MCP 服务器「${te.name}」连接失败: ${te.error}` });
 
     const cfg = toRuntimeConfig(provider);
+    const fallbackPick = body.fallbackModelId && !body.automaticFallback
+      && configuredModelFallback(model.id) === body.fallbackModelId ? getModelWithProvider(body.fallbackModelId) : null;
+    const clientFallback = !!fallbackPick && !model.imageGen && !fallbackPick.model.imageGen
+      && canUseModel(user, fallbackPick.model.id) && checkModelLimit(user, fallbackPick.model).ok
+      && (!model.vision || !!fallbackPick.model.vision) && (!model.tools || !!fallbackPick.model.tools);
+    live.fallbackModelId = clientFallback ? body.fallbackModelId : null;
     const adapter = getAdapter(provider.type);
     const parts = live.parts;
     const usage = { prompt: 0, completion: 0, total: 0 };
@@ -1807,7 +1839,9 @@ export async function chatRoutes(app: FastifyInstance) {
 
           resetProviderIdleTimer();
           try {
-            for await (const ev of adapter.streamChat(cfg, {
+            for await (const ev of adapter.streamChat({ ...cfg,
+              stopOnBusy: clientFallback && !parts.some((p) => p.type !== 'service_tier'),
+            }, {
               model: model.modelId,
               system: systemPrompt,
               messages,
@@ -2125,6 +2159,12 @@ export async function chatRoutes(app: FastifyInstance) {
       if (!hasBody || finishReason === 'other') finishReason = 'incomplete';
     }
     const durationMs = Date.now() - t0;
+    if (fallbackMeta && status === 'done' && finishReason === 'stop'
+      && (chat.modelId === null || chat.modelId === fallbackMeta.fromModelId)) {
+      const changed = db.update(schema.chats).set({ modelId: model.id })
+        .where(and(eq(schema.chats.id, chatId), sql`${schema.chats.modelId} is ${chat.modelId}`)).run();
+      fallbackMeta.adopted = changed.changes > 0;
+    }
     db.update(schema.messages).set({
       parts: JSON.stringify(finalParts),
       status, finishReason, error: errMsg, errorCode: errCode,
@@ -2153,6 +2193,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // keep a finished chat busy. The finally block remains the error fallback
     // (all leases are idempotent).
     releaseTurn();
+    if (fallbackMeta?.adopted) sse.send('model_selected', { modelId: model.id });
     streamLog.info({ status, finishReason, clientGone, durationMs }, 'Chat turn finished');
     sse.send('done', { messageId: assistantId, status, finishReason });
 

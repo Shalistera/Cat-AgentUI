@@ -635,6 +635,8 @@ interface Props {
   switchSuggestion?: ModelInfo | null;
   /** Regenerate this reply with that model and keep using it (stops a stuck stream first). */
   onSwitchModel?: (m: ModelInfo) => void;
+  onRestoreModel?: (id: string) => void;
+  currentModelId?: string;
   onEdit?: (text: string) => void;
   /** Remove this message from the conversation (and from all later context). */
   onDelete?: () => void;
@@ -685,7 +687,7 @@ export function retryStatusText(r: ProviderRetry): string {
   return `模型提供方当前繁忙（限流），约 ${secs} 秒后自动重试…`;
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, switchSuggestion, onSwitchModel, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, switchSuggestion, onSwitchModel, onRestoreModel, currentModelId, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
@@ -855,6 +857,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
   // an inline 重新生成 so the user doesn't have to hunt for the hover action.
   const hasBody = msg.parts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image');
   const providerBusy = msg.errorCode === 'provider_busy';
+  const fallback = msg.parts.find((p) => p.type === 'model_fallback');
   const ranTools = msg.parts.some((p) => p.type === 'tool_call');
   // The null branch covers rows saved before the server started assigning
   // 'incomplete': a finished reply with nothing to read is cut short regardless.
@@ -883,6 +886,21 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
     <div className="flex gap-3 sm:pr-[42px]" data-msg-id={msg.id}>
       <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={fmtModelName(msg.model)} size={30} /></div>
       <div className="min-w-0 flex-1">
+        {fallback && (
+          <div role="status" className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg2 px-3 py-2 text-xs text-tx2">
+            {isStreaming && <Spinner className="h-3.5 w-3.5" />}
+            <span className="min-w-0 flex-1">{isStreaming
+              ? `「${fallback.fromName}」繁忙,正在尝试兜底模型「${fallback.toName}」…`
+              : fallback.adopted ? currentModelId === fallback.toModelId
+                ? `已自动切换至「${fallback.toName}」,当前对话将继续使用它`
+                : `本轮由兜底模型「${fallback.toName}」回复`
+              : `本轮尝试了兜底模型「${fallback.toName}」`}</span>
+            {fallback.adopted && currentModelId !== fallback.fromModelId && onRestoreModel && !isStreaming && (
+              <button type="button" className="shrink-0 cursor-pointer rounded-md border border-line px-2 py-1 hover:bg-bg3"
+                onClick={() => onRestoreModel(fallback.fromModelId)}>切回原模型</button>
+            )}
+          </div>
+        )}
         {(msg.priority || msg.parts.some((p) => p.type === 'service_tier')) && (
           <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-accfg" role="status">
             <span className="rounded-full border border-acc/30 bg-accs px-2 py-0.5 font-semibold">Priority · 优先通道</span>

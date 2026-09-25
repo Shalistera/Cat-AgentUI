@@ -63,6 +63,8 @@ export async function uploadWorkspaceFile(chatId: string, file: File, dir?: stri
 
 export interface StreamPayload {
   requestId?: string;
+  fallbackModelId?: string;
+  automaticFallback?: boolean;
   content?: ({ type: 'text'; text: string }
     | { type: 'image'; uploadId: string }
     | { type: 'file'; uploadId: string; name?: string; mime?: string })[];
@@ -108,6 +110,7 @@ export async function streamChat(
     catch { event = null; dataLines = []; return; }
     switch (event) {
       case 'meta': handlers.onMeta?.(data); break;
+      case 'model_selected': handlers.onModelSelected?.(data); break;
       case 'delta': handlers.onDelta?.(data.text ?? ''); break;
       case 'reasoning': handlers.onReasoning?.(data.text ?? ''); break;
       case 'thought_signature': handlers.onThoughtSignature?.(data); break;
@@ -251,6 +254,15 @@ export function suggestFallbackModel(
     && m.providerId !== opts.avoidProviderId
     && (!opts.needsVision || m.vision)
     && (!opts.needsTools || m.tools)
+    && !(m.usageLimit && usageLimitExhausted(m.usageLimit))) ?? null;
+}
+
+/** Explicit admin choice can use the same provider, but must still be
+ * accessible, capable and within this user's allowance. */
+export function configuredFallbackModel(models: ModelInfo[], source: ModelInfo | null, needsVision = false): ModelInfo | null {
+  if (!source || source.imageGen || !source.fallbackModelId) return null;
+  return models.find((m) => m.id === source.fallbackModelId && m.id !== source.id && !m.imageGen
+    && (!(needsVision || source.vision) || m.vision) && (!source.tools || m.tools)
     && !(m.usageLimit && usageLimitExhausted(m.usageLimit))) ?? null;
 }
 

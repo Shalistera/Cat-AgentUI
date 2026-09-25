@@ -216,6 +216,7 @@ async function* runLines<T>(
     // breakers or model-specific lines leave nothing after it, the last line
     // tried waits as long as a lone line would.
     let target = line;
+    if (cfg.stopOnBusy) target = { ...target, stopOnBusy: true };
     if (i === order.length - 1 && line.retryBudgetMs !== undefined) target = { ...target, retryBudgetMs: undefined };
     if (counter && i < escalation) target = { ...target, busyCounter: counter };
     if (immediatePriority && i < escalation) target = { ...target, singleAttempt: true, retryBudgetMs: 0 };
@@ -224,6 +225,10 @@ async function* runLines<T>(
       first(); // an empty-but-OK answer still counts as the line working
       return;
     } catch (err) {
+      if (cfg.stopOnBusy && !produced && err instanceof ProviderHttpError && BUSY_STATUSES.has(err.status)) {
+        if (probe) h.probing = false;
+        throw err;
+      }
       const kind = produced || req.signal.aborted ? 'request' : classifyFailure(err);
       if (kind === 'request') {
         if (probe) h.probing = false;

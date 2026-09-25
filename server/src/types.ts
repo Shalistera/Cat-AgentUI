@@ -18,6 +18,7 @@ export type StopReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | '
 export type FinishReason = StopReason | 'incomplete';
 
 export type MessagePart =
+  | { type: 'model_fallback'; sourceMessageId: string; fromModelId: string; fromName: string; toModelId: string; toName: string; adopted: boolean }
   | { type: 'service_tier'; tier: 'priority' }
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
@@ -85,6 +86,8 @@ export interface ProviderRuntimeConfig {
   escalateOnFailure?: boolean;
   /** Do not retry inside a standard line before escalating to Priority. */
   singleAttempt?: boolean;
+  /** Return the first busy rejection to a client with a configured fallback. */
+  stopOnBusy?: boolean;
   /** Per-request tally of busy rejections on standard lines, shared by them
    * (set by the failover layer, read by fetchRetry). */
   busyCounter?: BusyCounter;

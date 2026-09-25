@@ -2,7 +2,7 @@
 // one in the person's own order from another provider that can carry the
 // conversation and still has allowance.
 import assert from 'node:assert/strict';
-import { suggestFallbackModel } from '../web/src/api.ts';
+import { suggestFallbackModel, configuredFallbackModel } from '../web/src/api.ts';
 
 const model = (id, providerId, extra = {}) => ({
   id, modelId: id, displayName: id, providerId, providerName: providerId,
@@ -25,3 +25,14 @@ assert.equal(pick({ avoidProviderId: 'openai' }), 'gemini-3.7-flash');
 assert.equal(suggestFallbackModel(models.slice(0, 2), { avoidProviderId: 'google', needsVision: false, needsTools: false }), null,
   'image models are never offered');
 console.log('model-fallback regression: OK');
+
+const primary = model('gemini-3.8-flash', 'google', { fallbackModelId: 'gemini-3.7-flash' });
+assert.equal(configuredFallbackModel([primary, ...models], primary)?.id, 'gemini-3.7-flash', 'explicit fallback can be on the same provider');
+assert.equal(configuredFallbackModel([primary], primary), null, 'missing/revoked fallback is not usable');
+assert.equal(configuredFallbackModel(models, { ...primary, fallbackModelId: primary.id }), null, 'self-fallback cannot loop');
+assert.equal(configuredFallbackModel(models, { ...primary, fallbackModelId: 'gpt-image-2' }), null);
+assert.equal(configuredFallbackModel(models, { ...primary, fallbackModelId: 'gpt-5.6-luna' }), null, 'tools must be preserved');
+assert.equal(configuredFallbackModel(models, { ...primary, fallbackModelId: 'gpt-5.6-sol' }), null, 'vision must be preserved');
+assert.equal(configuredFallbackModel(models, { ...primary, fallbackModelId: 'claude-x' }), null, 'quota must be available');
+assert.equal(configuredFallbackModel(models, { ...primary, fallbackModelId: null }), null, 'no configured fallback means no automatic switch');
+console.log('configured fallback eligibility: OK');

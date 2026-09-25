@@ -121,7 +121,7 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
 
   const res = await fetchRetry(`${base(cfg)}/chat/completions`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-  }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
+  }, req.onRetry, { budgetMs: cfg.retryBudgetMs, stopOnBusy: cfg.stopOnBusy });
   if (!res.ok) throw await providerError('OpenAI', res);
 
   // accumulate tool calls by index
@@ -239,7 +239,7 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
 
   const res = await fetchRetry(`${base(cfg)}/responses`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-  }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
+  }, req.onRetry, { budgetMs: cfg.retryBudgetMs, stopOnBusy: cfg.stopOnBusy });
   if (!res.ok) throw await providerError('OpenAI(Responses)', res);
 
   let sawToolCall = false;

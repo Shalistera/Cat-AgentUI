@@ -380,7 +380,18 @@ console.log('Passed: failover unit semantics.');
       assert.equal(notices[0].priority, true);
       assert(output.some((ev) => ev.type === 'text' && ev.text === 'priority answer'));
     }
-    resetLineHealth();
+    for (const busyStatus of [429, 503, 529]) {
+      resetLineHealth(); resetProviderBusyGates();
+      let busyCalls = 0;
+      const tiers = [];
+      globalThis.fetch = async () => { busyCalls++; return new Response('{}', { status: busyStatus }); };
+      await assert.rejects(collect(withFailover(geminiAdapter).streamChat({ ...makeConfig(), stopOnBusy: true }, req({
+        model: 'gemini-2.5-pro', onServiceTier: (tier) => tiers.push(tier),
+      }))), { status: busyStatus });
+      assert.equal(busyCalls, 1, 'configured model fallback takes precedence over standard retries and paid escalation');
+      assert.deepEqual(tiers, ['standard']);
+    }
+    resetLineHealth(); resetProviderBusyGates();
     let invalidCalls = 0;
     globalThis.fetch = async () => { invalidCalls++; return new Response('{"error":{"message":"invalid argument"}}', { status: 400 }); };
     await assert.rejects(collect(withFailover(geminiAdapter).streamChat(makeConfig(), req({ model: 'gemini-2.5-pro' }))), { status: 400 });

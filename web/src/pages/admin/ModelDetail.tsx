@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronUp, Plus, Upload, X } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
-  Badge, Button, Card, EmptyState, Field, Input, SegmentedControl, Spinner, Textarea, toast,
+  Badge, Button, Card, EmptyState, Field, Input, Select, SegmentedControl, Spinner, Textarea, toast,
 } from '../../components/ui';
 import { ProviderAvatar } from '../../components/ModelAvatar';
 import type { AdminModel, AdminProvider, LimitPeriod, ReasoningLevel, ReasoningMode } from '../../types';
@@ -15,6 +15,40 @@ import { TYPE_LABELS } from './provider-common';
 
 const MODE_LABELS: Record<ReasoningMode, string> = { auto: '默认', custom: '自定义', off: '关闭' };
 const DESCRIPTION_MAX = 500;
+
+function FallbackCard({ model, providers, reload }: { model: AdminModel; providers: AdminProvider[]; reload(): Promise<void> }) {
+  const [selected, setSelected] = useState(model.fallbackModelId ?? '');
+  const [busy, setBusy] = useState(false);
+  const candidates = providers.filter((p) => p.enabled).flatMap((p) => p.models
+    .filter((m) => m.enabled && !m.imageGen && m.id !== model.id
+      && (!model.vision || m.vision) && (!model.tools || m.tools))
+    .map((m) => ({ ...m, providerName: p.name })));
+  const missing = !!selected && !candidates.some((m) => m.id === selected);
+  async function save() {
+    setBusy(true);
+    try {
+      await api.patch(`/api/admin/models/${model.id}`, { fallbackModelId: selected || null });
+      await reload();
+      toast('已保存兜底模型', 'ok');
+    } catch (err) { toast(errMsg(err), 'err'); }
+    finally { setBusy(false); }
+  }
+  return <Card title="限流时自动兜底" desc="主模型首次限流且尚未输出时,由对话页面自动尝试指定模型一次。成功后当前对话沿用兜底模型,新对话默认模型不变。">
+    <div className="space-y-3">
+      <Field label="兜底模型" hint="可以选择同一服务商的其他模型。仅对有权限、额度充足且能力兼容的用户生效。">
+        <Select aria-label="兜底模型" value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy}>
+          <option value="">关闭自动兜底</option>
+          {missing && <option value={selected} disabled>原兜底模型已不可用,请重新选择</option>}
+          {candidates.map((m) => <option key={m.id} value={m.id}>{m.displayName || m.modelId} · {m.providerName}</option>)}
+        </Select>
+      </Field>
+      <p className="text-xs text-tx3">不会丢弃已开始的回复或重做工具操作。兜底也失败时停止自动切换,由用户决定下一步。</p>
+      <div className="flex justify-end"><Button size="sm" disabled={busy || missing || selected === (model.fallbackModelId ?? '')} onClick={save}>
+        {busy && <Spinner className="h-3.5 w-3.5" />}保存兜底模型
+      </Button></div>
+    </div>
+  </Card>;
+}
 
 // ---------- 模型图标 ----------
 const ICON_MIMES = ['image/svg+xml', 'image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -429,12 +463,14 @@ function ReasoningCard({ model, reload }: { model: AdminModel; reload(): Promise
 export default function ModelDetail() {
   const { id } = useParams<{ id: string }>();
   const [found, setFound] = useState<{ provider: AdminProvider; model: AdminModel } | null>(null);
+  const [allProviders, setAllProviders] = useState<AdminProvider[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
       const r = await api.get<AdminProvider[] | { providers?: AdminProvider[] }>('/api/admin/providers');
       const providers = Array.isArray(r) ? r : r.providers ?? [];
+      setAllProviders(providers);
       for (const provider of providers) {
         const model = (provider.models ?? []).find((m) => m.id === id);
         if (model) { setFound({ provider, model }); return; }
@@ -491,6 +527,7 @@ export default function ModelDetail() {
 
       <IconCard provider={provider} model={model} reload={load} />
       <DescriptionCard model={model} reload={load} />
+      {!model.imageGen && <FallbackCard key={`${model.id}:${model.fallbackModelId ?? ''}`} model={model} providers={allProviders} reload={load} />}
       <PricingCard model={model} reload={load} />
       <UsageLimitCard model={model} reload={load} />
       <ReasoningCard model={model} reload={load} />

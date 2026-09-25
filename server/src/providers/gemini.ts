@@ -253,7 +253,7 @@ export const geminiAdapter: ChatAdapter = {
     req.onServiceTier?.(gate === 'priority' ? 'priority' : 'standard');
     const res = await fetchRetry(url, {
       method: 'POST', headers, body: JSON.stringify(buildChatBody(req)), signal: req.signal,
-    }, retryReporter(req.onRetry, gate), { budgetMs: cfg.retryBudgetMs, gate, counter: cfg.busyCounter, singleAttempt: cfg.singleAttempt });
+    }, retryReporter(req.onRetry, gate), { budgetMs: cfg.retryBudgetMs, gate, counter: cfg.busyCounter, singleAttempt: cfg.singleAttempt, stopOnBusy: cfg.stopOnBusy });
     if (!res.ok) throw await providerError('Gemini', res);
 
     let usage: any = null;

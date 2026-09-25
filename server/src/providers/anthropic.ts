@@ -142,7 +142,7 @@ async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): As
 
   const res = await fetchRetry(`${base(cfg)}/v1/messages`, {
     method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
-  }, req.onRetry, { budgetMs: cfg.retryBudgetMs });
+  }, req.onRetry, { budgetMs: cfg.retryBudgetMs, stopOnBusy: cfg.stopOnBusy });
   if (!res.ok) throw await providerError('Anthropic', res);
 
   // track tool_use blocks by content index

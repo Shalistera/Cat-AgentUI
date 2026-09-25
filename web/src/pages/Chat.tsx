@@ -4,7 +4,7 @@ import {
   Archive, ArrowDown, Check, FolderClosed, FolderOpen, Ghost, ListOrdered, PanelLeft, Pencil,
   Plus, Search, Send, Trash2,
 } from 'lucide-react';
-import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, suggestFallbackModel, usageLimitExhausted, ApiError } from '../api';
+import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, suggestFallbackModel, configuredFallbackModel, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
 import { recoverChatStream, mergeStreamSnapshot, type StreamIdentity } from '../streamRecovery';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
@@ -324,6 +324,7 @@ export default function Chat() {
   const [findSeed, setFindSeed] = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
+  const stoppingRef = useRef(false);
   const turnIdentityRef = useRef<({ chatId: string } & StreamIdentity) | null>(null);
   const skipLoadRef = useRef<string | null>(null);
   // A handed-off send chose its own 联网搜索 state; the model-default effect
@@ -362,7 +363,7 @@ export default function Chat() {
     if (!modelsLoaded) return;
     const chatModel = chat?.modelId ? models.find((m) => m.id === chat.modelId) : null;
     if (chatModel) { setModelSel(chatModel); return; }
-    if (modelSel && models.some((m) => m.id === modelSel.id)) return;
+    if (chat && modelSel && models.some((m) => m.id === modelSel.id)) return;
     const last = localStorage.getItem(LAST_MODEL_KEY);
     // an image model is only ever picked deliberately, never as the default
     const pick = models.find((m) => m.id === last)
@@ -382,6 +383,7 @@ export default function Chat() {
     abortRef.current?.abort();
     abortRef.current = null;
     turnIdentityRef.current = null;
+    stoppingRef.current = false;
     setStreaming(false);
     sendingRef.current = false;
     setCompare(null);
@@ -599,6 +601,19 @@ export default function Chat() {
     return created;
   }
 
+  function startModelFallback(chatId: string, failed: Pick<Message, 'id' | 'error' | 'finishReason'>, target: ModelInfo) {
+    setMessages((prev) => [...prev.map((m) => m.id === failed.id
+      ? { ...m, status: 'error' as const, error: failed.error, errorCode: 'provider_busy' as const, finishReason: failed.finishReason, retry: null } : m), {
+      id: 'tmp-a', parentId: prev.find((m) => m.id === failed.id)?.parentId ?? null,
+      role: 'assistant', parts: [], model: target.modelId, providerId: target.providerId,
+      status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null,
+      totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now(),
+    }]);
+    setLeafId('tmp-a');
+    toast(`模型繁忙,正在尝试兜底模型「${target.displayName}」`, 'info');
+    void runStream(chatId, { regenerateMessageId: failed.id, modelId: target.id, automaticFallback: true }, { allowAutoFallback: false });
+  }
+
   async function followStream(chatId: string, identity: StreamIdentity, existing?: AbortController, placeholders = false, onAccepted?: () => void): Promise<boolean> {
     const controller = existing ?? new AbortController();
     abortRef.current = controller;
@@ -622,10 +637,28 @@ export default function Chat() {
           setMessages((prev) => current() ? mergeStreamSnapshot(prev, snapshot, placeholders) : prev);
           setLeafId((leaf) => placeholders && !leaf?.startsWith('tmp-') ? leaf : id);
           setCompare((c) => c?.challengerId === 'tmp-a' ? { ...c, challengerId: id } : c);
+          if (!snapshot.active && snapshot.chatModelId && snapshot.message.parts.some((p) => p.type === 'model_fallback')) {
+            setChat((c) => c?.id === chatId ? { ...c, modelId: snapshot.chatModelId! } : c);
+            const selected = models.find((m) => m.id === snapshot.chatModelId);
+            if (selected) setModelSel(selected);
+          }
         }
         setToolConfirm(snapshot.activeTurn?.toolConfirm ?? null);
       }, controller.signal);
       if (!current()) return acknowledged;
+      const failed = result.message;
+      if (!stoppingRef.current && failed?.status === 'error' && failed.errorCode === 'provider_busy'
+        && result.fallbackModelId && failed.parts.every((p) => p.type === 'service_tier')) {
+        const source = models.find((m) => m.providerId === failed.providerId && m.modelId === failed.model) ?? null;
+        const target = configuredFallbackModel(models, source);
+        if (target?.id === result.fallbackModelId) {
+          // The next request replaces the controller. Commit this acknowledged
+          // snapshot first, including when the original meta event was lost.
+          setMessages((prev) => mergeStreamSnapshot(prev, result, placeholders));
+          startModelFallback(chatId, failed, target);
+          return acknowledged;
+        }
+      }
       if (!result.message) {
         setMessages((prev) => prev.filter((m) => !placeholders || (m.id !== 'tmp-a' && m.id !== 'tmp-u')));
         setLeafId((id) => id?.startsWith('tmp-') ? null : id);
@@ -649,12 +682,16 @@ export default function Chat() {
     }
   }
 
-  function runStream(chatId: string, payload: Parameters<typeof streamChat>[1], opts?: { busyRetries?: number }): Promise<boolean> {
+  function runStream(chatId: string, payload: Parameters<typeof streamChat>[1], opts?: { busyRetries?: number; allowAutoFallback?: boolean }): Promise<boolean> {
+    const source = models.find((m) => m.id === (payload.modelId ?? chatRef.current?.modelId)) ?? modelSel;
+    const fallback = opts?.allowAutoFallback === false || payload.automaticFallback ? null : configuredFallbackModel(models, source);
     payload = { ...payload, requestId: payload.requestId ?? crypto.randomUUID() };
+    if (fallback) payload.fallbackModelId = fallback.id;
     // Resolve on persistence acknowledgement, not when generation finishes.
     let acknowledge!: (accepted: boolean | PromiseLike<boolean>) => void;
     const accepted = new Promise<boolean>((resolve) => { acknowledge = resolve; });
     const controller = new AbortController();
+    stoppingRef.current = false;
     abortRef.current = controller;
     turnIdentityRef.current = { chatId, requestId: payload.requestId };
     sendingRef.current = true;
@@ -667,6 +704,9 @@ export default function Chat() {
     let flushTimer: ReturnType<typeof setInterval> | null = null;
     let finished = false;
     let messageId = 'tmp-a';
+    let produced = false;
+    let pendingFallback = false;
+    let fallbackError = '';
     const previousLeafId = leafId;
 
     const applyToAssistant = (fn: (m: Message) => Message) => {
@@ -741,7 +781,8 @@ export default function Chat() {
         streamMsgIdRef.current = d.messageId;
         setMessages((prev) => prev.map((m) => {
           let next = m;
-          if (next.id === 'tmp-a') next = { ...next, id: d.messageId, model: d.model, providerId: d.providerId ?? null };
+          if (next.id === 'tmp-a') next = { ...next, id: d.messageId, model: d.model, providerId: d.providerId ?? null,
+            parts: d.fallback ? [d.fallback, ...next.parts] : next.parts };
           else if (next.id === 'tmp-u' && d.userMessageId) next = { ...next, id: d.userMessageId };
           if (next.parentId === 'tmp-u' && d.userMessageId) next = { ...next, parentId: d.userMessageId };
           return next;
@@ -752,12 +793,13 @@ export default function Chat() {
         setChat((c) => (c && c.archived ? { ...c, archived: false } : c));
         chatsStore.patch(chatId, { archived: false });
       },
-      onDelta(t) { buf.text += t; },
-      onReasoning(t) { buf.reasoning += t; },
-      onThoughtSignature(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
-      onToolCall(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_call', ...d }] })); },
+      onDelta(t) { if (t) produced = true; buf.text += t; },
+      onReasoning(t) { if (t) produced = true; buf.reasoning += t; },
+      onThoughtSignature(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
+      onToolCall(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_call', ...d }] })); },
       onSubagentProgress(d) { useSubagentProgress.getState().push(d.toolCallId, d.text); },
       onToolResult(d) {
+        produced = true;
         flush();
         applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_result', ...d }] }));
         setToolConfirm(null);
@@ -783,7 +825,7 @@ export default function Chat() {
         notifyDone('需要你确认工具调用', `${d.calls.map((c) => c.name.split('__').pop()).join('、')}`, `/chat/${chatId}`);
       },
       onGrounding(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
-      onImage(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'image', imageId: d.imageId, mime: d.mime }] })); },
+      onImage(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'image', imageId: d.imageId, mime: d.mime }] })); },
       onUsage(d) {
         applyToAssistant((m) => ({
           ...m,
@@ -802,6 +844,14 @@ export default function Chat() {
             ? [...m.parts, { type: 'service_tier', tier: 'priority' }] : m.parts,
         }));
       },
+      onModelSelected(d) {
+        if (abortRef.current !== controller || controller.signal.aborted) return;
+        setChat((c) => c?.id === chatId ? { ...c, modelId: d.modelId } : c);
+        const selected = models.find((m) => m.id === d.modelId);
+        if (selected) setModelSel(selected);
+        chatsStore.patch(chatId, { modelId: d.modelId });
+        applyToAssistant((m) => ({ ...m, parts: m.parts.map((p) => p.type === 'model_fallback' ? { ...p, adopted: true } : p) }));
+      },
       onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c?.id === chatId ? { ...c, title } : c)); },
       onFollowups(d) {
         if (!d.questions?.length || !d.messageId) return;
@@ -812,9 +862,24 @@ export default function Chat() {
           ? { ...m, parts: [...m.parts, { type: 'followups', questions: d.questions }] }
           : m)));
       },
-      onError(message, errorCode) { applyToAssistant((m) => ({ ...m, status: 'error', error: message, errorCode, retry: null })); },
+      onError(message, errorCode) {
+        pendingFallback = !!fallback && !produced && errorCode === 'provider_busy';
+        if (pendingFallback) fallbackError = message;
+        applyToAssistant((m) => ({ ...m, status: pendingFallback ? 'streaming' : 'error', error: message, errorCode, retry: null }));
+      },
       onDone(status, finishReason, id) {
         if (id && id !== messageId) return;
+        if (pendingFallback && fallback && status === 'error' && !produced && !finished
+          && !stoppingRef.current && abortRef.current === controller && !controller.signal.aborted) {
+          finished = true;
+          if (flushTimer) clearInterval(flushTimer);
+          flush();
+          applyToAssistant((m) => ({ ...m, status: 'error', finishReason }));
+          // Same saved question/attachments, new sibling reply. Admission has
+          // already been released by 'done', so no abort/retry race is needed.
+          startModelFallback(chatId, { id: messageId, error: fallbackError, finishReason }, fallback);
+          return;
+        }
         finalize(status, finishReason);
       },
     }, controller.signal)
@@ -838,7 +903,7 @@ export default function Chat() {
             }
             finished = true;
             if (flushTimer) clearInterval(flushTimer);
-            acknowledge(runStream(chatId, payload, { busyRetries: opts!.busyRetries! - 1 }));
+            acknowledge(runStream(chatId, payload, { ...opts, busyRetries: opts!.busyRetries! - 1 }));
             return;
           }
           // request rejected before anything was persisted — drop placeholders
@@ -908,6 +973,7 @@ export default function Chat() {
     const target = turnIdentityRef.current;
     const controller = abortRef.current;
     if (!target || !controller) return;
+    stoppingRef.current = true;
     try {
       await api.post(`/api/chats/${target.chatId}/stop`, {
         requestId: target.requestId, messageId: target.messageId,
@@ -1016,7 +1082,23 @@ export default function Chat() {
   }), [path, mcpSelected]);
   function fallbackFor(m: Message): ModelInfo | null {
     const avoid = m.providerId ?? models.find((x) => x.modelId === m.model)?.providerId ?? modelSel?.providerId ?? null;
-    return suggestFallbackModel(models, { avoidProviderId: avoid, ...fallbackNeeds });
+    const source = models.find((item) => item.providerId === m.providerId && item.modelId === m.model) ?? null;
+    return configuredFallbackModel(models, source, fallbackNeeds.needsVision)
+      ?? suggestFallbackModel(models, { avoidProviderId: avoid, ...fallbackNeeds });
+  }
+
+  async function restoreModel(modelId: string) {
+    const target = chatRef.current;
+    const original = models.find((m) => m.id === modelId);
+    if (!target || !original || streaming || sendingRef.current) return;
+    try {
+      await api.patch(`/api/chats/${target.id}`, { modelId });
+      if (chatRef.current?.id !== target.id) return;
+      setChat((c) => c ? { ...c, modelId } : c);
+      setModelSel(original);
+      chatsStore.patch(target.id, { modelId });
+      toast(`已切回「${original.displayName}」`, 'ok');
+    } catch (err) { toast(errMsg(err), 'err'); }
   }
 
   // 用其他模型对比生成:当前回复留在原位,挑战者作为隐藏兄弟并排流式输出,
@@ -1039,7 +1121,7 @@ export default function Chat() {
     // Pin the view to the original: the compare panel renders in its place,
     // its descendants stay hidden until a side is kept.
     setLeafId(msgId);
-    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: withModel.id });
+    runStream(chatRef.current.id, { regenerateMessageId: msgId, modelId: withModel.id }, { allowAutoFallback: false });
   }
 
   function keepCompare(side: 'original' | 'challenger') {
@@ -1395,6 +1477,8 @@ export default function Chat() {
                     onRegenerateWith={m.role === 'assistant' && !streaming && !!chat ? (pick) => regenerateCompare(m.id, pick) : undefined}
                     switchSuggestion={suggestion}
                     onSwitchModel={suggestion ? (pick) => switchModel(m.id, pick) : undefined}
+                    onRestoreModel={!streaming ? (id) => void restoreModel(id) : undefined}
+                    currentModelId={modelSel?.id}
                     onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
                     onEditAssistant={m.role === 'assistant' && m.status !== 'streaming' && !streaming && !!chat
                       ? (t) => void editAssistant(m.id, t)

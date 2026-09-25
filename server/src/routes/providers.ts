@@ -11,6 +11,7 @@ import {
 import { accessUserIds, accessibleOnly, imageModelsAllowed, replaceModelAccess } from '../model-access.js';
 import { checkModelLimit, hasModelLimit, parseLimitPeriod } from '../quota.js';
 import { broadcast } from './events.js';
+import { configuredModelFallback, setModelFallback } from '../model-fallback.js';
 import {
   endpointRuntimeConfig, getRawAdapter, primaryLineKey, toPrimaryRuntimeConfig, type EndpointRow,
 } from '../providers/index.js';
@@ -38,6 +39,7 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
     modelId: m.modelId,
     displayName: m.displayName,
     description: m.description,
+    fallbackModelId: configuredModelFallback(m.id),
     vision: !!m.vision,
     tools: !!m.tools,
     imageGen: !!m.imageGen,
@@ -273,6 +275,7 @@ const modelsAddSchema = z.object({
 });
 
 const modelPatchSchema = z.object({
+  fallbackModelId: z.string().max(64).nullable().optional(),
   displayName: z.string().max(200).nullish(),
   description: z.string().max(500).nullish(),
   vision: z.boolean().optional(),
@@ -867,10 +870,6 @@ export async function providerRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: '模型不存在' });
     const d = body.data;
 
-    if (d.isDefault === true) {
-      // Only one default model across the whole app.
-      db.update(schema.models).set({ isDefault: 0 }).run();
-    }
     const patch: Partial<typeof schema.models.$inferInsert> = {};
     if (d.displayName !== undefined) patch.displayName = d.displayName || null;
     if (d.description !== undefined) patch.description = d.description?.trim() || null;
@@ -899,10 +898,26 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.limitRequests !== undefined) patch.limitRequests = d.limitRequests || null;
     if (d.limitTokens !== undefined) patch.limitTokens = d.limitTokens || null;
 
+    if (d.fallbackModelId) {
+      const fallback = db.select().from(schema.models).where(eq(schema.models.id, d.fallbackModelId)).get();
+      const provider = fallback && getProvider(fallback.providerId);
+      if (d.fallbackModelId === id || !fallback || !fallback.enabled || !provider?.enabled || fallback.imageGen || (d.imageGen ?? !!row.imageGen)) {
+        return reply.code(400).send({ error: '请选择其他已启用的对话模型作为兜底' });
+      }
+      if (((d.vision ?? !!row.vision) && !fallback.vision) || ((d.tools ?? !!row.tools) && !fallback.tools)) {
+        return reply.code(400).send({ error: '兜底模型需要支持主模型的识图与工具能力' });
+      }
+    }
+
+    if (d.isDefault === true) {
+      // Only one default model across the whole app, after validation succeeds.
+      db.update(schema.models).set({ isDefault: 0 }).run();
+    }
     if (Object.keys(patch).length) {
       db.update(schema.models).set(patch).where(eq(schema.models.id, id)).run();
     }
     if (d.allowedUserIds !== undefined) replaceModelAccess(id, d.allowedUserIds);
+    if (d.fallbackModelId !== undefined) setModelFallback(id, d.fallbackModelId);
     broadcast('models-updated');
     const updated = db.select().from(schema.models).where(eq(schema.models.id, id)).get()!;
     return publicModel(updated, getProvider(updated.providerId)!.type as ProviderType);
@@ -955,6 +970,7 @@ export async function providerRoutes(app: FastifyInstance) {
       .filter((r) => !r.imageGen || imageModelsAllowed(req.user!))
       .map((r) => ({
       id: r.id,
+      fallbackModelId: configuredModelFallback(r.id),
       modelId: r.modelId,
       displayName: r.displayName || r.modelId,
       description: r.description,
@@ -979,6 +995,8 @@ export async function providerRoutes(app: FastifyInstance) {
       // unlimited for them (no limit set, or they are an admin).
       usageLimit: usageLimitFor(req.user!, r),
     }));
+    const visibleIds = new Set(list.map((m) => m.id));
+    for (const m of list) if (m.fallbackModelId && !visibleIds.has(m.fallbackModelId)) m.fallbackModelId = null;
     // A user's own drag order (settings.modelOrder, model row ids) wins over
     // the admin order. The sort is stable, so models the user never ranked —
     // e.g. added after they last dragged — stay in admin order at the end.

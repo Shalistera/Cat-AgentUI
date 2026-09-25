@@ -43,6 +43,7 @@ export interface TranslateConfig {
 }
 
 export type MessagePart =
+  | { type: 'model_fallback'; sourceMessageId: string; fromModelId: string; fromName: string; toModelId: string; toName: string; adopted: boolean }
   | { type: 'service_tier'; tier: 'priority' }
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
@@ -204,6 +205,7 @@ export interface SearchResult {
 
 export interface ModelInfo {
   id: string; modelId: string; displayName: string;
+  fallbackModelId?: string | null;
   /** Admin-written blurb shown under the model name on the new-chat page. */
   description: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; nativeSearch: boolean; isDefault: boolean;
@@ -353,6 +355,7 @@ export type ModelAccessMode = 'shared' | 'restricted';
 
 export interface AdminModel {
   id: string; providerId: string; modelId: string; displayName: string | null;
+  fallbackModelId?: string | null;
   /** Blurb shown to users on the new-chat page; null = not set. */
   description: string | null;
   /** Content-addressed URL of the model's custom icon; null = provider avatar / brand mark. */
@@ -495,7 +498,8 @@ export interface WorkspaceListing {
 
 // SSE stream handler callbacks
 export interface StreamHandlers {
-  onMeta?(d: { messageId: string; userMessageId: string | null; model: string; providerId?: string }): void;
+  onMeta?(d: { messageId: string; userMessageId: string | null; model: string; providerId?: string; fallback?: Extract<MessagePart, { type: 'model_fallback' }> }): void;
+  onModelSelected?(d: { modelId: string }): void;
   onDelta?(text: string): void;
   onReasoning?(text: string): void;
   onThoughtSignature?(d: Extract<MessagePart, { type: 'thought_signature' }>): void;
@@ -524,6 +528,8 @@ export interface ActiveChatTurn {
 }
 
 export interface ChatStreamState {
+  fallbackModelId?: string | null;
+  chatModelId?: string | null;
   active: boolean;
   activeTurn: ActiveChatTurn | null;
   message: Message | null;

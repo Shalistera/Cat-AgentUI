@@ -77,7 +77,7 @@ export function resetProviderBusyGates() { busyUntil.clear(); }
 export async function fetchRetry(
   url: string, init: RequestInit & { signal?: AbortSignal },
   onRetry?: (state: ProviderRetry | null) => void,
-  opts?: { budgetMs?: number; gate?: string; counter?: BusyCounter; singleAttempt?: boolean },
+  opts?: { budgetMs?: number; gate?: string; counter?: BusyCounter; singleAttempt?: boolean; stopOnBusy?: boolean },
 ): Promise<Response> {
   // `gate` splits one URL into separate backoff queues when requests to it
   // draw on different capacity (Vertex Priority PayGo vs standard).
@@ -95,6 +95,7 @@ export async function fetchRetry(
       // (a little spread so the queue doesn't fire as one burst) as long as
       // the budget allows; otherwise send and let the response decide.
       const queueMs = busyWaitMs(key);
+      if (opts?.stopOnBusy && queueMs > 0) throw new ProviderBusyError('模型服务', 429, 'Endpoint is in shared backoff');
       if (queueMs > 0 && waitedMs + queueMs <= budgetMs) {
         const spread = Math.round(Math.random() * 500);
         waitedMs += queueMs + spread;
@@ -116,7 +117,7 @@ export async function fetchRetry(
       // Shared across a request's lines: once it runs out, stop waiting here
       // and let the failover layer move on (to the Priority PayGo retry).
       const tallyFull = !!opts?.counter && ++opts.counter.busy >= opts.counter.limit;
-      if (opts?.singleAttempt || retries >= MAX_RATE_RETRIES || tallyFull) return res;
+      if (opts?.stopOnBusy || opts?.singleAttempt || retries >= MAX_RATE_RETRIES || tallyFull) return res;
       // 1–2s, 2–4s, 4–8s, 8–16s, 16–32s with jitter; respect longer server
       // hints within the total wait budget. Don't retry early when
       // Retry-After exceeds it.
@@ -224,8 +225,8 @@ function looksLikeHtml(text: string): boolean {
 export async function providerError(name: string, res: Response): Promise<Error> {
   const body = await readErrorBody(res);
   const gateway = GATEWAY_STATUS[res.status];
-  if (gateway) return new ProviderHttpError(`${name}: ${gateway} (${res.status})`, res.status);
   if (BUSY_STATUSES.has(res.status)) return new ProviderBusyError(name, res.status, body);
+  if (gateway) return new ProviderHttpError(`${name}: ${gateway} (${res.status})`, res.status);
   if (looksLikeHtml(body) || !body.trim()) return new ProviderHttpError(`${name}: 上游返回了错误 (${res.status}),请稍后再试`, res.status);
   return new ProviderHttpError(`${name} ${res.status}: ${body}`, res.status);
 }
