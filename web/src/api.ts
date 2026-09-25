@@ -2,7 +2,7 @@ import type { ModelInfo, StreamHandlers, UsageLimit } from './types';
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, readonly code?: string) {
     super(message);
     this.status = status;
   }
@@ -62,6 +62,7 @@ export async function uploadWorkspaceFile(chatId: string, file: File, dir?: stri
 }
 
 export interface StreamPayload {
+  requestId?: string;
   content?: ({ type: 'text'; text: string }
     | { type: 'image'; uploadId: string }
     | { type: 'file'; uploadId: string; name?: string; mime?: string })[];
@@ -86,7 +87,12 @@ export async function streamChat(
   if (res.status === 401) onUnauthorized.handler?.();
   if (!res.ok || !res.body) {
     const json = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, json.error || `请求失败 (${res.status})`);
+    throw new ApiError(res.status, json.error || `请求失败 (${res.status})`, json.code);
+  }
+
+  if (!res.headers.get('content-type')?.includes('text/event-stream')) {
+    await res.body.cancel();
+    throw new Error('生成连接返回了非流式响应');
   }
 
   const reader = res.body.getReader();
@@ -114,10 +120,17 @@ export async function streamChat(
       case 'usage': handlers.onUsage?.(data); break;
       case 'notice': handlers.onNotice?.(data.message ?? ''); break;
       case 'retry': handlers.onRetry?.(data); break;
+      case 'service_tier':
+        if (data?.tier === 'priority' || data?.tier === 'standard') handlers.onServiceTier?.(data.tier);
+        break;
       case 'title': handlers.onTitle?.(data.title ?? ''); break;
       case 'followups': handlers.onFollowups?.(data); break;
       case 'error': handlers.onError?.(data.message ?? '发生错误', data.code); break;
-      case 'done': handlers.onDone?.(data.status ?? 'done', data.finishReason ?? null); break;
+      case 'done':
+        if (data?.status === 'done' || data?.status === 'error' || data?.status === 'stopped') {
+          handlers.onDone?.(data.status, data.finishReason ?? null, data.messageId);
+        }
+        break;
     }
     event = null; dataLines = [];
   };

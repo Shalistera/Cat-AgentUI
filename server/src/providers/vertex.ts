@@ -11,10 +11,10 @@ const MULTI_REGIONS = new Set(['us', 'eu']);
 
 export const MAX_VERTEX_LOCATIONS = 6;
 
-export type VertexPriorityMode = 'off' | 'fallback' | 'always';
+export type VertexPriorityMode = 'off' | 'fallback' | 'first_failure' | 'always';
 
 export function parsePriorityMode(raw: string | null | undefined): VertexPriorityMode {
-  return raw === 'fallback' || raw === 'always' ? raw : 'off';
+  return raw === 'fallback' || raw === 'first_failure' || raw === 'always' ? raw : 'off';
 }
 
 /** The stored comma-separated list, in the admin's order. Empty = global. */
@@ -110,7 +110,7 @@ export function vertexLines(p: {
       name: lineLabel(location, priority),
     };
   });
-  if (mode === 'fallback') {
+  if (mode === 'fallback' || mode === 'first_failure') {
     const location = locs.includes('global') ? 'global' : locs.find(priorityLocation);
     if (location) {
       lines.push({

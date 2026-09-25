@@ -18,6 +18,7 @@ export type StopReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | '
 export type FinishReason = StopReason | 'incomplete';
 
 export type MessagePart =
+  | { type: 'service_tier'; tier: 'priority' }
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   // Display-only opaque metadata; never inserted into the text prompt.
@@ -80,6 +81,10 @@ export interface ProviderRuntimeConfig {
   /** Marks the Vertex Priority PayGo retry: once the standard lines before it
    * were rate limited this many times in one request, skip straight here. */
   escalateAfterBusy?: number;
+  /** First fallback-worthy failure jumps directly to this Priority line. */
+  escalateOnFailure?: boolean;
+  /** Do not retry inside a standard line before escalating to Priority. */
+  singleAttempt?: boolean;
   /** Per-request tally of busy rejections on standard lines, shared by them
    * (set by the failover layer, read by fetchRetry). */
   busyCounter?: BusyCounter;
@@ -190,6 +195,7 @@ export interface ChatRequest {
   onActivity?: () => void;
   /** Metadata only: never includes prompts, response text or credentials. */
   onStreamEnd?: (info: ProviderStreamEnd) => void;
+  onServiceTier?: (tier: 'standard' | 'priority') => void;
 }
 
 export interface ProviderStreamEnd {

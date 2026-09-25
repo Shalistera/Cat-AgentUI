@@ -154,6 +154,7 @@ npm run test:security  # 临时数据库 + Mock Provider/MCP 的隔离安全回�
 npm run test:upload-quota # 临时数据库的附件配额设置与上传回归
 npm run test:provider-retry # 模拟 429:有限重试、取消、附件保留与断流保护
 npm run test:stream-parser # SSE 末尾结束事件、分片编码、延迟结束与真实断流
+npm run test:chat-recovery # 断线后恢复原生成、刷新恢复、明确停止和用户隔离
 npm run test:provider-failover # 备用线路:优先级切换、熔断阈值与冷却试探、不重放已开始的流;Vertex 区域顺序与 Priority
 npm run test:model-fallback   # 持续限流时推荐换用的模型:其他服务商、按个人排序、能力与额度
 node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即可联调
@@ -165,10 +166,21 @@ Gemini / Vertex 流结束时,服务端输出 `Provider stream ended` 结构化�
 `endpointId`、`priority`、原始 `finishReason`、`transport`、`invalidEvents` 和
 `sinceLastByteMs`,不记录对话正文或密钥。`transport=eof` 且没有 `finishReason`
 只表示连接读完但未确认正常完成;`transport=error` 表示读取异常;
-`transport=aborted` 配合 `timeout` / `clientGone` 区分本地超时和客户端断开。
+`transport=aborted` 表示主动取消或本地超时,可结合 `timeout` 判断;
+`clientGone` 只表示浏览器连接已断开,可恢复请求不会仅因该标记取消生成。
 若服务端记录 `finishReason=STOP` 且最终为 `stop`,浏览器仍提示不完整,
 应检查浏览器到面板之间的 SSE 链路。上游心跳也算连接活动,不会因没有新 token
 而触发空闲超时;总生成时限仍然生效。
+
+对话请求携带 `requestId` 时,浏览器连接中断不会取消后台生成。页面会通过只读
+`stream-state` 接口恢复同一轮的正文、重试状态和工具确认,直到后台真正结束,
+不会自动重放模型请求。重新打开对话也会继续跟踪;「停止」通过独立接口按请求标识
+取消生成。后台仍受原有总时限限制,不带 `requestId` 的旧客户端保留断线取消行为。
+
+Vertex Priority PayGo 可选择「首次失败即启用」:首次可切换线路的错误发生在输出前时,
+直接跳到 Priority,跳过标准通道内部重试和其他标准区域。参数错误、用户取消和
+已开始输出的流不会因此重放。实际使用 Priority 时显示「正在使用优先通道请求」,
+回复保留 Priority 标识;不支持 Priority 的模型/区域不会显示该标识。
 
 ## 🗄️ 数据与迁移
 

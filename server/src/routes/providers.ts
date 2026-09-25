@@ -217,7 +217,7 @@ const providerCreateSchema = z.object({
   useVertex: z.boolean().nullish(),
   vertexProject: z.string().max(100).nullish(),
   vertexLocation: z.string().max(300).nullish(),
-  vertexPriority: z.enum(['off', 'fallback', 'always']).optional(),
+  vertexPriority: z.enum(['off', 'fallback', 'first_failure', 'always']).optional(),
   vertexSaJson: z.string().max(20000).nullish(),
   extraHeaders: z.record(z.string(), z.string()).nullish(),
 });
@@ -231,7 +231,7 @@ const providerPatchSchema = z.object({
   useVertex: z.boolean().nullish(),
   vertexProject: z.string().max(100).nullish(),
   vertexLocation: z.string().max(300).nullish(),
-  vertexPriority: z.enum(['off', 'fallback', 'always']).optional(),
+  vertexPriority: z.enum(['off', 'fallback', 'first_failure', 'always']).optional(),
   vertexSaJson: z.string().max(20000).nullish(),
   extraHeaders: z.record(z.string(), z.string()).nullish(),
   // The admin API never returns saved values. The editor sends unchanged key

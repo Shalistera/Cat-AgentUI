@@ -266,7 +266,9 @@ try {
   const exhausted = await turn('retry-exhaust');
   const exhaustedText = await exhausted.res.text();
   assert.equal(counts.get('retry-exhaust'), 4, 'initial request plus three retries');
-  assert(!exhaustedText.includes(secret) && !exhaustedText.includes('429'), 'no raw provider errors in user stream');
+  assert(!exhaustedText.includes(secret), 'no provider secret in the user stream');
+  assert(events(exhaustedText).filter((e) => e.type === 'error' || e.type === 'notice')
+    .every((e) => !e.data.message.includes('429')), 'no raw provider errors in user-facing messages (ids/delays can contain 429)');
   const failed = (await request('GET', `/api/chats/${exhausted.id}`)).json.messages;
   assert.equal(failed.length, 2);
   assert(failed[0].parts.some((p) => p.uploadId === uploadId));

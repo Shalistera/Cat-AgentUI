@@ -14,7 +14,7 @@ function response(text) {
       if (i < bytes.length) controller.enqueue(bytes.slice(i, ++i));
       else controller.close();
     },
-  }));
+  }), { headers: { 'content-type': 'text/event-stream' } });
 }
 
 for (const ending of ['', '\n', '\n\n', '\r\n\r\n']) {
@@ -39,7 +39,7 @@ try {
   }
 
   let feed;
-  globalThis.fetch = async () => new Response(new ReadableStream({ start(controller) { feed = controller; } }));
+  globalThis.fetch = async () => new Response(new ReadableStream({ start(controller) { feed = controller; } }), { headers: { 'content-type': 'text/event-stream' } });
   let completed = false;
   let read = streamChat('test', {}, { onDone: () => { completed = true; } }, new AbortController().signal);
   feed.enqueue(encoder.encode('event: delta\ndata: {"text":"partial"}\n\n'));
@@ -58,6 +58,12 @@ try {
   globalThis.fetch = async () => response('event: done\ndata: {"status":"done"');
   await streamChat('test', {}, { onDone: () => { completed = true; } }, new AbortController().signal);
   assert.equal(completed, false, 'a truncated JSON finish event is not a successful completion');
+
+  globalThis.fetch = async () => response('event: done\ndata: {}\n\n');
+  await streamChat('test', {}, { onDone: () => { completed = true; } }, new AbortController().signal);
+  assert.equal(completed, false, 'an empty done object must not finish a live generation');
+  globalThis.fetch = async () => new Response('<html>proxy response</html>', { headers: { 'content-type': 'text/html' } });
+  await assert.rejects(streamChat('test', {}, {}, new AbortController().signal), /非流式响应/);
 
   globalThis.fetch = async () => new Response(JSON.stringify({ error: '对话并发数已达上限' }), { status: 429 });
   await assert.rejects(streamChat('test', {}, {}, new AbortController().signal), (e) => e instanceof ApiError && e.status === 429);

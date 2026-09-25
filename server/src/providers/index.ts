@@ -128,6 +128,7 @@ function vertexFallbacks(row: ProviderRow, primary: ProviderRuntimeConfig): Prov
     endpointName: v.name,
     servesModel: v.onlyPriorityModels ? priorityModel : undefined,
     escalateAfterBusy: v.onlyPriorityModels ? config.vertexPriorityAfterBusy : undefined,
+    escalateOnFailure: v.onlyPriorityModels && row.vertexPriority === 'first_failure' || undefined,
   }));
 }
 

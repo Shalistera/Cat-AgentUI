@@ -294,10 +294,11 @@ function ProviderModal({ provider, onClose, onSaved }: {
                 <VertexLocationEditor locations={vertexLocations} onChange={setVertexLocations} />
                 <Field label="Priority PayGo" hint={vertexPriority === 'off'
                   ? '按 token 计费、单价更高、更不容易被限流的付费方式,不用提前购买'
-                  : 'Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效(us-central1 这类单区域不支持),图像等不支持的模型自动按标准请求发送。限流时启用会在对话里提示用户正在使用优先通道'}>
+                  : 'Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域,已开始输出的回复不会重放。实际请求 Priority 时,对话会展示并保留优先通道标识'}>
                   <Select value={vertexPriority} onChange={(e) => setVertexPriority(e.target.value as AdminProvider['vertexPriority'])}>
                     <option value="off">关闭 · 只用标准按量付费</option>
                     <option value="fallback">限流时启用 · 标准请求被限流 5 次或各区域都试过后改走 Priority</option>
+                    <option value="first_failure">首次失败即启用 · 标准请求失败一次就改走 Priority</option>
                     <option value="always">始终使用 · 所有请求都走 Priority</option>
                   </Select>
                 </Field>

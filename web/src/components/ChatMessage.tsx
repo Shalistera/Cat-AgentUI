@@ -883,6 +883,12 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
     <div className="flex gap-3 sm:pr-[42px]" data-msg-id={msg.id}>
       <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={fmtModelName(msg.model)} size={30} /></div>
       <div className="min-w-0 flex-1">
+        {(msg.priority || msg.parts.some((p) => p.type === 'service_tier')) && (
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-accfg" role="status">
+            <span className="rounded-full border border-acc/30 bg-accs px-2 py-0.5 font-semibold">Priority · 优先通道</span>
+            <span>{isStreaming && msg.priority ? '正在使用优先通道请求' : '已启用付费优先通道'}</span>
+          </div>
+        )}
         {editing ? (
           // The editor works on the merged plain text; reasoning/tool/image
           // blocks are untouched by the edit and come back on save.
@@ -925,7 +931,12 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             {onCancel && <button type="button" className="cursor-pointer rounded-md border border-line px-2 py-1 text-xs hover:bg-bg3" onClick={onCancel}>取消</button>}
           </div>
         )}
-        {isStreaming && msg.parts.length === 0 && !msg.retry && (
+        {isStreaming && msg.recovering && (
+          <div className="my-2 flex items-center gap-2 text-[13px] text-tx3" role="status">
+            <Spinner className="h-3.5 w-3.5" />正在同步后台生成状态…
+          </div>
+        )}
+        {isStreaming && !msg.recovering && !msg.parts.some((p) => p.type === 'text' || p.type === 'reasoning' || p.type === 'tool_call' || p.type === 'image') && !msg.retry && (
           <div className="flex items-center gap-2 py-1 text-[13px] text-tx3">
             <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在思考…'}
           </div>

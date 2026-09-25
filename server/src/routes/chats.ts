@@ -6,6 +6,7 @@ import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
+import { activeChatStream, beginChatStream, chatStreamReceipt, endChatStream, identifyChatStream } from '../chat-stream-state.js';
 import { ProviderBusyError } from '../providers/sse.js';
 import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
@@ -57,6 +58,7 @@ function createSse(reply: FastifyReply) {
   res.once('close', () => clearInterval(ping));
   return {
     send(event: string, data: unknown) {
+      if (res.destroyed || res.writableEnded) return;
       try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* closed */ }
     },
     end() { clearInterval(ping); try { res.end(); } catch { /* closed */ } },
@@ -503,6 +505,22 @@ export function messageDto(m: typeof schema.messages.$inferSelect, bookmarked?: 
   };
 }
 
+function liveMessageDto(m: typeof schema.messages.$inferSelect, bookmarked?: ReadonlySet<string>) {
+  const message = messageDto(m, bookmarked);
+  const current = activeChatStream(m.chatId);
+  return current?.messageId === m.id && m.status === 'streaming'
+    ? { ...message, parts: current.parts, retry: current.retry, retrySince: current.retrySince, priority: current.priority }
+    : message;
+}
+
+function activeTurnDto(chatId: string) {
+  const turn = activeChatStream(chatId);
+  return turn ? {
+    requestId: turn.requestId, messageId: turn.messageId, userMessageId: turn.userMessageId,
+    toolConfirm: turn.toolConfirm,
+  } : null;
+}
+
 /** Ids of this user's 收藏 inside one chat. */
 function bookmarkedIdsIn(chatId: string, userId: string): Set<string> {
   return new Set(db.select({ messageId: schema.bookmarks.messageId }).from(schema.bookmarks)
@@ -639,6 +657,7 @@ const partSchema = z.union([
 ]);
 
 const streamBodySchema = z.object({
+  requestId: z.string().uuid().optional(),
   // Leave room for text alongside the largest permitted attachment batch.
   content: z.array(partSchema).min(1).max(ATTACHMENT_COUNT_MAX + 20).optional(),
   modelId: z.string().max(64).optional(),
@@ -823,8 +842,53 @@ export async function chatRoutes(app: FastifyInstance) {
         webSearch: !!c.webSearch || legacySearch, mcpServerIds,
         currentLeafId: resolveLeafId(msgs, c.currentLeafId),
       },
-      messages: msgs.map((m) => messageDto(m, marks)),
+      messages: msgs.map((m) => liveMessageDto(m, marks)),
+      activeTurn: activeTurnDto(id),
     };
+  });
+
+  // Read-only recovery: never repeats the model request or tool execution.
+  app.get('/api/chats/:id/stream-state', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const chat = db.select().from(schema.chats).where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+    if (!chat) return reply.code(404).send({ error: '对话不存在' });
+    const query = z.object({ requestId: z.string().max(64).optional(), messageId: z.string().max(64).optional() }).safeParse(req.query);
+    if (!query.success) return reply.code(400).send({ error: '参数错误' });
+    const { requestId, messageId } = query.data;
+    const current = activeChatStream(id);
+    const matching = current && (!requestId || current.requestId === requestId)
+      && (!messageId || current.messageId === messageId) ? current : undefined;
+    const receipt = requestId ? chatStreamReceipt(id, requestId) : undefined;
+    const targetId = matching?.messageId ?? receipt?.messageId ?? messageId
+      ?? (!requestId && !matching ? chat.currentLeafId : undefined);
+    const row = targetId ? db.select().from(schema.messages)
+      .where(and(eq(schema.messages.id, targetId), eq(schema.messages.chatId, id))).get() : undefined;
+    const userId = matching?.userMessageId ?? receipt?.userMessageId ?? row?.parentId;
+    const userRow = userId ? db.select().from(schema.messages)
+      .where(and(eq(schema.messages.id, userId), eq(schema.messages.chatId, id))).get() : undefined;
+    const marks = bookmarkedIdsIn(id, req.user!.id);
+    return {
+      active: !!matching, activeTurn: matching ? activeTurnDto(id) : null,
+      message: row?.role === 'assistant' ? liveMessageDto(row, marks) : null,
+      userMessage: userRow ? messageDto(userRow, marks) : null,
+    };
+  });
+
+  app.post('/api/chats/:id/stop', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const owned = db.select({ id: schema.chats.id }).from(schema.chats)
+      .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+    if (!owned) return reply.code(404).send({ error: '对话不存在' });
+    const body = z.object({ requestId: z.string().max(64).optional(), messageId: z.string().max(64).optional() })
+      .refine((v) => !!v.requestId || !!v.messageId).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '缺少正在生成的请求标识' });
+    const current = activeChatStream(id);
+    if (!current || (body.data.requestId && body.data.requestId !== current.requestId)
+      || (body.data.messageId && body.data.messageId !== current.messageId)) return { stopped: false };
+    current.controller.abort();
+    return { stopped: true };
   });
 
   // Download a conversation as a file. Markdown renders the branch currently
@@ -1213,6 +1277,10 @@ export async function chatRoutes(app: FastifyInstance) {
       .where(and(eq(schema.chats.id, chatId), eq(schema.chats.userId, user.id))).get();
     if (!chat) return reply.code(404).send({ error: '对话不存在' });
 
+    if (body.requestId && chatStreamReceipt(chatId, body.requestId)) {
+      return reply.code(409).send({ error: '这个请求已接收,请恢复查看原回复', code: 'request_exists' });
+    }
+
     // resolve model
     const picked = getModelWithProvider(body.modelId ?? chat.modelId) ?? getDefaultModel(user);
     if (!picked) return reply.code(400).send({ error: '没有可用的模型,请联系管理员配置' });
@@ -1264,8 +1332,10 @@ export async function chatRoutes(app: FastifyInstance) {
 
     const chatLease = tryAcquireChatTurn(user.id, chatId);
     if (!chatLease) {
-      return reply.code(429).send({ error: '对话并发数已达上限,请等待其他回复完成' });
+      return reply.code(429).send({ error: '对话并发数已达上限,请等待其他回复完成', code: 'chat_busy' });
     }
+    const live = beginChatStream(chatId, body.requestId ?? newId());
+    const controller = live.controller;
     let imageLease: AdmissionLease | null = null;
     let imageReservation: StorageReservation | null = null;
     let contextMediaLease: AdmissionLease | null = null;
@@ -1275,6 +1345,7 @@ export async function chatRoutes(app: FastifyInstance) {
       imageReservation?.release();
       imageLease?.release();
       chatLease.release();
+      endChatStream(chatId, live);
     };
 
     // From admission through MCP discovery and provider I/O, every exit path
@@ -1555,12 +1626,18 @@ export async function chatRoutes(app: FastifyInstance) {
     // --- start streaming ---
     const sse = createSse(reply);
     endSse = sse.end;
-    const controller = new AbortController();
     let clientGone = false;
     // response 'close' with writableEnded=false → client disconnected mid-stream
     // (request 'close' fires as soon as the body is consumed on Node 16+, so it's unusable here)
     reply.raw.on('close', () => {
-      if (!reply.raw.writableEnded) { clientGone = true; controller.abort(); }
+      // A browser transport loss is not a user cancellation. The bounded
+      // turn continues and can be recovered through stream-state/GET chat.
+      // Explicit Stop uses the authenticated /stop endpoint instead.
+      if (!reply.raw.writableEnded) {
+        clientGone = true;
+        // Preserve cancellation semantics for older clients without recovery.
+        if (!body.requestId) controller.abort();
+      }
     });
 
     const assistantId = newId();
@@ -1573,6 +1650,7 @@ export async function chatRoutes(app: FastifyInstance) {
       parentId: assistantParentId,
       model: model.modelId, providerId: provider.id, status: 'streaming', createdAt: now(),
     }).run();
+    identifyChatStream(chatId, live, assistantId, userMessageId);
     // The freshly generated reply becomes the visible branch. New activity in
     // an archived chat also un-archives it — a talking chat isn't shelved.
     db.update(schema.chats).set({
@@ -1590,7 +1668,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     const cfg = toRuntimeConfig(provider);
     const adapter = getAdapter(provider.type);
-    const parts: MessagePart[] = [];
+    const parts = live.parts;
     const usage = { prompt: 0, completion: 0, total: 0 };
     let ttft: number | null = null;
     const t0 = Date.now();
@@ -1636,13 +1714,15 @@ export async function chatRoutes(app: FastifyInstance) {
     const onFailover = (info: ProviderFailover) => {
       sse.send('notice', {
         message: info.priority
-          ? '标准通道持续限流,正在使用优先通道重试'
+          ? '正在使用优先通道请求 · Priority PayGo'
           : `线路「${info.from}」暂时不可用(${info.reason}),已切换到「${info.to}」`,
       });
       if (!model.imageGen && !controller.signal.aborted) resetProviderIdleTimer();
       req.log.warn({ providerId: provider.id, model: model.modelId, ...info }, 'Provider line failover');
     };
     const onRetry = (state: ProviderRetry | null) => {
+      live.retry = state;
+      if (state && live.retrySince === undefined) live.retrySince = Date.now();
       sse.send('retry', state);
       if (!model.imageGen && !controller.signal.aborted) {
         if (state?.delayMs) clearProviderIdleTimer();
@@ -1740,6 +1820,13 @@ export async function chatRoutes(app: FastifyInstance) {
               signal: controller.signal,
               onRetry,
               onFailover,
+              onServiceTier: (tier) => {
+                live.priority = tier === 'priority';
+                if (live.priority && !parts.some((p) => p.type === 'service_tier')) {
+                  parts.push({ type: 'service_tier', tier: 'priority' });
+                }
+                sse.send('service_tier', { tier });
+              },
               onActivity: () => { if (!controller.signal.aborted) resetProviderIdleTimer(); },
               onStreamEnd: (info) => {
                 const fields = redactSensitiveValue({
@@ -1828,8 +1915,10 @@ export async function chatRoutes(app: FastifyInstance) {
             const denied = new Set<string>();
             if (askFor.length) {
               clearProviderIdleTimer(); // a human is the slow party now, not the provider
-              sse.send('tool_confirm', { messageId: assistantId, calls: askFor.map((c) => ({ id: c.id, name: c.name, args: c.args })) });
+              live.toolConfirm = { messageId: assistantId, calls: askFor.map((c) => ({ id: c.id, name: c.name, args: c.args })) };
+              sse.send('tool_confirm', live.toolConfirm);
               const decisions = await waitForToolDecision(assistantId, user.id, askFor.map((c) => c.id), controller.signal);
+              live.toolConfirm = null;
               if (controller.signal.aborted) throw new Error('对话已停止');
               for (const [id, d] of decisions) if (d !== 'allow') denied.add(id);
             }
@@ -1913,8 +2002,10 @@ export async function chatRoutes(app: FastifyInstance) {
                     reasoning: sm.model.id === model.id ? resolveReasoning(chat.reasoningEffort, model, provider.type as ProviderType) : undefined,
                     secretValues, signal: controller.signal,
                     askConfirm: async (calls) => {
-                      sse.send('tool_confirm', { messageId: assistantId, calls });
+                      live.toolConfirm = { messageId: assistantId, calls };
+                      sse.send('tool_confirm', live.toolConfirm);
                       const d = await waitForToolDecision(assistantId, user.id, calls.map((c) => c.id), controller.signal);
+                      live.toolConfirm = null;
                       if (controller.signal.aborted) throw new Error('对话已停止');
                       return d;
                     },
@@ -1957,9 +2048,7 @@ export async function chatRoutes(app: FastifyInstance) {
         }
       }
     } catch (e) {
-      if (clientGone) {
-        status = 'stopped';
-      } else if (textTimeoutError) {
+      if (textTimeoutError) {
         status = 'error';
         errMsg = textTimeoutError;
         sse.send('error', { message: errMsg });
@@ -2065,7 +2154,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // (all leases are idempotent).
     releaseTurn();
     streamLog.info({ status, finishReason, clientGone, durationMs }, 'Chat turn finished');
-    sse.send('done', { status, finishReason });
+    sse.send('done', { messageId: assistantId, status, finishReason });
 
     // An interrupted/filtered/length-limited answer needs no extra model
     // requests, especially when the provider is already struggling.
@@ -2173,8 +2262,16 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     } finally {
-      releaseTurn();
-      endSse?.();
+      try {
+        // If setup/persistence failed outside the generation catch, recovery
+        // must not poll a permanently 'streaming' row after admission ended.
+        if (live.messageId) db.update(schema.messages).set({
+          status: 'error', error: '生成意外结束,请重试', parts: JSON.stringify(live.parts),
+        }).where(and(eq(schema.messages.id, live.messageId), eq(schema.messages.status, 'streaming'))).run();
+      } finally {
+        releaseTurn();
+        endSse?.();
+      }
     }
   });
 }

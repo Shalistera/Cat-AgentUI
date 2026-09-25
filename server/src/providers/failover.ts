@@ -201,6 +201,7 @@ async function* runLines<T>(
   // request skips ahead to the Priority PayGo retry instead of waiting out
   // every remaining location.
   const escalation = order.findIndex((o) => o.line.escalateAfterBusy);
+  const immediatePriority = escalation > 0 && !!order[escalation].line.escalateOnFailure;
   const counter: BusyCounter | undefined = escalation > 0
     ? { busy: 0, limit: order[escalation].line.escalateAfterBusy! } : undefined;
   for (let i = 0; i < order.length; i++) {
@@ -217,6 +218,7 @@ async function* runLines<T>(
     let target = line;
     if (i === order.length - 1 && line.retryBudgetMs !== undefined) target = { ...target, retryBudgetMs: undefined };
     if (counter && i < escalation) target = { ...target, busyCounter: counter };
+    if (immediatePriority && i < escalation) target = { ...target, singleAttempt: true, retryBudgetMs: 0 };
     try {
       yield* attempt(target, rewriteModel(line, req.model), first);
       first(); // an empty-but-OK answer still counts as the line working
@@ -234,7 +236,8 @@ async function* runLines<T>(
         if (probe) h.probing = false; // the line answered; the probe is settled either way
         missingModels.set(`${key}|${req.model}`, Date.now() + MISSING_MODEL_TTL_MS);
       }
-      const skip = kind === 'line' && !!counter && i < escalation - 1 && counter.busy >= counter.limit;
+      const skip = i < escalation - 1 && (immediatePriority
+        || (kind === 'line' && !!counter && counter.busy >= counter.limit));
       const nextIndex = skip ? escalation : i + 1;
       const next = order[nextIndex];
       const from = line.endpointName ?? '主线路';

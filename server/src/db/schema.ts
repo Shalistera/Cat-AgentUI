@@ -44,8 +44,8 @@ export const providers = sqliteTable('providers', {
   // Comma-separated locations in priority order ("global,us,eu"); null =
   // global. Rate-limited on one, the request moves on to the next.
   vertexLocation: text('vertex_location'),
-  // Priority PayGo: 'off' | 'fallback' (one last Priority attempt after the
-  // standard locations) | 'always'. See providers/vertex.ts.
+  // Priority PayGo: 'off' | 'fallback' (after standard locations/retries) |
+  // 'first_failure' (after one pre-output failure) | 'always'. See vertex.ts.
   vertexPriority: text('vertex_priority').notNull().default('off'),
   vertexSaJsonEnc: text('vertex_sa_json_enc'), // encrypted service account JSON
   // extra_headers is retained only as a one-start compatibility source for
@@ -414,4 +414,3 @@ export const skills = sqliteTable('skills', {
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
-

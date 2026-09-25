@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, suggestFallbackModel, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
+import { recoverChatStream, mergeStreamSnapshot, type StreamIdentity } from '../streamRecovery';
 import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
@@ -17,7 +18,7 @@ import { tabAlert } from '../tabAlert';
 import { notifyDone } from '../notify';
 import { FindBar } from '../components/FindBar';
 import { normalizeWorkspacePath } from '../workspaceLinks';
-import type { ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, ToolConfirmRequest, User } from '../types';
+import type { ActiveChatTurn, ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, ToolConfirmRequest, User } from '../types';
 
 /** First line-ish of a reply's text, for the notification body. */
 function partsPreview(parts: MessagePart[]): string {
@@ -323,6 +324,7 @@ export default function Chat() {
   const [findSeed, setFindSeed] = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
+  const turnIdentityRef = useRef<({ chatId: string } & StreamIdentity) | null>(null);
   const skipLoadRef = useRef<string | null>(null);
   // A handed-off send chose its own 联网搜索 state; the model-default effect
   // below must not overwrite it when the model subsequently changes state.
@@ -340,6 +342,10 @@ export default function Chat() {
   // True from the moment a send is committed until its stream finishes — the
   // queue auto-dispatcher keys off this, not the async `streaming` state.
   const sendingRef = useRef(false);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
 
   const path = useMemo(() => computePath(messages, leafId), [messages, leafId]);
   // Re-run 对话内查找 when the visible conversation changes (branch switch,
@@ -371,8 +377,11 @@ export default function Chat() {
   useEffect(() => {
     // A chat we just created and are already streaming into: the route change is
     // our own navigation, so don't abort the in-flight stream or reload state.
-    if (skipLoadRef.current === routeId) { skipLoadRef.current = null; return; }
+    if (skipLoadRef.current === routeId) return;
+    skipLoadRef.current = null;
     abortRef.current?.abort();
+    abortRef.current = null;
+    turnIdentityRef.current = null;
     setStreaming(false);
     sendingRef.current = false;
     setCompare(null);
@@ -385,7 +394,7 @@ export default function Chat() {
       return;
     }
     let cancelled = false;
-    api.get<{ chat: ChatDetail; messages: Message[] }>(`/api/chats/${routeId}`)
+    api.get<{ chat: ChatDetail; messages: Message[]; activeTurn?: ActiveChatTurn | null }>(`/api/chats/${routeId}`)
       .then((r) => {
         if (cancelled) return;
         setChat(r.chat); setMessages(r.messages);
@@ -413,6 +422,11 @@ export default function Chat() {
         if (msgParam) { jumpToRef.current = msgParam; setStick(false); }
         else setStick(true);
         if (findParam) { setFindSeed(findParam); setFindOpen(true); setStick(false); }
+        if (r.activeTurn) {
+          void followStream(r.chat.id, {
+            requestId: r.activeTurn.requestId, messageId: r.activeTurn.messageId ?? undefined,
+          });
+        }
         if (msgParam || findParam) {
           params.delete('msg'); params.delete('find');
           nav({ pathname: `/chat/${routeId}`, search: params.toString() }, { replace: true });
@@ -585,12 +599,64 @@ export default function Chat() {
     return created;
   }
 
+  async function followStream(chatId: string, identity: StreamIdentity, existing?: AbortController, placeholders = false, onAccepted?: () => void): Promise<boolean> {
+    const controller = existing ?? new AbortController();
+    abortRef.current = controller;
+    turnIdentityRef.current = { chatId, ...identity };
+    sendingRef.current = true;
+    setStreaming(true);
+    if (identity.messageId) streamMsgIdRef.current = identity.messageId;
+    const current = () => abortRef.current === controller && !controller.signal.aborted;
+    setMessages((prev) => prev.map((m) => m.id === identity.messageId || (placeholders && m.id === 'tmp-a')
+      ? { ...m, status: 'streaming', recovering: true, error: null } : m));
+    let acknowledged = false;
+    try {
+      const result = await recoverChatStream(chatId, identity, (snapshot) => {
+        if (!current()) return;
+        if (snapshot.message) {
+          if (!acknowledged) onAccepted?.();
+          acknowledged = true;
+          const id = snapshot.message.id;
+          streamMsgIdRef.current = id;
+          turnIdentityRef.current = { chatId, requestId: snapshot.activeTurn?.requestId ?? identity.requestId, messageId: id };
+          setMessages((prev) => current() ? mergeStreamSnapshot(prev, snapshot, placeholders) : prev);
+          setLeafId((leaf) => placeholders && !leaf?.startsWith('tmp-') ? leaf : id);
+          setCompare((c) => c?.challengerId === 'tmp-a' ? { ...c, challengerId: id } : c);
+        }
+        setToolConfirm(snapshot.activeTurn?.toolConfirm ?? null);
+      }, controller.signal);
+      if (!current()) return acknowledged;
+      if (!result.message) {
+        setMessages((prev) => prev.filter((m) => !placeholders || (m.id !== 'tmp-a' && m.id !== 'tmp-u')));
+        setLeafId((id) => id?.startsWith('tmp-') ? null : id);
+        toast('未找到已接收的回复,输入已保留,请重试', 'err');
+      }
+      setStreaming(false);
+      sendingRef.current = false;
+      setToolConfirm(null);
+      chatsStore.load().catch(() => {});
+      if (models.some((m) => m.usageLimit)) loadModels(true).catch(() => {});
+      return acknowledged;
+    } catch (err) {
+      if (!current()) return acknowledged;
+      setStreaming(false);
+      sendingRef.current = false;
+      setToolConfirm(null);
+      setMessages((prev) => prev.map((m) => m.id === identity.messageId || (placeholders && m.id === 'tmp-a')
+        ? { ...m, status: 'error', recovering: false, error: errMsg(err) } : m));
+      toast(errMsg(err), 'err');
+      return acknowledged;
+    }
+  }
+
   function runStream(chatId: string, payload: Parameters<typeof streamChat>[1], opts?: { busyRetries?: number }): Promise<boolean> {
+    payload = { ...payload, requestId: payload.requestId ?? crypto.randomUUID() };
     // Resolve on persistence acknowledgement, not when generation finishes.
     let acknowledge!: (accepted: boolean | PromiseLike<boolean>) => void;
     const accepted = new Promise<boolean>((resolve) => { acknowledge = resolve; });
     const controller = new AbortController();
     abortRef.current = controller;
+    turnIdentityRef.current = { chatId, requestId: payload.requestId };
     sendingRef.current = true;
     streamMsgIdRef.current = 'tmp-a';
     setStreaming(true);
@@ -604,8 +670,9 @@ export default function Chat() {
     const previousLeafId = leafId;
 
     const applyToAssistant = (fn: (m: Message) => Message) => {
+      if (abortRef.current !== controller || controller.signal.aborted) return;
       const targetId = messageId;
-      setMessages((prev) => prev.map((m) => (m.id === targetId ? fn(m) : m)));
+      setMessages((prev) => abortRef.current !== controller ? prev : prev.map((m) => (m.id === targetId ? fn(m) : m)));
     };
 
     const appendPart = (type: 'text' | 'reasoning', text: string) => {
@@ -632,7 +699,7 @@ export default function Chat() {
       finished = true;
       if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
       flush();
-      applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status, finishReason, retry: null }));
+      applyToAssistant((m) => ({ ...m, status: m.status === 'error' ? 'error' : status, finishReason, retry: null, recovering: false }));
       if (abortRef.current !== controller) return;
       setStreaming(false);
       sendingRef.current = false;
@@ -655,10 +722,22 @@ export default function Chat() {
       chatsStore.load().catch(() => { /* ignore */ });
     };
 
+    const recover = () => {
+      if (finished || abortRef.current !== controller || controller.signal.aborted) { acknowledge(false); return; }
+      finished = true;
+      if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
+      flush();
+      void followStream(chatId, {
+        requestId: payload.requestId, messageId: messageId === 'tmp-a' ? undefined : messageId,
+      }, controller, true, () => acknowledge(true)).then(acknowledge);
+    };
+
     streamChat(chatId, payload, {
       onMeta(d) {
+        if (abortRef.current !== controller || controller.signal.aborted) return;
         acknowledge(true);
         messageId = d.messageId;
+        turnIdentityRef.current = { chatId, requestId: payload.requestId, messageId };
         streamMsgIdRef.current = d.messageId;
         setMessages((prev) => prev.map((m) => {
           let next = m;
@@ -716,6 +795,13 @@ export default function Chat() {
       onRetry(retry) {
         if (!finished) applyToAssistant((m) => ({ ...m, retry, retrySince: m.retrySince ?? (retry ? Date.now() : undefined) }));
       },
+      onServiceTier(tier) {
+        applyToAssistant((m) => ({
+          ...m, priority: tier === 'priority',
+          parts: tier === 'priority' && !m.parts.some((p) => p.type === 'service_tier')
+            ? [...m.parts, { type: 'service_tier', tier: 'priority' }] : m.parts,
+        }));
+      },
       onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c?.id === chatId ? { ...c, title } : c)); },
       onFollowups(d) {
         if (!d.questions?.length || !d.messageId) return;
@@ -727,15 +813,22 @@ export default function Chat() {
           : m)));
       },
       onError(message, errorCode) { applyToAssistant((m) => ({ ...m, status: 'error', error: message, errorCode, retry: null })); },
-      onDone(status, finishReason) { finalize(status, finishReason); },
+      onDone(status, finishReason, id) {
+        if (id && id !== messageId) return;
+        finalize(status, finishReason);
+      },
     }, controller.signal)
-      // The SSE stream closed without a 'done' event (server or proxy dropped
-      // it mid-reply): finalize() is a no-op if 'done' already ran, otherwise
-      // flag the reply as incomplete rather than letting it pass as finished.
-      .then(() => { finalize('done', 'incomplete'); acknowledge(false); })
+      // Transport completion is not generation completion. Read the original
+      // request's state until the backend actually finishes; never POST again.
+      .then(recover)
       .catch(async (e) => {
-        if (controller.signal.aborted) { finalize('stopped'); acknowledge(false); return; }
+        if (controller.signal.aborted || abortRef.current !== controller) {
+          finished = true;
+          if (flushTimer) clearInterval(flushTimer);
+          acknowledge(false); return;
+        }
         if (e instanceof ApiError) {
+          if (e.code === 'request_exists') { recover(); return; }
           // A model switch right after stopping a turn can beat the server to
           // releasing this chat; wait a moment and send again.
           if (e.status === 429 && /对话并发/.test(e.message) && (opts?.busyRetries ?? 0) > 0) {
@@ -757,10 +850,10 @@ export default function Chat() {
           sendingRef.current = false;
           toast(e.message, 'err');
           acknowledge(false);
+          if (e.code === 'chat_busy') void followStream(chatId, {});
           return;
         }
-        finalize('error');
-        acknowledge(false);
+        recover();
       });
     return accepted;
   }
@@ -811,8 +904,18 @@ export default function Chat() {
     }
   }
 
-  function stop() {
-    abortRef.current?.abort();
+  async function stop() {
+    const target = turnIdentityRef.current;
+    const controller = abortRef.current;
+    if (!target || !controller) return;
+    try {
+      await api.post(`/api/chats/${target.chatId}/stop`, {
+        requestId: target.requestId, messageId: target.messageId,
+      });
+      if (abortRef.current !== controller) return;
+      controller.abort();
+      void followStream(target.chatId, { requestId: target.requestId, messageId: target.messageId }, undefined, true);
+    } catch (err) { toast(errMsg(err), 'err'); }
   }
 
   async function decideTools(req: ToolConfirmRequest, decisions: Record<string, 'allow' | 'deny'>, rememberChat = false) {

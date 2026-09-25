@@ -77,7 +77,7 @@ export function resetProviderBusyGates() { busyUntil.clear(); }
 export async function fetchRetry(
   url: string, init: RequestInit & { signal?: AbortSignal },
   onRetry?: (state: ProviderRetry | null) => void,
-  opts?: { budgetMs?: number; gate?: string; counter?: BusyCounter },
+  opts?: { budgetMs?: number; gate?: string; counter?: BusyCounter; singleAttempt?: boolean },
 ): Promise<Response> {
   // `gate` splits one URL into separate backoff queues when requests to it
   // draw on different capacity (Vertex Priority PayGo vs standard).
@@ -107,7 +107,7 @@ export async function fetchRetry(
       try {
         res = await fetch(url, init);
       } catch (err) {
-        if (init.signal?.aborted || connectionRetried || !isPreSendError(err)) throw err;
+        if (init.signal?.aborted || opts?.singleAttempt || connectionRetried || !isPreSendError(err)) throw err;
         connectionRetried = true;
         await sleep(300, undefined, { signal: init.signal });
         continue;
@@ -116,7 +116,7 @@ export async function fetchRetry(
       // Shared across a request's lines: once it runs out, stop waiting here
       // and let the failover layer move on (to the Priority PayGo retry).
       const tallyFull = !!opts?.counter && ++opts.counter.busy >= opts.counter.limit;
-      if (retries >= MAX_RATE_RETRIES || tallyFull) return res;
+      if (opts?.singleAttempt || retries >= MAX_RATE_RETRIES || tallyFull) return res;
       // 1–2s, 2–4s, 4–8s, 8–16s, 16–32s with jitter; respect longer server
       // hints within the total wait budget. Don't retry early when
       // Retry-After exceeds it.

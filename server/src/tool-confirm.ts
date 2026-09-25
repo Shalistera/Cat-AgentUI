@@ -3,9 +3,9 @@
 // event; the client answers through POST /api/chats/:id/tool-decision, which
 // resolves the wait. One pending question per assistant message at a time.
 //
-// Nothing is persisted: if the tab goes away the stream aborts and the wait is
-// cancelled through its signal; a decision that arrives for an unknown message
-// is simply rejected.
+// Nothing is persisted: recoverable chat turns expose the pending question in
+// their live snapshot, so another tab/reload can answer it. Explicit Stop and
+// the turn timeout cancel the wait; unknown-message decisions are rejected.
 
 export type ToolDecision = 'allow' | 'deny';
 

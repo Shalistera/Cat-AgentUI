@@ -43,6 +43,7 @@ export interface TranslateConfig {
 }
 
 export type MessagePart =
+  | { type: 'service_tier'; tier: 'priority' }
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   // Display-only opaque metadata; never inserted into the text prompt.
@@ -74,6 +75,8 @@ export interface Message {
   errorCode?: 'provider_busy';
   /** Ephemeral upstream retry status, never part of model context. */
   retry?: ProviderRetry | null;
+  priority?: boolean;
+  recovering?: boolean;
   /** Ephemeral: when this reply first started waiting on upstream retries. */
   retrySince?: number;
   promptTokens: number | null;
@@ -406,7 +409,7 @@ export interface AdminProvider {
   baseUrl: string | null; hasKey: boolean;
   useResponses: boolean; useVertex: boolean;
   vertexProject: string | null; vertexLocation: string | null; hasVertexSa: boolean;
-  vertexPriority: 'off' | 'fallback' | 'always';
+  vertexPriority: 'off' | 'fallback' | 'first_failure' | 'always';
   hasExtraHeaders: boolean; extraHeaderKeys: string[];
   enabled: boolean; sortOrder: number;
   avatarUrl: string | null;
@@ -506,10 +509,25 @@ export interface StreamHandlers {
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;
   onNotice?(message: string): void;
   onRetry?(state: ProviderRetry | null): void;
+  onServiceTier?(tier: 'standard' | 'priority'): void;
   onTitle?(title: string): void;
   onFollowups?(d: { messageId?: string; questions: string[] }): void;
   onError?(message: string, code?: 'provider_busy'): void;
-  onDone?(status: 'done' | 'error' | 'stopped', finishReason: string | null): void;
+  onDone?(status: 'done' | 'error' | 'stopped', finishReason: string | null, messageId?: string): void;
+}
+
+export interface ActiveChatTurn {
+  requestId: string;
+  messageId: string | null;
+  userMessageId: string | null;
+  toolConfirm: ToolConfirmRequest | null;
+}
+
+export interface ChatStreamState {
+  active: boolean;
+  activeTurn: ActiveChatTurn | null;
+  message: Message | null;
+  userMessage: Message | null;
 }
 
 /** /api/admin/storage — what data/ is holding and for whom. */

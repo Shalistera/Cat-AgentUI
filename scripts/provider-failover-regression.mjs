@@ -9,7 +9,9 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { withFailover, resetLineHealth, lineStatus, rewriteModel } from '../server/dist/providers/failover.js';
-import { ProviderHttpError } from '../server/dist/providers/sse.js';
+import { ProviderHttpError, resetProviderBusyGates } from '../server/dist/providers/sse.js';
+import { geminiAdapter } from '../server/dist/providers/gemini.js';
+import { GoogleAuth } from 'google-auth-library';
 import {
   normalizeVertexLocations, parseVertexLocations, vertexLines, vertexTarget,
 } from '../server/dist/providers/vertex.js';
@@ -337,6 +339,61 @@ assert.equal(rewriteModel({ stripModelPrefix: 'openai/' }, 'gpt-4o'), 'gpt-4o');
 
 console.log('Passed: failover unit semantics.');
 
+// First-failure mode exercises the real Gemini transport/header path. Both
+// authentication and fetch are stubbed; no request can reach Google here.
+{
+  const savedFetch = globalThis.fetch;
+  const savedToken = GoogleAuth.prototype.getAccessToken;
+  const makeConfig = () => {
+    const primary = line('primary', 'Vertex eu', {
+      useVertex: true, baseUrl: null, vertexLocation: 'eu', vertexProject: 'test-project',
+      vertexSaJson: JSON.stringify({ project_id: 'test-project' }), retryBudgetMs: 3000,
+    });
+    primary.fallbacks = [
+      { ...primary, endpointId: 'us', vertexLocation: 'us' },
+      { ...primary, endpointId: 'priority', endpointName: 'Vertex global · Priority', vertexLocation: 'global',
+        vertexPriority: true, escalateAfterBusy: 5, escalateOnFailure: true, servesModel: (m) => !m.includes('image') },
+    ];
+    return primary;
+  };
+  try {
+    GoogleAuth.prototype.getAccessToken = async () => 'mock-local-token';
+    for (const failure of [429, 503, 500, 'connect']) {
+      resetLineHealth(); resetProviderBusyGates();
+      const calls = [], tiers = [], notices = [];
+      globalThis.fetch = async (url, init) => {
+        calls.push({ url, priority: new Headers(init.headers).get('x-vertex-ai-llm-shared-request-type') });
+        if (calls.length === 1) {
+          if (failure === 'connect') throw netErr();
+          return new Response('{}', { status: failure });
+        }
+        return new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'priority answer' }] }, finishReason: 'STOP' }] })}\n\n`);
+      };
+      const output = await collect(withFailover(geminiAdapter).streamChat(makeConfig(), req({ model: 'gemini-2.5-pro',
+        onServiceTier: (tier) => tiers.push(tier), onFailover: (info) => notices.push(info),
+      })));
+      assert.equal(calls.length, 2, `${failure}: one standard attempt, then Priority, with no hidden standard retries`);
+      assert(calls[0].url.includes('/locations/eu/'));
+      assert(calls[1].url.includes('/locations/global/'));
+      assert.deepEqual(calls.map((c) => c.priority), [null, 'priority']);
+      assert.deepEqual(tiers, ['standard', 'priority']);
+      assert.equal(notices[0].priority, true);
+      assert(output.some((ev) => ev.type === 'text' && ev.text === 'priority answer'));
+    }
+    resetLineHealth();
+    let invalidCalls = 0;
+    globalThis.fetch = async () => { invalidCalls++; return new Response('{"error":{"message":"invalid argument"}}', { status: 400 }); };
+    await assert.rejects(collect(withFailover(geminiAdapter).streamChat(makeConfig(), req({ model: 'gemini-2.5-pro' }))), { status: 400 });
+    assert.equal(invalidCalls, 1, 'a malformed request does not escalate to a paid attempt');
+    resetLineHealth();
+    const partial = fake({ primary: ['mid'] });
+    const p = makeConfig();
+    await assert.rejects(collect(partial.adapter.streamChat(p, req({ model: 'gemini-2.5-pro' }))));
+    assert.equal(partial.calls.length, 1, 'first-failure mode never replays partial output');
+  } finally { globalThis.fetch = savedFetch; GoogleAuth.prototype.getAccessToken = savedToken; }
+  console.log('Passed: first failure immediately switches to actual Priority headers, announces the tier, and preserves no-replay/error safeguards.');
+}
+
 // ---- end to end: the real app, two mock OpenAI-compatible gateways ----
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-agentui-failover-'));
@@ -502,6 +559,10 @@ try {
   assert.deepEqual(g.vertexLines.map((l) => [l.name, l.priority, l.health.state]), [['Vertex global', false, 'ok'], ['Vertex global · Priority', true, 'ok']]);
   const g2 = (await request('PATCH', `/api/admin/providers/${g.id}`, { vertexLocation: 'eu', vertexPriority: 'off' })).json;
   assert.equal(g2.primaryLineName, '主线路'); assert.deepEqual(g2.vertexLines, []);
+  const fastPriority = (await request('PATCH', `/api/admin/providers/${g.id}`, { vertexPriority: 'first_failure' })).json;
+  assert.equal(fastPriority.vertexPriority, 'first_failure');
+  assert.equal(fastPriority.vertexLines.length, 1);
+  assert.equal(fastPriority.vertexLines[0].priority, true);
   assert.equal((await request('PATCH', `/api/admin/providers/${g.id}`, { vertexPriority: 'sometimes' })).status, 400);
   assert.equal((await request('POST', `/api/admin/providers/${g.id}/health/reset`)).status, 200);
   console.log('Passed: Vertex location validation, stored order, and built-in lines in the admin API.');
