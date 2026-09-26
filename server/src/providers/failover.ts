@@ -9,6 +9,7 @@ import type {
   AdapterEvent, BusyCounter, ChatAdapter, ChatRequest, ImageGenRequest, ImageGenResult, ProviderRuntimeConfig,
 } from '../types.js';
 import { BUSY_STATUSES, ProviderHttpError, isNetworkError } from './sse.js';
+import { checkStream, ProviderEmptyError, ProviderInterruptedError } from './stream-integrity.js';
 
 export interface LineHealth {
   /** Consecutive fallback-worthy failures; cleared by the next success. */
@@ -104,6 +105,7 @@ export type FailureKind =
   | 'request';
 
 export function classifyFailure(err: unknown): FailureKind {
+  if (err instanceof ProviderEmptyError || err instanceof ProviderInterruptedError) return 'line';
   if (isNetworkError(err)) return 'line';
   if (err instanceof ProviderHttpError) {
     const s = err.status;
@@ -187,13 +189,14 @@ async function* runLines<T>(
   attempt: (line: ProviderRuntimeConfig, model: string, first: () => void) => AsyncGenerator<T>,
 ): AsyncGenerator<T> {
   // Nothing to fall back to: behave exactly like the bare adapter.
-  if (!cfg.fallbacks?.length) {
+  if (!cfg.fallbacks?.length && !cfg.recoverEmptyStreams) {
     yield* attempt(cfg, rewriteModel(cfg, req.model), () => {});
     return;
   }
   const threshold = cfg.failoverThreshold ?? DEFAULT_THRESHOLD;
   const cooldownMs = cfg.failoverCooldownMs ?? DEFAULT_COOLDOWN_MS;
   const order = plan(cfg, req.model);
+  let emptyFailures = 0;
   // The last failure that said something about capacity or reachability: if
   // the lines after it merely lack the model, that is the error worth showing.
   let lineErr: unknown = null;
@@ -205,13 +208,14 @@ async function* runLines<T>(
   const counter: BusyCounter | undefined = escalation > 0
     ? { busy: 0, limit: order[escalation].line.escalateAfterBusy! } : undefined;
   for (let i = 0; i < order.length; i++) {
+    req.signal.throwIfAborted();
     const { line, probe } = order[i];
     const key = lineKey(line);
     const h = lineHealth(key);
     if (probe) h.probing = true;
     if (line !== cfg) h.tookOver++; // answered instead of the provider's own line
     let produced = false;
-    const first = () => { if (!produced) { produced = true; markSuccess(key); } };
+    const first = () => { if (!produced) { produced = true; if (!cfg.recoverEmptyStreams) markSuccess(key); } };
     // Its busy-retry cap exists to hand over to the next line. When open
     // breakers or model-specific lines leave nothing after it, the last line
     // tried waits as long as a lone line would.
@@ -222,9 +226,22 @@ async function* runLines<T>(
     if (immediatePriority && i < escalation) target = { ...target, singleAttempt: true, retryBudgetMs: 0 };
     try {
       yield* attempt(target, rewriteModel(line, req.model), first);
-      first(); // an empty-but-OK answer still counts as the line working
+      if (cfg.recoverEmptyStreams) markSuccess(key);
+      else first();
       return;
     } catch (err) {
+      if (req.signal.aborted) { if (probe) h.probing = false; throw err; }
+      if (err instanceof ProviderEmptyError) {
+        emptyFailures++;
+        if (emptyFailures >= 2) {
+          markFailure(key, err, threshold, cooldownMs);
+          throw err;
+        }
+        // With no alternative endpoint, one fresh connection is still worth
+        // trying. Never keep cycling around the configured lines.
+        if (i === order.length - 1) order.push({ line, probe: false });
+      }
+      if (produced && err instanceof ProviderInterruptedError) markFailure(key, err, threshold, cooldownMs);
       if (cfg.stopOnBusy && !produced && err instanceof ProviderHttpError && BUSY_STATUSES.has(err.status)) {
         if (probe) h.probing = false;
         throw err;
@@ -253,6 +270,7 @@ async function* runLines<T>(
       if (!next) throw kind === 'model' && lineErr ? lineErr : err;
       req.onFailover?.({
         from, to: next.line.endpointName ?? '主线路', reason: describe(err),
+        ...(err instanceof ProviderEmptyError ? { recovery: 'empty' as const } : {}),
         ...(nextIndex === escalation ? { priority: true } : {}),
       });
       i = nextIndex - 1;
@@ -267,6 +285,10 @@ export function withFailover(raw: ChatAdapter): ChatAdapter {
   const wrapped: ChatAdapter = {
     streamChat(cfg, req): AsyncGenerator<AdapterEvent> {
       return runLines(cfg, req, async function* (line, model, first) {
+        if (cfg.recoverEmptyStreams) {
+          yield* checkStream(raw.streamChat(line, { ...req, model }), lineKey(line), req.signal, first);
+          return;
+        }
         for await (const ev of raw.streamChat(line, { ...req, model })) {
           first();
           yield ev;

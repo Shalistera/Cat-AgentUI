@@ -18,7 +18,8 @@ export type StopReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | '
 export type FinishReason = StopReason | 'incomplete';
 
 export type MessagePart =
-  | { type: 'model_fallback'; sourceMessageId: string; fromModelId: string; fromName: string; toModelId: string; toName: string; adopted: boolean }
+  | { type: 'response_recovery'; kind: 'continuation'; state: 'running' | 'done' | 'failed' }
+  | { type: 'model_fallback'; sourceMessageId: string; fromModelId: string; fromName: string; toModelId: string; toName: string; adopted: boolean; reason?: 'busy' | 'empty' }
   | { type: 'service_tier'; tier: 'priority' }
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
@@ -88,6 +89,8 @@ export interface ProviderRuntimeConfig {
   singleAttempt?: boolean;
   /** Return the first busy rejection to a client with a configured fallback. */
   stopOnBusy?: boolean;
+  /** Chat-only recovery of successful HTTP streams with no usable answer. */
+  recoverEmptyStreams?: boolean;
   /** Per-request tally of busy rejections on standard lines, shared by them
    * (set by the failover layer, read by fetchRetry). */
   busyCounter?: BusyCounter;
@@ -98,6 +101,7 @@ export interface ProviderRuntimeConfig {
 }
 
 export interface ProviderFailover {
+  recovery?: 'empty';
   /** The line that just failed and the one now being tried. */
   from: string;
   to: string;
@@ -170,6 +174,7 @@ export interface ReasoningRequest {
 }
 
 export interface ProviderRetry {
+  recovery?: 'empty' | 'continuation';
   attempt: number;
   maxAttempts: number;
   /** Zero means the retry is now being sent rather than waiting. */

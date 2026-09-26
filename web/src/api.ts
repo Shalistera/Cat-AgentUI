@@ -109,6 +109,7 @@ export async function streamChat(
     try { data = JSON.parse(dataLines.join('\n')); }
     catch { event = null; dataLines = []; return; }
     switch (event) {
+      case 'response_recovery': handlers.onResponseRecovery?.(data); break;
       case 'meta': handlers.onMeta?.(data); break;
       case 'model_selected': handlers.onModelSelected?.(data); break;
       case 'delta': handlers.onDelta?.(data.text ?? ''); break;

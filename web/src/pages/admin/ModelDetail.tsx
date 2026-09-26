@@ -33,7 +33,7 @@ function FallbackCard({ model, providers, reload }: { model: AdminModel; provide
     } catch (err) { toast(errMsg(err), 'err'); }
     finally { setBusy(false); }
   }
-  return <Card title="限流时自动兜底" desc="主模型首次限流且尚未输出时,由对话页面自动尝试指定模型一次。成功后当前对话沿用兜底模型,新对话默认模型不变。">
+  return <Card title="限流或空回时自动兜底" desc="首次限流或空回自动恢复失败、且尚未输出正文时,自动尝试指定模型一次。成功后当前对话沿用兜底模型,新对话默认模型不变。">
     <div className="space-y-3">
       <Field label="兜底模型" hint="可以选择同一服务商的其他模型。仅对有权限、额度充足且能力兼容的用户生效。">
         <Select aria-label="兜底模型" value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy}>

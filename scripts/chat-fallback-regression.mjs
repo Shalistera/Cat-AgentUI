@@ -9,11 +9,28 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-fallback-'));
 const calls = new Map();
+const bodies = new Map();
 let app, base, admin, logs = '';
 const upstream = http.createServer(async (req, res) => {
-  for await (const _ of req) { /* consume */ }
+  let body = ''; for await (const chunk of req) body += chunk;
   const model = /models\/([^:]+):/.exec(req.url)?.[1];
   calls.set(model, (calls.get(model) ?? 0) + 1);
+  bodies.set(model, [...(bodies.get(model) ?? []), JSON.parse(body)]);
+  if (model?.startsWith('recovery-')) {
+    const n = calls.get(model);
+    const send = (data) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(`data: ${JSON.stringify(data)}\n\n`); };
+    const original = 'Original beginning of the preserved answer.';
+    let candidate;
+    if (model === 'recovery-block') { send({ promptFeedback: { blockReason: 'SAFETY' } }); return; }
+    if (model === 'recovery-empty' || (model === 'recovery-retry' && n === 1)) {
+      candidate = { content: { parts: [{ text: 'discarded speculative reasoning', thought: true }] }, finishReason: 'STOP' };
+    } else if (model === 'recovery-length') candidate = { finishReason: 'MAX_TOKENS' };
+    else if (model === 'recovery-tool' && n === 1) candidate = { content: { parts: [{ functionCall: { name: 'workspace_list', args: {} } }] }, finishReason: 'STOP' };
+    else if (model === 'recovery-partial' && n === 2) candidate = { content: { parts: [{ text: original + ' Newly completed remainder.' }] }, finishReason: 'STOP' };
+    else if (model === 'recovery-retry') candidate = { content: { parts: [{ text: 'Recovered with the same model' }] }, finishReason: 'STOP' };
+    else candidate = { content: { parts: [{ text: original }] } };
+    send({ candidates: [candidate], usageMetadata: { totalTokenCount: 2 } }); return;
+  }
   if (model === 'tool-busy' && calls.get(model) === 1) {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     res.end(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: 'workspace_list', args: {} } }] }, finishReason: 'STOP' }] })}\n\n`);
@@ -60,10 +77,58 @@ try {
   admin = (await request('POST', '/api/auth/register', { username: 'admin', password: 'password-123' })).cookie;
   await request('PUT', '/api/admin/settings', { followupEnabled: false });
   const provider = (await request('POST', '/api/admin/providers', { name: 'Fallback mock', type: 'gemini', baseUrl: `http://127.0.0.1:${upstreamPort}` })).data;
-  const names = ['primary-busy', 'backup-ok', 'backup-busy', 'tool-busy'];
+  const names = ['primary-busy', 'backup-ok', 'backup-busy', 'tool-busy', 'recovery-retry', 'recovery-empty', 'recovery-partial', 'recovery-always', 'recovery-block', 'recovery-length', 'recovery-tool'];
   await request('POST', '/api/admin/models', { providerId: provider.id, models: names.map((modelId) => ({ modelId, displayName: modelId, vision: true, tools: true })) });
   const models = Object.fromEntries((await request('GET', '/api/admin/providers')).data[0].models.map((m) => [m.modelId, m.id]));
   const setFallback = (source, target) => request('PATCH', `/api/admin/models/${models[source]}`, { fallbackModelId: target ? models[target] : null });
+  const recoverTurn = async (name) => {
+    const id = await newChat(models[name]);
+    const result = await turn(id, { content: [{ type: 'text', text: 'Please answer' }] });
+    const saved = (await request('GET', `/api/chats/${id}`)).data;
+    return { ...result, saved, reply: saved.messages.at(-1) };
+  };
+  const retried = await recoverTurn('recovery-retry');
+  assert.equal(calls.get('recovery-retry'), 2);
+  assert(!retried.events.some((e) => e.type === 'error' || e.type === 'reasoning'));
+  assert(retried.events.some((e) => e.type === 'retry' && e.data?.recovery === 'empty'));
+  assert.equal(retried.reply.totalTokens, 4, 'usage from discarded attempts is counted');
+  assert.equal(retried.saved.messages.filter((m) => m.role === 'assistant').length, 1);
+
+  const partial = await recoverTurn('recovery-partial');
+  assert.equal(calls.get('recovery-partial'), 2);
+  assert.equal(partial.reply.finishReason, 'stop');
+  assert.equal(partial.reply.parts.filter((p) => p.type === 'text').length, 1, 'continuation keeps one Markdown text part so code fences remain intact');
+  assert.equal(partial.reply.parts.filter((p) => p.type === 'text').map((p) => p.text).join(''), 'Original beginning of the preserved answer. Newly completed remainder.');
+  assert(partial.reply.parts.some((p) => p.type === 'response_recovery' && p.state === 'done'));
+  const continuationBody = bodies.get('recovery-partial')[1];
+  assert(JSON.stringify(continuationBody).includes('Original beginning of the preserved answer.'));
+  assert(JSON.stringify(continuationBody).includes('从中断位置'));
+  assert(!continuationBody.tools?.length, 'continuation does not repeat tools or native search');
+
+  const exhausted = await recoverTurn('recovery-always');
+  assert.equal(calls.get('recovery-always'), 2, 'at most one continuation');
+  assert.equal(exhausted.reply.finishReason, 'incomplete');
+  assert(exhausted.reply.parts.some((p) => p.type === 'response_recovery' && p.state === 'failed'));
+  for (const [name, reason] of [['recovery-block', 'content_filter'], ['recovery-length', 'length']]) {
+    const result = await recoverTurn(name);
+    assert.equal(calls.get(name), 1, 'policy and configured output limits are not bypassed');
+    assert.equal(result.reply.finishReason, reason);
+  }
+  const withTools = await recoverTurn('recovery-tool');
+  assert.equal(calls.get('recovery-tool'), 2, 'a tool round and its answer round, with no automatic replay');
+  assert.equal(withTools.reply.parts.filter((p) => p.type === 'tool_call').length, 1);
+  assert(!withTools.reply.parts.some((p) => p.type === 'response_recovery'));
+
+  await setFallback('recovery-empty', 'backup-ok');
+  const emptyChat = await newChat(models['recovery-empty']);
+  const empty = await turn(emptyChat, { fallbackModelId: models['backup-ok'], content: [{ type: 'text', text: 'empty recovery' }] });
+  assert.equal(calls.get('recovery-empty'), 2);
+  assert(empty.events.some((e) => e.type === 'error' && e.data.code === 'provider_empty'));
+  const emptyId = empty.events.find((e) => e.type === 'meta').data.messageId;
+  const emptyFallback = await turn(emptyChat, { regenerateMessageId: emptyId, modelId: models['backup-ok'], automaticFallback: true });
+  assert(emptyFallback.events.some((e) => e.type === 'model_selected'));
+  assert(emptyFallback.events.some((e) => e.type === 'meta' && e.data.fallback?.reason === 'empty'));
+  console.log('Passed: invisible empty retry, reasoning discarded, aggregate usage, one continuation, exact overlap removal, policy/length/tool safeguards and empty-model fallback.');
   assert.equal((await setFallback('primary-busy', 'backup-ok')).data.fallbackModelId, models['backup-ok']);
   assert.equal((await setFallback('primary-busy', 'primary-busy')).status, 400);
   assert.equal((await request('GET', '/api/models')).data.find((m) => m.id === models['primary-busy']).fallbackModelId, models['backup-ok']);

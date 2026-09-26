@@ -676,6 +676,8 @@ function useElapsed(since: number | undefined, ms: number): boolean {
 /** Upstream backoff status line. Retries are numbered; waiting behind a
  * limit another request already hit is not (attempt 0). */
 export function retryStatusText(r: ProviderRetry): string {
+  if (r.recovery === 'empty') return r.priority ? '正在使用优先通道恢复回复…' : '正在自动恢复回复,请稍候…';
+  if (r.recovery === 'continuation') return '正在自动补全回复,请稍候…';
   if (r.priority) {
     if (r.delayMs === 0) return '正在通过优先通道重新请求模型…';
     const secs = Math.max(1, Math.round(r.delayMs / 1000));
@@ -858,6 +860,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
   const hasBody = msg.parts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image');
   const providerBusy = msg.errorCode === 'provider_busy';
   const fallback = msg.parts.find((p) => p.type === 'model_fallback');
+  const recovery = msg.parts.find((p) => p.type === 'response_recovery');
   const ranTools = msg.parts.some((p) => p.type === 'tool_call');
   // The null branch covers rows saved before the server started assigning
   // 'incomplete': a finished reply with nothing to read is cut short regardless.
@@ -886,11 +889,16 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
     <div className="flex gap-3 sm:pr-[42px]" data-msg-id={msg.id}>
       <div className="mt-0.5 hidden shrink-0 sm:block"><ModelAvatar model={fmtModelName(msg.model)} size={30} /></div>
       <div className="min-w-0 flex-1">
+        {recovery && recovery.state !== 'failed' && (
+          <div role="status" className="mb-2 flex items-center gap-2 text-xs text-tx3">
+            {isStreaming ? <><Spinner className="h-3.5 w-3.5" />正在自动补全回复…</> : recovery.state === 'done' ? '已自动续写恢复 · 原文已保留' : null}
+          </div>
+        )}
         {fallback && (
           <div role="status" className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg2 px-3 py-2 text-xs text-tx2">
             {isStreaming && <Spinner className="h-3.5 w-3.5" />}
             <span className="min-w-0 flex-1">{isStreaming
-              ? `「${fallback.fromName}」繁忙,正在尝试兜底模型「${fallback.toName}」…`
+              ? fallback.reason === 'empty' ? `正在使用「${fallback.toName}」恢复回复…` : `「${fallback.fromName}」繁忙,正在尝试兜底模型「${fallback.toName}」…`
               : fallback.adopted ? currentModelId === fallback.toModelId
                 ? `已自动切换至「${fallback.toName}」,当前对话将继续使用它`
                 : `本轮由兜底模型「${fallback.toName}」回复`
@@ -933,12 +941,12 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
         {isStreaming && toolConfirm && onToolDecision && (
           <ToolConfirmCard key={toolConfirm.calls.map((c) => c.id).join('|')} req={toolConfirm} onDecide={onToolDecision} />
         )}
-        {isStreaming && msg.retry && (
+        {isStreaming && msg.retry && msg.retry.recovery !== 'continuation' && (
           <div className="my-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg2 px-3.5 py-2.5 text-[13px] text-tx2">
             <Spinner className="h-3.5 w-3.5" />
             <span role="status" className="min-w-0 flex-1">
               {retryStatusText(msg.retry)}
-              {msg.retry.attempt > 0 && <span className="ml-1 text-xs text-tx3">({msg.retry.attempt}/{msg.retry.maxAttempts})</span>}
+              {msg.retry.attempt > 0 && !msg.retry.recovery && <span className="ml-1 text-xs text-tx3">({msg.retry.attempt}/{msg.retry.maxAttempts})</span>}
             </span>
             {switchTo && retriedLong && (
               <button type="button" title={switchTitle} onClick={() => onSwitchModel!(switchTo)}

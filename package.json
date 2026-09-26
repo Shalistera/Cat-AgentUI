@@ -22,6 +22,7 @@
     "test:stream-parser": "npm run build -w server && node --import tsx scripts/stream-parser-regression.mjs",
     "test:chat-recovery": "npm run build -w server && node --import tsx scripts/chat-recovery-regression.mjs",
     "test:chat-fallback": "npm run build -w server && node scripts/chat-fallback-regression.mjs",
+    "test:response-integrity": "npm run build -w server && node scripts/response-integrity-regression.mjs",
     "start": "npm run start -w server",
     "test:provider-failover": "npm run build -w server && node scripts/provider-failover-regression.mjs"
   },

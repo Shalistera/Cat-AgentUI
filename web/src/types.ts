@@ -43,7 +43,8 @@ export interface TranslateConfig {
 }
 
 export type MessagePart =
-  | { type: 'model_fallback'; sourceMessageId: string; fromModelId: string; fromName: string; toModelId: string; toName: string; adopted: boolean }
+  | { type: 'response_recovery'; kind: 'continuation'; state: 'running' | 'done' | 'failed' }
+  | { type: 'model_fallback'; sourceMessageId: string; fromModelId: string; fromName: string; toModelId: string; toName: string; adopted: boolean; reason?: 'busy' | 'empty' }
   | { type: 'service_tier'; tier: 'priority' }
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
@@ -56,7 +57,7 @@ export type MessagePart =
   | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; supports?: { text: string; start: number; sources: number[] }[]; label?: string }
   | { type: 'followups'; questions: string[] };
 
-export interface ProviderRetry { attempt: number; maxAttempts: number; delayMs: number; queued?: boolean; priority?: boolean }
+export interface ProviderRetry { attempt: number; maxAttempts: number; delayMs: number; queued?: boolean; priority?: boolean; recovery?: 'empty' | 'continuation' }
 
 export interface Message {
   id: string;
@@ -73,7 +74,7 @@ export interface Message {
       without a proper finish signal — e.g. only the thought chain arrived). */
   finishReason: string | null;
   error: string | null;
-  errorCode?: 'provider_busy';
+  errorCode?: 'provider_busy' | 'provider_empty';
   /** Ephemeral upstream retry status, never part of model context. */
   retry?: ProviderRetry | null;
   priority?: boolean;
@@ -498,6 +499,7 @@ export interface WorkspaceListing {
 
 // SSE stream handler callbacks
 export interface StreamHandlers {
+  onResponseRecovery?(d: Extract<MessagePart, { type: 'response_recovery' }>): void;
   onMeta?(d: { messageId: string; userMessageId: string | null; model: string; providerId?: string; fallback?: Extract<MessagePart, { type: 'model_fallback' }> }): void;
   onModelSelected?(d: { modelId: string }): void;
   onDelta?(text: string): void;
@@ -516,7 +518,7 @@ export interface StreamHandlers {
   onServiceTier?(tier: 'standard' | 'priority'): void;
   onTitle?(title: string): void;
   onFollowups?(d: { messageId?: string; questions: string[] }): void;
-  onError?(message: string, code?: 'provider_busy'): void;
+  onError?(message: string, code?: 'provider_busy' | 'provider_empty'): void;
   onDone?(status: 'done' | 'error' | 'stopped', finishReason: string | null, messageId?: string): void;
 }
 

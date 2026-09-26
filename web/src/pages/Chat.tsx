@@ -601,16 +601,16 @@ export default function Chat() {
     return created;
   }
 
-  function startModelFallback(chatId: string, failed: Pick<Message, 'id' | 'error' | 'finishReason'>, target: ModelInfo) {
+  function startModelFallback(chatId: string, failed: Pick<Message, 'id' | 'error' | 'finishReason' | 'errorCode'>, target: ModelInfo) {
     setMessages((prev) => [...prev.map((m) => m.id === failed.id
-      ? { ...m, status: 'error' as const, error: failed.error, errorCode: 'provider_busy' as const, finishReason: failed.finishReason, retry: null } : m), {
+      ? { ...m, status: 'error' as const, error: failed.error, errorCode: failed.errorCode, finishReason: failed.finishReason, retry: null } : m), {
       id: 'tmp-a', parentId: prev.find((m) => m.id === failed.id)?.parentId ?? null,
       role: 'assistant', parts: [], model: target.modelId, providerId: target.providerId,
       status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null,
       totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now(),
     }]);
     setLeafId('tmp-a');
-    toast(`模型繁忙,正在尝试兜底模型「${target.displayName}」`, 'info');
+    toast(`正在使用兜底模型「${target.displayName}」恢复回复`, 'info');
     void runStream(chatId, { regenerateMessageId: failed.id, modelId: target.id, automaticFallback: true }, { allowAutoFallback: false });
   }
 
@@ -647,7 +647,7 @@ export default function Chat() {
       }, controller.signal);
       if (!current()) return acknowledged;
       const failed = result.message;
-      if (!stoppingRef.current && failed?.status === 'error' && failed.errorCode === 'provider_busy'
+      if (!stoppingRef.current && failed?.status === 'error' && (failed.errorCode === 'provider_busy' || failed.errorCode === 'provider_empty')
         && result.fallbackModelId && failed.parts.every((p) => p.type === 'service_tier')) {
         const source = models.find((m) => m.providerId === failed.providerId && m.modelId === failed.model) ?? null;
         const target = configuredFallbackModel(models, source);
@@ -707,6 +707,7 @@ export default function Chat() {
     let produced = false;
     let pendingFallback = false;
     let fallbackError = '';
+    let fallbackErrorCode: Message['errorCode'];
     const previousLeafId = leafId;
 
     const applyToAssistant = (fn: (m: Message) => Message) => {
@@ -718,9 +719,13 @@ export default function Chat() {
     const appendPart = (type: 'text' | 'reasoning', text: string) => {
       applyToAssistant((m) => {
         const parts = [...m.parts];
-        const last = parts[parts.length - 1];
+        let lastIndex = parts.length - 1;
+        if (type === 'text' && parts.some((p) => p.type === 'response_recovery')) {
+          while (lastIndex >= 0 && parts[lastIndex].type !== 'text') lastIndex--;
+        }
+        const last = parts[lastIndex];
         if (last && last.type === type) {
-          parts[parts.length - 1] = { ...last, text: (last as { text: string }).text + text } as MessagePart;
+          parts[lastIndex] = { ...last, text: (last as { text: string }).text + text } as MessagePart;
         } else {
           parts.push({ type, text } as MessagePart);
         }
@@ -852,6 +857,10 @@ export default function Chat() {
         chatsStore.patch(chatId, { modelId: d.modelId });
         applyToAssistant((m) => ({ ...m, parts: m.parts.map((p) => p.type === 'model_fallback' ? { ...p, adopted: true } : p) }));
       },
+      onResponseRecovery(d) {
+        flush();
+        applyToAssistant((m) => ({ ...m, parts: [d, ...m.parts.filter((p) => p.type !== 'response_recovery')] }));
+      },
       onTitle(title) { chatsStore.patch(chatId, { title }); setChat((c) => (c?.id === chatId ? { ...c, title } : c)); },
       onFollowups(d) {
         if (!d.questions?.length || !d.messageId) return;
@@ -863,8 +872,8 @@ export default function Chat() {
           : m)));
       },
       onError(message, errorCode) {
-        pendingFallback = !!fallback && !produced && errorCode === 'provider_busy';
-        if (pendingFallback) fallbackError = message;
+        pendingFallback = !!fallback && !produced && (errorCode === 'provider_busy' || errorCode === 'provider_empty');
+        if (pendingFallback) { fallbackError = message; fallbackErrorCode = errorCode; }
         applyToAssistant((m) => ({ ...m, status: pendingFallback ? 'streaming' : 'error', error: message, errorCode, retry: null }));
       },
       onDone(status, finishReason, id) {
@@ -877,7 +886,7 @@ export default function Chat() {
           applyToAssistant((m) => ({ ...m, status: 'error', finishReason }));
           // Same saved question/attachments, new sibling reply. Admission has
           // already been released by 'done', so no abort/retry race is needed.
-          startModelFallback(chatId, { id: messageId, error: fallbackError, finishReason }, fallback);
+          startModelFallback(chatId, { id: messageId, error: fallbackError, errorCode: fallbackErrorCode, finishReason }, fallback);
           return;
         }
         finalize(status, finishReason);

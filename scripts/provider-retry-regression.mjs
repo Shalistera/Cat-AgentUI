@@ -220,7 +220,7 @@ try {
   await request('PUT', '/api/admin/settings', { followupEnabled: true });
   const eof = await turn('stream-eof');
   assert.equal(events(await eof.res.text()).find((e) => e.type === 'done').data.finishReason, 'incomplete', 'a genuinely missing finish signal remains incomplete');
-  assert.equal(counts.get('stream-eof'), 1, 'incomplete replies do not launch follow-up generation or replay output');
+  assert.equal(counts.get('stream-eof'), 2, 'one bounded continuation; incomplete replies do not launch follow-up generation');
   const continued = await fetch(`${base}/api/chats/${eof.id}/stream`, {
     method: 'POST', headers: { cookie: admin, 'x-csrf': '1', 'content-type': 'application/json' },
     body: JSON.stringify({ content: [{ type: 'text', text: 'continue after incomplete reply' }] }),
@@ -312,7 +312,8 @@ try {
   const partial = await turn('retry-partial');
   const partialEvents = events(await partial.res.text());
   assert(partialEvents.some((e) => e.type === 'delta' && e.data.text.includes('PRESERVED OUTPUT')));
-  assert.equal(counts.get('retry-partial'), 1, 'partial output is never replayed');
+  assert.equal(counts.get('retry-partial'), 2, 'partial output gets one continuation');
+  assert.equal(partialEvents.filter((e) => e.type === 'delta').map((e) => e.data.text).join(''), 'PRESERVED OUTPUT', 'a repeated prefix is not appended twice');
   const tool = await turn('retry-tool');
   const toolEvents = events(await tool.res.text());
   assert.equal(toolEvents.filter((e) => e.type === 'tool_call').length, 1, '429 after a tool does not replay that tool');

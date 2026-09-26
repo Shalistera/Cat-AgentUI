@@ -206,7 +206,7 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
   const { adapter, calls } = fake({ primary: [Object.assign(new Error('aborted'), { name: 'AbortError' })] });
   ac.abort();
   await assert.rejects(collect(adapter.streamChat(cfg(), req({ signal: ac.signal }))));
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 0, 'an already-cancelled request never starts a provider attempt');
   assert.equal(lineStatus('prov:primary').failures, 0);
 }
 

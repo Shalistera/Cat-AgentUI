@@ -31,7 +31,10 @@ function isPreSendError(err: unknown): boolean {
  * pooled socket) or a mid-flight transport failure. Either way this line did
  * not answer, which is what failover cares about. */
 export function isNetworkError(err: unknown): boolean {
-  return err instanceof TypeError && err.message === 'fetch failed';
+  if (err instanceof TypeError && err.message === 'fetch failed') return true;
+  if (!(err instanceof Error)) return false;
+  const e = err as Error & { code?: string; cause?: { code?: string } };
+  return ['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ERR_STREAM_PREMATURE_CLOSE'].includes(e.cause?.code ?? e.code ?? '');
 }
 
 const MAX_RATE_RETRIES = 5;

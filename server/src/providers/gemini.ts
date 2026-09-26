@@ -4,7 +4,7 @@ import type {
   AdapterMessage, ChatAdapter, ChatRequest, GeneratedImage, GroundingInfo, ImageGenRequest, ImageGenResult,
   ProviderRuntimeConfig, ProviderStreamEnd, UsageInfo,
 } from '../types.js';
-import { sseMessages, providerError, readJsonLimited, fetchRetry } from './sse.js';
+import { sseMessages, providerError, readJsonLimited, fetchRetry, isNetworkError } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
 import { PRIORITY_HEADER, vertexTarget } from './vertex.js';
 import { config } from '../config.js';
@@ -313,7 +313,10 @@ export const geminiAdapter: ChatAdapter = {
       transport = req.signal.aborted ? 'aborted' : 'error';
       const e = err as { name?: string; cause?: { code?: string } };
       errorCode = String(e?.cause?.code ?? e?.name ?? 'Error').slice(0, 80);
-      throw err;
+      // A complete final frame remains authoritative if the socket resets
+      // afterwards. Do not turn a confirmed answer into a continuation.
+      const confirmed = finishReason && ['STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII'].includes(finishReason);
+      if (req.signal.aborted || !confirmed || !isNetworkError(err)) throw err;
     } finally {
       req.onStreamEnd?.({
         endpointId: cfg.endpointId ?? `${cfg.id}:primary`,
@@ -326,7 +329,7 @@ export const geminiAdapter: ChatAdapter = {
 
     if (grounding) yield { type: 'grounding', grounding };
     if (usage) yield { type: 'usage', usage: toUsage(usage) };
-    const reason = sawToolCall ? 'tool_calls'
+    const reason = promptBlockReason ? 'content_filter' : sawToolCall ? 'tool_calls'
       : finishReason === 'MAX_TOKENS' ? 'length'
       : finishReason === 'STOP' ? 'stop'
       : finishReason && ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII'].includes(finishReason) ? 'content_filter'

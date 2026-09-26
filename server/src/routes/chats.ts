@@ -7,8 +7,10 @@ import { requireAuth } from '../auth.js';
 import { canUseProject } from '../project-access.js';
 import { config } from '../config.js';
 import { configuredModelFallback } from '../model-fallback.js';
+import { ContinuationText } from '../continuation-text.js';
 import { activeChatStream, beginChatStream, chatStreamReceipt, endChatStream, identifyChatStream } from '../chat-stream-state.js';
-import { ProviderBusyError } from '../providers/sse.js';
+import { ProviderBusyError, isNetworkError } from '../providers/sse.js';
+import { ProviderEmptyError, ProviderInterruptedError } from '../providers/stream-integrity.js';
 import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch, supportsVertexSearchWithFunctions } from '../providers/gemini.js';
@@ -499,7 +501,7 @@ export function messageDto(m: typeof schema.messages.$inferSelect, bookmarked?: 
   return {
     id: m.id, parentId: m.parentId, role: m.role, parts: parseParts(m.parts), model: m.model,
     providerId: m.providerId, status: m.status, finishReason: m.finishReason ?? null, error: m.error,
-    errorCode: m.errorCode === 'provider_busy' ? 'provider_busy' : undefined,
+    errorCode: m.errorCode === 'provider_busy' || m.errorCode === 'provider_empty' ? m.errorCode : undefined,
     promptTokens: m.promptTokens, completionTokens: m.completionTokens, totalTokens: m.totalTokens,
     durationMs: m.durationMs, ttftMs: m.ttftMs, createdAt: m.createdAt,
     bookmarked: bookmarked?.has(m.id) ?? false,
@@ -1402,13 +1404,14 @@ export async function chatRoutes(app: FastifyInstance) {
       const source = failed && db.select().from(schema.models).where(and(
         eq(schema.models.modelId, failed.model ?? ''), eq(schema.models.providerId, failed.providerId ?? ''),
       )).get();
-      if (!failed || !source || failed.errorCode !== 'provider_busy'
+      if (!failed || !source || (failed.errorCode !== 'provider_busy' && failed.errorCode !== 'provider_empty')
         || parseParts(failed.parts).some((p) => p.type !== 'service_tier')
         || configuredModelFallback(source.id) !== model.id || !canUseModel(user, source.id)) {
         return reply.code(400).send({ error: '这条回复不适合自动兜底,请手动选择模型重试' });
       }
       fallbackMeta = { type: 'model_fallback', sourceMessageId: failed.id, fromModelId: source.id, fromName: source.displayName || source.modelId,
-        toModelId: model.id, toName: model.displayName || model.modelId, adopted: false };
+        toModelId: model.id, toName: model.displayName || model.modelId, adopted: false,
+        reason: failed.errorCode === 'provider_empty' ? 'empty' : 'busy' };
     }
     // Replies that were cut short (stopped, errored mid-way, or ended on a
     // length / content-filter stop) are replayed with an explicit marker, so
@@ -1707,12 +1710,15 @@ export async function chatRoutes(app: FastifyInstance) {
     let status: 'done' | 'error' | 'stopped' = 'done';
     let finishReason: FinishReason | null = null;
     let errMsg: string | null = null;
-    let errCode: 'provider_busy' | null = null;
+    let errCode: 'provider_busy' | 'provider_empty' | null = null;
     let imageCount = 0;
     let outputChars = 0;
     let textTimeoutError: string | null = null;
     let textTurnTimer: ReturnType<typeof setTimeout> | null = null;
     let providerIdleTimer: ReturnType<typeof setTimeout> | null = null;
+    let continuation: Extract<MessagePart, { type: 'response_recovery' }> | undefined;
+    let continuationConfig = cfg;
+    let continuationTextBefore = 0;
 
     const consumeOutput = (chars: number) => {
       outputChars += Math.max(0, chars);
@@ -1744,7 +1750,8 @@ export async function chatRoutes(app: FastifyInstance) {
     // differently-cached answer has an explanation, and reset the idle clock
     // since the new line starts from zero.
     const onFailover = (info: ProviderFailover) => {
-      sse.send('notice', {
+      if (info.recovery) onRetry({ attempt: 1, maxAttempts: 1, delayMs: 0, recovery: 'empty', priority: info.priority });
+      else sse.send('notice', {
         message: info.priority
           ? '正在使用优先通道请求 · Priority PayGo'
           : `线路「${info.from}」暂时不可用(${info.reason}),已切换到「${info.to}」`,
@@ -1831,22 +1838,35 @@ export async function chatRoutes(app: FastifyInstance) {
           iterations++;
           const messages = [...baseHistory];
           if (parts.length) messages.push({ role: 'assistant', parts: toAdapterPartsNoImages(parts) });
+          if (continuation) messages.push({ role: 'user', parts: [{ type: 'text', text:
+            '上一条助手回复因传输中断尚未完成。请从中断位置直接续写剩余内容,不要重复已有文字,不要重新开头,不要解释中断。保留原有结构和代码块状态,不调用任何工具。',
+          }] });
           const pendingCalls: { id: string; name: string; args: string }[] = [];
           const textBeforeRound = parts.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 0), 0);
-          let stopReason = 'stop';
+          let stopReason = 'other';
+          let roundError: unknown;
           const textRedactor = new StreamingSecretRedactor(secretValues);
           const reasoningRedactor = new StreamingSecretRedactor(secretValues);
+          const continuationText = continuation ? new ContinuationText(parts.filter((p) => p.type === 'text').map((p) => p.text).join('')) : null;
+          const emitText = (text: string) => {
+            if (!text) return;
+            const previous = continuation ? parts.filter((p) => p.type === 'text').at(-1) : undefined;
+            if (previous) previous.text += text;
+            else appendText(parts, 'text', text);
+            sse.send('delta', { text });
+          };
 
           resetProviderIdleTimer();
           try {
-            for await (const ev of adapter.streamChat({ ...cfg,
+            for await (const ev of adapter.streamChat({ ...continuationConfig,
+              recoverEmptyStreams: !continuation,
               stopOnBusy: clientFallback && !parts.some((p) => p.type !== 'service_tier'),
             }, {
               model: model.modelId,
               system: systemPrompt,
               messages,
-              tools: toolDefs,
-              webSearch: nativeSearchActive,
+              tools: continuation ? [] : toolDefs,
+              webSearch: continuation ? false : nativeSearchActive,
               temperature: chat.temperature ?? undefined,
               maxTokens: Math.min(chat.maxTokens ?? config.defaultModelOutputTokens, config.maxModelOutputTokens),
               hardMaxTokens: config.maxModelOutputTokens,
@@ -1874,13 +1894,11 @@ export async function chatRoutes(app: FastifyInstance) {
             })) {
               resetProviderIdleTimer();
               if (ev.type === 'text') {
+                if (live.retry?.recovery) onRetry(null);
                 if (ttft === null) ttft = Date.now() - t0;
                 consumeOutput(ev.text.length);
-                const safeText = textRedactor.push(ev.text);
-                if (safeText) {
-                  appendText(parts, 'text', safeText);
-                  sse.send('delta', { text: safeText });
-                }
+                const safeText = textRedactor.push(continuationText ? continuationText.push(ev.text) : ev.text);
+                emitText(safeText);
               } else if (ev.type === 'reasoning') {
                 if (ttft === null) ttft = Date.now() - t0;
                 consumeOutput(ev.text.length);
@@ -1894,6 +1912,7 @@ export async function chatRoutes(app: FastifyInstance) {
                 parts.push(ev);
                 sse.send('thought_signature', ev);
               } else if (ev.type === 'tool_call') {
+                if (continuation) throw new Error('自动补全未能完成,已有内容已保留');
                 consumeOutput(ev.id.length + ev.name.length + ev.args.length + (ev.sig?.length ?? 0));
                 const safeCall = {
                   ...ev,
@@ -1920,18 +1939,48 @@ export async function chatRoutes(app: FastifyInstance) {
                 finishReason = ev.reason;
               }
             }
+          } catch (err) {
+            roundError = err;
           } finally {
             clearProviderIdleTimer();
-            const textTail = textRedactor.flush();
-            if (textTail) {
-              appendText(parts, 'text', textTail);
-              sse.send('delta', { text: textTail });
+            const continuationTail = continuationText?.flush();
+            if (continuationTail) {
+              const text = textRedactor.push(continuationTail);
+              emitText(text);
             }
+            const textTail = textRedactor.flush();
+            emitText(textTail);
             const reasoningTail = reasoningRedactor.flush();
             if (reasoningTail) {
               appendText(parts, 'reasoning', reasoningTail);
               sse.send('reasoning', { text: reasoningTail });
             }
+          }
+
+          const canContinue = !continuation && !controller.signal.aborted
+            && parts.some((p) => p.type === 'text' && p.text.trim())
+            && !parts.some((p) => p.type === 'tool_call' || p.type === 'tool_result' || p.type === 'image')
+            && (roundError instanceof ProviderInterruptedError || isNetworkError(roundError)
+              || (!roundError && stopReason === 'other'));
+          if (canContinue) {
+            // The old output is part of the next prompt, never discarded or
+            // replayed. Prefer another configured endpoint for the continuation.
+            if (roundError instanceof ProviderInterruptedError) {
+              const candidates = [cfg, ...(cfg.fallbacks ?? [])].filter((line) => !line.servesModel || line.servesModel(model.modelId));
+              const next = candidates.find((line) => (line.endpointId ?? `${line.id}:primary`) !== roundError.endpointId);
+              if (next) continuationConfig = { ...next, fallbacks: [] };
+            }
+            continuation = { type: 'response_recovery', kind: 'continuation', state: 'running' };
+            continuationTextBefore = parts.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 0), 0);
+            parts.unshift(continuation);
+            sse.send('response_recovery', continuation);
+            onRetry({ attempt: 1, maxAttempts: 1, delayMs: 0, recovery: 'continuation' });
+            continue;
+          }
+          if (roundError) throw roundError;
+          if (continuation && stopReason === 'stop'
+            && parts.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 0), 0) <= continuationTextBefore) {
+            finishReason = 'incomplete';
           }
 
           if (stopReason === 'tool_calls' && pendingCalls.length && iterations < config.maxToolIterations) {
@@ -2091,6 +2140,7 @@ export async function chatRoutes(app: FastifyInstance) {
       } else {
         status = 'error';
         errMsg = redactSensitiveText(e instanceof Error ? e.message : String(e), secretValues);
+        if (e instanceof ProviderEmptyError) errCode = e.code;
         if (e instanceof ProviderBusyError) {
           errCode = e.code;
           req.log.warn({
@@ -2156,7 +2206,12 @@ export async function chatRoutes(app: FastifyInstance) {
     // body via their image parts.
     if (status === 'done') {
       const hasBody = finalParts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image' || p.type === 'tool_call');
-      if (!hasBody || finishReason === 'other') finishReason = 'incomplete';
+      if (finishReason !== 'length' && finishReason !== 'content_filter'
+        && (!hasBody || finishReason === 'other')) finishReason = 'incomplete';
+    }
+    if (continuation) {
+      continuation.state = status === 'done' && finishReason === 'stop' ? 'done' : 'failed';
+      sse.send('response_recovery', continuation);
     }
     const durationMs = Date.now() - t0;
     if (fallbackMeta && status === 'done' && finishReason === 'stop'
