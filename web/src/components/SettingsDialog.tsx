@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowUpDown, BarChart3, Check, FlaskConical, HardDrive, LayoutTemplate, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, Trash2, UserRound, X,
+  ArrowUpDown, BarChart3, Check, HardDrive, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, Trash2, UserRound, X,
 } from 'lucide-react';
 import { api, fmtBytes, fmtCost, fmtDate, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
@@ -23,11 +23,6 @@ const TABS: { id: SettingsTab; label: string; icon: typeof UserRound }[] = [
   { id: 'usage', label: '我的用量', icon: BarChart3 },
   { id: 'storage', label: '附件存储', icon: HardDrive },
 ];
-// 实验性功能 lives apart from the regular sections: pinned to the bottom of
-// the rail, dashed, with a Beta tag — it should read as a side door, not as
-// one more preference page.
-const LABS_TAB = { id: 'labs' as SettingsTab, label: '实验性功能', icon: FlaskConical };
-
 /** Section = heading + one-line description + body. Stacked sections are
     separated by a rule instead of nested cards, so the dialog stays flat. */
 function Section({ title, desc, actions, children }: {
@@ -706,78 +701,6 @@ function StorageSection() {
   );
 }
 
-// ---------- 实验性功能 ----------
-function LabsSection() {
-  const user = useAuth((s) => s.user);
-  const [canvas, setCanvas] = useState(!!user?.settings.canvasAnswers);
-
-  async function saveThoughtSignatures(v: boolean) {
-    try {
-      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { showThoughtSignatures: v } });
-      useAuth.setState({ user: r.user });
-      toast(v ? '加密块显示已开启' : '加密块显示已关闭', 'ok');
-    } catch (err) {
-      toast(err instanceof Error ? err.message : '保存失败', 'err');
-    }
-  }
-
-  async function saveCanvas(v: boolean) {
-    setCanvas(v);
-    try {
-      const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { canvasAnswers: v } });
-      useAuth.setState({ user: r.user });
-      toast(v ? '互动画布已开启:输入框里多了「画布」按钮' : '互动画布已关闭', 'ok');
-    } catch (err) {
-      setCanvas(!v);
-      toast(err instanceof Error ? err.message : '保存失败', 'err');
-    }
-  }
-
-  return (
-    <>
-      <div className="mb-5 flex items-start gap-3 rounded-lg border border-dashed border-acc/40 bg-acc/5 px-4 py-3">
-        <FlaskConical size={16} className="mt-0.5 shrink-0 text-acc" />
-        <p className="text-xs leading-relaxed text-tx2">
-          这里是还在打磨中的玩法:可能不稳定、可能改动、也可能消失。全部默认关闭,只对你自己生效,随时可以关掉,不影响已有对话。
-        </p>
-      </div>
-      <Section title="思维签名 · 加密块" desc="查看 Gemini 聊天接口实际返回的 thoughtSignature 原始字符串。">
-        <ToggleRow label="显示加密块" checked={user?.settings.showThoughtSignatures === true}
-          desc="在助手回复下方显示可展开、可复制的加密块；仅影响显示，默认关闭。"
-          onChange={(v) => void saveThoughtSignatures(v)} />
-        <p className="mt-3 text-xs leading-relaxed text-tx3">
-          这是不透明的加密数据，无法在这里解密为思维链。模型或中转服务不一定返回；旧消息只能显示已保存的签名。目前支持 Gemini 原生聊天接口。
-        </p>
-      </Section>
-      <Section
-        title="互动画布"
-        desc="让模型在文字回答之外,按需附上一个可交互的小组件(HTML / Canvas / JavaScript),直接在对话里渲染。"
-      >
-        <ToggleRow
-          label="启用互动画布"
-          desc="模型仍然照常用文字回答;只在流程、结构、数据、可调参数这类「看比读更清楚」的内容上,才在文字下方附一个互动组件"
-          checked={canvas}
-          onChange={(v) => void saveCanvas(v)}
-        />
-        <ul className="mt-4 space-y-2 text-xs leading-relaxed text-tx3">
-          <li className="flex gap-2">
-            <LayoutTemplate size={13} className="mt-0.5 shrink-0 text-tx3" />
-            <span>开启后输入框会多出「画布」按钮:点亮它,这一条回答就一定带组件;不点则由模型自行判断。</span>
-          </li>
-          <li className="flex gap-2">
-            <span aria-hidden className="mt-[0.6em] h-1 w-1 shrink-0 rounded-full bg-tx3" />
-            <span>组件跟随深浅色主题,可切换查看源码、重新加载,或在右侧面板打开;组件里的按钮可以把一个追问放进输入框,由你决定是否发送。</span>
-          </li>
-          <li className="flex gap-2">
-            <span aria-hidden className="mt-[0.6em] h-1 w-1 shrink-0 rounded-full bg-tx3" />
-            <span>带组件的回答会多用一些输出 tokens、多等几十秒;复杂组件偶尔会有 bug,请以文字为准。</span>
-          </li>
-        </ul>
-      </Section>
-    </>
-  );
-}
-
 // ---------- dialog ----------
 export function SettingsDialog() {
   const open = useUi((s) => s.settingsOpen);
@@ -794,7 +717,7 @@ export function SettingsDialog() {
   }, [open, close]);
 
   if (!open || !user) return null;
-  const active = [...TABS, LABS_TAB].find((t) => t.id === tab) ?? TABS[0];
+  const active = TABS.find((t) => t.id === tab) ?? TABS[0];
   const initial = (user.displayName || user.username).slice(0, 1).toUpperCase();
 
   return createPortal(
@@ -831,21 +754,6 @@ export function SettingsDialog() {
                 </button>
               );
             })}
-            {/* 实验性功能: bottom-left, past a rule, dashed — deliberately apart. */}
-            <div className="shrink-0 sm:mt-auto sm:border-t sm:border-line sm:pt-3">
-              <button
-                type="button" aria-current={active.id === LABS_TAB.id ? 'page' : undefined}
-                onClick={() => setTab(LABS_TAB.id)}
-                className={`flex w-full shrink-0 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-[13px] transition-colors ${
-                  active.id === LABS_TAB.id
-                    ? 'border-acc/60 bg-acc/10 font-medium text-tx'
-                    : 'border-dashed border-line2 text-tx2 hover:border-acc/50 hover:bg-acc/5 hover:text-tx'}`}
-              >
-                <FlaskConical size={14} className="text-acc" />
-                {LABS_TAB.label}
-                <span className="ml-auto rounded-sm bg-acc/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-acc">Beta</span>
-              </button>
-            </div>
           </nav>
         </aside>
 
@@ -864,7 +772,6 @@ export function SettingsDialog() {
               {active.id === 'devices' && <DevicesSection />}
               {active.id === 'usage' && <UsageSection />}
               {active.id === 'storage' && <StorageSection />}
-              {active.id === 'labs' && <LabsSection />}
             </div>
           </div>
         </div>

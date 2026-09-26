@@ -24,7 +24,8 @@
     "test:chat-fallback": "npm run build -w server && node scripts/chat-fallback-regression.mjs",
     "test:response-integrity": "npm run build -w server && node scripts/response-integrity-regression.mjs",
     "start": "npm run start -w server",
-    "test:provider-failover": "npm run build -w server && node scripts/provider-failover-regression.mjs"
+    "test:provider-failover": "npm run build -w server && node scripts/provider-failover-regression.mjs",
+    "test:data-comparison": "npm run build -w server && node --import tsx scripts/data-comparison-regression.mjs"
   },
   "devDependencies": {
     "pm2": "^7.0.3"

@@ -80,7 +80,7 @@ export default function AgentSettingsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-base font-semibold tracking-tight text-tx">Agent 能力</h1>
-          <p className="mt-0.5 text-xs text-tx3">工作区、图片生成、技能、子代理的总开关与访问范围。沙盒(命令执行)的开关、限额与运行库在<Link to="/admin/sandbox" className="mx-0.5 text-acc hover:underline">沙盒</Link>页;技能内容在<Link to="/admin/skills" className="mx-0.5 text-acc hover:underline">技能</Link>页。</p>
+          <p className="mt-0.5 text-xs text-tx3">工作区、图表对比、图片生成、技能、子代理的总开关与访问范围。沙盒(命令执行)的开关、限额与运行库在<Link to="/admin/sandbox" className="mx-0.5 text-acc hover:underline">沙盒</Link>页;技能内容在<Link to="/admin/skills" className="mx-0.5 text-acc hover:underline">技能</Link>页。</p>
         </div>
         <Button variant="primary" size="sm" disabled={!dirty || saving} onClick={save}>{saving && <Spinner className="h-3.5 w-3.5" />}保存更改</Button>
       </div>
@@ -88,6 +88,11 @@ export default function AgentSettingsPage() {
       <Card title="工作区" desc="每个对话一个私有文件目录,模型通过 workspace_* 工具读写;关闭后输入栏不再出现「工作区」按钮,已有文件保留但模型不可用。沙盒、子代理都建立在工作区之上。">
         <AccessEditor value={s.workspace} onChange={(v) => setS({ ...s, workspace: v })} users={users} disabled={saving}
           enabledLabel="允许使用工作区" enabledDesc={`每对话上限 ${fmtMb(data.limits.workspaceBytes)} / ${data.limits.workspaceFiles} 个文件,单文件 ${fmtMb(data.limits.workspaceFileBytes)}(环境变量 MAX_WORKSPACE_*)`} />
+      </Card>
+
+      <Card title="图表对比" desc="比较同一指标、同一单位的数值,支持柱状图和多曲线折线图,可切换为数据表。数据来源和数值始终可见。">
+        <AccessEditor value={s.dataComparison} onChange={(v) => setS({ ...s, dataComparison: v })} users={users} disabled={saving}
+          enabledLabel="允许使用图表对比" enabledDesc="默认开启,受个人智能工具开关控制。仅用于有明确数值的数据分析和比较;每轮最多一次,柱状图 2–12 项;折线图最多 6 条曲线、每条 120 点、合计 600 点,无需生成 HTML 或额外调用绘图模型。" />
       </Card>
 
       <Card title="图片生成" desc="普通聊天模型可按需要调用 generate_image,用下面选定的图片模型生成图片并直接展示在对话中。工具授权独立于模型可见权限:用户即使看不到这些模型、没有绘图工坊或直接使用图像模型的权限,也可通过此工具出图。">

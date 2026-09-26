@@ -1,4 +1,4 @@
-// Agent 能力 master switches: 工作区, 图片生成, 技能, 子代理. (沙盒 keeps its own richer
+// Agent 能力 master switches: 工作区, 图表对比, 图片生成, 技能, 子代理. (沙盒 keeps its own richer
 // settings in sandbox/settings.ts.) One JSON blob in app_settings so the admin
 // page saves it atomically; every chat turn reads it fresh.
 import { getSetting, setSetting } from './db/index.js';
@@ -13,6 +13,7 @@ export interface AccessPolicy {
 }
 
 export interface AgentSettings {
+  dataComparison: AccessPolicy;
   workspace: AccessPolicy;
   skills: AccessPolicy;
   imageGeneration: AccessPolicy & {
@@ -38,6 +39,7 @@ export interface AgentSettings {
 }
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
+  dataComparison: { enabled: true, accessMode: 'shared', allowedUserIds: [] },
   workspace: { enabled: true, accessMode: 'shared', allowedUserIds: [] },
   skills: { enabled: true, accessMode: 'shared', allowedUserIds: [] },
   imageGeneration: { enabled: false, accessMode: 'shared', allowedUserIds: [], modelIds: [], maxPerTurn: 2, dailyLimit: 20 },
@@ -70,6 +72,7 @@ export function normalizeAgentSettings(raw: DeepPartial<AgentSettings> | null | 
   const sub = raw?.subagent ?? {};
   const images = raw?.imageGeneration ?? {};
   return {
+    dataComparison: policy(raw?.dataComparison as Partial<AccessPolicy>, d.dataComparison),
     workspace: policy(raw?.workspace as Partial<AccessPolicy>, d.workspace),
     skills: policy(raw?.skills as Partial<AccessPolicy>, d.skills),
     imageGeneration: {
@@ -99,6 +102,7 @@ export function getAgentSettings(): AgentSettings {
 export function saveAgentSettings(patch: DeepPartial<AgentSettings>): AgentSettings {
   const cur = getAgentSettings();
   const next = normalizeAgentSettings({
+    dataComparison: { ...cur.dataComparison, ...(patch.dataComparison ?? {}) },
     workspace: { ...cur.workspace, ...(patch.workspace ?? {}) },
     skills: { ...cur.skills, ...(patch.skills ?? {}) },
     imageGeneration: { ...cur.imageGeneration, ...(patch.imageGeneration ?? {}) },

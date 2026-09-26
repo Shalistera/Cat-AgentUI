@@ -30,6 +30,7 @@ import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPro
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { GENERATE_IMAGE_TOOL, buildImageToolPrompt, callImageTool, imageToolDefinition, imageToolModelsFor } from '../image-tool.js';
+import { COMPARE_DATA_TOOL, COMPARE_DATA_DEF, callCompareData } from '../data-comparison.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry,
@@ -697,23 +698,6 @@ function wantsToolConfirm(settingsJson: string): boolean {
   catch { return false; }
 }
 
-/** 互动画布 (settings.canvasAnswers, experimental): answer as a live HTML page. */
-function wantsCanvasAnswers(settingsJson: string): boolean {
-  try { return !!(JSON.parse(settingsJson) as { canvasAnswers?: unknown }).canvasAnswers; }
-  catch { return false; }
-}
-
-// Modelled on how claude.ai's custom visuals and ChatGPT's visualizations
-// work: the text is the answer, the model adds ONE interactive component only
-// when seeing beats reading, and the person can demand one for a single turn.
-// The client (web CanvasAnswer.tsx) renders every ```html fence of the reply
-// in a sandboxed iframe sized to its content, and injects exactly the CSS
-// variables and the sendPrompt() bridge promised below — keep the two in step.
-const CANVAS_PROMPT = [
-  '【互动画布】用户开启了实验性的「互动画布」:你仍然照常用 Markdown 作答,文字本身必须是完整的回答。只有当内容「看比读更清楚」——流程、结构、空间关系、数据规律、可调参数的演示——才在文字之后追加一个(最多一个)```html 代码块,界面会把它渲染成文字下方的可交互组件。闲聊、定义、事实列表、纯说理、写代码、改文案一律不加;不要为了加而加,组件不能只是重复文字。',
-  '组件写法:只写 HTML 片段(不要 <!DOCTYPE>、<html>、<head>、<body>),内联 CSS 与原生 JavaScript,不加载任何外部资源,不写代码注释;宽度随容器自适应、高度由内容决定,不要 100vh 和内部滚动;<canvas> 随容器宽度重绘并处理 devicePixelRatio;取色只用界面提供的 CSS 变量 --bg、--bg2、--fg、--muted、--line、--accent、--ok、--warn、--err,字体用 --font,浅色与深色下都要清晰;无语法错误、无未捕获异常,不要 alert/confirm/prompt。组件里可以调用 sendPrompt("追问文本") 把一个追问放进用户的输入框,适合做「点击了解更多」这类按钮。',
-].join('\n');
-
 const TOOL_DENIED_RESULT = '(用户拒绝执行此工具调用。不要重试同一调用;如无法继续,请直接告诉用户你需要这个工具做什么。)';
 
 // Anchored to the QUESTION, not the answer: for tasks like translation the
@@ -954,6 +938,20 @@ export async function chatRoutes(app: FastifyInstance) {
               lines.push('<details><summary>思考过程</summary>', '', p.text.trim(), '', '</details>', '');
             }
             break;
+          case 'data_comparison': {
+            const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+            if (p.chart === 'line') {
+              lines.push(`### ${cell(p.title)}`, '',
+                `| ${cell(p.xLabel)} | ${p.series.map((s) => `${cell(s.label)} (${cell(p.unit)})`).join(' | ')} |`,
+                `| --- | ${p.series.map(() => '---:').join(' | ')} |`,
+                ...p.x.map((x, i) => `| ${cell(p.xLabels?.[i] ?? String(x))} | ${p.series.map((s) => s.values[i] ?? '—').join(' | ')} |`),
+                '', `数据来源: ${cell(p.source)}`, '');
+            } else {
+              lines.push(`### ${cell(p.title)}`, '', `| 类别 | 数值 (${cell(p.unit)}) |`, '| --- | ---: |',
+                ...p.items.map((i) => `| ${cell(i.label)} | ${i.value} |`), '', `数据来源: ${cell(p.source)}`, '');
+            }
+            break;
+          }
           case 'image':
             lines.push(`*[图片${p.imageId ? '(模型生成)' : '(附件)'}]*`, '');
             break;
@@ -1596,6 +1594,9 @@ export async function chatRoutes(app: FastifyInstance) {
     if (imageToolActive) toolDefs = [...(toolDefs ?? []), imageToolDefinition(imageToolModels)];
     const imageToolBlock = imageToolActive ? buildImageToolPrompt(imageToolModels) : null;
     let imageToolAttempts = 0;
+    const comparisonActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.dataComparison, user);
+    if (comparisonActive) toolDefs = [...(toolDefs ?? []), COMPARE_DATA_DEF];
+    let comparisonAttempts = 0;
     // Native search rides on the main request whenever Vertex lets it: the
     // model searches inside its own turn (fast, sentence-level citations).
     // Gemini 3.x accepts googleSearch next to functionDeclarations; 2.5 does
@@ -1632,9 +1633,6 @@ export async function chatRoutes(app: FastifyInstance) {
     // chat's own prompt: stable across chats (cache-friendly), but the chat's
     // prompt comes later and therefore wins on conflict.
     const userInstructions = customInstructionsOf(user.settings);
-    // 互动画布 is a format instruction, so it comes last and wins over the
-    // chat's own prompt; image turns have no text answer to shape.
-    const canvasAnswers = !model.imageGen && wantsCanvasAnswers(user.settings);
     const systemPrompt = [
       project.block,
       userInstructions ? `用户的全局偏好设置(适用于所有对话):\n${userInstructions}` : null,
@@ -1644,7 +1642,6 @@ export async function chatRoutes(app: FastifyInstance) {
       subagentBlock,
       imageToolBlock,
       nativeSearchActive ? SEARCH_HINT_NATIVE : (mcpSearchActive || bridgedSearchActive) ? SEARCH_HINT_MCP : null,
-      canvasAnswers ? CANVAS_PROMPT : null,
     ].filter(Boolean).join('\n\n') || undefined;
     // Take one snapshot for the whole turn. It covers Provider credentials,
     // custom headers, MCP env/headers, and SECRET_KEY without querying per token.
@@ -1907,10 +1904,6 @@ export async function chatRoutes(app: FastifyInstance) {
                   appendText(parts, 'reasoning', safeText);
                   sse.send('reasoning', { text: safeText });
                 }
-              } else if (ev.type === 'thought_signature') {
-                consumeOutput(ev.signature.length);
-                parts.push(ev);
-                sse.send('thought_signature', ev);
               } else if (ev.type === 'tool_call') {
                 if (continuation) throw new Error('自动补全未能完成,已有内容已保留');
                 consumeOutput(ev.id.length + ev.name.length + ev.args.length + (ev.sig?.length ?? 0));
@@ -1991,7 +1984,7 @@ export async function chatRoutes(app: FastifyInstance) {
             // this chat; trusted commands (convert_file, plain skill-script
             // invocations) never ask.
             const chatAutoAllow = isAutoAllowed(chatId, user.id);
-            const askFor = chatAutoAllow ? [] : pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name) && !isSubagentTool(call.name) && call.name !== GOOGLE_SEARCH_TOOL
+            const askFor = chatAutoAllow ? [] : pendingCalls.filter((call) => !isProjectTool(call.name) && !isWorkspaceTool(call.name) && !isSkillTool(call.name) && !isSubagentTool(call.name) && call.name !== GOOGLE_SEARCH_TOOL && call.name !== COMPARE_DATA_TOOL
               && !isTrustedCommand(call.name, call.args)
               && (confirmAllTools || toolNeedsConfirm(call.name, toolCapabilities)
                 || (isSandboxTool(call.name) && sandboxConfirm)));
@@ -2020,6 +2013,7 @@ export async function chatRoutes(app: FastifyInstance) {
               // Project knowledge tools are served in-process; everything else
               // goes out to its MCP server.
               const toolImages: MessagePart[] = [];
+              let toolComparison: Extract<MessagePart, { type: 'data_comparison' }> | undefined;
               const { result, isError } = isProjectTool(call.name) && chat.projectId
                 ? callProjectTool(chat.projectId, call.name, call.args)
                 : call.name === GENERATE_IMAGE_TOOL && imageToolActive
@@ -2037,6 +2031,12 @@ export async function chatRoutes(app: FastifyInstance) {
                     sse.send('retry', null);
                     if (!controller.signal.aborted) resetProviderIdleTimer();
                   }
+                })()
+                : call.name === COMPARE_DATA_TOOL && comparisonActive
+                ? (() => {
+                  const outcome = callCompareData({ userId: user.id, chatId, attempt: ++comparisonAttempts }, call.args);
+                  toolComparison = outcome.comparison;
+                  return outcome;
                 })()
                 : isWorkspaceTool(call.name) && workspaceActive
                 ? await callWorkspaceTool(chatId, call.name, call.args)
@@ -2103,6 +2103,8 @@ export async function chatRoutes(app: FastifyInstance) {
                 // A built-in tool name the model remembers from earlier turns
                 // but that is switched off now (person's 智能工具 setting, or
                 // admin policy): say so plainly instead of the MCP "not found".
+                : call.name === COMPARE_DATA_TOOL
+                ? { result: '图表对比当前不可用:请检查智能工具开关和管理员配置的图表对比访问范围。', isError: true }
                 : call.name === GENERATE_IMAGE_TOOL
                 ? { result: '图片生成工具当前不可用:请检查智能工具开关,以及管理员配置的图片生成访问范围和模型列表', isError: true }
                 : isWorkspaceTool(call.name) || isSandboxTool(call.name) || isSkillTool(call.name) || isSubagentTool(call.name)
@@ -2120,6 +2122,11 @@ export async function chatRoutes(app: FastifyInstance) {
               const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: trimmed, isError };
               parts.push(part);
               sse.send('tool_result', part);
+              if (toolComparison) {
+                consumeOutput(JSON.stringify(toolComparison).length);
+                parts.push(toolComparison);
+                sse.send('data_comparison', toolComparison);
+              }
               for (const image of toolImages) {
                 parts.push(image);
                 sse.send('image', image);

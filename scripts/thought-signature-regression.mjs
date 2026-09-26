@@ -20,12 +20,11 @@ async function collect(req = request) {
 try {
   responseParts = [[{ text: 'hello', thoughtSignature: longSignature }], [{ text: '', thoughtSignature: 'trailing==' }], [{ thought: true, text: 'summary', thoughtSignature: 'thought==' }]];
   const events = await collect();
-  assert.deepEqual(events.filter((e) => e.type === 'thought_signature'), [
-    { type: 'thought_signature', signature: longSignature, source: 'text' },
-    { type: 'thought_signature', signature: 'trailing==', source: 'standalone' },
-    { type: 'thought_signature', signature: 'thought==', source: 'thought' },
+  assert.deepEqual(events, [
+    { type: 'text', text: 'hello' },
+    { type: 'reasoning', text: 'summary' },
+    { type: 'stop', reason: 'stop' },
   ]);
-  assert.equal(events.find((e) => e.type === 'text').text, 'hello');
   responseParts = [[{ functionCall: { name: 'lookup', args: { id: 1 } }, thoughtSignature: longSignature }, { functionCall: { name: 'other', args: {} } }]];
   const calls = (await collect()).filter((e) => e.type === 'tool_call');
   assert.equal(calls[0].sig, longSignature);
@@ -35,7 +34,7 @@ try {
   assert.equal(sent.contents[1].parts[1].thoughtSignature, undefined);
   responseParts = [[{ text: 'plain response' }, { thoughtSignature: null }, { thoughtSignature: 123 }, { thoughtSignature: '' }]];
   assert.equal((await collect()).filter((e) => e.type === 'thought_signature').length, 0);
-  console.log('PASS: text / standalone / thought signatures, long values, tool replay, absent and invalid signatures');
+  console.log('PASS: display-only signatures ignored; tool signatures preserved and replayed verbatim');
 } finally {
   globalThis.fetch = originalFetch;
 }

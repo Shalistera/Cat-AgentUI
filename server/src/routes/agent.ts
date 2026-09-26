@@ -28,6 +28,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const workspace = on && policyAllows(a.workspace, user);
     return {
       agentTools: on,
+      dataComparison: on && policyAllows(a.dataComparison, user),
       workspace,
       sandbox: workspace && sandboxAvailableFor(user),
       convert: workspace && convertAvailableFor(user),
@@ -52,6 +53,7 @@ export async function agentRoutes(app: FastifyInstance) {
   app.put('/api/admin/agent', async (req, reply) => {
     requireAdmin(req, reply);
     const body = z.object({
+      dataComparison: policySchema.optional(),
       workspace: policySchema.optional(),
       skills: policySchema.optional(),
       imageGeneration: policySchema.extend({

@@ -17,14 +17,33 @@ export type StopReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | '
     'length': flag the reply and offer 重新生成. */
 export type FinishReason = StopReason | 'incomplete';
 
+interface ComparisonBase {
+  title: string;
+  unit: string;
+  source: string;
+}
+export interface BarComparison extends ComparisonBase {
+  /** Absent on older saved charts. */
+  chart?: 'bar';
+  items: { label: string; value: number }[];
+}
+export interface LineComparison extends ComparisonBase {
+  chart: 'line';
+  xLabel: string;
+  /** Strictly increasing numeric coordinates; labels only affect display. */
+  x: number[];
+  xLabels?: string[];
+  series: { label: string; values: (number | null)[] }[];
+}
+export type DataComparison = BarComparison | LineComparison;
+
 export type MessagePart =
+  | ({ type: 'data_comparison' } & DataComparison)
   | { type: 'response_recovery'; kind: 'continuation'; state: 'running' | 'done' | 'failed' }
   | { type: 'model_fallback'; sourceMessageId: string; fromModelId: string; fromName: string; toModelId: string; toName: string; adopted: boolean; reason?: 'busy' | 'empty' }
   | { type: 'service_tier'; tier: 'priority' }
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  // Display-only opaque metadata; never inserted into the text prompt.
-  | { type: 'thought_signature'; signature: string; source: 'text' | 'thought' | 'standalone' }
   // user attachment (uploadId) or model-generated image (imageId → images table)
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   // non-image attachment. name/mime are denormalized from the uploads row at
@@ -224,8 +243,6 @@ export interface ProviderStreamEnd {
 export type AdapterEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  // Display-only opaque metadata; never inserted into the text prompt.
-  | { type: 'thought_signature'; signature: string; source: 'text' | 'thought' | 'standalone' }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'grounding'; grounding: GroundingInfo }
   | { type: 'usage'; usage: UsageInfo }

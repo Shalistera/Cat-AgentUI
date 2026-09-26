@@ -800,7 +800,6 @@ export default function Chat() {
       },
       onDelta(t) { if (t) produced = true; buf.text += t; },
       onReasoning(t) { if (t) produced = true; buf.reasoning += t; },
-      onThoughtSignature(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
       onToolCall(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'tool_call', ...d }] })); },
       onSubagentProgress(d) { useSubagentProgress.getState().push(d.toolCallId, d.text); },
       onToolResult(d) {
@@ -830,6 +829,7 @@ export default function Chat() {
         notifyDone('需要你确认工具调用', `${d.calls.map((c) => c.name.split('__').pop()).join('、')}`, `/chat/${chatId}`);
       },
       onGrounding(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
+      onDataComparison(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
       onImage(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'image', imageId: d.imageId, mime: d.mime }] })); },
       onUsage(d) {
         applyToAssistant((m) => ({

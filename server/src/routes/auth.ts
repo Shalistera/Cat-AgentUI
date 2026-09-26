@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { maxAttachmentsPerMessage } from '../attachment-settings.js';
+import { cleanUserSettings } from '../user-settings.js';
 
 class RegistrationBlocked extends Error { constructor(message: string, readonly code: number) { super(message); } }
 import { z } from 'zod';
@@ -27,7 +28,7 @@ function publicUser(u: {
     // Resolved for the UI: admins always pass both gates.
     allowImages: u.role === 'admin' || !!u.allowImages,
     allowImageModels: u.role === 'admin' || !!u.allowImageModels,
-    settings,
+    settings: cleanUserSettings(settings),
   };
 }
 
@@ -218,10 +219,6 @@ export async function authRoutes(app: FastifyInstance) {
       settings: z.record(z.string(), z.unknown()).optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
-    if (body.data.settings?.showThoughtSignatures !== undefined
-      && typeof body.data.settings.showThoughtSignatures !== 'boolean') {
-      return reply.code(400).send({ error: '参数错误' });
-    }
     // settings is a free-form merge, but modelOrder / favoriteModels feed a
     // sort on every /api/models call — keep them bounded string lists (or
     // null to reset).
@@ -275,7 +272,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (body.data.settings !== undefined) {
       let cur: Record<string, unknown> = {};
       try { cur = JSON.parse(req.user!.settings); } catch { /* ignore */ }
-      patch.settings = JSON.stringify({ ...cur, ...body.data.settings });
+      patch.settings = JSON.stringify(cleanUserSettings({ ...cur, ...body.data.settings }));
     }
     if (Object.keys(patch).length) {
       db.update(schema.users).set(patch).where(eq(schema.users.id, req.user!.id)).run();

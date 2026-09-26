@@ -1,5 +1,5 @@
 // A Content-Security-Policy for model-generated HTML rendered in sandboxed
-// iframes (互动画布, HTML 预览, 工作区 file preview). The iframe already lacks
+// iframes (HTML 预览, 工作区 file preview). The iframe already lacks
 // allow-same-origin, so scripts can't reach our cookies; this additionally
 // stops the page from phoning home with whatever it can see. Inline script
 // and style stay allowed (the point of the feature); images/media allow data:

@@ -422,3 +422,15 @@ html.dark .hljs-title, html.dark .hljs-function .hljs-title, html.dark .hljs-tit
 html.dark .hljs-attr, html.dark .hljs-attribute, html.dark .hljs-variable, html.dark .hljs-name, html.dark .hljs-selector-attr, html.dark .hljs-selector-class, html.dark .hljs-selector-id { color: #e3b567; }
 html.dark .hljs-built_in, html.dark .hljs-class .hljs-title, html.dark .hljs-title.class_ { color: #79c8dd; }
 html.dark .hljs-meta, html.dark .hljs-link { color: #7fc4f0; }
+
+/* Fixed chart palette; shared by paths, legends and numeric readouts. */
+.comparison-line {
+  --comparison-1: #2563eb; --comparison-2: #ea580c;
+  --comparison-3: #059669; --comparison-4: #ca8a04;
+  --comparison-5: #db2777; --comparison-6: #7c3aed;
+}
+.dark .comparison-line {
+  --comparison-1: #60a5fa; --comparison-2: #fb923c;
+  --comparison-3: #34d399; --comparison-4: #facc15;
+  --comparison-5: #f472b6; --comparison-6: #a78bfa;
+}

@@ -147,6 +147,12 @@ function cleanSchema(schema: any): any {
       out[k] = schema[k];
     }
   }
+  // Our common JSON Schema uses nullable type unions. Gemini's parameters
+  // schema represents the same contract as one type plus nullable: true.
+  if (Array.isArray(out.type) && out.type.includes('null')) {
+    const concrete = out.type.filter((type: unknown) => type !== 'null');
+    if (concrete.length === 1) { out.type = concrete[0]; out.nullable = true; }
+  }
   return out;
 }
 
@@ -287,11 +293,6 @@ export const geminiAdapter: ChatAdapter = {
         if (typeof cand.finishReason === 'string' && cand.finishReason) finishReason = cand.finishReason.slice(0, 80);
         grounding = groundingOf(cand.groundingMetadata) ?? grounding;
         for (const part of cand.content?.parts ?? []) {
-          // Signatures may arrive on text or on a final, empty streaming part.
-          if (!part.functionCall && typeof part.thoughtSignature === 'string' && part.thoughtSignature) {
-            yield { type: 'thought_signature', signature: part.thoughtSignature,
-              source: part.thought === true ? 'thought' : typeof part.text === 'string' && part.text ? 'text' : 'standalone' };
-          }
           if (part.thought === true && part.text) {
             yield { type: 'reasoning', text: part.text };
           } else if (typeof part.text === 'string' && part.text) {

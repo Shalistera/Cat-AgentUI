@@ -1,13 +1,14 @@
 import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
+  BarChart3, Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
   Info, ImagePlus, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo, ProviderRetry, ToolConfirmRequest } from '../types';
 import { useLightbox } from './Lightbox';
 import { fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
-import { useAuth, useModels, useSubagentProgress } from '../store';
+import { useModels, useSubagentProgress } from '../store';
+import { ComparisonChart } from './ComparisonChart';
 import { Markdown } from './Markdown';
 import { WorkspaceFileLink } from './WorkspaceFileLink';
 import { normalizeWorkspacePath } from '../workspaceLinks';
@@ -320,6 +321,7 @@ function isWorkspaceTool(name: string): boolean {
 // in the expanded row — for once the "how" is exactly what the person wants.
 const RUN_COMMAND = 'run_command';
 const GENERATE_IMAGE = 'generate_image';
+const COMPARE_DATA = 'compare_data';
 const SPAWN_SUBAGENT = 'spawn_subagent';
 function subagentTitle(call: ToolCallPart): string {
   try {
@@ -415,7 +417,11 @@ function ToolRun({ calls, results, organizing, chatId }: {
 
   let label: ReactNode;
   const lastPending = pending[pending.length - 1];
-  if (workspaceOnly && active && lastPending.name === GENERATE_IMAGE) {
+  if (active && lastPending.name === COMPARE_DATA) {
+    label = '正在对比数据…';
+  } else if (calls.every((c) => c.name === COMPARE_DATA)) {
+    label = failed.length ? '数据对比未完成' : organizing ? '数据对比完成,正在整理结论…' : '数据对比完成';
+  } else if (workspaceOnly && active && lastPending.name === GENERATE_IMAGE) {
     label = '正在生成图片…';
   } else if (hasImageGeneration && !active && !organizing) {
     label = failed.length ? '图片生成结束,部分调用未成功' : '图片生成完成';
@@ -462,7 +468,7 @@ function ToolRun({ calls, results, organizing, chatId }: {
     label = calls.length === 1 ? `${noun}完成` : `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次`;
   }
 
-  const Icon = searching ? Globe : hasImageGeneration ? ImagePlus : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
+  const Icon = calls.every((c) => c.name === COMPARE_DATA) ? BarChart3 : searching ? Globe : hasImageGeneration ? ImagePlus : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
 
   return (
     <Disclosure
@@ -489,7 +495,7 @@ function ToolRun({ calls, results, organizing, chatId }: {
                 {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
                   : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
                   : <Check size={13} className="shrink-0 text-ok" />}
-                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === GENERATE_IMAGE ? '生成图片' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
+                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === COMPARE_DATA ? '数据对比' : c.name === GENERATE_IMAGE ? '生成图片' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
                 {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">「{subagentTitle(c)}」</span>}
                 {q && <span className="truncate text-tx3">「{q}」</span>}
                 {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">{workspaceFileName(c, chatId, r)}</span>}
@@ -590,28 +596,6 @@ function Timestamp({ ts }: { ts: number }) {
   );
 }
 
-function ThoughtSignatures({ parts, streaming }: { parts: MessagePart[]; streaming: boolean }) {
-  const blocks = parts.flatMap((p) => p.type === 'thought_signature'
-    ? [{ value: p.signature, source: p.source }]
-    : p.type === 'tool_call' && p.sig ? [{ value: p.sig, source: `functionCall · ${p.name}` }] : []);
-  return (
-    <details className="my-3 min-w-0 rounded-lg border border-dashed border-line2 bg-bg1 px-3 py-2 text-xs text-tx2">
-      <summary className="cursor-pointer">实验性功能 · 加密块{blocks.length ? ` (${blocks.length})` : ''}</summary>
-      <p className="my-2 text-tx3">Gemini thoughtSignature 原始加密数据，无法解密为思维链。</p>
-      {!blocks.length && <p className="py-1 text-tx3">{streaming ? '尚未收到加密块。' : '此回复没有已保存的加密块；模型或中转服务可能未返回，旧消息也可能未记录。'}</p>}
-      {blocks.map((block, i) => (
-        <div key={i} className="mt-3 min-w-0">
-          <div className="mb-1 flex items-center gap-2">
-            <span className="min-w-0 flex-1 break-all">{block.source} · {block.value.length.toLocaleString()} 字符</span>
-            <CopyBtn text={block.value} />
-          </div>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-line bg-bg2 p-2 font-mono text-[11px]" dir="ltr">{block.value}</pre>
-        </div>
-      ))}
-    </details>
-  );
-}
-
 function partsToPlainText(parts: MessagePart[]): string {
   return parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 }
@@ -694,9 +678,6 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
   const retriedLong = useElapsed(isStreaming ? msg.retrySince : undefined, SWITCH_OFFER_AFTER_MS);
-  // 互动画布 (experimental): ```html fences in replies render as live pages.
-  const showThoughtSignatures = useAuth((s) => s.user?.settings.showThoughtSignatures === true);
-  const canvas = useAuth((s) => !!s.user?.settings.canvasAnswers);
 
   if (msg.role === 'user') {
     const text = partsToPlainText(msg.parts);
@@ -798,7 +779,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
       const shown = streamingThis ? p.text : injectCitations(p.text, supports);
       rendered.push(
         <div key={i} data-quotable className={streamingThis ? 'blink-cursor' : ''}>
-          <Markdown text={shown} streaming={streamingThis} canvas={canvas} citations={citations} workspaceChatId={workspaceChatId} />
+          <Markdown text={shown} streaming={streamingThis} citations={citations} workspaceChatId={workspaceChatId} />
         </div>,
       );
     } else if (p.type === 'tool_call' || p.type === 'tool_result') {
@@ -822,6 +803,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             organizing={isStreaming && trailing && allDone} />,
         );
       }
+    } else if (p.type === 'data_comparison') {
+      rendered.push(<ComparisonChart key={i} data={p} />);
     } else if (p.type === 'grounding') {
       rendered.push(<GroundingBlock key={i} part={p} />);
     } else if (p.type === 'image') {
@@ -857,7 +840,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
   // A finished reply that the provider cut short (max output tokens, safety
   // filter) — and errors that interrupted a partial answer — get a banner with
   // an inline 重新生成 so the user doesn't have to hunt for the hover action.
-  const hasBody = msg.parts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image');
+  const hasBody = msg.parts.some((p) => (p.type === 'text' && p.text.trim()) || p.type === 'image' || p.type === 'data_comparison');
   const providerBusy = msg.errorCode === 'provider_busy';
   const fallback = msg.parts.find((p) => p.type === 'model_fallback');
   const recovery = msg.parts.find((p) => p.type === 'response_recovery');
@@ -937,7 +920,6 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             </div>
           </div>
         ) : rendered}
-        {showThoughtSignatures && <ThoughtSignatures parts={msg.parts} streaming={isStreaming} />}
         {isStreaming && toolConfirm && onToolDecision && (
           <ToolConfirmCard key={toolConfirm.calls.map((c) => c.id).join('|')} req={toolConfirm} onDecide={onToolDecision} />
         )}

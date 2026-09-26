@@ -32,7 +32,6 @@ import ini from 'highlight.js/lib/languages/ini';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import { useHtmlPreview } from '../store';
 import { MermaidBlock } from './Mermaid';
-import { CanvasAnswer } from './CanvasAnswer';
 import { useLightbox } from './Lightbox';
 import { WorkspaceFileLink } from './WorkspaceFileLink';
 import { resolveWorkspaceLink } from '../workspaceLinks';
@@ -97,9 +96,6 @@ function remarkBrToBreak() {
 const headBtn = 'flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] text-tx2 transition-colors hover:bg-bg3 hover:text-tx';
 
 const PREVIEWABLE_LANGS = new Set(['html', 'htm', 'svg']);
-// 互动画布 mode renders these fences live instead of as code (see CanvasAnswer).
-const CANVAS_LANGS = new Set(['html', 'htm']);
-
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -230,12 +226,12 @@ function extractText(node: ReactNode): string {
   return '';
 }
 
-const MarkdownContext = createContext({ streaming: false, canvas: false, normalized: '' });
+const MarkdownContext = createContext({ streaming: false });
 
 // Keep the renderer identity stable: an inline `pre` component remounts every
 // streamed token, losing the user's fold/preview state.
 function MarkdownPre({ children }: { children?: ReactNode }) {
-  const { streaming, canvas, normalized } = useContext(MarkdownContext);
+  const { streaming } = useContext(MarkdownContext);
   const child = Array.isArray(children) ? children[0] : children;
   let lang = '';
   let code = '';
@@ -247,10 +243,6 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
     code = extractText(children);
   }
   if (lang.toLowerCase() === 'mermaid') return <MermaidBlock code={code} streaming={streaming} />;
-  if (canvas && CANVAS_LANGS.has(lang.toLowerCase())) {
-    const open = streaming && normalized.trimEnd().endsWith(code.trimEnd());
-    return <CanvasAnswer code={code} streaming={open} />;
-  }
   return <CodeBlock lang={lang} code={code} />;
 }
 
@@ -292,10 +284,8 @@ function CiteChip({ n, citations }: { n: number; citations: Citation[] }) {
   );
 }
 
-export const Markdown = memo(function Markdown({ text, streaming = false, canvas = false, citations, workspaceChatId }: {
+export const Markdown = memo(function Markdown({ text, streaming = false, citations, workspaceChatId }: {
   text: string; streaming?: boolean;
-  /** 互动画布: render ```html fences as live pages (settings.canvasAnswers). */
-  canvas?: boolean;
   /** Google 搜索 sources, 1-based in `cite:n` links (see citations.ts). */
   citations?: Citation[];
   /** Context for legacy replies that linked directly to a relative filename. */
@@ -303,7 +293,7 @@ export const Markdown = memo(function Markdown({ text, streaming = false, canvas
 }) {
   const normalized = useMemo(() => normalizeMath(text), [text]);
   return (
-    <MarkdownContext.Provider value={{ streaming, canvas, normalized }}>
+    <MarkdownContext.Provider value={{ streaming }}>
     <div className="md">
       <ReactMarkdown
         // remark-cjk-friendly: CommonMark's flanking rule treats CJK quotes/brackets as punctuation, so

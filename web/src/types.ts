@@ -27,9 +27,6 @@ export interface User {
     agentTools?: boolean;
     /** 全局自定义指令 — prepended to every chat's system prompt (max 1500 chars). */
     customInstructions?: string | null;
-    /** 互动画布 (experimental): answers come back as one HTML page, rendered live. */
-    canvasAnswers?: boolean;
-    showThoughtSignatures?: boolean;
   };
 }
 
@@ -42,14 +39,33 @@ export interface TranslateConfig {
   maxChars: number; maxSceneChars: number;
 }
 
+interface ComparisonBase {
+  title: string;
+  unit: string;
+  source: string;
+}
+export interface BarComparison extends ComparisonBase {
+  /** Absent on older saved charts. */
+  chart?: 'bar';
+  items: { label: string; value: number }[];
+}
+export interface LineComparison extends ComparisonBase {
+  chart: 'line';
+  xLabel: string;
+  /** Strictly increasing numeric coordinates; labels only affect display. */
+  x: number[];
+  xLabels?: string[];
+  series: { label: string; values: (number | null)[] }[];
+}
+export type DataComparison = BarComparison | LineComparison;
+
 export type MessagePart =
+  | ({ type: 'data_comparison' } & DataComparison)
   | { type: 'response_recovery'; kind: 'continuation'; state: 'running' | 'done' | 'failed' }
   | { type: 'model_fallback'; sourceMessageId: string; fromModelId: string; fromName: string; toModelId: string; toName: string; adopted: boolean; reason?: 'busy' | 'empty' }
   | { type: 'service_tier'; tier: 'priority' }
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  // Display-only opaque metadata; never inserted into the text prompt.
-  | { type: 'thought_signature'; signature: string; source: 'text' | 'thought' | 'standalone' }
   | { type: 'image'; uploadId?: string; imageId?: string; mime?: string; url?: string }
   | { type: 'file'; uploadId: string; name?: string; mime?: string }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
@@ -504,13 +520,13 @@ export interface StreamHandlers {
   onModelSelected?(d: { modelId: string }): void;
   onDelta?(text: string): void;
   onReasoning?(text: string): void;
-  onThoughtSignature?(d: Extract<MessagePart, { type: 'thought_signature' }>): void;
   onToolCall?(d: { id: string; name: string; args: string; sig?: string }): void;
   onToolResult?(d: { toolCallId: string; name: string; result: string; isError?: boolean }): void;
   onToolConfirm?(d: ToolConfirmRequest): void;
   /** 子代理 live progress for the parent's spawn_subagent tool row. */
   onSubagentProgress?(d: { toolCallId: string; text: string }): void;
   onGrounding?(d: Extract<MessagePart, { type: 'grounding' }>): void;
+  onDataComparison?(d: Extract<MessagePart, { type: 'data_comparison' }>): void;
   onImage?(d: { imageId: string; mime?: string }): void;
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;
   onNotice?(message: string): void;
@@ -595,6 +611,7 @@ export interface SkillDetail { skill: SkillInfo; files: { path: string; size: nu
 // ---- Agent 能力 ----
 export interface AccessPolicy { enabled: boolean; accessMode: 'shared' | 'restricted'; allowedUserIds: string[] }
 export interface AgentSettings {
+  dataComparison: AccessPolicy;
   workspace: AccessPolicy;
   skills: AccessPolicy;
   imageGeneration: AccessPolicy & { modelIds: string[]; maxPerTurn: number; dailyLimit: number };
@@ -607,4 +624,4 @@ export interface AgentAdminData {
   limits: { workspaceBytes: number; workspaceFileBytes: number; workspaceFiles: number; toolIterations: number };
 }
 /** /api/agent/capabilities — what this person's chats may use right now. */
-export interface AgentCapabilities { agentTools: boolean; workspace: boolean; sandbox: boolean; convert: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean; imageGeneration: boolean }
+export interface AgentCapabilities { agentTools: boolean; dataComparison: boolean; workspace: boolean; sandbox: boolean; convert: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean; imageGeneration: boolean }

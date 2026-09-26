@@ -114,12 +114,12 @@ export async function streamChat(
       case 'model_selected': handlers.onModelSelected?.(data); break;
       case 'delta': handlers.onDelta?.(data.text ?? ''); break;
       case 'reasoning': handlers.onReasoning?.(data.text ?? ''); break;
-      case 'thought_signature': handlers.onThoughtSignature?.(data); break;
       case 'tool_call': handlers.onToolCall?.(data); break;
       case 'tool_result': handlers.onToolResult?.(data); break;
       case 'subagent_progress': handlers.onSubagentProgress?.(data); break;
       case 'tool_confirm': handlers.onToolConfirm?.(data); break;
       case 'grounding': handlers.onGrounding?.(data); break;
+      case 'data_comparison': handlers.onDataComparison?.(data); break;
       case 'image': handlers.onImage?.(data); break;
       case 'usage': handlers.onUsage?.(data); break;
       case 'notice': handlers.onNotice?.(data.message ?? ''); break;

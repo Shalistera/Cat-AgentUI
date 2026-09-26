@@ -32,7 +32,7 @@ function initialThemeMode(): ThemeMode {
   return 'system';
 }
 
-export type SettingsTab = 'account' | 'chat' | 'appearance' | 'devices' | 'usage' | 'storage' | 'labs';
+export type SettingsTab = 'account' | 'chat' | 'appearance' | 'devices' | 'usage' | 'storage';
 
 interface UiState {
   /** Effective theme — what is on screen right now. */
@@ -384,7 +384,7 @@ export const useAgentCaps = create<AgentCapsState>((set, get) => ({
   async load(force = false) {
     if (get().caps && !force) return;
     try { set({ caps: await api.get<AgentCapabilities>('/api/agent/capabilities') }); }
-    catch { set({ caps: { agentTools: true, workspace: false, sandbox: false, convert: false, sandboxConfirm: true, skills: 0, subagent: false, imageGeneration: false } }); }
+    catch { set({ caps: { agentTools: true, dataComparison: false, workspace: false, sandbox: false, convert: false, sandboxConfirm: true, skills: 0, subagent: false, imageGeneration: false } }); }
   },
 }));
 
