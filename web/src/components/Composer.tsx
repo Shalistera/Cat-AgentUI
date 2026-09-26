@@ -24,10 +24,8 @@ const touchKeyboard = window.matchMedia?.('(pointer: coarse)').matches ?? false;
 const toolBtnShape = 'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none';
 const toolBtn = `${toolBtnShape} border-transparent text-tx2 hover:border-line hover:bg-bg2 hover:text-tx`;
 
-// `off` is a real stop rather than an absence — Gemini needs an explicit zero
-// budget to actually stop thinking. Everything above it comes from the model's
-// ladder, where each level carries both the name the vendor receives and the
-// one worth showing a person.
+// `off` is explicit; models without a full thinking-off mode label it as
+// minimum effort below. Other levels come from the model's configured ladder.
 const OFF_LEVEL: ReasoningLevel = { value: 'off', label: '关闭' };
 type ModelPanelView = 'models' | 'settings';
 type ModelKind = 'all' | 'chat' | 'image';
@@ -531,7 +529,8 @@ export function Composer(props: ComposerProps) {
     }
   }
 
-  const efforts: ReasoningLevel[] = [OFF_LEVEL, ...(model?.reasoningLevels ?? [])];
+  const minimumThinking = model?.providerType === 'gemini' && /^gemini-3\.[78]-flash(?:-|$)/i.test(model.modelId.split('/').pop() ?? '');
+  const efforts: ReasoningLevel[] = [minimumThinking ? { ...OFF_LEVEL, label: '最低' } : OFF_LEVEL, ...(model?.reasoningLevels ?? [])];
   // A level the current model does not offer falls back to the off stop instead
   // of leaving the slider pointing at nothing.
   const effortIdx = Math.max(0, efforts.findIndex((e) => e.value === (props.settings.reasoningEffort || OFF_LEVEL.value)));
@@ -997,7 +996,7 @@ export function Composer(props: ComposerProps) {
                   index={effortIdx}
                   onChange={(i) => setReasoningEffort(efforts[i])}
                 />
-                <p className="mt-1 text-[11px] leading-4 text-tx3">{effortHint(effortIdx, efforts.length)}</p>
+                <p className="mt-1 text-[11px] leading-4 text-tx3">{minimumThinking && effortIdx === 0 ? '该模型无法完全关闭思考,使用最低强度并隐藏思考摘要' : effortHint(effortIdx, efforts.length)}</p>
               </div>
             </Popover>
           )}

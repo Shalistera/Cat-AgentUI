@@ -226,6 +226,10 @@ export interface ChatRequest {
 }
 
 export interface ProviderStreamEnd {
+  /** Actual request cap and separate Gemini usage counters for truncation diagnosis. */
+  requestedMaxOutputTokens?: number;
+  thoughtTokens?: number;
+  answerTokens?: number;
   endpointId: string;
   location: string | null;
   priority: boolean;

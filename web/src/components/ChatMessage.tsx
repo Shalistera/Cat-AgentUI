@@ -758,7 +758,10 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
 
   // assistant — render parts in order, folding each run of consecutive tool
   // activity into a single status line
-  const rendered: React.ReactNode[] = [];
+  // Presentation only: keep persisted/history parts in their original order.
+  // A chart remains the first answer content even if a model wrote a preamble.
+  const rendered: React.ReactNode[] = msg.parts.flatMap((p, i) => p.type === 'data_comparison'
+    ? [<ComparisonChart key={`comparison-${i}`} data={p} />] : []);
   const resultsByCallId = new Map<string, ToolResultPart>();
   for (const p of msg.parts) if (p.type === 'tool_result') resultsByCallId.set(p.toolCallId, p);
   let lastTextIdx = -1;
@@ -803,8 +806,6 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             organizing={isStreaming && trailing && allDone} />,
         );
       }
-    } else if (p.type === 'data_comparison') {
-      rendered.push(<ComparisonChart key={i} data={p} />);
     } else if (p.type === 'grounding') {
       rendered.push(<GroundingBlock key={i} part={p} />);
     } else if (p.type === 'image') {
@@ -824,8 +825,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
 
   const plain = partsToPlainText(msg.parts);
   const followups = msg.parts.flatMap((p) => (p.type === 'followups' ? p.questions : []));
-  const tps = msg.completionTokens && msg.durationMs && msg.durationMs > (msg.ttftMs ?? 0)
-    ? msg.completionTokens / ((msg.durationMs - (msg.ttftMs ?? 0)) / 1000)
+  const tps = msg.completionTokens && msg.durationMs && msg.durationMs > 0
+    ? msg.completionTokens / (msg.durationMs / 1000)
     : null;
   // Debug-grade stats fold into one hover tooltip behind an info icon.
   const statsTip = [
@@ -834,7 +835,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
     msg.totalTokens != null && msg.totalTokens > 0
       ? `输入 ${fmtTokens(msg.promptTokens)} · 输出 ${fmtTokens(msg.completionTokens)} · 共 ${fmtTokens(msg.totalTokens)} tokens`
       : null,
-    tps != null && tps > 0 ? `输出速度 ${tps.toFixed(1)} tok/s` : null,
+    msg.completionTokens != null ? '输出 tokens 按服务商用量统计,可包含思考和多轮工具调用。' : null,
+    tps != null && tps > 0 ? `整轮平均生成速度 ${tps.toFixed(1)} tok/s` : null,
   ].filter(Boolean).join('\n');
 
   // A finished reply that the provider cut short (max output tokens, safety
@@ -850,7 +852,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
   const cutShort = !isStreaming && msg.status === 'done'
     && (msg.finishReason === 'length' || msg.finishReason === 'content_filter' || msg.finishReason === 'incomplete'
       || (msg.finishReason == null && !hasBody && !msg.parts.some((p) => p.type === 'tool_call')));
-  const cutShortWhy = msg.finishReason === 'length' ? '已达到模型单次输出长度上限。'
+  const cutShortWhy = msg.finishReason === 'length' ? '已达到本次请求或服务商设置的输出上限(可能包含思考),不一定是模型的最大容量。'
     : msg.finishReason === 'content_filter' ? '模型或服务商的内容策略中止了输出。'
     : !hasBody ? '模型没有返回可显示的正文,可以重新生成。'
     : '未收到正常的结束确认,可以继续对话或重新生成。';

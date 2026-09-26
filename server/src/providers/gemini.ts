@@ -184,12 +184,23 @@ function buildChatBody(req: ChatRequest): any {
   if (req.temperature !== undefined) generationConfig.temperature = req.temperature;
   if (req.maxTokens) generationConfig.maxOutputTokens = req.maxTokens;
   if (req.reasoning) {
-    // 0 is the only way to actually switch thinking off — omitting the config
-    // leaves the model deciding for itself.
-    const budget = req.reasoning.level !== 'off'
-      ? Math.round(2048 + req.reasoning.ratio * (32768 - 2048))
-      : 0;
-    generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: budget > 0 };
+    const modelId = req.model.split('/').pop() ?? req.model;
+    // These Flash models use native levels; minimal/off are not supported.
+    // Keep older models on their existing budget protocol.
+    if (/^gemini-3\.[78]-flash(?:-|$)/i.test(modelId)) {
+      const level = req.reasoning.level.toLowerCase();
+      const thinkingLevel = level === 'off' || level === 'minimal' ? 'low'
+        : ['low', 'medium', 'high'].includes(level) ? level
+        : req.reasoning.ratio < 0.25 ? 'low' : req.reasoning.ratio < 0.75 ? 'medium' : 'high';
+      generationConfig.thinkingConfig = { thinkingLevel, includeThoughts: level !== 'off' };
+    } else {
+      // 0 is the only way to actually switch thinking off — omitting the config
+      // leaves the model deciding for itself.
+      const budget = req.reasoning.level !== 'off'
+        ? Math.round(2048 + req.reasoning.ratio * (32768 - 2048))
+        : 0;
+      generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: budget > 0 };
+    }
   }
   if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
   // Both may ride together on Gemini 3.x; the caller keeps them apart for
@@ -320,6 +331,9 @@ export const geminiAdapter: ChatAdapter = {
       if (req.signal.aborted || !confirmed || !isNetworkError(err)) throw err;
     } finally {
       req.onStreamEnd?.({
+        requestedMaxOutputTokens: req.maxTokens,
+        thoughtTokens: usage?.thoughtsTokenCount,
+        answerTokens: usage?.candidatesTokenCount,
         endpointId: cfg.endpointId ?? `${cfg.id}:primary`,
         location: cfg.useVertex ? cfg.vertexLocation ?? 'global' : null,
         priority: gate === 'priority', transport, finishReason, promptBlockReason, errorCode,

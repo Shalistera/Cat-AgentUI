@@ -5,9 +5,15 @@ import { getAgentSettings, policyAllows, userWantsAgentTools } from './agent-set
 import type { DataComparison, MessagePart, ToolDef } from './types.js';
 
 export const COMPARE_DATA_TOOL = 'compare_data';
+export const DATA_COMPARISON_PROMPT = [
+  '[图表对比]',
+  '用户要求图表、曲线、趋势或按时间展示数值比较时,先收集必要数据,再调用 compare_data,最后写简短结论。需要联网就先检索来源。数据足够后优先出图,不要先写长篇背景科普、重复表格或 ASCII 时间轴;出图前最多一句进度说明。此工具不依赖工作区、命令执行或沙盒。',
+  '除非用户明确要求详述,图后只写 2–4 条关键差异及必要的来源/局限说明,正文约 200–400 字即可;不要逐时间段重复描述图上已有信息。闲聊和没有比较需求的回答照常回复,不用图表。',
+  '图表数值必须有依据,先明确比较条件、共同单位及来源。只有少量峰值、范围或时长时,不能编造成完整时间曲线;找不到逐点数据或可核实计算依据时,简短说明缺口并给已有事实,不要为了出图猜数。估算必须明确依据和假设,不能当作实测数据或个人效果预测。',
+].join('\n');
 export const COMPARE_DATA_DEF: ToolDef = {
   name: COMPARE_DATA_TOOL,
-  description: '比较同一指标和单位的数据并直接展示图表/数据表。分类比较用 items(2–12 项柱状图);时间或连续数值上的曲线对比用 chart=line、xLabel、严格递增的数值 x、series(1–6 条曲线,每条与 x 等长,2–120 点,总计最多 600 点),可用 xLabels 标注时间。缺失值用 null,至少两个有效点。优先已有关键采样点,不要为平滑额外插值。仅用于用户要求的数据分析/方案数值比较,或明确要求图表;数据来自用户、已读取资料或实际计算结果,先统一单位和统计口径。不要为闲聊、新闻、单个数字、无关指标或猜测的数据调用。每轮最多一次;成功后简短解释结论,无需重复表格或生成 HTML;失败时用文字说明,不要重复调用。',
+  description: '比较有依据的同指标、同单位数值并立即展示图表和数据表。分类比较用 items(2–12 项);连续/时间序列用 chart=line、xLabel、严格递增的数值 x、series(1–6 条等长曲线,每条 2–120 点,合计最多 600 点),可用 xLabels 标注时间。缺失值用 null。每轮最多一次,无需沙盒或 HTML。先出图再简短解释,不要重复整组数据。',
   parameters: {
     type: 'object',
     properties: {

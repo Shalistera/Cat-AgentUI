@@ -155,7 +155,7 @@ try {
   await app.register(cookie);
   await authPlugin(app); await authRoutes(app); await agentRoutes(app); await chatRoutes(app);
   adapter.streamChat = async function* (_cfg, req) {
-    latestPrompt = req.systemPrompt;
+    latestPrompt = req.system;
     offered.push(req.tools ?? []);
     const done = req.messages.some((m) => m.parts.some((p) => p.type === 'tool_result' && p.name === 'compare_data'));
     if (!done && plans.length) {
@@ -178,6 +178,13 @@ try {
   assert.equal(normal.charts.length, 1, JSON.stringify(normal));
   assert(offered[0].some((t) => t.name === 'compare_data'));
   assert(!latestPrompt?.includes('互动画布'));
+  assert(latestPrompt?.includes('数据足够后优先出图') && latestPrompt.includes('不能编造成完整时间曲线'));
+  saveAgentSettings({ workspace: { enabled: true } });
+  const withWorkspace = await turn();
+  assert.equal(withWorkspace.charts.length, 1);
+  assert(!latestPrompt.includes('生成 PDF/图表这类必须执行'));
+  assert(latestPrompt.includes('此工具不依赖工作区、命令执行或沙盒'));
+  saveAgentSettings({ workspace: { enabled: false } });
   assert.deepEqual(normal.charts[0].data, { type: 'data_comparison', ...sample });
   const saved = (await request('GET', `/api/chats/${normal.id}`)).json();
   assert(saved.messages.some((m) => m.parts.some((p) => p.type === 'data_comparison' && p.items.length === 3)));
@@ -199,6 +206,7 @@ try {
   assert.equal(invalidTurn.charts.length, 0); assert(invalidTurn.results[0].isError);
   userSettings({ agentTools: false });
   const off = await turn(); assert.equal(off.charts.length, 0); assert(off.results[0].isError);
+  assert(!latestPrompt?.includes('[图表对比]'));
   assert(!offered[0].some((t) => t.name === 'compare_data'));
   userSettings({});
   const plain = await turn([sample], 'plain'); assert.equal(plain.charts.length, 0);

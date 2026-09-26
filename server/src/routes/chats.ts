@@ -30,7 +30,7 @@ import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPro
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { GENERATE_IMAGE_TOOL, buildImageToolPrompt, callImageTool, imageToolDefinition, imageToolModelsFor } from '../image-tool.js';
-import { COMPARE_DATA_TOOL, COMPARE_DATA_DEF, callCompareData } from '../data-comparison.js';
+import { COMPARE_DATA_TOOL, COMPARE_DATA_DEF, DATA_COMPARISON_PROMPT, callCompareData } from '../data-comparison.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry,
@@ -1574,7 +1574,7 @@ export async function chatRoutes(app: FastifyInstance) {
           ? buildSandboxPrompt()
           : convertActive
           ? buildConvertPrompt()
-          : '本对话没有命令执行能力(没有 run_command 之类的工具):不要为了"让人去跑"而主动写脚本或给出终端命令,除非用户明确要的就是脚本本身;需要计算、转换格式、生成 PDF/图表这类必须执行才能完成的事,直接告诉用户当前不支持执行,由用户决定。',
+          : '本对话没有命令执行能力(没有 run_command 之类的工具):不要为了"让人去跑"而主动写脚本或给出终端命令,除非用户明确要的就是脚本本身;不能声称已经执行脚本。当前提供的其他内置工具仍可完成其描述支持的操作,不要把缺少命令执行当作所有内置工具都不可用。',
       ].join('\n\n')
       : null;
     const sandboxConfirm = sandboxActive && sandboxNeedsConfirm();
@@ -1641,6 +1641,7 @@ export async function chatRoutes(app: FastifyInstance) {
       skillsBlock,
       subagentBlock,
       imageToolBlock,
+      comparisonActive ? DATA_COMPARISON_PROMPT : null,
       nativeSearchActive ? SEARCH_HINT_NATIVE : (mcpSearchActive || bridgedSearchActive) ? SEARCH_HINT_MCP : null,
     ].filter(Boolean).join('\n\n') || undefined;
     // Take one snapshot for the whole turn. It covers Provider credentials,
@@ -1882,7 +1883,8 @@ export async function chatRoutes(app: FastifyInstance) {
               onStreamEnd: (info) => {
                 const fields = redactSensitiveValue({
                   chatId, messageId: assistantId, providerId: provider.id, model: model.modelId,
-                  ...info, clientGone, timeout: textTimeoutError,
+                  ...info, comparisonAvailable: comparisonActive, toolCount: continuation ? 0 : (toolDefs?.length ?? 0),
+                  clientGone, timeout: textTimeoutError,
                 }, secretValues);
                 if (info.transport !== 'eof' || !info.finishReason || info.invalidEvents) {
                   streamLog.warn(fields, 'Provider stream ended');

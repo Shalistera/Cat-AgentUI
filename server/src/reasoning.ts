@@ -27,7 +27,7 @@ export interface ReasoningLevel {
 
 export type ReasoningMode = 'auto' | 'custom' | 'off';
 
-/** Our own sentinel for "don't think", never a vendor value — adapters omit the field. */
+/** Our own sentinel for minimum/no thinking; adapters respect model capabilities. */
 export const OFF = 'off';
 
 export const MAX_LEVELS = 12;
@@ -58,9 +58,9 @@ function ladder(...values: string[]): ReasoningLevel[] {
  * First match wins, so a narrower rule goes above a broader one. An empty
  * ladder is a real answer: it says the model has no reasoning mode.
  *
- * Only OpenAI puts the level name on the wire, so those values have to be real
- * `reasoning_effort` tokens. Anthropic and Gemini budget in thinking tokens and
- * read only the position on the ladder, so their names are ours to choose.
+ * OpenAI uses native reasoning_effort tokens; Gemini 3.7/3.8 Flash uses native
+ * low/medium/high levels. Anthropic and older Gemini models budget in thinking
+ * tokens and read the position on the ladder.
  */
 const RULES: Record<ProviderType, { re: RegExp; levels: ReasoningLevel[] }[]> = {
   openai: [
