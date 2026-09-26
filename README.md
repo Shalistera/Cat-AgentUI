@@ -129,8 +129,11 @@ npx pm2 save
 Gemini 3.7/3.8 Flash 按原生 `thinkingLevel` 发送低/中/高档;它们不能完全关闭思考,最低档使用 low 并隐藏思考摘要。
 高思考档触及上限时,可按需要提高部署环境的 `DEFAULT_MODEL_OUTPUT_TOKENS`(例如 32768 或 65536),
 但实际值仍受 `MAX_MODEL_OUTPUT_TOKENS` 和服务商限制;已有对话显式保存的 `maxTokens` 优先。
-提高上限会允许更多思考和输出,不保证低延迟或低成本。图表任务默认先取数据、先出图、后写简短结论。
-Gemini 的流结束日志包含 `requestedMaxOutputTokens`、`thoughtTokens`、`answerTokens`,便于定位实际截断。
+提高上限会允许更多思考和输出,不保证低延迟或低成本。图表任务默认先取数据、先出图、后写简短结论。当前用户消息明确要求图表或“对比 + 按时间展示”时,
+会增加简短的本轮图表意图提示;只看当前用户消息,忽略引用和代码片段,跳过明确不画图或纯翻译/编程请求。
+这个判断不另调模型,不改变 Vertex 原生搜索或其他 Agent 工具;生成后的长文也不会被再送去转换。
+Gemini 的流结束日志包含 `requestedMaxOutputTokens`、`thoughtTokens`、`answerTokens`,便于定位实际截断。回合结束日志还会记录 `comparisonIntentMatched`、`comparisonAttempts`、
+`comparisonRendered`,可区分意图未匹配、工具未调用和工具已调用但未出图。
 参考:[Google 思考与输出预算说明](https://ai.google.dev/gemini-api/docs/generate-content/thinking)。
 
 ### Vertex Gemini 原生联网搜索

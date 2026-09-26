@@ -30,7 +30,7 @@ import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPro
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { GENERATE_IMAGE_TOOL, buildImageToolPrompt, callImageTool, imageToolDefinition, imageToolModelsFor } from '../image-tool.js';
-import { COMPARE_DATA_TOOL, COMPARE_DATA_DEF, DATA_COMPARISON_PROMPT, callCompareData } from '../data-comparison.js';
+import { COMPARE_DATA_TOOL, COMPARE_DATA_DEF, DATA_COMPARISON_PROMPT, callCompareData, comparisonPresentationHint } from '../data-comparison.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry,
@@ -1596,6 +1596,8 @@ export async function chatRoutes(app: FastifyInstance) {
     let imageToolAttempts = 0;
     const comparisonActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.dataComparison, user);
     if (comparisonActive) toolDefs = [...(toolDefs ?? []), COMPARE_DATA_DEF];
+    const comparisonHint = comparisonActive ? comparisonPresentationHint(parseParts(history[history.length - 1].parts)
+      .filter((p) => p.type === 'text').map((p) => p.text).join('\n')) : null;
     let comparisonAttempts = 0;
     // Native search rides on the main request whenever Vertex lets it: the
     // model searches inside its own turn (fast, sentence-level citations).
@@ -1643,6 +1645,7 @@ export async function chatRoutes(app: FastifyInstance) {
       imageToolBlock,
       comparisonActive ? DATA_COMPARISON_PROMPT : null,
       nativeSearchActive ? SEARCH_HINT_NATIVE : (mcpSearchActive || bridgedSearchActive) ? SEARCH_HINT_MCP : null,
+      comparisonHint,
     ].filter(Boolean).join('\n\n') || undefined;
     // Take one snapshot for the whole turn. It covers Provider credentials,
     // custom headers, MCP env/headers, and SECRET_KEY without querying per token.
@@ -1884,6 +1887,7 @@ export async function chatRoutes(app: FastifyInstance) {
                 const fields = redactSensitiveValue({
                   chatId, messageId: assistantId, providerId: provider.id, model: model.modelId,
                   ...info, comparisonAvailable: comparisonActive, toolCount: continuation ? 0 : (toolDefs?.length ?? 0),
+                  comparisonIntentMatched: !!comparisonHint,
                   clientGone, timeout: textTimeoutError,
                 }, secretValues);
                 if (info.transport !== 'eof' || !info.finishReason || info.invalidEvents) {
@@ -2258,7 +2262,9 @@ export async function chatRoutes(app: FastifyInstance) {
     // (all leases are idempotent).
     releaseTurn();
     if (fallbackMeta?.adopted) sse.send('model_selected', { modelId: model.id });
-    streamLog.info({ status, finishReason, clientGone, durationMs }, 'Chat turn finished');
+    streamLog.info({ status, finishReason, clientGone, durationMs, comparisonAvailable: comparisonActive,
+      comparisonIntentMatched: !!comparisonHint, comparisonAttempts,
+      comparisonRendered: finalParts.some((p) => p.type === 'data_comparison') }, 'Chat turn finished');
     sse.send('done', { messageId: assistantId, status, finishReason });
 
     // An interrupted/filtered/length-limited answer needs no extra model

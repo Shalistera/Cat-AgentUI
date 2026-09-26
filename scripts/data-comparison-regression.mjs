@@ -15,7 +15,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-comparison-'));
 process.env.DATA_DIR = temp;
 process.env.SECRET_KEY = 'comparison-regression-secret';
 const { db, rawDb, schema, runMigrations, setSetting } = await import('../server/dist/db/index.js');
-const { callCompareData, parseComparison, COMPARE_DATA_DEF } = await import('../server/dist/data-comparison.js');
+const { callCompareData, parseComparison, COMPARE_DATA_DEF, comparisonPresentationHint } = await import('../server/dist/data-comparison.js');
 const { saveAgentSettings } = await import('../server/dist/agent-settings.js');
 const { authPlugin } = await import('../server/dist/auth.js');
 const { sha256hex } = await import('../server/dist/crypto.js');
@@ -31,6 +31,7 @@ let plans = [];
 let offered = [];
 let beforeTool;
 let latestPrompt;
+let upstreamRequests = [];
 const sample = { title: '方案净收益对比', unit: '万元', source: '用户提供的同年度数据', items: [
   { label: '甲', value: -20 }, { label: '乙', value: 0 }, { label: '丙', value: 80 },
 ] };
@@ -43,19 +44,35 @@ const context = { userId: 'alice', chatId: 'owned', attempt: 1 };
 const userSettings = (settings) => db.update(schema.users).set({ settings: JSON.stringify(settings) }).where(eq(schema.users.id, 'alice')).run();
 const request = (method, url, payload, user = 'alice') => app.inject({ method, url, payload,
   headers: { 'x-csrf': '1', cookie: `cat_session=${user}-session` } });
-async function turn(calls = [sample], modelId = 'model') {
-  plans = calls; offered = [];
+async function turn(calls = [sample], modelId = 'model', options = {}) {
+  plans = calls; offered = []; upstreamRequests = [];
   const created = await request('POST', '/api/chats', { modelId });
   assert.equal(created.statusCode, 200, created.body);
   const id = created.json().chat.id;
-  await request('PATCH', `/api/chats/${id}`, { title: '图表测试' });
-  const res = await request('POST', `/api/chats/${id}/stream`, { modelId, content: [{ type: 'text', text: '比较甲、乙、丙的净收益' }] });
+  await request('PATCH', `/api/chats/${id}`, { title: '图表测试', ...(options.webSearch ? { webSearch: true } : {}) });
+  const res = await request('POST', `/api/chats/${id}/stream`, { modelId, content: [{ type: 'text', text: options.text ?? '比较甲、乙、丙的净收益' }] });
   assert.equal(res.statusCode, 200, res.body);
   const events = [...res.body.matchAll(/event: ([^\n]+)\ndata: ([^\n]+)/g)].map((m) => ({ type: m[1], data: JSON.parse(m[2]) }));
   return { id, events, charts: events.filter((e) => e.type === 'data_comparison'), results: events.filter((e) => e.type === 'tool_result').map((e) => e.data) };
 }
 
 try {
+  const reportedPrompt = '去网上调查一下专注达的药动力信息，对比一下速效利他林的吸收信息，给我展示出来两种哌甲酯的区别，用时间段来展示吧。';
+  for (const text of [reportedPrompt, '按时间对比两条产线的产量', '对比去年和今年的销量，用折线图显示',
+    '给我画个柱状图', 'Show a graph of these values', 'Compare these two series over time',
+    '不要长篇大论，给我画个对比图', '不需要文字，用图表展示', '不要写代码，直接用图表展示']) {
+    assert(comparisonPresentationHint(text), text);
+  }
+  for (const text of ['你好', '今天有什么新闻', '比较两个方案的优缺点', '什么是折线图',
+    '按时间对比两个方案，但不要画图', '请用文字介绍两者区别，只要文字',
+    '对比两个方案，别给我生成图表', '按时间对比两者，不用折线图', 'Compare these two series over time, text only',
+    '按时间展示这两组数据，仅用表格',
+    '请翻译这句话：对比两种方案，用时间段展示', '帮我写一个生成折线图的函数',
+    '他回复“给我画个柱状图”是什么意思', '解释 `用图表展示两者区别` 这句话',
+    '> 对比两者，用时间段展示\n解释这段引用', '```\n对比两者，用时间段展示\n```',
+    '~~~text\n对比两者，用时间段展示\n~~~']) {
+    assert.equal(comparisonPresentationHint(text), null, text);
+  }
   // Upgrade cleanup is surgical and idempotent, even with malformed legacy JSON.
   const legacy = new Database(':memory:');
   legacy.exec('CREATE TABLE users (settings TEXT NOT NULL)');
@@ -80,7 +97,7 @@ try {
   }
   db.insert(schema.chats).values({ id: 'owned', userId: 'alice', createdAt: Date.now(), updatedAt: Date.now() }).run();
   db.insert(schema.providers).values({ id: 'provider', name: 'Fixture', type: 'gemini', createdAt: Date.now() }).run();
-  for (const [id, tools] of [['model', 1], ['plain', 0]]) db.insert(schema.models).values({ id, providerId: 'provider', modelId: id, tools, createdAt: Date.now() }).run();
+  for (const [id, tools] of [['model', 1], ['plain', 0], ['native', 1]]) db.insert(schema.models).values({ id, providerId: 'provider', modelId: id === 'native' ? 'gemini-3.8-flash' : id, tools, createdAt: Date.now() }).run();
   setSetting('followup_enabled', false);
   saveAgentSettings({ workspace: { enabled: false }, skills: { enabled: false } });
 
@@ -156,6 +173,7 @@ try {
   await authPlugin(app); await authRoutes(app); await agentRoutes(app); await chatRoutes(app);
   adapter.streamChat = async function* (_cfg, req) {
     latestPrompt = req.system;
+    upstreamRequests.push(req);
     offered.push(req.tools ?? []);
     const done = req.messages.some((m) => m.parts.some((p) => p.type === 'tool_result' && p.name === 'compare_data'));
     if (!done && plans.length) {
@@ -174,10 +192,27 @@ try {
   assert.equal(adminSettings.statusCode, 200, adminSettings.body);
   assert.equal((await request('GET', '/api/agent/capabilities', undefined, 'bob')).json().dataComparison, false);
 
+  // The reported wording receives a per-turn intent hint without changing
+  // Vertex native grounding or the set of agent tools.
+  db.update(schema.providers).set({ useVertex: 1, vertexProject: 'fixture', vertexLocation: 'global' }).where(eq(schema.providers.id, 'provider')).run();
+  const native = await turn([lineSample], 'native', { text: reportedPrompt, webSearch: true });
+  assert.equal(native.charts.length, 1);
+  assert(latestPrompt.includes('[本轮图表意图]') && latestPrompt.includes('优先绘制时间曲线'));
+  assert(upstreamRequests.every((r) => r.webSearch === true));
+  assert(upstreamRequests.every((r) => r.tools.some((t) => t.name === 'compare_data') && !r.tools.some((t) => t.name === 'google_search')));
+  assert(upstreamRequests[0].messages.at(-1).parts.some((p) => p.text === reportedPrompt), 'original user text is unchanged');
+  assert.equal(upstreamRequests.length, 2, 'normal tool call and answer, no classifier or repair model calls');
+  const target = native.events.find((e) => e.type === 'meta').data.messageId;
+  await request('POST', `/api/chats/${native.id}/stream`, { modelId: 'native', regenerateMessageId: target });
+  assert(latestPrompt.includes('[本轮图表意图]'), 'regeneration uses the selected user message');
+  await request('POST', `/api/chats/${native.id}/stream`, { modelId: 'native', content: [{ type: 'text', text: '现在只要文字，不要画图' }] });
+  assert(!latestPrompt.includes('[本轮图表意图]'), 'prior chart requests do not force later turns');
+  db.update(schema.providers).set({ useVertex: 0 }).where(eq(schema.providers.id, 'provider')).run();
   const normal = await turn();
   assert.equal(normal.charts.length, 1, JSON.stringify(normal));
   assert(offered[0].some((t) => t.name === 'compare_data'));
   assert(!latestPrompt?.includes('互动画布'));
+  assert(!latestPrompt?.includes('[本轮图表意图]'), 'ordinary comparisons retain the default behavior');
   assert(latestPrompt?.includes('数据足够后优先出图') && latestPrompt.includes('不能编造成完整时间曲线'));
   saveAgentSettings({ workspace: { enabled: true } });
   const withWorkspace = await turn();
@@ -205,17 +240,19 @@ try {
   const invalidTurn = await turn([{ ...sample, items: [] }]);
   assert.equal(invalidTurn.charts.length, 0); assert(invalidTurn.results[0].isError);
   userSettings({ agentTools: false });
-  const off = await turn(); assert.equal(off.charts.length, 0); assert(off.results[0].isError);
-  assert(!latestPrompt?.includes('[图表对比]'));
+  const off = await turn([sample], 'model', { text: reportedPrompt }); assert.equal(off.charts.length, 0); assert(off.results[0].isError);
+  assert(!latestPrompt?.includes('[图表对比]') && !latestPrompt?.includes('[本轮图表意图]'));
   assert(!offered[0].some((t) => t.name === 'compare_data'));
   userSettings({});
-  const plain = await turn([sample], 'plain'); assert.equal(plain.charts.length, 0);
+  const plain = await turn([sample], 'plain', { text: reportedPrompt }); assert.equal(plain.charts.length, 0);
+  assert(!latestPrompt?.includes('[本轮图表意图]'));
   assert(!offered[0].some((t) => t.name === 'compare_data'));
   beforeTool = () => saveAgentSettings({ dataComparison: { enabled: false } });
   const revoked = await turn(); assert.equal(revoked.charts.length, 0); assert(revoked.results[0].isError);
   assert.equal((await request('GET', '/api/agent/capabilities')).json().dataComparison, false);
   saveAgentSettings({ dataComparison: { enabled: true } });
-  const text = await turn([]); assert.equal(text.charts.length, 0);
+  const text = await turn([], 'model', { text: reportedPrompt }); assert.equal(text.charts.length, 0);
+  assert.equal(upstreamRequests.length, 1, 'a text-only response does not trigger a hidden chart repair request');
   // Browser dispatches the persisted chart part without another model request.
   const { streamChat } = await import('../web/src/api.ts');
   const originalFetch = globalThis.fetch;
@@ -225,7 +262,7 @@ try {
     await streamChat('fixture', {}, { onDataComparison: (part) => { received = part; } }, new AbortController().signal);
     assert.deepEqual(received, normal.charts[0].data);
   } finally { globalThis.fetch = originalFetch; }
-  console.log('PASS: multiline/gaps/irregular axes/Gemini schema, retirement migration/profile cleanup, numeric validation/scales, ACL/revocation, per-turn cap, SSE, persistence, Markdown export and text-only fallback.');
+  console.log('PASS: per-turn chart intent/opt-outs/native search preservation/no extra model calls, multiline/gaps/irregular axes/Gemini schema, retirement migration/profile cleanup, numeric validation/scales, ACL/revocation, per-turn cap, SSE, persistence, Markdown export and text-only fallback.');
 } finally {
   adapter.streamChat = originalStream;
   await app.close(); rawDb.close(); fs.rmSync(temp, { recursive: true, force: true });
