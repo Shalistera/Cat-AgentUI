@@ -1599,6 +1599,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const comparisonHint = comparisonActive ? comparisonPresentationHint(parseParts(history[history.length - 1].parts)
       .filter((p) => p.type === 'text').map((p) => p.text).join('\n')) : null;
     let comparisonAttempts = 0;
+    let comparisonRendered = false;
     // Native search rides on the main request whenever Vertex lets it: the
     // model searches inside its own turn (fast, sentence-level citations).
     // Gemini 3.x accepts googleSearch next to functionDeclarations; 2.5 does
@@ -1843,6 +1844,8 @@ export async function chatRoutes(app: FastifyInstance) {
             '上一条助手回复因传输中断尚未完成。请从中断位置直接续写剩余内容,不要重复已有文字,不要重新开头,不要解释中断。保留原有结构和代码块状态,不调用任何工具。',
           }] });
           const pendingCalls: { id: string; name: string; args: string }[] = [];
+          const roundTools = continuation ? [] : toolDefs?.filter((t) => t.name !== COMPARE_DATA_TOOL
+            || (!comparisonRendered && comparisonAttempts < 2));
           const textBeforeRound = parts.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 0), 0);
           let stopReason = 'other';
           let roundError: unknown;
@@ -1866,7 +1869,7 @@ export async function chatRoutes(app: FastifyInstance) {
               model: model.modelId,
               system: systemPrompt,
               messages,
-              tools: continuation ? [] : toolDefs,
+              tools: roundTools,
               webSearch: continuation ? false : nativeSearchActive,
               temperature: chat.temperature ?? undefined,
               maxTokens: Math.min(chat.maxTokens ?? config.defaultModelOutputTokens, config.maxModelOutputTokens),
@@ -1886,7 +1889,7 @@ export async function chatRoutes(app: FastifyInstance) {
               onStreamEnd: (info) => {
                 const fields = redactSensitiveValue({
                   chatId, messageId: assistantId, providerId: provider.id, model: model.modelId,
-                  ...info, comparisonAvailable: comparisonActive, toolCount: continuation ? 0 : (toolDefs?.length ?? 0),
+                  ...info, comparisonAvailable: comparisonActive, toolCount: roundTools?.length ?? 0,
                   comparisonIntentMatched: !!comparisonHint,
                   clientGone, timeout: textTimeoutError,
                 }, secretValues);
@@ -2040,8 +2043,9 @@ export async function chatRoutes(app: FastifyInstance) {
                 })()
                 : call.name === COMPARE_DATA_TOOL && comparisonActive
                 ? (() => {
-                  const outcome = callCompareData({ userId: user.id, chatId, attempt: ++comparisonAttempts }, call.args);
+                  const outcome = callCompareData({ userId: user.id, chatId, attempt: ++comparisonAttempts, alreadyRendered: comparisonRendered }, call.args);
                   toolComparison = outcome.comparison;
+                  if (toolComparison) comparisonRendered = true;
                   return outcome;
                 })()
                 : isWorkspaceTool(call.name) && workspaceActive

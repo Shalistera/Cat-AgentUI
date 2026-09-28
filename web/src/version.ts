@@ -22,6 +22,12 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-09-28',
+    items: [
+      '图表对比更能容忍多余字段和数字格式差异;填错参数时会指出具体问题,并允许模型修正一次。',
+    ],
+  },
+  {
     date: '2026-09-26',
     items: [
       '更容易识别“对比两者,用时间段展示”这类图表请求,减少只回复长文的情况。',

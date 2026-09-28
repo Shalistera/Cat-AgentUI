@@ -233,6 +233,9 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
   if (req.tools?.length) {
     body.tools = req.tools.map((t) => ({
       type: 'function', name: t.name, description: t.description, parameters: t.parameters,
+      // Preserve the shared schema's optional fields, as Chat Completions does.
+      // Responses may otherwise normalize them all to required in strict mode.
+      strict: false,
     }));
     body.tool_choice = 'auto';
   }

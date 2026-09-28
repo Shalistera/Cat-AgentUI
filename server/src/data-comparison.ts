@@ -43,22 +43,29 @@ export const DATA_COMPARISON_PROMPT = [
 ].join('\n');
 export const COMPARE_DATA_DEF: ToolDef = {
   name: COMPARE_DATA_TOOL,
-  description: '用户要求图表、趋势或按时间展示数值对比时调用,包括先搜索/计算再展示的任务,不要求用户先给出数值或工具名。取得有依据的同指标、同单位数据后立即出图。分类比较用 items(2–12 项);时间序列用 chart=line、xLabel、递增数值 x、series(1–6 条等长曲线,每条 2–120 点,合计最多 600 点),xLabels 可标注时间,缺失值用 null。每轮最多一次,无需沙盒或 HTML;先出图再简短解释。',
+  description: [
+    '展示数值对比图。用户要图表、趋势或按时间比较时,先搜索/计算取得数据再调用,无需沙盒或 HTML。',
+    '柱状图:填 title、unit、source、chart="bar"、items 即可。折线图:填 title、unit、source、chart="line"、xLabel、x、series;需要文字刻度时加 xLabels。未使用字段省略或填 null,会忽略另一种图的字段。',
+    '以下均为虚构格式示例,使用时替换为真实数据:',
+    '柱状图 {"title":"两天销量","unit":"件","source":"示例数据","chart":"bar","items":[{"label":"周一","value":10},{"label":"周二","value":12}]}',
+    '折线图 {"title":"两天销量","unit":"件","source":"示例数据","chart":"line","xLabel":"天","x":[1,2],"xLabels":["周一","周二"],"series":[{"label":"销量","values":[10,12]}]}',
+    '每轮只展示一张图;格式错误可按具体报错修正一次。成功后简述结论。',
+  ].join('\n'),
   parameters: {
     type: 'object',
     properties: {
       title: { type: 'string', description: '对比的指标和统计范围,最多 80 字' },
       unit: { type: 'string', description: '所有数值共用的单位,例如 万元、%、毫秒、分,最多 24 字' },
-      source: { type: 'string', description: '实际数据出处或计算依据,最多 160 字;估算数据必须明确标注' },
-      chart: { type: 'string', enum: ['bar', 'line'], description: '省略为柱状图;折线图填 line。items 与折线字段二选一' },
-      xLabel: { type: 'string', description: '横轴名称和单位,例如 时间(小时),最多 40 字' },
-      x: { type: 'array', minItems: 2, maxItems: 120, items: { type: 'number', minimum: -1e15, maximum: 1e15 }, description: '实际横坐标,如 [6,8,8.5,10,12];严格递增,保留真实间隔' },
-      xLabels: { type: 'array', minItems: 2, maxItems: 120, items: { type: 'string' }, description: '可选刻度标签,如 6:00、8:00、8:30;与 x 等长,每项最多 30 字' },
-      series: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'object', properties: {
+      source: { type: 'string', description: '实际数据出处、链接或计算依据,最多 1000 字;估算数据必须明确标注' },
+      chart: { type: 'string', enum: ['bar', 'line'], description: 'bar=柱状图,line=折线图;省略时按提供的数据字段识别' },
+      xLabel: { type: ['string', 'null'], description: '仅折线图需要:横轴名称和单位,如 时间(小时),最多 40 字' },
+      x: { type: ['array', 'null'], minItems: 2, maxItems: 120, items: { type: 'number', minimum: -1e15, maximum: 1e15 }, description: '仅折线图需要:递增数值横坐标,保留真实间隔,如 [0,1,4] 表示相距 1 天和 3 天;日期文字放 xLabels' },
+      xLabels: { type: ['array', 'null'], minItems: 2, maxItems: 120, items: { type: 'string' }, description: '可选折线刻度标签,如 ["09-24","09-25"];与 x 等长,每项最多 30 字。不需要就省略或填 null' },
+      series: { type: ['array', 'null'], minItems: 1, maxItems: 6, description: '仅折线图需要:1–6 条曲线,每条 values 与 x 等长,总计最多 600 点', items: { type: 'object', properties: {
         label: { type: 'string', description: '唯一的曲线名称,最多 80 字' },
         values: { type: 'array', minItems: 2, maxItems: 120, items: { type: ['number', 'null'] }, description: '与 x 对齐的数值,缺失位置用 null' },
       }, required: ['label', 'values'], additionalProperties: false } },
-      items: { type: 'array', minItems: 2, maxItems: 12, items: {
+      items: { type: ['array', 'null'], minItems: 2, maxItems: 12, description: '仅柱状图需要:2–12 个名称与数值。画折线图时省略或填 null', items: {
         type: 'object', properties: {
           label: { type: 'string', description: '唯一的方案或类别名称,最多 40 字' },
           value: { type: 'number', minimum: -1e15, maximum: 1e15 },
@@ -69,18 +76,20 @@ export const COMPARE_DATA_DEF: ToolDef = {
   },
 };
 
-const finiteValue = z.number().finite().min(-1e15).max(1e15);
+// Accept unambiguous numeric strings, not empty strings/booleans/units as zero.
+const finiteValue = z.preprocess((v) => typeof v === 'string' && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(v.trim())
+  ? Number(v.trim()) : v, z.number().finite().min(-1e15).max(1e15));
 const common = {
   title: z.string().trim().min(1).max(80),
   unit: z.string().trim().min(1).max(24),
-  source: z.string().trim().min(1).max(160),
+  source: z.string().trim().min(1).max(1000),
 };
 const uniqueLabels = (items: { label: string }[]) => new Set(items.map((i) => i.label.normalize('NFKC').toLowerCase())).size === items.length;
 const barSchema = z.object({
   ...common,
   chart: z.literal('bar').optional(),
   items: z.array(z.object({ label: z.string().trim().min(1).max(40), value: finiteValue }).strict()).min(2).max(12),
-}).strict().refine((v) => uniqueLabels(v.items));
+}).strict().refine((v) => uniqueLabels(v.items), { path: ['items'], message: 'label 名称不能重复,请给每项不同的名称' });
 const lineSchema = z.object({
   ...common,
   chart: z.literal('line'),
@@ -91,36 +100,77 @@ const lineSchema = z.object({
     label: z.string().trim().min(1).max(80),
     values: z.array(finiteValue.nullable()).min(2).max(120),
   }).strict()).min(1).max(6),
-}).strict().refine((v) =>
-  v.x.every((x, i) => i === 0 || x > v.x[i - 1])
-  && (!v.xLabels || v.xLabels.length === v.x.length)
-  && v.x.length * v.series.length <= 600
-  && uniqueLabels(v.series)
-  && v.series.every((s) => s.values.length === v.x.length && s.values.filter((n) => n !== null).length >= 2));
-const comparisonSchema = z.union([barSchema, lineSchema]);
+}).strict().superRefine((v, ctx) => {
+  const issue = (path: (string | number)[], message: string) => ctx.addIssue({ code: 'custom', path, message });
+  v.x.forEach((x, i) => {
+    if (i > 0 && x <= v.x[i - 1]) issue(['x', i], '必须大于前一个横坐标;请同步调整横轴和对应数值,不能单独排序');
+  });
+  if (v.xLabels && v.xLabels.length !== v.x.length) issue(['xLabels'], `需与 x 一样有 ${v.x.length} 项;不需要文字刻度时可省略`);
+  if (v.x.length * v.series.length > 600) issue(['series'], '所有曲线合计最多 600 点');
+  if (!uniqueLabels(v.series)) issue(['series'], 'label 名称不能重复,请给每条曲线不同的名称');
+  v.series.forEach((s, i) => {
+    if (s.values.length !== v.x.length) issue(['series', i, 'values'], `需与 x 一样有 ${v.x.length} 项;缺失位置用 null,不要补造数值`);
+    if (s.values.filter((n) => n !== null).length < 2) issue(['series', i, 'values'], '至少需要两个有效数值才能连线;不能补造数值');
+  });
+});
 
-/** Strict numeric input; the same validated data feeds both table and chart. */
-export function parseComparison(args: string): DataComparison | null {
-  if (args.length > 32000) return null;
-  try {
-    const parsed = comparisonSchema.safeParse(JSON.parse(args));
-    return parsed.success ? parsed.data : null;
-  } catch { return null; }
+function describeIssue(issue: z.ZodIssue): string {
+  const path = issue.path.reduce<string>((s, p) => typeof p === 'number' ? `${s}[${p}]` : s ? `${s}.${String(p)}` : String(p), '') || '参数';
+  let message = issue.message;
+  if (issue.code === 'invalid_type') message = issue.expected === 'number'
+    ? issue.path[0] === 'x' ? '需要有限数值横坐标;日期或时间文字请放在 xLabels 中'
+      : issue.path.includes('values') ? '需要有限数字或 null;单位填在 unit,缺失值用 null'
+      : '需要有限数字;单位填在 unit,不能用空字符串或 null 代替数值'
+    : issue.expected === 'string' ? '需要填写文字' : issue.expected === 'array' ? '需要填写数组' : '类型不正确';
+  if (issue.code === 'too_small') message = `至少需要 ${issue.minimum}${issue.origin === 'array' ? ' 项' : issue.origin === 'string' ? ' 个字符' : ''}`;
+  if (issue.code === 'too_big') message = `最多允许 ${issue.maximum}${issue.origin === 'array' ? ' 项' : issue.origin === 'string' ? ' 个字符' : ''}`;
+  if (issue.code === 'unrecognized_keys') message = '包含未定义字段,请只使用工具参数中的字段';
+  return `${path}: ${message}`;
 }
 
-export function callCompareData(ctx: { userId: string; chatId: string; attempt: number }, args: string): {
+function readComparison(args: string): { data: DataComparison; error?: never } | { data?: never; error: string } {
+  if (args.length > 32000) return { error: '参数总长度超过 32000 字符,请减少数据点或缩短说明' };
+  let raw: unknown;
+  try { raw = JSON.parse(args); } catch { return { error: '参数必须是合法 JSON 对象' }; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: '参数必须是 JSON 对象' };
+  const input = { ...raw } as Record<string, unknown>;
+  // Select a branch before validation. Irrelevant fields (including provider-
+  // required placeholders) never enter the renderer or invalidate real data.
+  if (typeof input.chart === 'string') input.chart = input.chart.trim().toLowerCase();
+  if (input.chart == null || input.chart === '') {
+    const hasItems = Array.isArray(input.items) && input.items.length > 0;
+    const hasSeries = Array.isArray(input.series) && input.series.length > 0;
+    if (hasItems && hasSeries) return { error: 'chart: 同时提供了 items 和 series,请填写 bar 或 line 选择要画的图' };
+    if (hasSeries) input.chart = 'line'; else delete input.chart;
+  }
+  if (input.chart !== undefined && input.chart !== 'bar' && input.chart !== 'line') return { error: 'chart: 只支持 bar(柱状图)或 line(折线图)' };
+  const line = input.chart === 'line';
+  for (const field of line ? ['items'] : ['xLabel', 'x', 'xLabels', 'series']) delete input[field];
+  if (input.xLabels == null || (Array.isArray(input.xLabels) && input.xLabels.length === 0)) delete input.xLabels;
+  const parsed = (line ? lineSchema : barSchema).safeParse(input);
+  return parsed.success ? { data: parsed.data } : { error: parsed.error.issues.slice(0, 4).map(describeIssue).join('\n') };
+}
+
+/** Normalize harmless formatting only; keep data and geometry checks strict. */
+export function parseComparison(args: string): DataComparison | null {
+  return readComparison(args).data ?? null;
+}
+
+export function callCompareData(ctx: { userId: string; chatId: string; attempt: number; alreadyRendered?: boolean }, args: string): {
   result: string; isError: boolean; comparison?: Extract<MessagePart, { type: 'data_comparison' }>;
 } {
   const fail = (result: string) => ({ result, isError: true });
-  if (ctx.attempt > 1) return fail('本轮已调用过数据对比,请使用已有结果,不要重复调用。');
+  if (ctx.alreadyRendered) return fail('本轮已展示图表,请使用已有结果,不要重复调用。');
+  if (ctx.attempt > 2) return fail('本轮图表参数已尝试两次,请简短说明问题,不要继续重试。');
   // Recheck the live policy: an admin may revoke access during generation.
   const user = db.select().from(schema.users).where(eq(schema.users.id, ctx.userId)).get();
   if (!user || user.disabled || !userWantsAgentTools(user.settings)
     || !policyAllows(getAgentSettings().dataComparison, user)) return fail('图表对比当前未开放。');
   if (!db.select({ id: schema.chats.id }).from(schema.chats)
     .where(and(eq(schema.chats.id, ctx.chatId), eq(schema.chats.userId, user.id))).get()) return fail('对话不存在或无权访问。');
-  const data = parseComparison(args);
-  if (!data) return fail('数据格式无效:需要标题、共同单位、数据出处。柱状图为 2–12 项;折线图需递增横轴、1–6 条同长度曲线,每条 2–120 点、至少两个有效数值,总计不超过 600 点。请用文字说明,本轮不要重试。');
+  const parsed = readComparison(args);
+  if (!parsed.data) return fail(`图表参数有误:\n${parsed.error}\n${ctx.attempt < 2 ? '请保留已有真实数据,按以上字段提示修正后重试一次。' : '本轮修正次数已用完,请简短说明问题,不要继续重试。'}`);
+  const data = parsed.data;
   if (data.chart === 'line') {
     return {
       isError: false,

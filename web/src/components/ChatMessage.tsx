@@ -406,6 +406,11 @@ function ToolRun({ calls, results, organizing, chatId }: {
   const [open, setOpen] = useState(false);
   const pending = calls.filter((c) => !results.has(c.id));
   const failed = calls.filter((c) => results.get(c.id)?.isError);
+  const comparisonOnly = calls.every((c) => c.name === COMPARE_DATA);
+  const comparisonDone = comparisonOnly && calls.some((c) => {
+    const result = results.get(c.id);
+    return result && !result.isError;
+  });
   const searching = calls.some((c) => isSearchTool(c.name));
   const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name) || c.name === RUN_COMMAND || c.name === SPAWN_SUBAGENT || c.name === GENERATE_IMAGE);
   const hasCommand = calls.some((c) => c.name === RUN_COMMAND);
@@ -419,8 +424,8 @@ function ToolRun({ calls, results, organizing, chatId }: {
   const lastPending = pending[pending.length - 1];
   if (active && lastPending.name === COMPARE_DATA) {
     label = '正在对比数据…';
-  } else if (calls.every((c) => c.name === COMPARE_DATA)) {
-    label = failed.length ? '数据对比未完成' : organizing ? '数据对比完成,正在整理结论…' : '数据对比完成';
+  } else if (comparisonOnly) {
+    label = !comparisonDone && failed.length ? '数据对比未完成' : organizing ? '数据对比完成,正在整理结论…' : '数据对比完成';
   } else if (workspaceOnly && active && lastPending.name === GENERATE_IMAGE) {
     label = '正在生成图片…';
   } else if (hasImageGeneration && !active && !organizing) {
@@ -476,7 +481,7 @@ function ToolRun({ calls, results, organizing, chatId }: {
       onToggle={() => setOpen(!open)}
       icon={busy
         ? <Spinner className="h-3.5 w-3.5 shrink-0 text-acc" />
-        : <Icon size={13} className={`shrink-0 ${failed.length ? 'text-err' : 'text-tx3'}`} />}
+        : <Icon size={13} className={`shrink-0 ${failed.length && !comparisonDone ? 'text-err' : 'text-tx3'}`} />}
       label={
         <span className={`truncate font-medium ${busy ? 'animate-pulse text-acc' : 'text-tx2'}`}>
           {label}

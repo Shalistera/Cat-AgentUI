@@ -28,6 +28,7 @@ app.setErrorHandler((err, _req, reply) => reply.code(err.message === 'forbidden'
 const adapter = getAdapter('gemini');
 const originalStream = adapter.streamChat;
 let plans = [];
+let plannedRounds;
 let offered = [];
 let beforeTool;
 let latestPrompt;
@@ -46,6 +47,7 @@ const request = (method, url, payload, user = 'alice') => app.inject({ method, u
   headers: { 'x-csrf': '1', cookie: `cat_session=${user}-session` } });
 async function turn(calls = [sample], modelId = 'model', options = {}) {
   plans = calls; offered = []; upstreamRequests = [];
+  plannedRounds = options.rounds ? [...options.rounds] : undefined;
   const created = await request('POST', '/api/chats', { modelId });
   assert.equal(created.statusCode, 200, created.body);
   const id = created.json().chat.id;
@@ -104,13 +106,13 @@ try {
   for (const invalid of [null, {}, { ...sample, items: [sample.items[0]] }, { ...sample, unit: '' }, { ...sample, source: '' },
     { ...sample, items: Array.from({ length: 13 }, (_, i) => ({ label: String(i), value: i })) },
     { ...sample, items: [{ label: 'A', value: 1 }, { label: ' a ', value: 2 }] },
-    { ...sample, items: [{ label: 'A', value: '1' }, { label: 'B', value: 2 }] },
+    ...['', ' ', true, null, '1 美元', '1,234', '1e999'].map((value) => ({ ...sample, items: [{ label: 'A', value }, { label: 'B', value: 2 }] })),
     { ...sample, items: [{ label: 'A', value: 1e16 }, { label: 'B', value: 2 }] },
     { ...sample, html: '<script>alert(1)</script>' }]) assert.equal(parseComparison(JSON.stringify(invalid)), null);
   assert.equal(parseComparison('{"items":[{"label":"A","value":1e999}]}'), null);
   assert.deepEqual(parseComparison(asArgs(lineSample)), lineSample);
   for (const invalid of [
-    { ...lineSample, chart: 'pie' }, { ...lineSample, chart: undefined }, { ...lineSample, items: sample.items },
+    { ...lineSample, chart: 'pie' }, { ...lineSample, chart: undefined, items: sample.items },
     { ...lineSample, x: [6, 8, 8, 12, 24] }, { ...lineSample, x: [6, 8, 7, 12, 24] },
     { ...lineSample, x: [6, 8, Infinity, 12, 24] }, { ...lineSample, xLabels: ['6:00'] },
     { ...lineSample, series: [{ label: 'a', values: [0, 1] }] },
@@ -119,6 +121,23 @@ try {
     { ...lineSample, series: Array.from({ length: 7 }, (_, i) => ({ label: String(i), values: [0, 1, 2, 3, 4] })) },
     { ...lineSample, xLabels: undefined, x: Array.from({ length: 120 }, (_, i) => i), series: Array.from({ length: 6 }, (_, i) => ({ label: String(i), values: Array(120).fill(0) })) },
   ]) assert.equal(parseComparison(asArgs(invalid)), null, JSON.stringify(invalid));
+  // The two reported failures: full line+bar fields and placeholder line
+  // fields on a bar request. Inactive fields never reach the rendered data.
+  assert.deepEqual(parseComparison(asArgs({ ...lineSample, items: sample.items })), lineSample);
+  assert.deepEqual(parseComparison(asArgs({ ...sample, chart: 'bar', x: [0], xLabels: [], xLabel: '', series: [] })), { ...sample, chart: 'bar' });
+  assert.deepEqual(parseComparison(asArgs({ ...sample, chart: null, x: null, xLabels: null, xLabel: null, series: null })), sample);
+  assert.deepEqual(parseComparison(asArgs({ ...lineSample, chart: undefined, items: null })), lineSample);
+  const { xLabels: _labels, ...lineWithoutLabels } = lineSample;
+  assert.deepEqual(parseComparison(asArgs({ ...lineSample, chart: ' LINE ', xLabels: null })), lineWithoutLabels);
+  const numericStrings = { ...lineSample, x: lineSample.x.map(String), series: lineSample.series.map((s) => ({ ...s, values: s.values.map((v) => v === null ? null : String(v)) })) };
+  assert.deepEqual(parseComparison(asArgs(numericStrings)), lineSample);
+  assert.equal(parseComparison(asArgs({ ...sample, items: [{ label: 'A', value: '224.58' }, { label: 'B', value: '225.07' }] })).items[0].value, 224.58);
+  const longerSource = 'https://example.com/quotes?context=' + 'a'.repeat(220);
+  assert.equal(parseComparison(asArgs({ ...sample, source: longerSource })).source, longerSource);
+  assert.equal(parseComparison(asArgs({ ...sample, source: 'a'.repeat(1001) })), null);
+  for (const example of COMPARE_DATA_DEF.description.split('\n').filter((line) => line.includes(' {'))) {
+    assert(parseComparison(example.slice(example.indexOf('{'))), 'every advertised example must be accepted');
+  }
   const maximumLine = { ...lineSample, xLabels: undefined, x: Array.from({ length: 120 }, (_, i) => i),
     series: Array.from({ length: 5 }, (_, i) => ({ label: String(i), values: Array(120).fill(0) })) };
   assert(parseComparison(asArgs(maximumLine)));
@@ -139,22 +158,49 @@ try {
   assert.deepEqual(JSON.parse(lines.result).series[0], { label: '方案 A', min: 0, max: 2, range: 2, peakX: 12 });
   // Verify the actual provider wire schema: nullable JSON unions become Gemini's nullable flag.
   const { geminiAdapter } = await import('../server/dist/providers/gemini.js');
+  const { openaiAdapter } = await import('../server/dist/providers/openai.js');
+  const { anthropicAdapter } = await import('../server/dist/providers/anthropic.js');
   const providerFetch = globalThis.fetch;
   try {
     let sent;
-    globalThis.fetch = async (_url, init) => {
+    globalThis.fetch = async (url, init) => {
       sent = JSON.parse(init.body);
-      return new Response('data: {"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}\n\n', { headers: { 'content-type': 'text/event-stream' } });
+      const event = url.endsWith('/responses') ? { type: 'response.completed', response: { status: 'completed' } }
+        : url.endsWith('/chat/completions') ? { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }
+        : url.endsWith('/messages') ? { type: 'message_delta', delta: { stop_reason: 'end_turn' } }
+        : { candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] };
+      return new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
     };
     for await (const _ev of geminiAdapter.streamChat({ id: 'test', type: 'gemini', baseUrl: 'https://fixture.invalid', apiKey: null, extraHeaders: {}, useVertex: false },
       { model: 'fixture', messages: [{ role: 'user', parts: [{ type: 'text', text: 'test' }] }], tools: [COMPARE_DATA_DEF], signal: new AbortController().signal })) { /* drain */ }
     assert.deepEqual(sent.tools[0].functionDeclarations[0].parameters.properties.series.items.properties.values.items, { type: 'number', nullable: true });
+    assert.deepEqual(sent.tools[0].functionDeclarations[0].parameters.properties.chart.enum, ['bar', 'line'], 'Gemini enum values remain strings');
+    assert.equal(sent.tools[0].functionDeclarations[0].parameters.properties.items.nullable, true);
+    assert.deepEqual(sent.tools[0].functionDeclarations[0].parameters.required, ['title', 'unit', 'source']);
+    const req = { model: 'fixture', messages: [{ role: 'user', parts: [{ type: 'text', text: 'chart test' }] }], tools: [COMPARE_DATA_DEF], signal: new AbortController().signal };
+    const cfg = { id: 'fixture', type: 'openai', baseUrl: 'https://fixture.invalid', apiKey: null, extraHeaders: {} };
+    for (const useResponses of [true, false]) {
+      for await (const _ev of openaiAdapter.streamChat({ ...cfg, useResponses }, req)) { /* drain */ }
+      const tool = useResponses ? sent.tools[0] : sent.tools[0].function;
+      if (useResponses) assert.equal(tool.strict, false, 'Responses must not promote optional chart fields to required');
+      assert.deepEqual(tool.parameters, COMPARE_DATA_DEF.parameters, 'preserve optional fields on Responses and Chat Completions');
+    }
+    for await (const _ev of anthropicAdapter.streamChat({ ...cfg, type: 'anthropic' }, req)) { /* drain */ }
+    assert.deepEqual(sent.tools[0].input_schema, COMPARE_DATA_DEF.parameters);
   } finally { globalThis.fetch = providerFetch; }
   const compared = callCompareData(context, asArgs());
   assert.equal(compared.isError, false);
   assert.deepEqual(compared.comparison, { type: 'data_comparison', ...sample });
   assert.equal(JSON.parse(compared.result).range, 100);
-  assert.equal(callCompareData({ ...context, attempt: 2 }, asArgs()).isError, true);
+  assert.equal(callCompareData({ ...context, attempt: 2, alreadyRendered: true }, asArgs()).isError, true);
+  assert.equal(callCompareData({ ...context, attempt: 3 }, asArgs()).isError, true);
+  const missingUnit = callCompareData(context, asArgs({ ...sample, unit: '' }));
+  assert(missingUnit.isError && missingUnit.result.includes('unit:') && missingUnit.result.includes('重试一次'));
+  const mismatched = { ...lineSample, series: [{ label: 'A', values: [10, 12] }] };
+  assert.match(callCompareData(context, asArgs(mismatched)).result, /series\[0\]\.values:.*5 项/);
+  assert.match(callCompareData(context, asArgs({ ...lineSample, x: [6, 8, 7, 12, 24] })).result, /x\[2\]:.*必须大于/);
+  assert.match(callCompareData(context, asArgs({ ...lineSample, x: ['09-24', '09-25'] })).result, /x\[0\]:.*xLabels/);
+  assert(!callCompareData({ ...context, attempt: 2 }, asArgs(mismatched)).result.includes('重试一次'));
   assert.equal(callCompareData({ ...context, userId: 'bob' }, asArgs()).isError, true);
   saveAgentSettings({ dataComparison: { accessMode: 'restricted', allowedUserIds: ['bob'] } });
   assert.equal(callCompareData(context, asArgs()).isError, true);
@@ -176,9 +222,10 @@ try {
     upstreamRequests.push(req);
     offered.push(req.tools ?? []);
     const done = req.messages.some((m) => m.parts.some((p) => p.type === 'tool_result' && p.name === 'compare_data'));
-    if (!done && plans.length) {
+    const roundCalls = plannedRounds ? plannedRounds.shift() ?? [] : !done ? plans : [];
+    if (roundCalls.length) {
       if (beforeTool) { const hook = beforeTool; beforeTool = null; hook(); }
-      for (let i = 0; i < plans.length; i++) yield { type: 'tool_call', id: `compare-${i}`, name: 'compare_data', args: asArgs(plans[i]) };
+      for (let i = 0; i < roundCalls.length; i++) yield { type: 'tool_call', id: `compare-${upstreamRequests.length}-${i}`, name: 'compare_data', args: asArgs(roundCalls[i]) };
       yield { type: 'stop', reason: 'tool_calls' };
     } else { yield { type: 'text', text: '丙的净收益最高。' }; yield { type: 'stop', reason: 'stop' }; }
   };
@@ -199,7 +246,9 @@ try {
   assert.equal(native.charts.length, 1);
   assert(latestPrompt.includes('[本轮图表意图]') && latestPrompt.includes('优先绘制时间曲线'));
   assert(upstreamRequests.every((r) => r.webSearch === true));
-  assert(upstreamRequests.every((r) => r.tools.some((t) => t.name === 'compare_data') && !r.tools.some((t) => t.name === 'google_search')));
+  assert(upstreamRequests.every((r) => !r.tools.some((t) => t.name === 'google_search')));
+  assert(upstreamRequests[0].tools.some((t) => t.name === 'compare_data'));
+  assert(!upstreamRequests[1].tools.some((t) => t.name === 'compare_data'), 'hide the chart tool after successful rendering');
   assert(upstreamRequests[0].messages.at(-1).parts.some((p) => p.text === reportedPrompt), 'original user text is unchanged');
   assert.equal(upstreamRequests.length, 2, 'normal tool call and answer, no classifier or repair model calls');
   const target = native.events.find((e) => e.type === 'meta').data.messageId;
@@ -233,12 +282,30 @@ try {
   assert(savedLine.messages.some((m) => m.parts.some((p) => p.type === 'data_comparison' && p.chart === 'line' && p.series[1].values[2] === null)));
   const lineExport = await request('GET', `/api/chats/${lineTurn.id}/export?format=md`);
   assert(lineExport.body.includes('| 8:30 | 1 | — |') && lineExport.body.includes('方案 A (相对值)'));
+  const tolerantLine = await turn([{ ...lineSample, items: sample.items }]);
+  assert.deepEqual(tolerantLine.charts[0].data, { type: 'data_comparison', ...lineSample });
+  assert.equal(upstreamRequests.length, 2, 'inactive fields are normalized without a repair round');
+  const tolerantBar = await turn([{ ...sample, chart: 'bar', xLabel: '', x: [0], xLabels: [], series: [] }]);
+  assert.deepEqual(tolerantBar.charts[0].data, { type: 'data_comparison', ...sample, chart: 'bar' });
+  assert.equal(upstreamRequests.length, 2);
   const mixed = await turn([lineSample, sample]);
   assert.equal(mixed.charts.length, 1); assert(mixed.results[1].isError, 'line and bar share one per-turn limit');
   const twice = await turn([sample, sample]);
   assert.equal(twice.charts.length, 1); assert(twice.results[1].isError);
   const invalidTurn = await turn([{ ...sample, items: [] }]);
   assert.equal(invalidTurn.charts.length, 0); assert(invalidTurn.results[0].isError);
+  const fixed = await turn([], 'model', { rounds: [[mismatched], [lineSample]] });
+  assert.equal(fixed.charts.length, 1); assert.deepEqual(fixed.charts[0].data, { type: 'data_comparison', ...lineSample });
+  assert(fixed.results[0].isError && !fixed.results[1].isError);
+  assert.equal(upstreamRequests.length, 3, 'one failed attempt, one correction, then conclusion');
+  assert(offered[1].some((t) => t.name === 'compare_data'));
+  assert(!offered[2].some((t) => t.name === 'compare_data'));
+  const exhausted = await turn([], 'model', { rounds: [[mismatched], [mismatched]] });
+  assert.equal(exhausted.charts.length, 0);
+  assert(exhausted.results[1].result.includes('修正次数已用完'));
+  assert(!offered[2].some((t) => t.name === 'compare_data'), 'hide after two failed attempts');
+  const forcedThird = await turn([mismatched, mismatched, lineSample]);
+  assert.equal(forcedThird.charts.length, 0); assert(forcedThird.results[2].isError, 'runtime cap still applies if model ignores tool availability');
   userSettings({ agentTools: false });
   const off = await turn([sample], 'model', { text: reportedPrompt }); assert.equal(off.charts.length, 0); assert(off.results[0].isError);
   assert(!latestPrompt?.includes('[图表对比]') && !latestPrompt?.includes('[本轮图表意图]'));
@@ -262,7 +329,7 @@ try {
     await streamChat('fixture', {}, { onDataComparison: (part) => { received = part; } }, new AbortController().signal);
     assert.deepEqual(received, normal.charts[0].data);
   } finally { globalThis.fetch = originalFetch; }
-  console.log('PASS: per-turn chart intent/opt-outs/native search preservation/no extra model calls, multiline/gaps/irregular axes/Gemini schema, retirement migration/profile cleanup, numeric validation/scales, ACL/revocation, per-turn cap, SSE, persistence, Markdown export and text-only fallback.');
+  console.log('PASS: mixed-field normalization/numeric strings/field errors/bounded correction, Responses optional fields and Gemini/Anthropic/Chat Completions schemas, intent/opt-outs/native search preservation, validation/ACL/one-chart cap, SSE/persistence/export and text-only fallback.');
 } finally {
   adapter.streamChat = originalStream;
   await app.close(); rawDb.close(); fs.rmSync(temp, { recursive: true, force: true });
