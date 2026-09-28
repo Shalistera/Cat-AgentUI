@@ -30,7 +30,7 @@ import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPro
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import { GENERATE_IMAGE_TOOL, buildImageToolPrompt, callImageTool, imageToolDefinition, imageToolModelsFor } from '../image-tool.js';
-import { COMPARE_DATA_TOOL, COMPARE_DATA_DEF, DATA_COMPARISON_PROMPT, callCompareData, comparisonPresentationHint } from '../data-comparison.js';
+import { COMPARE_DATA_TOOL, DATA_COMPARISON_PROMPT, callCompareData, comparisonPresentationIntent, comparisonToolDefinition } from '../data-comparison.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
 import type {
   AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry,
@@ -1550,6 +1550,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // only comes into being on the first write.
     const agentSettings = getAgentSettings();
     const agentTools = userWantsAgentTools(user.settings);
+    const comparisonActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.dataComparison, user);
     const workspaceActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.workspace, user);
     // Why the built-in tools are absent this turn — surfaced to the model (and
     // so to the person) when it still tries to call one from memory.
@@ -1571,7 +1572,7 @@ export async function chatRoutes(app: FastifyInstance) {
       ? [
         buildWorkspacePrompt(chatId),
         sandboxActive
-          ? buildSandboxPrompt()
+          ? buildSandboxPrompt(comparisonActive)
           : convertActive
           ? buildConvertPrompt()
           : '本对话没有命令执行能力(没有 run_command 之类的工具):不要为了"让人去跑"而主动写脚本或给出终端命令,除非用户明确要的就是脚本本身;不能声称已经执行脚本。当前提供的其他内置工具仍可完成其描述支持的操作,不要把缺少命令执行当作所有内置工具都不可用。',
@@ -1582,7 +1583,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const skillRows = agentTools && model.tools && !model.imageGen && policyAllows(agentSettings.skills, user) ? skillsFor(user) : [];
     const skillsActive = skillRows.length > 0;
     if (skillsActive) toolDefs = [...(toolDefs ?? []), ...SKILL_TOOL_DEFS];
-    const skillsBlock = skillsActive ? buildSkillsPrompt(skillRows, sandboxActive) : null;
+    const skillsBlock = skillsActive ? buildSkillsPrompt(skillRows, sandboxActive, comparisonActive) : null;
     // 子代理: needs the workspace (that is where its output lands) and a
     // tool-capable model; the model it runs on may be an admin-designated one.
     const subagentActive = workspaceActive && subagentAvailableFor(user);
@@ -1594,10 +1595,10 @@ export async function chatRoutes(app: FastifyInstance) {
     if (imageToolActive) toolDefs = [...(toolDefs ?? []), imageToolDefinition(imageToolModels)];
     const imageToolBlock = imageToolActive ? buildImageToolPrompt(imageToolModels) : null;
     let imageToolAttempts = 0;
-    const comparisonActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.dataComparison, user);
-    if (comparisonActive) toolDefs = [...(toolDefs ?? []), COMPARE_DATA_DEF];
-    const comparisonHint = comparisonActive ? comparisonPresentationHint(parseParts(history[history.length - 1].parts)
+    const comparisonIntent = comparisonActive ? comparisonPresentationIntent(parseParts(history[history.length - 1].parts)
       .filter((p) => p.type === 'text').map((p) => p.text).join('\n')) : null;
+    const comparisonHint = comparisonIntent?.hint;
+    if (comparisonActive) toolDefs = [...(toolDefs ?? []), comparisonToolDefinition(comparisonIntent?.chart)];
     let comparisonAttempts = 0;
     let comparisonRendered = false;
     // Native search rides on the main request whenever Vertex lets it: the
@@ -1891,6 +1892,7 @@ export async function chatRoutes(app: FastifyInstance) {
                   chatId, messageId: assistantId, providerId: provider.id, model: model.modelId,
                   ...info, comparisonAvailable: comparisonActive, toolCount: roundTools?.length ?? 0,
                   comparisonIntentMatched: !!comparisonHint,
+                  comparisonTarget: comparisonIntent?.chart,
                   clientGone, timeout: textTimeoutError,
                 }, secretValues);
                 if (info.transport !== 'eof' || !info.finishReason || info.invalidEvents) {
@@ -2043,7 +2045,8 @@ export async function chatRoutes(app: FastifyInstance) {
                 })()
                 : call.name === COMPARE_DATA_TOOL && comparisonActive
                 ? (() => {
-                  const outcome = callCompareData({ userId: user.id, chatId, attempt: ++comparisonAttempts, alreadyRendered: comparisonRendered }, call.args);
+                  const outcome = callCompareData({ userId: user.id, chatId, attempt: ++comparisonAttempts,
+                    alreadyRendered: comparisonRendered, chartTarget: comparisonIntent?.chart }, call.args);
                   toolComparison = outcome.comparison;
                   if (toolComparison) comparisonRendered = true;
                   return outcome;
@@ -2267,7 +2270,7 @@ export async function chatRoutes(app: FastifyInstance) {
     releaseTurn();
     if (fallbackMeta?.adopted) sse.send('model_selected', { modelId: model.id });
     streamLog.info({ status, finishReason, clientGone, durationMs, comparisonAvailable: comparisonActive,
-      comparisonIntentMatched: !!comparisonHint, comparisonAttempts,
+      comparisonIntentMatched: !!comparisonHint, comparisonTarget: comparisonIntent?.chart, comparisonAttempts,
       comparisonRendered: finalParts.some((p) => p.type === 'data_comparison') }, 'Chat turn finished');
     sse.send('done', { messageId: assistantId, status, finishReason });
 

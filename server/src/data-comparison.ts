@@ -5,10 +5,12 @@ import { getAgentSettings, policyAllows, userWantsAgentTools } from './agent-set
 import type { DataComparison, MessagePart, ToolDef } from './types.js';
 
 export const COMPARE_DATA_TOOL = 'compare_data';
+export type ComparisonChartTarget = 'bar' | 'line';
+export type ComparisonIntent = { hint: string; chart?: ComparisonChartTarget };
 
 /** A narrow presentation hint for the current user message, not a classifier
  * over retrieved documents or assistant history. No extra model request. */
-export function comparisonPresentationHint(userText: string): string | null {
+export function comparisonPresentationIntent(userText: string): ComparisonIntent | null {
   const text = userText.normalize('NFKC')
     .replace(/```[\s\S]*?(?:```|$)/g, ' ')
     .replace(/~~~[\s\S]*?(?:~~~|$)/g, ' ')
@@ -19,38 +21,61 @@ export function comparisonPresentationHint(userText: string): string | null {
   // Negation must modify the chart itself: “不要长文,用图表展示” is positive.
   if (/(?:不要|不用|无需|不需要|别)\s*(?:(?:再|额外|给我|帮我|为我|生成|提供|绘制|展示|显示|添加|输出|使用|用|画|做)\s*){0,4}(?:图表|图形|画图|绘图|曲线|可视化|折线图|柱状图|对比图)|(?:只|仅)(?:要|用)(?:纯)?(?:文字|文本|表格)|\b(?:no (?:charts?|graphs?)|(?:do not|don't) (?:plot|draw|chart)|(?:text|table)[ -]only)\b/i.test(text)) return null;
   if (/^(?:请帮我|请|帮我|麻烦)?\s*(?:翻译|润色|改写|检查语法|解释(?:一下)?这(?:句|段)话|(?:写|编写|实现|开发).{0,24}(?:代码|脚本|函数|组件))/.test(text)) return null;
+  if (/(?:为什么|为何|怎么).{0,24}(?:调用|选用|选择|出图|绘图)|(?:解释|分析|排查|检查).{0,20}(?:提示词|工具定义|图表工具|绘图工具|调用失败)/.test(text)) return null;
 
   const compare = /对比|比较|两者|两种|区别|\bcompar(?:e|ing|ison)\b/i.test(text);
-  const time = /(?:按|随|用).{0,6}(?:时间|日期|月份|年度|季度)|时间(?:段|轴|序列)|逐(?:时|日|月|年)|\bover time\b|\btime[ -]?series\b|\btimeline\b/i.test(text);
+  const time = /(?:按|随|用).{0,6}(?:时间|日期|月份|年度|季度)|时间(?:段|轴|序列)|一天内|不同时段|逐(?:小时|时|日|月|年)|\bover time\b|\btime[ -]?series\b|\btimeline\b/i.test(text);
   const display = /展示|呈现|显示|画|绘制|可视化|\b(?:show|display|plot|visuali[sz]e)\b/i.test(text);
   const chart = /(?:画|绘制|生成|展示|显示|用|调用|测试).{0,20}(?:图表|折线图|柱状图|对比图|曲线)|(?:图表|折线图|柱状图|对比图).{0,20}(?:展示|呈现|显示|调用|测试|试试)|\b(?:plot|draw|show|create).{0,24}\b(?:chart|graph|curve)s?\b/i.test(text);
   const temporal = compare && time && (display || /按.{0,6}(?:时间|日期)|\bover time\b|\btime[ -]?series\b/i.test(text));
   if (!chart && !temporal) return null;
-  return [
+  const bar = /柱状图|条形图|\bbar (?:chart|graph)s?\b/i.test(text);
+  const line = /折线图|曲线|\bline (?:chart|graph)s?\b|\bcurves?\b/i.test(text);
+  if (bar && line && !temporal && /区别|原理|用法|适用/.test(text)) return null;
+  // An explicit chart choice wins over the default for temporal comparisons.
+  // Ambiguous/mixed requests keep both options; no retrieved text is inspected.
+  const target = bar && line ? undefined : bar ? 'bar' : line || temporal ? 'line' : undefined;
+  const hint = [
     '[本轮图表意图]',
-    temporal ? '用户本轮要求按时间展示对比,可量化的时间变化应优先绘制时间曲线;非数值的事件/流程仍按用户要求展示。'
+    target === 'bar' ? '用户指定柱状图,按用户指定的指标比较。'
+      : target === 'line' ? '本轮目标是折线图:多个对象用共用横轴的多条曲线。时间变化应优先绘制时间曲线,不能改画峰值、总量等汇总柱状图;非数值事件/流程仍按用户要求展示。'
       : '用户本轮明确要求图表展示或测试图表能力。',
-    '先取有依据的数据,足够后在正文前实际调用 compare_data;不要用 ASCII 时间轴、长文或“已调用”的文字代替工具调用。缺少所需数值时简短说明缺口,不能编造或换成无关图表。出图后简述结论;用户明确要求的详述仍保留。',
+    '先围绕目标取有依据的数据,足够后在正文前调用 compare_data。若只找到汇总值,按下方图表规则补查时间序列;仍不足就简短说明具体缺口,不换指标凑图、不编造数值。',
   ].join('\n');
+  return { hint, chart: target };
+}
+
+export function comparisonPresentationHint(userText: string): string | null {
+  return comparisonPresentationIntent(userText)?.hint ?? null;
 }
 
 export const DATA_COMPARISON_PROMPT = [
   '[图表对比]',
-  '用户要求图表、曲线、趋势或按时间展示数值比较时,先收集必要数据,再调用 compare_data,最后写简短结论。需要联网就先检索来源。数据足够后优先出图,不要先写长篇背景科普、重复表格或 ASCII 时间轴;出图前最多一句进度说明。此工具不依赖工作区、命令执行或沙盒。',
-  '除非用户明确要求详述,图后只写 2–4 条关键差异及必要的来源/局限说明,正文约 200–400 字即可;不要逐时间段重复描述图上已有信息。闲聊和没有比较需求的回答照常回复,不用图表。',
-  '用户不必说出工具名或“画图”:“对比两者,用时间段展示”也应先考虑调用图表工具。明确仅用文字/表格或不要图表时,遵从用户要求。',
-  '图表数值必须有依据,先明确比较条件、共同单位及来源。只有少量峰值、范围或时长时,不能编造成完整时间曲线;找不到逐点数据或可核实计算依据时,简短说明缺口并给已有事实,不要为了出图猜数。估算必须明确依据和假设,不能当作实测数据或个人效果预测。',
+  '先确定用户要比较的对象、指标和横轴,再找数据。图表必须回答这个目标,出图次数不是目标。用户不必知道工具名:“对比两者,用时间段展示”应选择共用时间轴的多曲线;分类/汇总数值比较可用柱状图,用户明确指定图形时遵从其要求。不要把相关但不同的指标当作替代,例如浓度不等于药效、峰值不等于全天变化。',
+  '数据足够后优先出图:调用 compare_data,再写 2–4 条短结论及必要来源/局限,默认约 200–400 字。不要先写长篇科普、重复表格或 ASCII 时间轴。该工具可直接画 1–6 条曲线,不依赖工作区、命令执行或沙盒,无需 scipy/matplotlib 或绘图技能。',
+  '缺数据时:若只找到峰值/时长/摘要,但目标需要时间序列,利用当前可用搜索/读取能力做一轮有目标的补查,优先原始资料的时间点、数据表或曲线。拿不到原图或不能可靠提取时如实说明。仍不足就用 1–2 句说明缺少什么,不改画无关柱状图,不反复搜索凑图。只有少量峰值、范围或时长时,不能编造成完整时间曲线。',
+  '计算与展示分开:确需计算/拟合时可先用可用计算工具求数值,绘图仍用 compare_data。缺少计算库不代表图表工具不可用;可行时用已安装工具,否则说明计算受阻,不能假装已求得数据。用户要求或允许估算且有可核实计算依据时,才绘制并标注依据、假设和“估算”;实测值与估算不能混称。',
+  '明确仅用文字/表格时不调用图表。只测试工具且未要求真实数据时可用标明“演示”的数据;已要求检索真实资料时不能换成演示。调试任务只报告与测试有关的结果和缺口,不扩展成个人咨询或追问个人情况。',
 ].join('\n');
+
+const BAR_EXAMPLE = '柱状图 {"title":"两天销量","unit":"件","source":"演示数据","chart":"bar","items":[{"label":"周一","value":10},{"label":"周二","value":12}]}';
+const LINE_EXAMPLE = '多曲线 {"title":"两家店销量随时间变化","unit":"件","source":"演示数据","chart":"line","xLabel":"天","x":[1,2,3],"series":[{"label":"甲店","values":[10,12,11]},{"label":"乙店","values":[8,11,13]}]}';
+function comparisonDescription(target?: ComparisonChartTarget): string {
+  return [
+    '按用户要的指标展示数值对比,不以相关的汇总值替代时间变化。多条曲线可直接展示,不需要 Python、scipy、matplotlib 或沙盒。',
+    target ? `本轮只接受 ${target === 'line' ? 'line 折线图;多个对象放进 series 的多条曲线,共用 x' : 'bar 柱状图' }。` : 'chart=bar 画柱状图,chart=line 画单条或多条折线。',
+    '所有图都填 title、unit、source。',
+    target !== 'line' ? '柱状图再填 items;折线字段省略或填 null。' : null,
+    target !== 'bar' ? '折线图再填 xLabel、递增数值 x、series;需要文字刻度时加 xLabels。每条 series 有 label 和与 x 等长的 values,缺失值填 null。' : null,
+    '以下仅为格式示例,实际调用替换为符合用户目标的数据:',
+    target !== 'line' ? BAR_EXAMPLE : null,
+    target !== 'bar' ? LINE_EXAMPLE : null,
+    '每轮只展示一张图;错误可按报错修正一次。成功后简述结论。',
+  ].filter(Boolean).join('\n');
+}
 export const COMPARE_DATA_DEF: ToolDef = {
   name: COMPARE_DATA_TOOL,
-  description: [
-    '展示数值对比图。用户要图表、趋势或按时间比较时,先搜索/计算取得数据再调用,无需沙盒或 HTML。',
-    '柱状图:填 title、unit、source、chart="bar"、items 即可。折线图:填 title、unit、source、chart="line"、xLabel、x、series;需要文字刻度时加 xLabels。未使用字段省略或填 null,会忽略另一种图的字段。',
-    '以下均为虚构格式示例,使用时替换为真实数据:',
-    '柱状图 {"title":"两天销量","unit":"件","source":"示例数据","chart":"bar","items":[{"label":"周一","value":10},{"label":"周二","value":12}]}',
-    '折线图 {"title":"两天销量","unit":"件","source":"示例数据","chart":"line","xLabel":"天","x":[1,2],"xLabels":["周一","周二"],"series":[{"label":"销量","values":[10,12]}]}',
-    '每轮只展示一张图;格式错误可按具体报错修正一次。成功后简述结论。',
-  ].join('\n'),
+  description: comparisonDescription(),
   parameters: {
     type: 'object',
     properties: {
@@ -75,6 +100,22 @@ export const COMPARE_DATA_DEF: ToolDef = {
     required: ['title', 'unit', 'source'], additionalProperties: false,
   },
 };
+
+/** Narrow the advertised shape only when the current request has a clear
+ * chart target. Runtime validation enforces the same target for loose models. */
+export function comparisonToolDefinition(target?: ComparisonChartTarget): ToolDef {
+  if (!target) return COMPARE_DATA_DEF;
+  const base = COMPARE_DATA_DEF.parameters.properties as Record<string, Record<string, unknown>>;
+  const required = ['title', 'unit', 'source', 'chart', ...(target === 'line' ? ['xLabel', 'x', 'series'] : ['items'])];
+  const properties = Object.fromEntries([...required, ...(target === 'line' ? ['xLabels'] : [])].map((name) => {
+    const property = { ...base[name] };
+    if (required.includes(name) && Array.isArray(property.type)) property.type = property.type.find((t) => t !== 'null');
+    if (name === 'chart') property.enum = [target];
+    return [name, property];
+  }));
+  return { ...COMPARE_DATA_DEF, description: comparisonDescription(target),
+    parameters: { type: 'object', properties, required, additionalProperties: false } };
+}
 
 // Accept unambiguous numeric strings, not empty strings/booleans/units as zero.
 const finiteValue = z.preprocess((v) => typeof v === 'string' && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(v.trim())
@@ -156,7 +197,7 @@ export function parseComparison(args: string): DataComparison | null {
   return readComparison(args).data ?? null;
 }
 
-export function callCompareData(ctx: { userId: string; chatId: string; attempt: number; alreadyRendered?: boolean }, args: string): {
+export function callCompareData(ctx: { userId: string; chatId: string; attempt: number; alreadyRendered?: boolean; chartTarget?: ComparisonChartTarget }, args: string): {
   result: string; isError: boolean; comparison?: Extract<MessagePart, { type: 'data_comparison' }>;
 } {
   const fail = (result: string) => ({ result, isError: true });
@@ -171,6 +212,12 @@ export function callCompareData(ctx: { userId: string; chatId: string; attempt: 
   const parsed = readComparison(args);
   if (!parsed.data) return fail(`图表参数有误:\n${parsed.error}\n${ctx.attempt < 2 ? '请保留已有真实数据,按以上字段提示修正后重试一次。' : '本轮修正次数已用完,请简短说明问题,不要继续重试。'}`);
   const data = parsed.data;
+  if (ctx.chartTarget && (data.chart ?? 'bar') !== ctx.chartTarget) {
+    const target = ctx.chartTarget === 'line'
+      ? '本轮需要折线图(line),不能用峰值或总量柱状图替代时间变化。请取得与目标匹配的横轴数据,多对象用共用 x 的 series。'
+      : '用户指定柱状图(bar),请用 items 展示其要求的分类指标。';
+    return fail(`${target}${ctx.attempt < 2 ? '可修正一次;数据不足时简短说明缺口,不能补造数据。' : '本轮修正次数已用完,请简短说明问题,不要重试。'}`);
+  }
   if (data.chart === 'line') {
     return {
       isError: false,

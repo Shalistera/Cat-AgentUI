@@ -401,10 +401,11 @@ export function isSkillTool(name: string): boolean {
   return name === LOAD_SKILL_TOOL || name === READ_SKILL_FILE_TOOL;
 }
 
-export function buildSkillsPrompt(rows: SkillRow[], sandboxActive: boolean): string {
+export function buildSkillsPrompt(rows: SkillRow[], sandboxActive: boolean, comparisonActive = false): string {
   const lines = rows.map((r) => `- ${r.slug}:${r.description}`).join('\n');
   return [
     '[技能]',
+    ...(comparisonActive ? ['用户未指定技能且只需把已有数据展示为对话内柱状图或单/多曲线折线图时,直接用 compare_data,无需加载 Python 绘图技能;任务确需技能的数据分析方法、复杂图形或文件导出时再加载。'] : []),
     `以下是可用的技能(仅名称与用途;完整步骤未载入)。当用户的任务与某个技能的用途匹配时,先用 load_skill 读取它的完整说明,再严格按说明操作;需要说明里提到的文件时用 read_skill_file 读取。与任何技能无关的任务不必调用。${sandboxActive ? '技能目录在沙盒内只读挂载于 /skills/<技能名>/,说明里的脚本可以直接用 run_command 执行,例如 python3 /skills/<技能名>/scripts/xxx.py。' : ''}`,
     lines,
   ].join('\n');

@@ -99,7 +99,7 @@ export function buildConvertPrompt(): string {
   ].join('\n');
 }
 
-export function buildSandboxPrompt(): string {
+export function buildSandboxPrompt(comparisonActive = false): string {
   const s = getSandboxSettings();
   const env = cachedSandboxEnv();
   const libs = venvExists() ? installedPackageNamesSync() : [];
@@ -111,7 +111,11 @@ export function buildSandboxPrompt(): string {
   return [
     '[命令执行]',
     `可以用 run_command 在隔离沙盒里执行 shell 命令:工作目录就是本工作区(/workspace),文件改动会保留;可用工具:${tools.join('、')}。${libLine}没有网络,不能 pip/npm 安装任何东西;单条命令最长 ${s.timeoutSec} 秒,内存 ${s.memoryMb} MB。`,
-    '格式转换(PDF、Word、Markdown 互转)直接用 convert_file,一步完成,不要自己写 pandoc / weasyprint 命令。run_command 适合:数据处理与统计、生成图表、运行脚本验证代码或计算结果。纯文字任务不必执行命令。',
+    '格式转换(PDF、Word、Markdown 互转)直接用 convert_file,一步完成,不要自己写 pandoc / weasyprint 命令。run_command 适合:数据处理与统计、运行脚本验证代码或计算结果、制作需要导出的文件。纯文字任务不必执行命令。',
+    comparisonActive
+      ? '对话内柱状图和单/多曲线折线图直接用 compare_data,多条曲线不是改用 Python 绘图的理由。确需计算或拟合数值时才先运行计算代码,取得数据后再调用 compare_data;复杂图形或明确要求导出图片时才在沙盒绘图。'
+      : '需要图表文件时可在沙盒计算并绘制,先确认所需运行库可用。',
+    '依赖以已安装库清单为准,不要假定 scipy、pandas、matplotlib 存在。遇到 ModuleNotFoundError,可行时改用已安装工具或标准库;必需的计算无法完成时如实说明,不要反复导入或伪造计算结果。',
     '做法:较长的脚本先用 workspace_write 写成文件再执行;输出只 print 需要的结论,不要打印整份数据;命令失败时先读错误信息再修正,不要反复盲试;需要生成给用户的文件(图表、docx 等)就保存到工作区并在回复里说明文件名。',
   ].join('\n');
 }

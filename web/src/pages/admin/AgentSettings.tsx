@@ -92,7 +92,7 @@ export default function AgentSettingsPage() {
 
       <Card title="图表对比" desc="比较同一指标、同一单位的数值,支持柱状图和多曲线折线图,可切换为数据表。数据来源和数值始终可见。">
         <AccessEditor value={s.dataComparison} onChange={(v) => setS({ ...s, dataComparison: v })} users={users} disabled={saving}
-          enabledLabel="允许使用图表对比" enabledDesc="默认开启,受个人智能工具开关控制。仅用于有明确数值的数据分析和比较;每轮最多一次,柱状图 2–12 项;折线图最多 6 条曲线、每条 120 点、合计 600 点,无需生成 HTML 或额外调用绘图模型。" />
+          enabledLabel="允许使用图表对比" enabledDesc="默认开启,受个人智能工具开关控制。每轮最多展示一张图,格式错误可修正一次。柱状图 2–12 项;折线图最多 6 条曲线、每条 120 点、合计 600 点。多曲线也不依赖 Python 或沙盒;计算、拟合数据仍需相应计算能力。" />
       </Card>
 
       <Card title="图片生成" desc="普通聊天模型可按需要调用 generate_image,用下面选定的图片模型生成图片并直接展示在对话中。工具授权独立于模型可见权限:用户即使看不到这些模型、没有绘图工坊或直接使用图像模型的权限,也可通过此工具出图。">

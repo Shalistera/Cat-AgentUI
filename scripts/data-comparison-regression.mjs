@@ -15,7 +15,9 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-comparison-'));
 process.env.DATA_DIR = temp;
 process.env.SECRET_KEY = 'comparison-regression-secret';
 const { db, rawDb, schema, runMigrations, setSetting } = await import('../server/dist/db/index.js');
-const { callCompareData, parseComparison, COMPARE_DATA_DEF, comparisonPresentationHint } = await import('../server/dist/data-comparison.js');
+const { callCompareData, parseComparison, COMPARE_DATA_DEF, comparisonPresentationHint, comparisonPresentationIntent, comparisonToolDefinition } = await import('../server/dist/data-comparison.js');
+const { buildSandboxPrompt } = await import('../server/dist/sandbox/tool.js');
+const { buildSkillsPrompt } = await import('../server/dist/skills.js');
 const { saveAgentSettings } = await import('../server/dist/agent-settings.js');
 const { authPlugin } = await import('../server/dist/auth.js');
 const { sha256hex } = await import('../server/dist/crypto.js');
@@ -70,11 +72,30 @@ try {
     '对比两个方案，别给我生成图表', '按时间对比两者，不用折线图', 'Compare these two series over time, text only',
     '按时间展示这两组数据，仅用表格',
     '请翻译这句话：对比两种方案，用时间段展示', '帮我写一个生成折线图的函数',
+    '为什么没有选用多曲线折线图？我在调试，不要重新调用。', '分析图表工具的提示词，为什么用柱状图展示了峰值',
     '他回复“给我画个柱状图”是什么意思', '解释 `用图表展示两者区别` 这句话',
     '> 对比两者，用时间段展示\n解释这段引用', '```\n对比两者，用时间段展示\n```',
     '~~~text\n对比两者，用时间段展示\n~~~']) {
     assert.equal(comparisonPresentationHint(text), null, text);
   }
+  assert.equal(comparisonPresentationIntent(reportedPrompt)?.chart, 'line');
+  assert.equal(comparisonPresentationIntent('展示一天内两种方案的变化对比')?.chart, 'line');
+  assert.equal(comparisonPresentationIntent('给我画多曲线折线对比图')?.chart, 'line');
+  assert.equal(comparisonPresentationIntent('按时间对比两家店的销量，但用柱状图展示')?.chart, 'bar');
+  assert.equal(comparisonPresentationIntent('Show a graph of these values')?.chart, undefined);
+  assert.equal(comparisonPresentationIntent('展示折线图和柱状图的区别')?.chart, undefined);
+  const lineDef = comparisonToolDefinition('line');
+  const barDef = comparisonToolDefinition('bar');
+  assert.equal(lineDef.parameters.properties.items, undefined);
+  assert.deepEqual(lineDef.parameters.properties.chart.enum, ['line']);
+  assert(lineDef.parameters.required.includes('series') && lineDef.parameters.required.includes('x'));
+  assert.equal(barDef.parameters.properties.series, undefined);
+  assert.deepEqual(barDef.parameters.properties.chart.enum, ['bar']);
+  assert.equal(comparisonToolDefinition(), COMPARE_DATA_DEF, 'unclassified tasks retain both chart types');
+  const lineExample = lineDef.description.split('\n').find((line) => line.includes(' {'));
+  assert.equal(parseComparison(lineExample.slice(lineExample.indexOf('{'))).series.length, 2, 'show a working multi-curve example');
+  assert(buildSkillsPrompt([], true, true).includes('直接用 compare_data'));
+  assert(!buildSkillsPrompt([], true).includes('compare_data'), 'subagents without the chart tool retain their own workflow');
   // Upgrade cleanup is surgical and idempotent, even with malformed legacy JSON.
   const legacy = new Database(':memory:');
   legacy.exec('CREATE TABLE users (settings TEXT NOT NULL)');
@@ -93,6 +114,9 @@ try {
   legacy.close();
 
   runMigrations();
+  assert(buildSandboxPrompt(true).includes('多条曲线不是改用 Python 绘图的理由'));
+  assert(buildSandboxPrompt(true).includes('ModuleNotFoundError'));
+  assert(!buildSandboxPrompt(false).includes('compare_data'), 'do not advertise a disabled chart tool');
   for (const id of ['alice', 'bob', 'admin']) {
     db.insert(schema.users).values({ id, username: id, passwordHash: 'not-used', role: id === 'admin' ? 'admin' : 'user', createdAt: Date.now() }).run();
     db.insert(schema.sessions).values({ userId: id, tokenHash: sha256hex(`${id}-session`), createdAt: Date.now(), expiresAt: Date.now() + 60_000 }).run();
@@ -194,6 +218,10 @@ try {
   assert.equal(JSON.parse(compared.result).range, 100);
   assert.equal(callCompareData({ ...context, attempt: 2, alreadyRendered: true }, asArgs()).isError, true);
   assert.equal(callCompareData({ ...context, attempt: 3 }, asArgs()).isError, true);
+  const wrongTarget = callCompareData({ ...context, chartTarget: 'line' }, asArgs(sample));
+  assert(wrongTarget.isError && !wrongTarget.comparison && wrongTarget.result.includes('不能用峰值或总量柱状图替代'));
+  assert(!callCompareData({ ...context, chartTarget: 'line', attempt: 2 }, asArgs(lineSample)).isError);
+  assert(callCompareData({ ...context, chartTarget: 'bar' }, asArgs(lineSample)).isError);
   const missingUnit = callCompareData(context, asArgs({ ...sample, unit: '' }));
   assert(missingUnit.isError && missingUnit.result.includes('unit:') && missingUnit.result.includes('重试一次'));
   const mismatched = { ...lineSample, series: [{ label: 'A', values: [10, 12] }] };
@@ -248,6 +276,7 @@ try {
   assert(upstreamRequests.every((r) => r.webSearch === true));
   assert(upstreamRequests.every((r) => !r.tools.some((t) => t.name === 'google_search')));
   assert(upstreamRequests[0].tools.some((t) => t.name === 'compare_data'));
+  assert.deepEqual(upstreamRequests[0].tools.find((t) => t.name === 'compare_data').parameters.properties.chart.enum, ['line']);
   assert(!upstreamRequests[1].tools.some((t) => t.name === 'compare_data'), 'hide the chart tool after successful rendering');
   assert(upstreamRequests[0].messages.at(-1).parts.some((p) => p.text === reportedPrompt), 'original user text is unchanged');
   assert.equal(upstreamRequests.length, 2, 'normal tool call and answer, no classifier or repair model calls');
@@ -267,7 +296,7 @@ try {
   const withWorkspace = await turn();
   assert.equal(withWorkspace.charts.length, 1);
   assert(!latestPrompt.includes('生成 PDF/图表这类必须执行'));
-  assert(latestPrompt.includes('此工具不依赖工作区、命令执行或沙盒'));
+  assert(latestPrompt.includes('不依赖工作区、命令执行或沙盒'));
   saveAgentSettings({ workspace: { enabled: false } });
   assert.deepEqual(normal.charts[0].data, { type: 'data_comparison', ...sample });
   const saved = (await request('GET', `/api/chats/${normal.id}`)).json();
@@ -288,6 +317,14 @@ try {
   const tolerantBar = await turn([{ ...sample, chart: 'bar', xLabel: '', x: [0], xLabels: [], series: [] }]);
   assert.deepEqual(tolerantBar.charts[0].data, { type: 'data_comparison', ...sample, chart: 'bar' });
   assert.equal(upstreamRequests.length, 2);
+  const goalRepair = await turn([], 'model', { text: reportedPrompt, rounds: [[sample], [lineSample]] });
+  assert(goalRepair.results[0].isError && !goalRepair.results[1].isError);
+  assert.deepEqual(goalRepair.charts.map((c) => c.data.chart), ['line'], 'never display a substitute bar chart for a time-series request');
+  assert.equal(upstreamRequests.length, 3);
+  const noSeries = await turn([sample], 'model', { text: reportedPrompt });
+  assert.equal(noSeries.charts.length, 0, 'missing time data does not silently degrade into a summary chart');
+  const explicitBar = await turn([sample], 'model', { text: '按时间对比两家店的销量，用柱状图展示' });
+  assert.equal(explicitBar.charts.length, 1, 'honor an explicit bar preference despite temporal wording');
   const mixed = await turn([lineSample, sample]);
   assert.equal(mixed.charts.length, 1); assert(mixed.results[1].isError, 'line and bar share one per-turn limit');
   const twice = await turn([sample, sample]);
@@ -329,7 +366,7 @@ try {
     await streamChat('fixture', {}, { onDataComparison: (part) => { received = part; } }, new AbortController().signal);
     assert.deepEqual(received, normal.charts[0].data);
   } finally { globalThis.fetch = originalFetch; }
-  console.log('PASS: mixed-field normalization/numeric strings/field errors/bounded correction, Responses optional fields and Gemini/Anthropic/Chat Completions schemas, intent/opt-outs/native search preservation, validation/ACL/one-chart cap, SSE/persistence/export and text-only fallback.');
+  console.log('PASS: chart-target schema/runtime guard and bounded correction, multi-curve examples and sandbox routing, mixed-field normalization, provider schemas/native search preservation, validation/ACL/one-chart cap, SSE/persistence/export and text-only fallback.');
 } finally {
   adapter.streamChat = originalStream;
   await app.close(); rawDb.close(); fs.rmSync(temp, { recursive: true, force: true });

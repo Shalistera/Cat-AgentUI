@@ -125,6 +125,11 @@ npx pm2 save
 ### 图表工具参数与恢复
 
 `compare_data` 的说明提供柱状图和折线图的最小 JSON 示例。按 `chart` 选择需要的字段,忽略另一种图的字段和占位值;
+折线示例展示两条曲线共用横轴,不依赖 Python/scipy/matplotlib。模型确需计算或拟合数据时仍可使用沙盒,
+但已知数值的对话内图表直接走 `compare_data`;沙盒与技能提示按本轮图表权限引导,不会要求安装绘图库才能画多曲线。
+当前用户消息明确要求某类图形,或命中“对比 + 按时间展示”时,只提供对应图形的参数和示例,运行时也会拒绝不匹配的图形。
+用户明确指定柱状图优先于时序默认值;模糊请求保留两种选择。该检查能拦截错用图形,不能证明数值、指标或来源语义正确。
+缺少目标数据时优先定向补查原始资料,仍取不到则简短说明;不能用峰值/总量凑成不回答时间变化的图,不能无依据补造曲线。
 未指定图形时可从单独提供的 `items` 或 `series` 识别,两套数据都有时要求明确指定。纯数字字符串可转为数值,
 空字符串/布尔值/带单位的字符串不会被当作数字。数据出处允许最多 1000 字以容纳链接。
 数据点数、横轴顺序、曲线长度、缺失值和单位/出处仍会校验;不静默排序、补点或猜测单位。
@@ -143,7 +148,7 @@ Gemini 3.7/3.8 Flash 按原生 `thinkingLevel` 发送低/中/高档;它们不能
 提高上限会允许更多思考和输出,不保证低延迟或低成本。图表任务默认先取数据、先出图、后写简短结论。当前用户消息明确要求图表或“对比 + 按时间展示”时,
 会增加简短的本轮图表意图提示;只看当前用户消息,忽略引用和代码片段,跳过明确不画图或纯翻译/编程请求。
 这个判断不另调模型,不改变 Vertex 原生搜索或其他 Agent 工具;生成后的长文也不会被再送去转换。
-Gemini 的流结束日志包含 `requestedMaxOutputTokens`、`thoughtTokens`、`answerTokens`,便于定位实际截断。回合结束日志还会记录 `comparisonIntentMatched`、`comparisonAttempts`、
+Gemini 的流结束日志包含 `requestedMaxOutputTokens`、`thoughtTokens`、`answerTokens`,便于定位实际截断。回合结束日志还会记录 `comparisonIntentMatched`、`comparisonTarget`、`comparisonAttempts`、
 `comparisonRendered`,可区分意图未匹配、工具未调用和工具已调用但未出图。
 参考:[Google 思考与输出预算说明](https://ai.google.dev/gemini-api/docs/generate-content/thinking)。
 
