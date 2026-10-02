@@ -228,7 +228,7 @@ export interface ModelInfo {
   vision: boolean; tools: boolean; imageGen: boolean; nativeSearch: boolean; isDefault: boolean;
   /** Admin default for the 联网搜索 toggle on new chats with this model. */
   defaultWebSearch: boolean;
-  providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini';
+  providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini' | 'catbridge';
   /** Content-addressed URL of this model's own icon; wins over the provider avatar. */
   avatarUrl: string | null;
   /** Content-addressed URL of the provider's custom avatar; null = built-in mark. */
