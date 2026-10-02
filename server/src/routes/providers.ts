@@ -327,7 +327,7 @@ export async function providerRoutes(app: FastifyInstance) {
   app.get('/api/admin/providers', async (req, reply) => {
     requireAdmin(req, reply);
     const provRows = db.select().from(schema.providers)
-      .orderBy(asc(schema.providers.sortOrder), asc(schema.providers.createdAt)).all().filter((p) => p.type !== 'catbridge');
+      .orderBy(asc(schema.providers.sortOrder), asc(schema.providers.createdAt)).all();
     const modelRows = db.select().from(schema.models)
       .orderBy(asc(schema.models.sortOrder), asc(schema.models.modelId)).all();
     const byProvider = new Map<string, ModelRow[]>();

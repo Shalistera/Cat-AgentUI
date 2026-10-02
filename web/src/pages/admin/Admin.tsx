@@ -19,7 +19,6 @@ import Import from './Import';
 import Sandbox from './Sandbox';
 import Skills from './Skills';
 import AgentSettingsPage from './AgentSettings';
-import CatBridge from './CatBridge';
 
 /* The admin console is a dialog, the same shape as 设置: sections down the
    left, content on the right, floating over the app. It keeps URL routing
@@ -34,7 +33,6 @@ const SECTIONS: { to: string; label: string; icon: typeof BarChart3; end?: boole
   { to: '/admin/models', label: '模型设置', icon: Boxes },
   { to: '/admin/model-order', label: '模型排序', icon: ArrowUpDown },
   { to: '/admin/agent', label: '总控', icon: Bot, group: 'Agent 能力' },
-  { to: '/admin/catbridge', label: 'CatBridge', icon: Plug },
   { to: '/admin/mcp', label: 'MCP', icon: Wrench },
   { to: '/admin/sandbox', label: '沙盒', icon: Terminal },
   { to: '/admin/skills', label: '技能', icon: Sparkles },
@@ -128,7 +126,6 @@ export default function Admin() {
                 <Route path="sandbox" element={<Sandbox />} />
                 <Route path="skills" element={<Skills />} />
                 <Route path="agent" element={<AgentSettingsPage />} />
-                <Route path="catbridge" element={<CatBridge />} />
                 <Route path="settings" element={<AppSettings />} />
                 <Route path="import" element={<Import />} />
               </Routes>

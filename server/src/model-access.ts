@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { db, now, schema, getSetting } from './db/index.js';
+import { db, now, schema } from './db/index.js';
 
 export interface ModelAccessUser {
   id: string;
@@ -26,13 +26,6 @@ export function grantedModelIds(userId: string): Set<string> {
 
 /** Re-check at the point of use: shared models pass, restricted ones need a grant. */
 export function canUseModel(user: ModelAccessUser, modelDbId: string): boolean {
-  const row = db.select({ type: schema.providers.type }).from(schema.models)
-    .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
-    .where(eq(schema.models.id, modelDbId)).get();
-  if (row?.type === 'catbridge') {
-    const pair = getSetting<{ userId: string; modelId: string } | null>('catbridge', null);
-    return user.role === 'admin' && pair?.userId === user.id && pair.modelId === modelDbId;
-  }
   if (user.role === 'admin') return true;
   const model = db.select({ accessMode: schema.models.accessMode })
     .from(schema.models).where(eq(schema.models.id, modelDbId)).get();
@@ -53,7 +46,6 @@ export function canUseModel(user: ModelAccessUser, modelDbId: string): boolean {
 export function accessibleOnly<T extends { id: string; accessMode: string }>(
   rows: T[], user: ModelAccessUser,
 ): T[] {
-  rows = rows.filter((r) => canUseModel(user, r.id));
   if (user.role === 'admin') return rows;
   const granted = grantedModelIds(user.id);
   return rows.filter((r) => r.accessMode === 'shared' || granted.has(r.id));

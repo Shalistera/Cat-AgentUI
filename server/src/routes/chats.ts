@@ -25,9 +25,7 @@ import { checkModelLimit, checkQuota, modelLimitBlockMessage, modelLimitReason, 
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
-import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, isWorkspaceTool, removeWorkspace } from '../workspace.js';
-import { dispatchWorkspaceTool } from '../tool-dispatch.js';
-import { assertBridgeReady, bridgePair, runBridgeTurn } from '../catbridge.js';
+import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
@@ -581,7 +579,7 @@ function pickModel(rows: ReturnType<typeof enabledModelRows>) {
 // model — silently defaulting to an image model would surprise every new chat.
 // Only considers models this user is allowed to see.
 function getDefaultModel(user: { id: string; role: string }) {
-  let rows = enabledModelRows().filter((r) => canUseModel(user, r.models.id));
+  let rows = enabledModelRows();
   if (user.role !== 'admin') {
     const granted = grantedModelIds(user.id);
     rows = rows.filter((r) => r.models.accessMode === 'shared' || granted.has(r.models.id));
@@ -607,7 +605,7 @@ type ModelPick = { model: typeof schema.models.$inferSelect; provider: typeof sc
 function getTaskModelCandidates(settingKey: string, current?: ModelPick): ModelPick[] {
   const out: ModelPick[] = [];
   const push = (p: ModelPick | null | undefined) => {
-    if (p && p.provider.type !== 'catbridge' && !p.model.imageGen && !out.some((x) => x.model.id === p.model.id)) out.push(p);
+    if (p && !p.model.imageGen && !out.some((x) => x.model.id === p.model.id)) out.push(p);
   };
   const configured = getSetting<string>(settingKey, '');
   if (configured) push(getModelWithProvider(configured));
@@ -1337,11 +1335,6 @@ export async function chatRoutes(app: FastifyInstance) {
       if (!downgraded) return reply.code(429).send({ error: modelLimitBlockMessage(model, modelLimit) });
     }
 
-    const isBridge = provider.type === 'catbridge';
-    if (isBridge) {
-      try { assertBridgeReady(user.id, model.id); }
-      catch (e) { return reply.code((e as { statusCode: number }).statusCode || 503).send({ error: (e as Error).message }); }
-    }
     const chatLease = tryAcquireChatTurn(user.id, chatId);
     if (!chatLease) {
       return reply.code(429).send({ error: '对话并发数已达上限,请等待其他回复完成', code: 'chat_busy' });
@@ -1496,9 +1489,6 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     // Image models are fed pictures too — that's the whole point of "edit this one".
-    if (isBridge && (carriedDocs.length || history.some((m) => parseParts(m.parts).some((p) => p.type === 'image' || p.type === 'file')))) {
-      return reply.code(400).send({ error: 'CatBridge 第一版仅支持文本，请移除附件或切换模型' });
-    }
     const withImages = !!model.vision || !!model.imageGen;
     let baseHistory: AdapterMessage[];
     try {
@@ -1535,7 +1525,7 @@ export async function chatRoutes(app: FastifyInstance) {
     let toolDefs: ToolDef[] | undefined;
     let toolErrors: { serverId: string; name: string; error: string }[] = [];
     let toolCapabilities: McpCapabilities = { routes: new Map() };
-    if (!isBridge && model.tools && !model.imageGen && mcpServerIds.length) {
+    if (model.tools && !model.imageGen && mcpServerIds.length) {
       const r = await getToolsForServers(mcpServerIds, user);
       toolDefs = r.tools.length ? r.tools : undefined;
       toolErrors = r.errors;
@@ -1549,7 +1539,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // Small corpora ride along whole; big ones become a manifest plus the
     // project_search / project_read_doc tools. Image turns skip all of it.
     const project = chat.projectId && !model.imageGen
-      ? buildProjectPrompt(chat.projectId, user.id, !!model.tools && !isBridge)
+      ? buildProjectPrompt(chat.projectId, user.id, !!model.tools)
       : { block: null, tools: null };
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
     // 工作区 tools are in-process like project knowledge; the manifest block
@@ -1560,7 +1550,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // only comes into being on the first write.
     const agentSettings = getAgentSettings();
     const agentTools = userWantsAgentTools(user.settings);
-    const comparisonActive = !isBridge && agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.dataComparison, user);
+    const comparisonActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.dataComparison, user);
     const workspaceActive = agentTools && !!model.tools && !model.imageGen && policyAllows(agentSettings.workspace, user);
     // Why the built-in tools are absent this turn — surfaced to the model (and
     // so to the person) when it still tries to call one from memory.
@@ -1572,11 +1562,11 @@ export async function chatRoutes(app: FastifyInstance) {
     if (workspaceActive) toolDefs = [...(toolDefs ?? []), ...WORKSPACE_TOOL_DEFS];
     // 沙盒 rides on the workspace: commands run in that directory, so there
     // is nothing to execute against without it.
-    const sandboxActive = !isBridge && workspaceActive && sandboxAvailableFor(user);
+    const sandboxActive = workspaceActive && sandboxAvailableFor(user);
     if (sandboxActive) toolDefs = [...(toolDefs ?? []), ...SANDBOX_TOOL_DEFS];
     // Built-in conversions ride on the sandbox host, not on the "model may run
     // commands" switch: PDF / Word export is a basic feature.
-    const convertActive = !isBridge && workspaceActive && convertAvailableFor(user);
+    const convertActive = workspaceActive && convertAvailableFor(user);
     if (convertActive) toolDefs = [...(toolDefs ?? []), CONVERT_TOOL_DEF];
     const workspaceBlock = workspaceActive
       ? [
@@ -1590,17 +1580,17 @@ export async function chatRoutes(app: FastifyInstance) {
       : null;
     const sandboxConfirm = sandboxActive && sandboxNeedsConfirm();
     // 技能: name + description only; the model loads the full text on demand.
-    const skillRows = !isBridge && agentTools && model.tools && !model.imageGen && policyAllows(agentSettings.skills, user) ? skillsFor(user) : [];
+    const skillRows = agentTools && model.tools && !model.imageGen && policyAllows(agentSettings.skills, user) ? skillsFor(user) : [];
     const skillsActive = skillRows.length > 0;
     if (skillsActive) toolDefs = [...(toolDefs ?? []), ...SKILL_TOOL_DEFS];
     const skillsBlock = skillsActive ? buildSkillsPrompt(skillRows, sandboxActive, comparisonActive) : null;
     // 子代理: needs the workspace (that is where its output lands) and a
     // tool-capable model; the model it runs on may be an admin-designated one.
-    const subagentActive = !isBridge && workspaceActive && subagentAvailableFor(user);
+    const subagentActive = workspaceActive && subagentAvailableFor(user);
     if (subagentActive) toolDefs = [...(toolDefs ?? []), ...SUBAGENT_TOOL_DEFS];
     const subagentBlock = subagentActive ? buildSubagentPrompt() : null;
     let subagentSpawned = 0;
-    const imageToolModels = !isBridge && agentTools && model.tools && !model.imageGen ? imageToolModelsFor(user) : [];
+    const imageToolModels = agentTools && model.tools && !model.imageGen ? imageToolModelsFor(user) : [];
     const imageToolActive = imageToolModels.length > 0;
     if (imageToolActive) toolDefs = [...(toolDefs ?? []), imageToolDefinition(imageToolModels)];
     const imageToolBlock = imageToolActive ? buildImageToolPrompt(imageToolModels) : null;
@@ -1702,9 +1692,6 @@ export async function chatRoutes(app: FastifyInstance) {
 
     if (fallbackMeta) live.parts.push(fallbackMeta);
     sse.send('meta', { messageId: assistantId, userMessageId, model: model.modelId, providerId: provider.id, fallback: fallbackMeta });
-    if (isBridge && (webSearchRequested || requestedMcpServerIds.length)) {
-      sse.send('notice', { message: 'CatBridge 首版仅提供工作区工具，联网搜索和其他 MCP 尚未接入' });
-    }
     if (downgradeNotice) sse.send('notice', { message: downgradeNotice });
     if (mcpAccess.denied.length) {
       sse.send('notice', { message: '部分 MCP 服务器已被禁用或撤销授权,本次不会调用' });
@@ -1718,7 +1705,7 @@ export async function chatRoutes(app: FastifyInstance) {
       && canUseModel(user, fallbackPick.model.id) && checkModelLimit(user, fallbackPick.model).ok
       && (!model.vision || !!fallbackPick.model.vision) && (!model.tools || !!fallbackPick.model.tools);
     live.fallbackModelId = clientFallback ? body.fallbackModelId : null;
-    const adapter = isBridge ? undefined : getAdapter(provider.type);
+    const adapter = getAdapter(provider.type);
     const parts = live.parts;
     const usage = { prompt: 0, completion: 0, total: 0 };
     let ttft: number | null = null;
@@ -1792,7 +1779,7 @@ export async function chatRoutes(app: FastifyInstance) {
     try {
       if (model.imageGen) {
         // ---- image-generation turn ----
-        if (!adapter?.generateImages) throw new Error(`Provider「${provider.name}」不支持图像生成`);
+        if (!adapter.generateImages) throw new Error(`Provider「${provider.name}」不支持图像生成`);
         const { prompt, request, refImages } = buildImageTurn(baseHistory);
         let result;
         try {
@@ -1844,64 +1831,6 @@ export async function chatRoutes(app: FastifyInstance) {
         usage.completion += u?.completionTokens ?? 0;
         usage.total += u?.totalTokens ?? ((u?.promptTokens ?? 0) + (u?.completionTokens ?? 0));
         imageCount = generated.length;
-      } else if (isBridge) {
-        textTurnTimer = setTimeout(() => abortTextForTimeout('CatBridge 回合超过总时限'), config.chatTurnTimeoutMs);
-        const allowedNames = new Set((toolDefs ?? []).filter((t) => isWorkspaceTool(t.name)).map((t) => t.name));
-        const textRedactor = new StreamingSecretRedactor(secretValues);
-        const reasoningRedactor = new StreamingSecretRedactor(secretValues);
-        const emit = (type: 'text' | 'reasoning', text: string) => {
-          if (!text) return;
-          appendText(parts, type, text);
-          sse.send(type === 'text' ? 'delta' : 'reasoning', { text });
-        };
-        const flush = () => { emit('text', textRedactor.flush()); emit('reasoning', reasoningRedactor.flush()); };
-        try {
-          finishReason = await runBridgeTurn({
-            userId: user.id, modelId: model.id, chatId, system: systemPrompt,
-            messages: baseHistory, tools: (toolDefs ?? []).filter((t) => allowedNames.has(t.name)),
-            maxTokens: Math.min(chat.maxTokens ?? config.defaultModelOutputTokens, config.maxModelOutputTokens),
-            signal: controller.signal,
-            onEvent: (ev) => {
-              if (ev.type === 'usage') { usage.prompt = ev.usage.promptTokens ?? 0; usage.completion = ev.usage.completionTokens ?? 0; usage.total = ev.usage.totalTokens ?? 0; }
-              else {
-                if (ttft === null) ttft = Date.now() - t0;
-                consumeOutput(ev.text.length);
-                emit(ev.type, (ev.type === 'text' ? textRedactor : reasoningRedactor).push(ev.text));
-              }
-            },
-            onTool: async (id, name, args, signal) => {
-              signal.throwIfAborted();
-              if (!allowedNames.has(name)) return { result: '工具不在本回合授权列表内', isError: true };
-              flush();
-              const rawArgs = JSON.stringify(args);
-              const call = { id, name, args: redactSensitiveText(rawArgs, secretValues) };
-              consumeOutput(rawArgs.length);
-              parts.push({ type: 'tool_call', ...call }); sse.send('tool_call', call);
-              db.update(schema.messages).set({ parts: JSON.stringify(parts) }).where(eq(schema.messages.id, assistantId)).run();
-              let result: { result: string; isError?: boolean };
-              const needsConfirm = confirmAllTools || (bridgePair()?.confirmWrites && !['workspace_list','workspace_read'].includes(name));
-              let denied = false;
-              if (needsConfirm && !isAutoAllowed(chatId, user.id)) {
-                live.toolConfirm = { messageId: assistantId, calls: [call] };
-                const decision = waitForToolDecision(assistantId, user.id, [id], signal);
-                sse.send('tool_confirm', live.toolConfirm);
-                try { denied = (await decision).get(id) !== 'allow'; }
-                finally { live.toolConfirm = null; }
-              }
-              signal.throwIfAborted();
-              result = denied ? { result: TOOL_DENIED_RESULT, isError: true }
-                : await dispatchWorkspaceTool({ userId: user.id, chatId, modelId: model.id, signal, allowedNames }, name, rawArgs);
-              const safe = redactSensitiveText(result.result, secretValues);
-              const limit = Math.min(100_000, Math.floor(config.maxContextTextChars / 4));
-              result = { ...result, result: safe.length > limit ? `${safe.slice(0,limit)}\n…(结果已截断)` : safe };
-              consumeOutput(result.result.length);
-              const part: MessagePart = { type: 'tool_result', toolCallId: id, name, ...result };
-              parts.push(part); sse.send('tool_result', part);
-              db.update(schema.messages).set({ parts: JSON.stringify(parts) }).where(eq(schema.messages.id, assistantId)).run();
-              return result;
-            },
-          });
-        } finally { flush(); }
       } else {
         // ---- normal text turn ----
         textTurnTimer = setTimeout(() => abortTextForTimeout(
@@ -1934,7 +1863,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
           resetProviderIdleTimer();
           try {
-            for await (const ev of adapter!.streamChat({ ...continuationConfig,
+            for await (const ev of adapter.streamChat({ ...continuationConfig,
               recoverEmptyStreams: !continuation,
               stopOnBusy: clientFallback && !parts.some((p) => p.type !== 'service_tier'),
             }, {
@@ -2123,7 +2052,7 @@ export async function chatRoutes(app: FastifyInstance) {
                   return outcome;
                 })()
                 : isWorkspaceTool(call.name) && workspaceActive
-                ? await dispatchWorkspaceTool({ userId: user.id, chatId, modelId: model.id, signal: controller.signal, allowedNames: new Set((toolDefs ?? []).map((t) => t.name)) }, call.name, call.args)
+                ? await callWorkspaceTool(chatId, call.name, call.args)
                 : call.name === GOOGLE_SEARCH_TOOL && bridgedSearchActive
                 ? await (async () => {
                   let q = '';
@@ -2131,7 +2060,7 @@ export async function chatRoutes(app: FastifyInstance) {
                   if (!q) return { result: '缺少 query 参数', isError: true };
                   clearProviderIdleTimer();
                   try {
-                    const r = await bridgedGoogleSearch(adapter!, cfg, model.modelId, q, controller.signal);
+                    const r = await bridgedGoogleSearch(adapter, cfg, model.modelId, q, controller.signal);
                     bridgedQueries.push(q);
                     for (const src of r.sources) if (!bridgedSources.some((x) => x.uri === src.uri)) bridgedSources.push(src);
                     return { result: r.text, isError: false };
@@ -2350,7 +2279,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const completeAnswer = status === 'done' && (model.imageGen || finishReason === 'stop');
 
     // auto-title on first successful exchange
-    if (!isBridge && !chat.title && completeAnswer && !clientGone) {
+    if (!chat.title && completeAnswer && !clientGone) {
       // text-only replay: the title never needs the pictures, and non-vision
       // title models would choke on them
       const titleMessages: AdapterMessage[] = baseHistory.map((m) => ({
@@ -2401,7 +2330,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // exchange and suggests 3 follow-up questions. Best-effort, never blocks
     // or fails the turn; the result is appended to the saved message so
     // reloads keep the chips.
-    if (!isBridge && completeAnswer && !clientGone && !model.imageGen && getSetting(FOLLOWUP_ENABLED_KEY, true)) {
+    if (completeAnswer && !clientGone && !model.imageGen && getSetting(FOLLOWUP_ENABLED_KEY, true)) {
       const textOf = (ps: { type: string; text?: string }[]) => ps
         .filter((p) => p.type === 'text' && p.text).map((p) => p.text!).join('\n').trim();
       const question = textOf(baseHistory[baseHistory.length - 1]?.parts ?? []);

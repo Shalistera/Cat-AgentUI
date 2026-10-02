@@ -27,13 +27,11 @@
     "mammoth": "^1.12.1",
     "pptxgenjs": "^4.0.1",
     "undici": "^7.10.0",
-    "ws": "^8.22.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.1",
-    "@types/ws": "^8.18.2",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2"

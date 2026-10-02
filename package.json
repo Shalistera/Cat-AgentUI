@@ -26,8 +26,7 @@
     "start": "npm run start -w server",
     "test:provider-failover": "npm run build -w server && node scripts/provider-failover-regression.mjs",
     "test:data-comparison": "npm run build -w server && node --import tsx scripts/data-comparison-regression.mjs",
-    "test:gemini-generation": "npm run build -w server && node scripts/gemini-generation-regression.mjs",
-    "test:catbridge": "npm run build -w server && node scripts/catbridge-regression.mjs"
+    "test:gemini-generation": "npm run build -w server && node scripts/gemini-generation-regression.mjs"
   },
   "devDependencies": {
     "pm2": "^7.0.3"
