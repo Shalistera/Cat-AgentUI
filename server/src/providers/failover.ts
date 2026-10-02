@@ -230,7 +230,7 @@ async function* runLines<T>(
       else first();
       return;
     } catch (err) {
-      if (req.signal.aborted) { if (probe) h.probing = false; throw err; }
+      if (req.signal.aborted) throw err;
       if (err instanceof ProviderEmptyError) {
         emptyFailures++;
         if (emptyFailures >= 2) {
@@ -242,29 +242,28 @@ async function* runLines<T>(
         if (i === order.length - 1) order.push({ line, probe: false });
       }
       if (produced && err instanceof ProviderInterruptedError) markFailure(key, err, threshold, cooldownMs);
-      if (cfg.stopOnBusy && !produced && err instanceof ProviderHttpError && BUSY_STATUSES.has(err.status)) {
-        if (probe) h.probing = false;
-        throw err;
-      }
       const kind = produced || req.signal.aborted ? 'request' : classifyFailure(err);
-      if (kind === 'request') {
-        if (probe) h.probing = false;
-        throw err;
-      }
+      if (kind === 'request') throw err;
+      // A model fallback is waiting: a busy line hands over without waiting,
+      // is not counted (it was given no time to recover) and never escalates
+      // to the paid Priority line; once the rest are busy too, the busy error
+      // goes back to the client, which switches models.
+      const quickBusy = !!cfg.stopOnBusy && err instanceof ProviderHttpError && BUSY_STATUSES.has(err.status);
       if (kind === 'line') {
-        markFailure(key, err, threshold, cooldownMs);
+        if (!quickBusy) markFailure(key, err, threshold, cooldownMs);
         lineErr = err;
       } else {
-        if (probe) h.probing = false; // the line answered; the probe is settled either way
         missingModels.set(`${key}|${req.model}`, Date.now() + MISSING_MODEL_TTL_MS);
       }
-      const skip = i < escalation - 1 && (immediatePriority
+      const skip = !quickBusy && i < escalation - 1 && (immediatePriority
         || (kind === 'line' && !!counter && counter.busy >= counter.limit));
-      const nextIndex = skip ? escalation : i + 1;
+      let nextIndex = skip ? escalation : i + 1;
+      if (quickBusy && nextIndex === escalation) nextIndex++;
       const next = order[nextIndex];
       const from = line.endpointName ?? '主线路';
       console.warn(`[failover] provider ${cfg.id} line "${from}" failed (${describe(err)}), `
         + (kind === 'model' ? 'model unknown on this line (not counted)'
+          : quickBusy ? 'busy with a model fallback waiting (not counted)'
           : `${h.failures}/${threshold} consecutive${h.openUntil > Date.now() ? ', breaker open' : ''}`)
         + (next ? `; trying "${next.line.endpointName ?? '主线路'}"` : '; no line left'));
       if (!next) throw kind === 'model' && lineErr ? lineErr : err;
@@ -274,6 +273,11 @@ async function* runLines<T>(
         ...(nextIndex === escalation ? { priority: true } : {}),
       });
       i = nextIndex - 1;
+    } finally {
+      // However the attempt ended (settled above, thrown, or abandoned by a
+      // consumer that stopped reading mid-stream), the probe is no longer in
+      // flight. Left set, plan() would skip this line until a restart.
+      if (probe) h.probing = false;
     }
   }
 }

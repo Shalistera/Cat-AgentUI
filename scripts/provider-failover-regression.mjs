@@ -183,6 +183,21 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
   assert.equal(lineStatus('prov:primary').state, 'open');
 }
 
+// 5b. a probe whose consumer stops reading mid-stream (the chat turn's output
+//     cap) releases the line rather than leaving it skipped as "probing"
+{
+  resetLineHealth();
+  const { adapter, calls } = fake({ primary: [netErr(), netErr()] });
+  await collect(adapter.streamChat(cfg(), req()));
+  await collect(adapter.streamChat(cfg(), req()));
+  await sleep(350);
+  for await (const _ of adapter.streamChat({ ...cfg(), recoverEmptyStreams: true }, req())) break;
+  assert.notEqual(lineStatus('prov:primary').state, 'probing');
+  calls.length = 0;
+  await collect(adapter.streamChat(cfg(), req()));
+  assert.deepEqual(calls.map((c) => c.key), ['primary'], 'the next request probes the line again');
+}
+
 // 6. every line failing surfaces the last error; all breakers open still attempts
 {
   resetLineHealth();
@@ -334,6 +349,27 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
   assert.deepEqual(seenNotices.map((n) => [n.to, !!n.priority]), [['Vertex us', false], ['Vertex global · Priority', true]]);
 }
 
+// 12. with a model fallback waiting (stopOnBusy), a busy line hands over at
+//     once, uncounted, past the paid Priority line; other failures still escalate
+{
+  const lines = () => {
+    const p = cfg();
+    p.fallbacks = [line('b0', 'Vertex us'), line('b1', 'Vertex global · Priority', { escalateAfterBusy: 5 }), line('b2', '第三')];
+    p.stopOnBusy = true;
+    return p;
+  };
+  resetLineHealth();
+  const busy = fake({ primary: [httpErr(429)], b0: [httpErr(503)] });
+  const out = await collect(busy.adapter.streamChat(lines(), req()));
+  assert.deepEqual(busy.calls.map((c) => c.key), ['primary', 'b0', 'b2']);
+  assert.equal(out[0].text, 'b2-hi');
+  assert.equal(lineStatus('prov:primary').failures, 0, 'a busy rejection it never waited on is not held against the line');
+  resetLineHealth();
+  const down = fake({ primary: [httpErr(500)], b0: [httpErr(500)] });
+  await collect(down.adapter.streamChat(lines(), req()));
+  assert.deepEqual(down.calls.map((c) => c.key), ['primary', 'b0', 'b1'], 'an outage still escalates to Priority');
+}
+
 assert.equal(rewriteModel({ stripModelPrefix: 'openai/', addModelPrefix: 'azure/' }, 'openai/gpt-4o'), 'azure/gpt-4o');
 assert.equal(rewriteModel({ stripModelPrefix: 'openai/' }, 'gpt-4o'), 'gpt-4o');
 
@@ -382,14 +418,24 @@ console.log('Passed: failover unit semantics.');
     }
     for (const busyStatus of [429, 503, 529]) {
       resetLineHealth(); resetProviderBusyGates();
-      let busyCalls = 0;
+      const busyCalls = [];
       const tiers = [];
-      globalThis.fetch = async () => { busyCalls++; return new Response('{}', { status: busyStatus }); };
-      await assert.rejects(collect(withFailover(geminiAdapter).streamChat({ ...makeConfig(), stopOnBusy: true }, req({
+      globalThis.fetch = async (url, init) => {
+        busyCalls.push(`${url.match(/locations\/([^/]+)/)[1]}|${new Headers(init.headers).get('x-vertex-ai-llm-shared-request-type')}`);
+        return new Response('{}', { status: busyStatus });
+      };
+      const stream = () => collect(withFailover(geminiAdapter).streamChat({ ...makeConfig(), stopOnBusy: true }, req({
         model: 'gemini-2.5-pro', onServiceTier: (tier) => tiers.push(tier),
-      }))), { status: busyStatus });
-      assert.equal(busyCalls, 1, 'configured model fallback takes precedence over standard retries and paid escalation');
-      assert.deepEqual(tiers, ['standard']);
+      })));
+      await assert.rejects(stream(), { status: busyStatus });
+      assert.deepEqual(busyCalls, ['eu|null', 'us|null'],
+        'configured model fallback: each standard location once, no retries, no paid escalation');
+      assert.deepEqual(tiers, ['standard', 'standard']);
+      // The backoff those rejections left lets the next such request skip
+      // both locations without sending anything.
+      busyCalls.length = 0;
+      await assert.rejects(stream(), { status: 429 });
+      assert.deepEqual(busyCalls, []);
     }
     resetLineHealth(); resetProviderBusyGates();
     let invalidCalls = 0;

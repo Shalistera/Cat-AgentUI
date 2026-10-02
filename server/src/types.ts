@@ -106,7 +106,9 @@ export interface ProviderRuntimeConfig {
   escalateOnFailure?: boolean;
   /** Do not retry inside a standard line before escalating to Priority. */
   singleAttempt?: boolean;
-  /** Return the first busy rejection to a client with a configured fallback. */
+  /** A client with a configured fallback model: never wait out a busy
+   * rejection; try each remaining line once, except the paid Priority one,
+   * then return it. */
   stopOnBusy?: boolean;
   /** Chat-only recovery of successful HTTP streams with no usable answer. */
   recoverEmptyStreams?: boolean;

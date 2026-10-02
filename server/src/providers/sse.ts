@@ -120,7 +120,6 @@ export async function fetchRetry(
       // Shared across a request's lines: once it runs out, stop waiting here
       // and let the failover layer move on (to the Priority PayGo retry).
       const tallyFull = !!opts?.counter && ++opts.counter.busy >= opts.counter.limit;
-      if (opts?.stopOnBusy || opts?.singleAttempt || retries >= MAX_RATE_RETRIES || tallyFull) return res;
       // 1–2s, 2–4s, 4–8s, 8–16s, 16–32s with jitter; respect longer server
       // hints within the total wait budget. Don't retry early when
       // Retry-After exceeds it.
@@ -128,6 +127,15 @@ export async function fetchRetry(
         Math.round(1000 * 2 ** retries * (1 + Math.random())),
         retryAfterMs(res.headers.get('retry-after')),
       );
+      // Handing over at once still leaves the backoff behind, so later
+      // callers skip or queue (within their own budgets) rather than each
+      // hitting the limit again. A hint longer than anyone would wait is not
+      // kept: nothing clears it early, and it would only make lines skip.
+      if (opts?.stopOnBusy) {
+        if (delayMs <= config.providerRetryMaxWaitMs) markBusy(key, delayMs);
+        return res;
+      }
+      if (opts?.singleAttempt || retries >= MAX_RATE_RETRIES || tallyFull) return res;
       if (waitedMs + delayMs > budgetMs) return res;
       try { await res.body?.cancel(); } catch { /* rejected response discarded */ }
       markBusy(key, delayMs);
