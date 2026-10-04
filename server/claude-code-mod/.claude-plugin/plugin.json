@@ -1,0 +1,6 @@
+{
+  "name": "cat-agentui-bare",
+  "version": "0.1.0",
+  "description": "Keeps Claude Code's own context out of Cat-AgentUI chats: the panel supplies the whole prompt.",
+  "author": { "name": "Cat-AgentUI" }
+}

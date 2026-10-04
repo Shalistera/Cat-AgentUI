@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db, now, schema } from './db/index.js';
 
 export interface ModelAccessUser {
@@ -16,6 +16,22 @@ export function imageWorkshopAllowed(user: { role: string; allowImages: number }
   return user.role === 'admin' || !!user.allowImages;
 }
 
+/** Provider types that run on the operator's own subscription (本地 Claude
+ * Code): admins only, whatever a model's access mode or grants say. */
+const ADMIN_ONLY_PROVIDER_TYPES = ['claude-code'];
+
+export function providerAllowed(user: { role: string }, providerType: string): boolean {
+  return user.role === 'admin' || !ADMIN_ONLY_PROVIDER_TYPES.includes(providerType);
+}
+
+/** Model db-ids served by an admin-only provider. */
+export function adminOnlyModelIds(): Set<string> {
+  return new Set(db.select({ id: schema.models.id }).from(schema.models)
+    .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
+    .where(inArray(schema.providers.type, ADMIN_ONLY_PROVIDER_TYPES)).all()
+    .map((r) => r.id));
+}
+
 /** Model db-ids explicitly granted to this user. */
 export function grantedModelIds(userId: string): Set<string> {
   return new Set(db.select({ modelId: schema.modelAccess.modelId })
@@ -27,10 +43,12 @@ export function grantedModelIds(userId: string): Set<string> {
 /** Re-check at the point of use: shared models pass, restricted ones need a grant. */
 export function canUseModel(user: ModelAccessUser, modelDbId: string): boolean {
   if (user.role === 'admin') return true;
-  const model = db.select({ accessMode: schema.models.accessMode })
-    .from(schema.models).where(eq(schema.models.id, modelDbId)).get();
-  if (!model) return false;
-  if (model.accessMode === 'shared') return true;
+  const row = db.select({ accessMode: schema.models.accessMode, providerType: schema.providers.type })
+    .from(schema.models)
+    .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
+    .where(eq(schema.models.id, modelDbId)).get();
+  if (!row || !providerAllowed(user, row.providerType)) return false;
+  if (row.accessMode === 'shared') return true;
   return !!db.select({ userId: schema.modelAccess.userId })
     .from(schema.modelAccess)
     .where(and(
@@ -48,7 +66,8 @@ export function accessibleOnly<T extends { id: string; accessMode: string }>(
 ): T[] {
   if (user.role === 'admin') return rows;
   const granted = grantedModelIds(user.id);
-  return rows.filter((r) => r.accessMode === 'shared' || granted.has(r.id));
+  const adminOnly = adminOnlyModelIds();
+  return rows.filter((r) => !adminOnly.has(r.id) && (r.accessMode === 'shared' || granted.has(r.id)));
 }
 
 export function accessUserIds(modelDbId: string): string[] {

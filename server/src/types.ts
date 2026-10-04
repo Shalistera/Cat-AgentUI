@@ -70,7 +70,7 @@ export interface UsageInfo {
 
 // ---- Provider adapter contract ----
 
-export type ProviderType = 'openai' | 'anthropic' | 'gemini';
+export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'claude-code';
 
 export interface ProviderRuntimeConfig {
   id: string;

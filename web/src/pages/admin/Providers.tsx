@@ -125,6 +125,8 @@ function ProviderModal({ provider, onClose, onSaved }: {
   const hasBackups = (provider?.endpoints.length ?? 0) > 0;
 
   const vertexMode = type === 'gemini' && useVertex;
+  // Runs through this machine's own `claude` login: nothing to connect to.
+  const local = type === 'claude-code';
 
   function applySaJson(text: string): boolean {
     try {
@@ -235,8 +237,17 @@ function ProviderModal({ provider, onClose, onSaved }: {
             <option value="openai">OpenAI 兼容</option>
             <option value="anthropic">Anthropic</option>
             <option value="gemini">Google Gemini</option>
+            <option value="claude-code">本地 Claude Code(仅管理员)</option>
           </Select>
         </Field>
+        {local ? (
+          <p className="rounded-lg border border-line bg-bg2/30 p-3 text-xs leading-relaxed text-tx2">
+            通过服务器上已登录的 Claude Code(<code>claude</code> 命令)对话,使用的是该账号的订阅额度。
+            只有管理员能看到和使用这些模型,模型的访问范围设置对它不起作用。
+            Claude Code 自带的命令行、读写文件等工具全部关闭,只能用面板自己的工具(沙盒、工作区、Skills、子代理等);
+            温度和最大输出长度不生效。
+          </p>
+        ) : (<>
         <Field label="API 地址" hint="留空使用官方地址;可填任意兼容网关,写到 /v1 或整条接口地址都能识别">
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={DEFAULT_URLS[type]} />
         </Field>
@@ -254,6 +265,8 @@ function ProviderModal({ provider, onClose, onSaved }: {
             </div>
           </Field>
         )}
+
+        </>)}
 
         {type === 'openai' && (
           <ToggleRow
@@ -307,12 +320,14 @@ function ProviderModal({ provider, onClose, onSaved }: {
           </>
         )}
 
-        <Field label="自定义 Headers" hint={isEdit ? '已保存值不回显;留空保持,填写替换,删除行即移除' : undefined}>
-          <KeyValueEditor pairs={headers} onChange={setHeaders} keyPlaceholder="Header 名称"
-            valuePlaceholder={isEdit ? '留空保持原值' : 'Header 值'} valueType="password" />
-        </Field>
+        {!local && (
+          <Field label="自定义 Headers" hint={isEdit ? '已保存值不回显;留空保持,填写替换,删除行即移除' : undefined}>
+            <KeyValueEditor pairs={headers} onChange={setHeaders} keyPlaceholder="Header 名称"
+              valuePlaceholder={isEdit ? '留空保持原值' : 'Header 值'} valueType="password" />
+          </Field>
+        )}
 
-        {isEdit && (
+        {isEdit && !local && (
           <div className="space-y-4 rounded-lg border border-line bg-bg2/30 p-3">
             <Field label="主线路名称" hint={vertexMode ? '只在线路列表和切换提示里显示;留空显示为「主线路」,设置了多个区域或 Priority 时显示区域名' : '只在备用线路列表和切换提示里显示;留空显示为「主线路」'}>
               <Input value={primaryName} onChange={(e) => setPrimaryName(e.target.value)} placeholder="如 OpenRouter" maxLength={64} />
@@ -327,7 +342,7 @@ function ProviderModal({ provider, onClose, onSaved }: {
             </div>
           </div>
         )}
-        {isEdit && (
+        {isEdit && !local && (
           <div className="grid grid-cols-2 gap-3">
             <Field label="故障切换阈值" hint={hasBackups ? '同一线路连续失败这么多次后暂停使用' : '添加备用线路后生效'}>
               <Input type="number" min={1} max={100} value={failoverThreshold}
@@ -883,7 +898,8 @@ function ProviderCard({ provider, reload, onEdit }: {
   // Vertex authenticates with a service account, so "no API key" is its
   // normal, healthy state — judge it by the credential it actually uses.
   const usesVertex = provider.type === 'gemini' && provider.useVertex;
-  const hasCred = usesVertex ? provider.hasVertexSa : provider.hasKey;
+  const local = provider.type === 'claude-code';
+  const hasCred = local || (usesVertex ? provider.hasVertexSa : provider.hasKey);
 
   async function setEnabled(v: boolean) {
     if (toggling) return;
@@ -976,9 +992,11 @@ function ProviderCard({ provider, reload, onEdit }: {
         </span>
         <span className="hidden text-[11px] tabular-nums text-tx3 sm:inline">{models.length} 个模型 · {enabledCount} 已启用</span>
         <span className="hidden sm:contents">
-          <Badge tone={hasCred ? 'ok' : 'err'}>
-            {usesVertex ? (hasCred ? '已配置凭证' : '未配置凭证') : (hasCred ? '已配置 Key' : '未配置 Key')}
-          </Badge>
+          {local ? <Badge tone="warn">仅管理员</Badge> : (
+            <Badge tone={hasCred ? 'ok' : 'err'}>
+              {usesVertex ? (hasCred ? '已配置凭证' : '未配置凭证') : (hasCred ? '已配置 Key' : '未配置 Key')}
+            </Badge>
+          )}
         </span>
         <div className="ml-auto flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
           <Toggle checked={provider.enabled} disabled={toggling} onChange={setEnabled} />
@@ -1037,7 +1055,7 @@ function ProviderCard({ provider, reload, onEdit }: {
             </div>
           )}
 
-          <BackupLines provider={provider} reload={reload} />
+          {!local && <BackupLines provider={provider} reload={reload} />}
 
           <p className="text-[11px] leading-relaxed text-tx3">
             视觉/工具/推理等能力与可见性在

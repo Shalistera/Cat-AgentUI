@@ -7,6 +7,7 @@ import { decryptSecretRecord, providerExtraHeaders } from '../secrets.js';
 import { openaiAdapter } from './openai.js';
 import { anthropicAdapter } from './anthropic.js';
 import { geminiAdapter } from './gemini.js';
+import { claudeCodeAdapter } from './claude-code.js';
 import { withFailover } from './failover.js';
 import { priorityModel, vertexLines } from './vertex.js';
 
@@ -14,12 +15,16 @@ const rawAdapters: Record<ProviderType, ChatAdapter> = {
   openai: openaiAdapter,
   anthropic: anthropicAdapter,
   gemini: geminiAdapter,
+  'claude-code': claudeCodeAdapter,
 };
 
 const adapters: Record<ProviderType, ChatAdapter> = {
   openai: withFailover(openaiAdapter),
   anthropic: withFailover(anthropicAdapter),
   gemini: withFailover(geminiAdapter),
+  // One local process, no lines to fail over to — and a retried stream
+  // would restart a run that may be parked on tool calls.
+  'claude-code': claudeCodeAdapter,
 };
 
 /** The adapter callers use: walks the provider's backup lines on failure. */

@@ -14,6 +14,7 @@ import { config } from '../config.js';
 import { getAdapter, toRuntimeConfig } from '../providers/index.js';
 import { recordUsage } from '../usage.js';
 import { checkModelLimit, checkQuota, modelLimitBlockMessage, quotaBlockMessage } from '../quota.js';
+import { providerAllowed } from '../model-access.js';
 import { tryAcquireChatTurn } from '../admission.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
@@ -165,7 +166,8 @@ export async function translateRoutes(app: FastifyInstance) {
     if (!quota.ok) return reply.code(429).send({ error: quotaBlockMessage(quota) });
     // A model this person has exhausted for the day simply drops out of the
     // failover chain; only when every rung is gone does the request bounce.
-    const chain = configured.filter(({ models: m }) => checkModelLimit(req.user!, m).ok);
+    const chain = configured.filter(({ models: m, providers: p }) =>
+      providerAllowed(req.user!, p.type) && checkModelLimit(req.user!, m).ok);
     if (!chain.length) {
       const first = configured[0].models;
       return reply.code(429).send({

@@ -20,7 +20,7 @@ import { validateMcpSelection } from '../mcp/access.js';
 import { getSearchServerId } from './mcp.js';
 import { saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
-import { canUseModel, grantedModelIds, imageModelsAllowed } from '../model-access.js';
+import { canUseModel, grantedModelIds, imageModelsAllowed, providerAllowed } from '../model-access.js';
 import { checkModelLimit, checkQuota, modelLimitBlockMessage, modelLimitReason, quotaBlockMessage } from '../quota.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt } from './projects.js';
@@ -582,7 +582,8 @@ function getDefaultModel(user: { id: string; role: string }) {
   let rows = enabledModelRows();
   if (user.role !== 'admin') {
     const granted = grantedModelIds(user.id);
-    rows = rows.filter((r) => r.models.accessMode === 'shared' || granted.has(r.models.id));
+    rows = rows.filter((r) => providerAllowed(user, r.providers.type)
+      && (r.models.accessMode === 'shared' || granted.has(r.models.id)));
   }
   const text = rows.filter((r) => !r.models.imageGen);
   return pickModel(text.length ? text : rows);
@@ -602,15 +603,16 @@ type ModelPick = { model: typeof schema.models.$inferSelect; provider: typeof sc
 // model → the model that just answered (text turns only) → the default text
 // model. Generation walks the list so one provider having a bad moment
 // (429, timeout) doesn't kill the feature.
-function getTaskModelCandidates(settingKey: string, current?: ModelPick): ModelPick[] {
+function getTaskModelCandidates(settingKey: string, user: { role: string }, current?: ModelPick): ModelPick[] {
   const out: ModelPick[] = [];
   const push = (p: ModelPick | null | undefined) => {
-    if (p && !p.model.imageGen && !out.some((x) => x.model.id === p.model.id)) out.push(p);
+    if (p && !p.model.imageGen && providerAllowed(user, p.provider.type)
+      && !out.some((x) => x.model.id === p.model.id)) out.push(p);
   };
   const configured = getSetting<string>(settingKey, '');
   if (configured) push(getModelWithProvider(configured));
   push(current);
-  push(pickModel(enabledModelRows().filter((r) => !r.models.imageGen)));
+  push(pickModel(enabledModelRows().filter((r) => !r.models.imageGen && providerAllowed(user, r.providers.type))));
   return out;
 }
 
@@ -2291,7 +2293,7 @@ export async function chatRoutes(app: FastifyInstance) {
         { role: 'assistant', parts: toAdapterPartsNoImages(finalParts) },
         { role: 'user', parts: [{ type: 'text', text: wantsTitleEmoji(user.settings) ? TITLE_PROMPT_EMOJI : TITLE_PROMPT }] },
       );
-      for (const titlePick of getTaskModelCandidates(TITLE_MODEL_KEY, { model, provider })) {
+      for (const titlePick of getTaskModelCandidates(TITLE_MODEL_KEY, user, { model, provider })) {
         try {
           let title = '';
           const tUsage = { prompt: 0, completion: 0, total: 0 };
@@ -2341,7 +2343,7 @@ export async function chatRoutes(app: FastifyInstance) {
           { role: 'assistant', parts: [{ type: 'text', text: answer.slice(0, FOLLOWUP_ANSWER_CHARS) }] },
           { role: 'user', parts: [{ type: 'text', text: FOLLOWUP_PROMPT }] },
         ];
-        for (const pick of getTaskModelCandidates(FOLLOWUP_MODEL_KEY, { model, provider })) {
+        for (const pick of getTaskModelCandidates(FOLLOWUP_MODEL_KEY, user, { model, provider })) {
           try {
             let raw = '';
             const fUsage = { prompt: 0, completion: 0, total: 0 };

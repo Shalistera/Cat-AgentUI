@@ -120,9 +120,13 @@ export const config = {
   // Scheduled SQLite snapshots (see backup.ts). 0 hours = disabled.
   backupIntervalHours: intEnv('BACKUP_INTERVAL_HOURS', 24, 0, 720),
   backupKeep: intEnv('BACKUP_KEEP', 14, 1, 365),
+
+  // 本地 Claude Code provider: the `claude` binary to drive. Empty = the
+  // per-user install (~/.local/bin/claude), else the SDK's bundled one.
+  claudeCodePath: env('CLAUDE_CODE_PATH', '')!,
 };
 
-for (const d of ['', 'uploads', 'images', 'workspaces', 'sandbox', 'skills']) {
+for (const d of ['', 'uploads', 'images', 'workspaces', 'sandbox', 'skills', 'claude-code']) {
   const dir = path.join(config.dataDir, d);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(dir, 0o700); } catch { /* best effort on unusual filesystems */ }

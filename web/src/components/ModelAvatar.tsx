@@ -27,6 +27,7 @@ export function brandOf(modelName: string | null | undefined, providerType?: str
   // the OpenAI mark on those would misattribute them, so an unrecognised model
   // name falls through to the provider's own initial instead.
   if (providerType === 'anthropic' || providerType === 'gemini') return providerType;
+  if (providerType === 'claude-code') return 'anthropic';
   return null;
 }
 

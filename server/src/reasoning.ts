@@ -74,6 +74,10 @@ const RULES: Record<ProviderType, { re: RegExp; levels: ReasoningLevel[] }[]> = 
   gemini: [
     { re: /^gemini-(2\.5|[3-9])/, levels: ladder('low', 'medium', 'high') },
   ],
+  // Claude Code's own effort levels; Haiku has none.
+  'claude-code': [
+    { re: /^claude-(opus|sonnet|fable)-/, levels: ladder('low', 'medium', 'high', 'xhigh', 'max') },
+  ],
 };
 
 /**

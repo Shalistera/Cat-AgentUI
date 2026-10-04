@@ -212,7 +212,7 @@ function sendAvatar(reply: FastifyReply, parsed: { mime: string; buf: Buffer }) 
 // (.optional() alone rejects null, which 400s every form that blanks a field.)
 const providerCreateSchema = z.object({
   name: z.string().min(1).max(64),
-  type: z.enum(['openai', 'anthropic', 'gemini']),
+  type: z.enum(['openai', 'anthropic', 'gemini', 'claude-code']),
   baseUrl: z.string().max(300).nullish(),
   apiKey: z.string().max(500).nullish(),
   useResponses: z.boolean().nullish(),
@@ -226,7 +226,7 @@ const providerCreateSchema = z.object({
 
 const providerPatchSchema = z.object({
   name: z.string().min(1).max(64).optional(),
-  type: z.enum(['openai', 'anthropic', 'gemini']).optional(),
+  type: z.enum(['openai', 'anthropic', 'gemini', 'claude-code']).optional(),
   baseUrl: z.string().max(300).nullish(),
   apiKey: z.string().max(500).nullish(),
   useResponses: z.boolean().nullish(),
@@ -484,6 +484,7 @@ export async function providerRoutes(app: FastifyInstance) {
     const body = endpointCreateSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const d = body.data;
+    if (provider.type === 'claude-code') return reply.code(400).send({ error: '本地 Claude Code 没有备用线路' });
     const existing = endpointsOf(id);
     if (existing.length >= 10) return reply.code(400).send({ error: '备用线路最多 10 条' });
     const eid = newId();

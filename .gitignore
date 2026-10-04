@@ -14,3 +14,6 @@ server/dist/
 
 *.log
 .DS_Store
+
+# Written by Claude Code each time it loads the mod.
+server/claude-code-mod/.claude-plugin/types/
