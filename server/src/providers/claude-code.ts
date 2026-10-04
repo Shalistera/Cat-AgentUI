@@ -2,9 +2,9 @@
 // trying the panel out on this machine. Requests go through the `claude`
 // process (Agent SDK), never straight to the API with its credentials.
 //
-// Claude Code runs with none of its own tools, settings, CLAUDE.md or plugins;
-// the panel's tools for the turn are served to it as an in-process MCP server
-// whose handlers do not run anything themselves. A call is handed to the
+// Claude Code runs with none of its own tools, settings, CLAUDE.md, memory or
+// plugins; the panel's tools for the turn are served to it as an in-process
+// MCP server whose handlers do not run anything themselves. A call is handed to the
 // panel as an ordinary tool_call and the stream stops with 'tool_calls'; the
 // `claude` process stays parked, its MCP call open. The panel executes the
 // call its usual way (confirm cards and all) and calls streamChat again with
@@ -69,6 +69,24 @@ function childEnv(): Record<string, string | undefined> {
   env.ENABLE_TOOL_SEARCH = 'false';
   return env;
 }
+
+// Keep Claude Code as close to a bare API call as its options allow: no
+// built-in tools, no settings files or CLAUDE.md (user, project or local),
+// no auto memory (neither recalled into the turn nor written after it), no
+// background memory consolidation and no next-prompt suggestions. Whatever
+// the model should know comes from the panel's system prompt and tools.
+const ISOLATION = {
+  tools: [],
+  settingSources: [],
+  strictMcpConfig: true,
+  settings: {
+    autoMemoryEnabled: false,
+    autoDreamEnabled: false,
+    promptSuggestionEnabled: false,
+    claudeMdExcludes: ['**'],
+  },
+  promptSuggestions: false,
+} satisfies Options;
 
 class Deferred<T> {
   promise: Promise<T>;
@@ -347,9 +365,7 @@ function startRun(req: ChatRequest): Run {
       abortController: run.abort,
       model: req.model,
       systemPrompt: { type: 'custom', prompt: req.system || 'You are a helpful assistant.', snapshot: false },
-      tools: [],
-      settingSources: [],
-      strictMcpConfig: true,
+      ...ISOLATION,
       mcpServers: tools.length ? { [SERVER]: mcpServer(run, tools) } : {},
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
@@ -493,7 +509,7 @@ export const claudeCodeAdapter: ChatAdapter = {
       options: {
         pathToClaudeCodeExecutable: executable(),
         cwd: WORK_DIR, env: childEnv(), abortController: run.abort,
-        tools: [], settingSources: [], strictMcpConfig: true, persistSession: false,
+        ...ISOLATION, persistSession: false,
       },
     });
     run.q = q;
