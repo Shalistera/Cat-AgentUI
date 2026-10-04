@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ChevronRight, FileText, FolderClosed, MessageSquarePlus, PanelLeft, Pencil, Trash2, Upload, Users, X,
+  ChevronRight, FilePlus, FileText, FolderClosed, MessageSquarePlus, PanelLeft, Pencil, Trash2, Upload, Users, X,
 } from 'lucide-react';
 import { api, fmtTime } from '../api';
 import {
@@ -193,7 +193,11 @@ export default function ProjectPage() {
 
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [viewingDoc, setViewingDoc] = useState<(ProjectDoc & { content: string }) | null>(null);
+  // One dialog views, edits and creates a document; id null = not saved yet.
+  const [docEditor, setDocEditor] = useState<{
+    id: string | null; name: string; content: string; savedName: string; savedContent: string;
+  } | null>(null);
+  const [savingDoc, setSavingDoc] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -308,12 +312,66 @@ export default function ProjectPage() {
     }
   }
 
-  async function viewDoc(doc: ProjectDoc) {
+  async function openDoc(doc: ProjectDoc) {
     if (!project) return;
     try {
       const r = await api.get<{ doc: ProjectDoc & { content: string } }>(`/api/projects/${project.id}/docs/${doc.id}`);
-      setViewingDoc(r.doc);
+      setDocEditor({ id: r.doc.id, name: r.doc.name, content: r.doc.content, savedName: r.doc.name, savedContent: r.doc.content });
     } catch (e) { toast(errText(e, '读取失败'), 'err'); }
+  }
+
+  function newDoc() {
+    if (limits && docs.length >= limits.maxDocs) { toast(`每个项目最多 ${limits.maxDocs} 个文档`, 'err'); return; }
+    setDocEditor({ id: null, name: '', content: '', savedName: '', savedContent: '' });
+  }
+
+  const docDirty = docEditor != null
+    && (docEditor.name !== docEditor.savedName || docEditor.content !== docEditor.savedContent);
+
+  // Escape reaches this dialog and the confirm on top of it alike; one ask at a time.
+  const askingDiscard = useRef(false);
+  async function closeDocEditor() {
+    if (askingDiscard.current) return;
+    if (docDirty) {
+      askingDiscard.current = true;
+      const discard = await confirmDialog('放弃修改', '这份资料的修改还没有保存,确定关闭吗?');
+      askingDiscard.current = false;
+      if (!discard) return;
+    }
+    setDocEditor(null);
+  }
+
+  async function saveDoc() {
+    if (!project || !limits || !docEditor || savingDoc || !docDirty) return;
+    const name = docEditor.name.trim();
+    const { content } = docEditor;
+    if (!name) { toast('请填写资料名称', 'err'); return; }
+    if (!content.trim()) { toast('资料内容不能为空', 'err'); return; }
+    if (content.length > limits.maxDocChars) {
+      toast(`超出单文档上限(${limits.maxDocChars.toLocaleString()} 字符)`, 'err');
+      return;
+    }
+    setSavingDoc(true);
+    try {
+      if (docEditor.id) {
+        const r = await api.patch<{ doc: ProjectDoc & { content: string } }>(
+          `/api/projects/${project.id}/docs/${docEditor.id}`,
+          {
+            ...(name !== docEditor.savedName ? { name } : {}),
+            ...(content !== docEditor.savedContent ? { content } : {}),
+          },
+        );
+        const { content: saved, ...meta } = r.doc;
+        setDocs((prev) => prev.map((d) => (d.id === meta.id ? meta : d)));
+        setDocEditor({ id: meta.id, name: meta.name, content: saved, savedName: meta.name, savedContent: saved });
+      } else {
+        const r = await api.post<{ doc: ProjectDoc }>(`/api/projects/${project.id}/docs`, { name, content });
+        setDocs((prev) => [...prev, r.doc]);
+        setDocEditor({ id: r.doc.id, name: r.doc.name, content, savedName: r.doc.name, savedContent: content });
+      }
+      toast('资料已保存', 'ok');
+    } catch (e) { toast(errText(e, '保存失败'), 'err'); }
+    finally { setSavingDoc(false); }
   }
 
   async function removeDoc(doc: ProjectDoc) {
@@ -468,6 +526,9 @@ export default function ProjectPage() {
             <Card title="参考资料" desc="仅支持文本文件(txt / md / 代码等)。"
               actions={canEdit && (
                 <>
+                  <Button variant="ghost" size="iconSm" title="新建文本" onClick={newDoc}>
+                    <FilePlus size={14} />
+                  </Button>
                   <input ref={fileRef} type="file" multiple accept={ACCEPT} className="hidden"
                     onChange={(e) => void uploadFiles(e.target.files)} />
                   <Button variant="ghost" size="iconSm" title="上传文档" disabled={uploading}
@@ -478,7 +539,7 @@ export default function ProjectPage() {
               )}>
               {docs.length === 0 ? (
                 <p className="py-2 text-xs leading-relaxed text-tx3">
-                  {canEdit ? '上传项目相关的文档、规范或笔记,模型回答时会优先依据它们。' : '这个项目还没有参考资料。'}
+                  {canEdit ? '上传或新建项目相关的文档、规范或笔记,模型回答时会优先依据它们。' : '这个项目还没有参考资料。'}
                 </p>
               ) : (
                 <>
@@ -487,7 +548,7 @@ export default function ProjectPage() {
                       <div key={d.id} className="group flex items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-bg2">
                         <FileText size={13} className="shrink-0 text-tx3" />
                         <button className="min-w-0 flex-1 cursor-pointer truncate text-left text-xs text-tx hover:text-acc"
-                          title={`${d.name} · ${d.chars.toLocaleString()} 字符`} onClick={() => void viewDoc(d)}>
+                          title={`${d.name} · ${d.chars.toLocaleString()} 字符${canEdit ? ' · 点击编辑' : ''}`} onClick={() => void openDoc(d)}>
                           {d.name}
                         </button>
                         {canEdit && (
@@ -538,10 +599,39 @@ export default function ProjectPage() {
           onSaved={(p, m) => { setProject(p); setMembers(m); setMemberCount(m.length); syncStore(p); }} />
       )}
 
-      <Modal open={viewingDoc !== null} onClose={() => setViewingDoc(null)} title={viewingDoc?.name ?? ''} wide>
-        <pre className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-tx2">
-          {viewingDoc?.content}
-        </pre>
+      <Modal open={docEditor !== null} onClose={() => void closeDocEditor()} wide
+        title={!canEdit ? docEditor?.name ?? '' : docEditor?.id ? '编辑资料' : '新建资料'}>
+        {docEditor && (canEdit ? (
+          <form onSubmit={(e) => { e.preventDefault(); void saveDoc(); }} className="space-y-4"
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); void saveDoc(); }
+            }}>
+            <Field label="名称" required>
+              <Input value={docEditor.name} maxLength={200} autoFocus={!docEditor.id}
+                placeholder="如 产品规范.md"
+                onChange={(e) => setDocEditor({ ...docEditor, name: e.target.value })} />
+            </Field>
+            <Field label="内容" required>
+              <Textarea value={docEditor.content} rows={18} autoFocus={!!docEditor.id}
+                className="max-h-[60vh] font-mono text-xs"
+                onChange={(e) => setDocEditor({ ...docEditor, content: e.target.value })} />
+            </Field>
+            <ModalActions>
+              <span className={`mr-auto self-center text-[11px] tabular-nums ${
+                limits && docEditor.content.length > limits.maxDocChars ? 'text-err' : 'text-tx3'}`}>
+                {docEditor.content.length.toLocaleString()} / {limits?.maxDocChars.toLocaleString()} 字符
+              </span>
+              <Button variant="outline" onClick={() => void closeDocEditor()}>关闭</Button>
+              <Button type="submit" variant="primary" disabled={!docDirty || savingDoc}>
+                {savingDoc && <Spinner className="h-3.5 w-3.5" />}保存
+              </Button>
+            </ModalActions>
+          </form>
+        ) : (
+          <pre className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-tx2">
+            {docEditor.content}
+          </pre>
+        ))}
       </Modal>
     </div>
   );

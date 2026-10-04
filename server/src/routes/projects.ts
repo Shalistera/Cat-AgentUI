@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
-import { db, schema, now } from '../db/index.js';
+import { db, rawDb, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { PROJECT_TOOL_DEFS, indexDoc, removeDocIndex, removeProjectIndex } from '../knowledge.js';
@@ -286,6 +286,43 @@ export async function projectRoutes(app: FastifyInstance) {
       .where(and(eq(schema.projectDocs.id, docId), eq(schema.projectDocs.projectId, id))).get();
     if (!doc) return reply.code(404).send({ error: '文档不存在' });
     return { doc: { ...docMeta(doc), content: doc.content } };
+  });
+
+  // Rename and/or rewrite a document in place. Search chunks carry the name,
+  // so either change rebuilds the doc's index.
+  app.patch('/api/projects/:id/docs/:docId', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id, docId } = req.params as { id: string; docId: string };
+    const access = projectAccess(id, req.user!.id);
+    if (!access) return reply.code(404).send(NOT_FOUND);
+    if (!canEditProject(access.role)) return reply.code(403).send(NO_EDIT);
+    const body = z.object({
+      name: z.string().trim().min(1).max(200).optional(),
+      content: z.string().max(PROJECT_LIMITS.maxDocChars).optional(),
+    }).safeParse(req.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: `参数错误:单个文档不能超过 ${PROJECT_LIMITS.maxDocChars.toLocaleString()} 字符` });
+    }
+    const doc = db.select().from(schema.projectDocs)
+      .where(and(eq(schema.projectDocs.id, docId), eq(schema.projectDocs.projectId, id))).get();
+    if (!doc) return reply.code(404).send({ error: '文档不存在' });
+    const name = body.data.name ?? doc.name;
+    const content = body.data.content ?? doc.content;
+    if (!content.trim()) return reply.code(400).send({ error: '文档内容不能为空' });
+    if (totalChars(id) - doc.chars + content.length > PROJECT_LIMITS.maxTotalChars) {
+      return reply.code(400).send({ error: `项目资料总量超出上限(${PROJECT_LIMITS.maxTotalChars.toLocaleString()} 字符),请删减后再保存` });
+    }
+    if (name !== doc.name || content !== doc.content) {
+      rawDb.transaction(() => {
+        db.update(schema.projectDocs).set({ name, content, chars: content.length })
+          .where(eq(schema.projectDocs.id, docId)).run();
+        removeDocIndex(docId);
+        indexDoc(docId, id, name, content);
+        db.update(schema.projects).set({ updatedAt: now() }).where(eq(schema.projects.id, id)).run();
+      })();
+    }
+    const updated = db.select().from(schema.projectDocs).where(eq(schema.projectDocs.id, docId)).get()!;
+    return { doc: { ...docMeta(updated), content: updated.content } };
   });
 
   app.delete('/api/projects/:id/docs/:docId', async (req, reply) => {
