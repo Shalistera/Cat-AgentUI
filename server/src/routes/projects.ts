@@ -4,7 +4,7 @@ import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { db, rawDb, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
-import { PROJECT_TOOL_DEFS, indexDoc, removeDocIndex, removeProjectIndex } from '../knowledge.js';
+import { PROJECT_TOOL_DEFS, projectInjectBudget, removeProjectFiles } from '../knowledge.js';
 import {
   accessibleProjects, canEditProject, projectAccess, projectMemberCounts, projectMembers,
   replaceProjectMembers, userDirectory, type ProjectRole,
@@ -12,7 +12,7 @@ import {
 import type { ToolDef } from '../types.js';
 
 // Retrieval (knowledge.ts) means the caps are storage hygiene, not a context
-// budget — only corpora at or below PROJECT_INJECT_CHARS ride along whole.
+// budget: how much rides along whole is decided per turn by the model's size.
 export const PROJECT_LIMITS = {
   maxDocs: 50,
   maxDocChars: 300_000,
@@ -20,13 +20,8 @@ export const PROJECT_LIMITS = {
   maxInstructionsChars: 20_000,
 };
 
-/** Corpus size at or below which docs are injected verbatim: below it a tool
-    round-trip costs more than just shipping the text; above it the model gets
-    a manifest plus search/read tools and pulls only what the turn needs. */
-export const PROJECT_INJECT_CHARS = 6_000;
-
-/** When the corpus is over budget but the model can't call tools, inject at
-    most this much before cutting off — never the whole 2M-char allowance. */
+/** A model that can't call tools can't fetch what is left out, so it gets at
+    least this much — never the whole 2M-char allowance. */
 const NO_TOOLS_INJECT_CAP = 100_000;
 
 function docMeta(d: typeof schema.projectDocs.$inferSelect) {
@@ -58,45 +53,84 @@ function totalChars(projectId: string): number {
   return row?.sum ?? 0;
 }
 
-/** What a project contributes to a chat turn: a system-prompt block, plus the
-    retrieval tools when the corpus is too big to inject whole. */
-export function buildProjectPrompt(projectId: string, userId: string, canUseTools: boolean):
-  { block: string | null; tools: ToolDef[] | null } {
+/** One manifest line: size, the opening line and the first headings — enough
+    for the model to judge whether a document is worth fetching. */
+function manifestLine(d: { name: string; chars: number; content: string }): string {
+  const lines = d.content.split('\n').map((l) => l.trim()).filter(Boolean);
+  const opening = (lines[0] ?? '').replace(/^#+\s*/, '').slice(0, 60);
+  const headings = lines.slice(1).filter((l) => /^#{1,3}\s/.test(l)).slice(0, 4)
+    .map((l) => l.replace(/^#+\s*/, '').slice(0, 24));
+  const hint = [opening, headings.length ? `目录:${headings.join(' / ')}` : ''].filter(Boolean).join(' | ');
+  return `- ${d.name}(${d.chars.toLocaleString()} 字符)${hint ? `:${hint}` : ''}`;
+}
+
+export interface ProjectTurnContext {
+  /** System-prompt block (instructions, whole documents, manifest); null when there is nothing. */
+  block: string | null;
+  /** project_search / project_read_doc when some documents were left out. */
+  tools: ToolDef[] | null;
+  /** Documents the person may read in this project — gates the sandbox's /project mount. */
+  docCount: number;
+}
+
+/** What a project contributes to a chat turn. As many whole documents as fit
+    the model's budget ride along (smallest first, so the most of them fit);
+    the rest are listed in a manifest the model searches and reads on demand. */
+export function buildProjectPrompt(projectId: string, userId: string, opts: { canUseTools: boolean; modelId: string }): ProjectTurnContext {
   const p = projectAccess(projectId, userId)?.project;
-  if (!p) return { block: null, tools: null };
+  if (!p) return { block: null, tools: null, docCount: 0 };
   const docs = db.select().from(schema.projectDocs)
     .where(eq(schema.projectDocs.projectId, projectId))
     .orderBy(asc(schema.projectDocs.createdAt)).all();
 
   const blocks: string[] = [];
-  let tools: ToolDef[] | null = null;
   if (p.instructions?.trim()) blocks.push(`[项目指令]\n${p.instructions.trim()}`);
+  if (!docs.length) return { block: blocks.length ? blocks.join('\n\n') : null, tools: null, docCount: 0 };
 
-  const total = docs.reduce((n, d) => n + d.chars, 0);
-  if (docs.length && (total <= PROJECT_INJECT_CHARS || !canUseTools)) {
-    const included: string[] = [];
-    let used = 0;
-    for (const d of docs) {
-      if (!canUseTools && used + d.chars > NO_TOOLS_INJECT_CAP) break;
-      included.push(`<document name=${JSON.stringify(d.name)}>\n${d.content}\n</document>`);
-      used += d.chars;
+  const budget = opts.canUseTools
+    ? projectInjectBudget(opts.modelId)
+    : Math.max(projectInjectBudget(opts.modelId), NO_TOOLS_INJECT_CAP);
+  const whole = new Set<string>();
+  let used = 0;
+  for (const d of [...docs].sort((a, b) => a.chars - b.chars || a.createdAt - b.createdAt)) {
+    if (used + d.chars > budget) break;
+    whole.add(d.id);
+    used += d.chars;
+  }
+  const loaded = docs.filter((d) => whole.has(d.id));
+  const listed = docs.filter((d) => !whole.has(d.id));
+  const documents = loaded.map((d) => `<document name=${JSON.stringify(d.name)}>\n${d.content}\n</document>`).join('\n\n');
+
+  let tools: ToolDef[] | null = null;
+  if (!listed.length) {
+    blocks.push(`[项目资料]\n以下是本项目的全部参考文档(已整篇载入)。回答与项目相关的问题时,优先依据这些资料;资料没有覆盖的内容,如实说明;引用时注明文档名。\n\n${documents}`);
+  } else if (!opts.canUseTools) {
+    blocks.push(`[项目资料]\n以下是本项目的部分参考文档。回答与项目相关的问题时,优先依据这些资料;资料没有覆盖的内容,如实说明。\n\n${documents}`
+      + `\n\n(资料过多,另有 ${listed.length} 个文档未能载入:${listed.map((d) => d.name).join('、')})`);
+  } else {
+    if (loaded.length) {
+      blocks.push(`[项目资料]\n以下 ${loaded.length} 个文档已整篇载入。回答与项目相关的问题时,优先依据这些资料;引用时注明文档名。\n\n${documents}`);
     }
-    const omitted = docs.length - included.length;
     blocks.push(
-      `[项目资料]\n以下是本项目的参考文档。回答与项目相关的问题时,优先依据这些资料;资料没有覆盖的内容,如实说明。\n\n${included.join('\n\n')}`
-      + (omitted > 0 ? `\n\n(资料过多,另有 ${omitted} 个文档未能载入)` : ''),
-    );
-  } else if (docs.length) {
-    const manifest = docs.map((d) => {
-      const preview = d.content.slice(0, 80).replace(/\s+/g, ' ').trim();
-      return `- ${d.name}(${d.chars.toLocaleString()} 字符)${preview ? `:${preview}…` : ''}`;
-    }).join('\n');
-    blocks.push(
-      `[项目资料清单]\n本项目挂载了以下参考文档(仅清单,内容未载入)。当问题可能与它们相关时,先用 project_search 检索片段,需要完整上下文再用 project_read_doc 读取原文;引用资料回答时注明文档名。与资料无关的问题不必调用。\n${manifest}`,
+      `[项目资料清单]\n${loaded.length ? `另有 ${listed.length} 个文档` : `本项目的 ${listed.length} 个参考文档`}篇幅较大,只列出清单、内容未载入。问题可能涉及它们时,先用 project_search 检索(结果带文档名和字符位置),需要完整上下文再用 project_read_doc 从对应位置读取原文;引用时注明文档名。与资料无关的问题不必调用。\n`
+      + listed.map(manifestLine).join('\n'),
     );
     tools = PROJECT_TOOL_DEFS;
   }
-  return { block: blocks.length ? blocks.join('\n\n') : null, tools };
+  return { block: blocks.join('\n\n'), tools, docCount: docs.length };
+}
+
+/** The /project line for the sandbox block: only when run_command exists. */
+export function projectFilesPrompt(docCount: number): string {
+  return `本对话所属项目的 ${docCount} 个资料文件以只读方式挂载在沙盒的 /project/ 目录(文件名就是资料名,"/" 会换成 "_")。需要跨文档精确查找、统计或处理数据时直接用命令,例如 grep -rn "关键词" /project/、用 python3 读取 /project/ 下的 CSV;要修改或转换格式,先复制到工作区。`;
+}
+
+/** For the project page: what loads whole on an ordinary (~128K) model and on a 1M one. */
+function injectLimits() {
+  return {
+    injectChars: projectInjectBudget(''),
+    injectCharsMax: projectInjectBudget('claude-opus-5-5'),
+  };
 }
 
 export async function projectRoutes(app: FastifyInstance) {
@@ -162,7 +196,7 @@ export async function projectRoutes(app: FastifyInstance) {
       members: role === 'owner' ? projectMembers(id) : null,
       memberCount: projectMemberCounts([id]).get(id) ?? 0,
       docs: docs.map(docMeta),
-      limits: { ...PROJECT_LIMITS, injectChars: PROJECT_INJECT_CHARS },
+      limits: { ...PROJECT_LIMITS, ...injectLimits() },
       chats: chats.map((c) => ({
         id: c.id, title: c.title, pinned: !!c.pinned, modelId: c.modelId,
         projectId: c.projectId, createdAt: c.createdAt, updatedAt: c.updatedAt,
@@ -206,7 +240,7 @@ export async function projectRoutes(app: FastifyInstance) {
     // they just fall back to plain chats.
     db.update(schema.chats).set({ projectId: null }).where(eq(schema.chats.projectId, id)).run();
     db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
-    removeProjectIndex(id);
+    try { removeProjectFiles(id); } catch { /* swept at next startup */ }
     return { ok: true };
   });
 
@@ -272,7 +306,6 @@ export async function projectRoutes(app: FastifyInstance) {
       id: docId, projectId: id, name: body.data.name,
       content: body.data.content, chars, createdAt: now(),
     }).run();
-    indexDoc(docId, id, body.data.name, body.data.content);
     db.update(schema.projects).set({ updatedAt: now() }).where(eq(schema.projects.id, id)).run();
     const doc = db.select().from(schema.projectDocs).where(eq(schema.projectDocs.id, docId)).get()!;
     return { doc: docMeta(doc) };
@@ -288,8 +321,7 @@ export async function projectRoutes(app: FastifyInstance) {
     return { doc: { ...docMeta(doc), content: doc.content } };
   });
 
-  // Rename and/or rewrite a document in place. Search chunks carry the name,
-  // so either change rebuilds the doc's index.
+  // Rename and/or rewrite a document in place.
   app.patch('/api/projects/:id/docs/:docId', async (req, reply) => {
     requireAuth(req, reply);
     const { id, docId } = req.params as { id: string; docId: string };
@@ -316,8 +348,6 @@ export async function projectRoutes(app: FastifyInstance) {
       rawDb.transaction(() => {
         db.update(schema.projectDocs).set({ name, content, chars: content.length })
           .where(eq(schema.projectDocs.id, docId)).run();
-        removeDocIndex(docId);
-        indexDoc(docId, id, name, content);
         db.update(schema.projects).set({ updatedAt: now() }).where(eq(schema.projects.id, id)).run();
       })();
     }
@@ -335,7 +365,6 @@ export async function projectRoutes(app: FastifyInstance) {
       .where(and(eq(schema.projectDocs.id, docId), eq(schema.projectDocs.projectId, id))).get();
     if (!doc) return reply.code(404).send({ error: '文档不存在' });
     db.delete(schema.projectDocs).where(eq(schema.projectDocs.id, docId)).run();
-    removeDocIndex(docId);
     db.update(schema.projects).set({ updatedAt: now() }).where(eq(schema.projects.id, id)).run();
     return { ok: true };
   });

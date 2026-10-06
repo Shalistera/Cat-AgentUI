@@ -24,6 +24,8 @@ const KIND_LABELS: Record<string, string> = {
   ocr: 'OCR 工坊',
   translate: '翻译工坊',
   ppt: 'PPT 工坊',
+  subagent: '子代理',
+  compaction: '上下文压缩',
 };
 
 /**

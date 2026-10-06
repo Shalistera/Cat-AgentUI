@@ -1,115 +1,166 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { config } from './config.js';
 import { rawDb } from './db/index.js';
 import type { ToolDef } from './types.js';
 
-// Project-knowledge retrieval (tier 2). Docs are chunked into an FTS5 index;
-// when a project's corpus is too big to inject, the model gets a manifest plus
-// these two tools and decides per turn what to fetch — the same on-demand
-// pattern the first-party Claude/ChatGPT project features use.
-//
-// FTS5 is a virtual table, which drizzle can't model — it lives outside the
-// migration journal and is (re)built idempotently at startup.
+// Project knowledge, retrieval side. A turn loads as many whole documents as
+// the model's context comfortably holds (routes/projects.ts); the rest are
+// listed in a manifest and fetched on demand through these tools — the same
+// pattern the first-party Claude/ChatGPT project features use. The sandbox
+// additionally sees every document as a read-only file under /project.
 
 const CHUNK_CHARS = 1200;
 const SEARCH_LIMIT = 8;
 const SEARCH_RESULT_CAP = 12_000; // chars of snippets per tool call
 const READ_WINDOW = 15_000; // chars per project_read_doc call
+const MAX_TERMS = 16;
 
-export function initKnowledgeIndex() {
-  // trigram tokenizer: substring matching that works for CJK text, where the
-  // default unicode61 tokenizer would treat whole sentences as single tokens.
-  rawDb.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS project_docs_fts USING fts5(
-    content, doc_id UNINDEXED, project_id UNINDEXED, name UNINDEXED, seq UNINDEXED,
-    tokenize='trigram'
-  )`);
-  // Backfill docs uploaded before this index existed (or after a manual wipe).
-  const docs = rawDb.prepare('SELECT count(*) AS n FROM project_docs').get() as { n: number };
-  const indexed = rawDb.prepare('SELECT count(DISTINCT doc_id) AS n FROM project_docs_fts').get() as { n: number };
-  if (docs.n !== indexed.n) {
-    rawDb.prepare('DELETE FROM project_docs_fts').run();
-    const rows = rawDb.prepare('SELECT id, project_id, name, content FROM project_docs').all() as
-      { id: string; project_id: string; name: string; content: string }[];
-    for (const d of rows) indexDoc(d.id, d.project_id, d.name, d.content);
-  }
+/** Below this a tool round-trip costs more than just shipping the text. */
+export const PROJECT_INJECT_MIN_CHARS = 6_000;
+
+// ---- how much to load whole ----
+
+/** Approximate context window, in tokens, by model id. Only sizes how much
+    project text rides along whole — a guess on the low side is harmless (the
+    rest stays searchable), one on the high side costs tokens. Gateway
+    prefixes (`openai/gpt-5`) and Claude Code's `[1m]` suffix are understood. */
+export function contextWindowTokens(modelId: string): number {
+  const raw = modelId.toLowerCase();
+  const id = raw.replace(/^.*\//, '');
+  if (raw.includes('[1m]')) return 1_000_000;
+  if (/claude-(opus|sonnet)-4[-.][6-9]|claude-(opus|sonnet|fable|mythos)-[5-9]/.test(id)) return 1_000_000;
+  if (id.includes('claude')) return 200_000;
+  if (/gemini-(1\.5|[2-9])/.test(id)) return 1_000_000;
+  if (/gpt-4\.1/.test(id)) return 1_000_000;
+  if (/gpt-5/.test(id)) return 400_000;
+  if (/^o[1-9]/.test(id)) return 200_000;
+  if (/grok-4/.test(id)) return 256_000;
+  return 128_000;
 }
 
-/** Paragraph-friendly chunking: prefer blank-line breaks, then newlines, then
-    a hard cut — a chunk should read as a coherent passage, not a random slice. */
-function chunkText(content: string): string[] {
-  const out: string[] = [];
-  let rest = content;
-  while (rest.length > CHUNK_CHARS) {
-    const slice = rest.slice(0, CHUNK_CHARS);
-    let cut = slice.lastIndexOf('\n\n');
-    if (cut < CHUNK_CHARS * 0.4) cut = slice.lastIndexOf('\n');
-    if (cut < CHUNK_CHARS * 0.4) cut = CHUNK_CHARS;
-    out.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut);
-  }
-  const tail = rest.trim();
-  if (tail) out.push(tail);
-  return out.filter(Boolean);
+/** Characters of project text a turn on this model may load whole: ~15% of
+    the context, within the operator's PROJECT_INJECT_MAX_CHARS. Chinese runs
+    about one character per token on current tokenizers (English ~3), so the
+    budget counts characters as tokens to stay safe for Chinese corpora. */
+export function projectInjectBudget(modelId: string): number {
+  const byContext = Math.floor(contextWindowTokens(modelId) * 0.15);
+  return Math.min(config.projectInjectMaxChars, Math.max(PROJECT_INJECT_MIN_CHARS, byContext));
 }
 
-export function indexDoc(docId: string, projectId: string, name: string, content: string) {
-  const insert = rawDb.prepare(
-    'INSERT INTO project_docs_fts (content, doc_id, project_id, name, seq) VALUES (?, ?, ?, ?, ?)',
-  );
-  const chunks = chunkText(content);
-  const tx = rawDb.transaction(() => {
-    chunks.forEach((c, i) => insert.run(c, docId, projectId, name, i + 1));
+// ---- chunks & search ----
+
+interface Chunk { offset: number; text: string }
+
+/** Paragraph-friendly chunking that keeps each chunk's character offset in
+    the original document, so a search hit can be read in context. */
+function chunkDoc(content: string): Chunk[] {
+  const out: Chunk[] = [];
+  let pos = 0;
+  while (pos < content.length) {
+    let end = Math.min(content.length, pos + CHUNK_CHARS);
+    if (end < content.length) {
+      const slice = content.slice(pos, end);
+      let cut = slice.lastIndexOf('\n\n');
+      if (cut < CHUNK_CHARS * 0.4) cut = slice.lastIndexOf('\n');
+      if (cut < CHUNK_CHARS * 0.4) cut = CHUNK_CHARS;
+      end = pos + cut;
+    }
+    const raw = content.slice(pos, end);
+    const text = raw.trim();
+    if (text) out.push({ offset: pos + (raw.length - raw.trimStart().length), text });
+    pos = end;
+  }
+  return out;
+}
+
+const SEPARATORS = /[\s,，。、;；:：!！?？"“”'‘’()（）【】[\]{}<>《》|/\\·…]+/;
+const CJK_RUN = /[㐀-䶿一-鿿豈-﫿]{3,}/g;
+
+/** Query → terms, plus the overlapping two-character pieces of longer CJK
+    terms: written Chinese has no spaces, so 「差旅报销」 must still find
+    「差旅费报销」. */
+function queryTerms(query: string): { terms: string[]; grams: string[][] } {
+  const terms = [...new Set(query.toLowerCase().split(SEPARATORS).filter(Boolean))].slice(0, MAX_TERMS);
+  const grams = terms.map((t) => {
+    const out = new Set<string>();
+    for (const run of t.match(CJK_RUN) ?? []) {
+      for (let i = 0; i + 2 <= run.length; i++) out.add(run.slice(i, i + 2));
+    }
+    return [...out];
   });
-  tx();
+  return { terms, grams };
 }
 
-export function removeDocIndex(docId: string) {
-  rawDb.prepare('DELETE FROM project_docs_fts WHERE doc_id = ?').run(docId);
+function occurrences(hay: string, needle: string, cap = 8): number {
+  let n = 0;
+  for (let i = hay.indexOf(needle); i !== -1 && n < cap; i = hay.indexOf(needle, i + needle.length)) n++;
+  return n;
 }
 
-export function removeProjectIndex(projectId: string) {
-  rawDb.prepare('DELETE FROM project_docs_fts WHERE project_id = ?').run(projectId);
-}
+interface Hit { name: string; offset: number; text: string; docChars: number }
 
-interface Hit { name: string; seq: number; content: string }
-
+/** Ranks chunks by query terms weighted by rarity (idf) and term frequency,
+    then by how much of the query a chunk covers. A project's corpus is capped
+    at a few MB, so scoring every chunk in memory is fast and — unlike a
+    trigram index — handles one- and two-character Chinese terms. */
 function searchDocs(projectId: string, query: string): Hit[] {
-  const q = query.trim();
-  if (!q) return [];
-  // OR the whitespace-separated terms so multi-keyword queries rank by bm25
-  // instead of requiring an exact phrase.
-  const terms = q.split(/\s+/).filter((t) => t.length >= 3);
-  if (terms.length) {
-    const match = terms.map((t) => `"${t.replaceAll('"', '""')}"`).join(' OR ');
-    try {
-      const rows = rawDb.prepare(
-        `SELECT name, seq, content FROM project_docs_fts
-         WHERE project_docs_fts MATCH ? AND project_id = ?
-         ORDER BY bm25(project_docs_fts) LIMIT ?`,
-      ).all(match, projectId, SEARCH_LIMIT) as Hit[];
-      if (rows.length) return rows;
-    } catch { /* malformed query → fall through to LIKE */ }
-  }
-  // trigram needs ≥3 chars per token; two-character Chinese terms are everyday
-  // queries, so a LIKE scan is the correctness fallback (corpus is small).
-  const esc = q.replace(/[\\%_]/g, (c) => `\\${c}`);
-  return rawDb.prepare(
-    `SELECT name, seq, content FROM project_docs_fts
-     WHERE project_id = ? AND content LIKE ? ESCAPE '\\' LIMIT ?`,
-  ).all(projectId, `%${esc}%`, SEARCH_LIMIT) as Hit[];
+  const { terms, grams } = queryTerms(query);
+  if (!terms.length) return [];
+  const docs = rawDb.prepare('SELECT name, content FROM project_docs WHERE project_id = ? ORDER BY created_at')
+    .all(projectId) as { name: string; content: string }[];
+  const chunks = docs.flatMap((d) => chunkDoc(d.content).map((c) => ({
+    ...c, name: d.name, lowerName: d.name.toLowerCase(), lower: c.text.toLowerCase(), docChars: d.content.length,
+  })));
+  if (!chunks.length) return [];
+  const idf = (key: string) => {
+    let df = 0;
+    for (const c of chunks) if (c.lower.includes(key)) df++;
+    return df ? Math.log(1 + chunks.length / df) : 0;
+  };
+  const termIdf = terms.map(idf);
+  const gramIdf = grams.map((g) => g.map(idf));
+  const sat = (tf: number) => (tf * 2.2) / (tf + 1.2);
+
+  const scored = chunks.map((c) => {
+    let score = 0;
+    let covered = 0;
+    terms.forEach((t, k) => {
+      const weight = t.length === 1 ? 0.3 : 1;
+      const tf = termIdf[k] ? occurrences(c.lower, t) : 0;
+      if (tf) { score += weight * termIdf[k] * sat(tf); covered += 1; }
+      if (termIdf[k] && c.lowerName.includes(t)) score += 0.5 * termIdf[k];
+      if (!tf && grams[k].length) {
+        let present = 0;
+        grams[k].forEach((g, j) => {
+          const gtf = gramIdf[k][j] ? occurrences(c.lower, g) : 0;
+          if (gtf) { present++; score += 0.45 * gramIdf[k][j] * sat(gtf); }
+        });
+        if (present * 2 >= grams[k].length) covered += 0.5;
+      }
+    });
+    return { c, score: score * (0.5 + covered / terms.length) };
+  }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+
+  return scored.slice(0, SEARCH_LIMIT).map(({ c }) => ({ name: c.name, offset: c.offset, text: c.text, docChars: c.docChars }));
 }
+
+// ---- tools ----
 
 export const PROJECT_TOOL_DEFS: ToolDef[] = [
   {
     name: 'project_search',
-    description: '在当前项目的参考资料中全文检索,返回最相关的片段及其所属文档名。查询用关键词或短语;一次没搜到可以换近义词再试。',
+    description: '在当前项目的参考资料中检索,返回最相关的片段、所属文档名和字符位置。用几个关键词或短语查询(空格分隔),中文不必分词;一次没搜到可以换近义词再试。需要片段前后文时,用 project_read_doc 从给出的位置读取原文。',
     parameters: {
       type: 'object',
-      properties: { query: { type: 'string', description: '检索关键词或短语' } },
+      properties: { query: { type: 'string', description: '检索关键词或短语,多个用空格分隔' } },
       required: ['query'],
     },
   },
   {
     name: 'project_read_doc',
-    description: '按文档名读取项目参考资料的原文。长文档分段返回,响应里会给出继续读取所需的 offset。',
+    description: '按文档名读取项目参考资料的原文。长文档分段返回,响应里会给出继续读取所需的 offset;从检索结果跳读时,offset 可以设为片段位置之前一点。',
     parameters: {
       type: 'object',
       properties: {
@@ -137,16 +188,16 @@ export function callProjectTool(
     const query = typeof args.query === 'string' ? args.query : '';
     if (!query.trim()) return { result: '缺少 query 参数', isError: true };
     const hits = searchDocs(projectId, query);
-    if (!hits.length) return { result: `没有找到与「${query}」相关的内容。可以换个关键词,或用 project_read_doc 直接读取某个文档。`, isError: false };
+    if (!hits.length) return { result: `没有找到与「${query}」相关的内容。可以换个说法或拆成更短的关键词,也可以用 project_read_doc 直接读取某个文档。`, isError: false };
     const parts: string[] = [];
     let used = 0;
     for (const h of hits) {
-      const block = `【${h.name} · 片段${h.seq}】\n${h.content}`;
+      const block = `【${h.name} · 第 ${h.offset}–${h.offset + h.text.length} 字符 / 共 ${h.docChars} 字符】\n${h.text}`;
       if (used + block.length > SEARCH_RESULT_CAP) break;
       parts.push(block);
       used += block.length;
     }
-    return { result: parts.join('\n\n---\n\n'), isError: false };
+    return { result: `${parts.join('\n\n---\n\n')}\n\n(需要上下文时,用 project_read_doc 传文档名和 offset 读取原文)`, isError: false };
   }
 
   if (name === 'project_read_doc') {
@@ -170,4 +221,81 @@ export function callProjectTool(
   }
 
   return { result: `未知的项目工具「${name}」`, isError: true };
+}
+
+// ---- sandbox files ----
+
+const FILES_ROOT = path.join(config.dataDir, 'sandbox', 'project-files');
+/** A version unused this long can go: no command runs longer than the sandbox cap. */
+const STALE_MS = (config.maxSandboxTimeoutSec + 60) * 1000;
+
+/** A document name as a file name: no path separators or control characters,
+    not hidden, at most 200 bytes, unique (case-insensitively) in the folder. */
+function fileNameFor(name: string, used: Set<string>): string {
+  const clean = name.normalize('NFC').replace(/[/\\\u0000-\u001f\u007f]/g, '_').replace(/^\.+/, '_').trim() || 'document';
+  const ext = path.extname(clean).slice(0, 16);
+  let stem = clean.slice(0, clean.length - ext.length) || 'document';
+  while (stem.length > 1 && Buffer.byteLength(stem + ext) > 200) stem = stem.slice(0, -1);
+  let candidate = stem + ext;
+  for (let n = 2; used.has(candidate.toLowerCase()); n++) candidate = `${stem} (${n})${ext}`;
+  used.add(candidate.toLowerCase());
+  return candidate;
+}
+
+/** The project's documents as files, for a read-only /project mount in the
+    sandbox. Written once per content version (a hash of every document), so
+    repeated commands reuse the directory; null when the project has none. */
+export function projectFilesDir(projectId: string): string | null {
+  const docs = rawDb.prepare('SELECT id, name, content FROM project_docs WHERE project_id = ? ORDER BY created_at')
+    .all(projectId) as { id: string; name: string; content: string }[];
+  if (!docs.length) return null;
+  const hash = createHash('sha256');
+  for (const d of docs) hash.update(d.id).update('\0').update(d.name).update('\0').update(d.content).update('\0');
+  const prefix = `${projectId.replace(/[^a-zA-Z0-9-]/g, '')}-`;
+  const dir = path.join(FILES_ROOT, `${prefix}${hash.digest('hex').slice(0, 16)}`);
+  if (fs.existsSync(dir)) {
+    // mtime marks "last used": a newer version only sweeps this one once idle.
+    const t = new Date();
+    try { fs.utimesSync(dir, t, t); } catch { /* best effort */ }
+    return dir;
+  }
+
+  fs.mkdirSync(FILES_ROOT, { recursive: true, mode: 0o700 });
+  const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
+  fs.mkdirSync(tmp, { mode: 0o700 });
+  try {
+    const used = new Set<string>();
+    for (const d of docs) fs.writeFileSync(path.join(tmp, fileNameFor(d.name, used)), d.content, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, dir);
+  } catch (err) {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (!fs.existsSync(dir)) throw err; // otherwise a concurrent writer won the rename
+  }
+  for (const entry of fs.readdirSync(FILES_ROOT)) {
+    const full = path.join(FILES_ROOT, entry);
+    if (!entry.startsWith(prefix) || full === dir) continue;
+    try { if (Date.now() - fs.statSync(full).mtimeMs > STALE_MS) fs.rmSync(full, { recursive: true, force: true }); } catch { /* raced */ }
+  }
+  return dir;
+}
+
+export function removeProjectFiles(projectId: string) {
+  const prefix = `${projectId.replace(/[^a-zA-Z0-9-]/g, '')}-`;
+  if (!fs.existsSync(FILES_ROOT)) return;
+  for (const entry of fs.readdirSync(FILES_ROOT)) {
+    if (entry.startsWith(prefix)) fs.rmSync(path.join(FILES_ROOT, entry), { recursive: true, force: true });
+  }
+}
+
+/** Startup: the FTS5 index older versions kept is no longer read (search
+    scores chunks directly), and file copies of deleted projects go away. */
+export function initProjectKnowledge() {
+  rawDb.exec('DROP TABLE IF EXISTS project_docs_fts');
+  if (!fs.existsSync(FILES_ROOT)) return;
+  const live = new Set((rawDb.prepare('SELECT id FROM projects').all() as { id: string }[])
+    .map((p) => `${p.id.replace(/[^a-zA-Z0-9-]/g, '')}-`));
+  for (const entry of fs.readdirSync(FILES_ROOT)) {
+    const id = entry.replace(/[0-9a-f]{16}(\.tmp-.*)?$/, '');
+    if (!live.has(id) || entry.includes('.tmp-')) fs.rmSync(path.join(FILES_ROOT, entry), { recursive: true, force: true });
+  }
 }

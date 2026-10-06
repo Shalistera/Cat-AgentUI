@@ -25,6 +25,7 @@ import { bwrapBaseArgs, cachedSandboxEnv, probeSandboxEnv, sandboxProcessEnv } f
 import { getSandboxSettings, type SandboxSettings } from './settings.js';
 import { venvDir, venvExists } from './venv.js';
 import { skillsRoot } from '../skills.js';
+import { projectFilesDir } from '../knowledge.js';
 
 export interface RunRequest {
   userId: string;
@@ -32,6 +33,8 @@ export interface RunRequest {
   user: SkillUser;
   chatId: string;
   messageId?: string;
+  /** The chat's project, already access-checked: its documents appear read-only under /project. */
+  projectId?: string | null;
   command: string;
   /** Caller-requested timeout; clamped to the admin setting. */
   timeoutSec?: number;
@@ -78,10 +81,12 @@ export function sandboxLoad(): { running: number; max: number } {
 
 function nodeBinDir(): string { return path.dirname(process.execPath); }
 
-function bwrapArgv(bwrap: string, workspace: string, command: string, user: SkillUser, seccomp: string | null, tmpfsBytes: number): string[] {
+function bwrapArgv(bwrap: string, workspace: string, command: string, user: SkillUser, seccomp: string | null, tmpfsBytes: number, projectDir: string | null): string[] {
   const args = [bwrap, ...bwrapBaseArgs(tmpfsBytes)];
   args.push('--tmpfs', '/home', '--dir', '/home/sandbox');
   args.push('--bind', workspace, '/workspace', '--chdir', '/workspace');
+  // 项目资料 as plain files, read-only: grep / python over the whole corpus.
+  if (projectDir) args.push('--ro-bind', projectDir, '/project');
   const pathParts = ['/usr/local/bin', '/usr/bin', '/bin'];
   if (venvExists()) {
     args.push('--ro-bind', venvDir, '/opt/venv');
@@ -166,7 +171,9 @@ export async function runInSandbox(req: RunRequest): Promise<RunResult> {
   const t0 = Date.now();
   const unit = `caui-sbx-${crypto.randomBytes(6).toString('hex')}`;
   const seccomp = ensureSeccompFilter();
-  const bwrapPart = bwrapArgv(env.bwrapPath, workspace, req.command, req.user, seccomp, s.memoryMb * 1048576);
+  let projectDir: string | null = null;
+  try { projectDir = req.projectId ? projectFilesDir(req.projectId) : null; } catch { /* run without /project */ }
+  const bwrapPart = bwrapArgv(env.bwrapPath, workspace, req.command, req.user, seccomp, s.memoryMb * 1048576, projectDir);
   // `sh -c 'exec 3<"$1"; shift; exec "$@"' sh <filter> bwrap …` — opens the
   // filter on fd 3 for --seccomp without any quoting of the real argv.
   let inner = seccomp

@@ -120,6 +120,7 @@ export async function streamChat(
       case 'subagent_progress': handlers.onSubagentProgress?.(data); break;
       case 'tool_confirm': handlers.onToolConfirm?.(data); break;
       case 'grounding': handlers.onGrounding?.(data); break;
+      case 'context_summary': handlers.onContextSummary?.(data); break;
       case 'data_comparison': handlers.onDataComparison?.(data); break;
       case 'image': handlers.onImage?.(data); break;
       case 'usage': handlers.onUsage?.(data); break;

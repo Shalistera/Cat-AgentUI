@@ -648,7 +648,7 @@ export default function Chat() {
       if (!current()) return acknowledged;
       const failed = result.message;
       if (!stoppingRef.current && failed?.status === 'error' && (failed.errorCode === 'provider_busy' || failed.errorCode === 'provider_empty')
-        && result.fallbackModelId && failed.parts.every((p) => p.type === 'service_tier')) {
+        && result.fallbackModelId && failed.parts.every((p) => p.type === 'service_tier' || p.type === 'context_summary')) {
         const source = models.find((m) => m.providerId === failed.providerId && m.modelId === failed.model) ?? null;
         const target = configuredFallbackModel(models, source);
         if (target?.id === result.fallbackModelId) {
@@ -829,6 +829,10 @@ export default function Chat() {
         notifyDone('需要你确认工具调用', `${d.calls.map((c) => c.name.split('__').pop()).join('、')}`, `/chat/${chatId}`);
       },
       onGrounding(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
+      // One marker per reply: the 'running' one is replaced when compaction ends.
+      onContextSummary(d) {
+        applyToAssistant((m) => ({ ...m, parts: [...m.parts.filter((p) => p.type !== 'context_summary'), d] }));
+      },
       onDataComparison(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
       onImage(d) { produced = true; flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, { type: 'image', imageId: d.imageId, mime: d.mime }] })); },
       onUsage(d) {

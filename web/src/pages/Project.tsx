@@ -566,8 +566,10 @@ export default function ProjectPage() {
                       {docs.length} 个文档 · {totalChars.toLocaleString()} 字符
                       <br />
                       {totalChars <= limits.injectChars
-                        ? '资料量小,整体随对话提供'
-                        : '对话中由模型按需检索'}
+                        ? '资料不多,每次对话都整篇提供给模型'
+                        : totalChars <= (limits.injectCharsMax ?? limits.injectChars)
+                          ? '长上下文模型(如 Claude、Gemini)整篇读取;其他模型放不下的部分按需检索'
+                          : '放得下的文档整篇提供,其余由模型按需检索'}
                     </p>
                   )}
                 </>

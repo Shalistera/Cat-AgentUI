@@ -851,6 +851,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
   const providerBusy = msg.errorCode === 'provider_busy';
   const fallback = msg.parts.find((p) => p.type === 'model_fallback');
   const recovery = msg.parts.find((p) => p.type === 'response_recovery');
+  const compacted = msg.parts.find((p) => p.type === 'context_summary');
   const ranTools = msg.parts.some((p) => p.type === 'tool_call');
   // The null branch covers rows saved before the server started assigning
   // 'incomplete': a finished reply with nothing to read is cut short regardless.
@@ -883,6 +884,19 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
           <div role="status" className="mb-2 flex items-center gap-2 text-xs text-tx3">
             {isStreaming ? <><Spinner className="h-3.5 w-3.5" />正在自动补全回复…</> : recovery.state === 'done' ? '已自动续写恢复 · 原文已保留' : null}
           </div>
+        )}
+        {compacted && compacted.state === 'running' && (
+          <div role="status" className="mb-2 flex items-center gap-2 text-xs text-tx3">
+            {isStreaming && <Spinner className="h-3.5 w-3.5" />}对话较长,正在把较早的 {compacted.covered} 条消息压缩成摘要…
+          </div>
+        )}
+        {compacted && compacted.state === 'done' && (
+          <details className="group/sum mb-2 rounded-lg border border-line bg-bg2 px-3 py-2 text-xs text-tx2">
+            <summary className="cursor-pointer list-none">
+              较早的 {compacted.covered} 条消息已压缩成摘要,模型从这里起参考摘要继续 · <span className="text-acc group-open/sum:hidden">查看摘要</span><span className="hidden text-acc group-open/sum:inline">收起</span>
+            </summary>
+            {compacted.text && <p className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap leading-relaxed text-tx">{compacted.text}</p>}
+          </details>
         )}
         {fallback && (
           <div role="status" className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg2 px-3 py-2 text-xs text-tx2">

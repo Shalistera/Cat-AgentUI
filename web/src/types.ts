@@ -71,7 +71,9 @@ export type MessagePart =
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
   | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; supports?: { text: string; start: number; sources: number[] }[]; label?: string }
-  | { type: 'followups'; questions: string[] };
+  | { type: 'followups'; questions: string[] }
+  /** 上下文压缩 ran before this reply: older turns now reach the model as a summary. */
+  | { type: 'context_summary'; state: 'running' | 'done' | 'failed'; covered: number; text?: string };
 
 export interface ProviderRetry { attempt: number; maxAttempts: number; delayMs: number; queued?: boolean; priority?: boolean; recovery?: 'empty' | 'continuation' }
 
@@ -167,9 +169,10 @@ export interface ProjectDoc { id: string; name: string; chars: number; createdAt
 
 export interface ProjectLimits {
   maxDocs: number; maxDocChars: number; maxTotalChars: number; maxInstructionsChars: number;
-  /** At or below this many total chars the corpus is injected whole; above it
-      the model retrieves on demand. */
+  /** Characters loaded whole into a turn on an ordinary (~128K) model and on
+      a 1M-context one; documents that don't fit are retrieved on demand. */
   injectChars: number;
+  injectCharsMax: number;
 }
 
 /** 'off', or the `value` of one of the model's reasoning levels. */
@@ -527,6 +530,7 @@ export interface StreamHandlers {
   /** 子代理 live progress for the parent's spawn_subagent tool row. */
   onSubagentProgress?(d: { toolCallId: string; text: string }): void;
   onGrounding?(d: Extract<MessagePart, { type: 'grounding' }>): void;
+  onContextSummary?(d: Extract<MessagePart, { type: 'context_summary' }>): void;
   onDataComparison?(d: Extract<MessagePart, { type: 'data_comparison' }>): void;
   onImage?(d: { imageId: string; mime?: string }): void;
   onUsage?(d: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; durationMs: number; ttftMs: number | null }): void;

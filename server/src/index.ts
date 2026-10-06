@@ -22,7 +22,7 @@ import { eventRoutes } from './routes/events.js';
 import { searchRoutes } from './routes/search.js';
 import { ocrRoutes } from './routes/ocr.js';
 import { translateRoutes } from './routes/translate.js';
-import { initKnowledgeIndex } from './knowledge.js';
+import { initProjectKnowledge } from './knowledge.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import { skillRoutes } from './routes/skills.js';
@@ -59,7 +59,7 @@ async function main() {
     // old WAL frames that may still contain a pre-redaction plaintext value.
     rawDb.pragma('wal_checkpoint(TRUNCATE)');
   }
-  initKnowledgeIndex();
+  initProjectKnowledge();
   await reconcileStorageMetadata();
   sweepOrphanWorkspaces();
   reconcileSkills();

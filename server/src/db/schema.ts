@@ -233,6 +233,20 @@ export const chats = sqliteTable('chats', {
   updatedAt: integer('updated_at').notNull(),
 }, (t) => [index('idx_chats_user').on(t.userId, t.updatedAt)]);
 
+// 上下文压缩: the summary that stands in for the older part of a branch once
+// it outgrows the model's history budget. Anchored to the last message it
+// covers, so it only applies to branches that run through that message.
+export const chatSummaries = sqliteTable('chat_summaries', {
+  id: text('id').primaryKey(),
+  chatId: text('chat_id').notNull().references(() => chats.id, { onDelete: 'cascade' }),
+  upToMessageId: text('up_to_message_id').notNull(),
+  summary: text('summary').notNull(),
+  // Messages folded in so far, earlier summaries included.
+  covered: integer('covered').notNull().default(0),
+  model: text('model'),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [index('idx_chat_summaries_chat').on(t.chatId, t.createdAt)]);
+
 export const messages = sqliteTable('messages', {
   id: text('id').primaryKey(),
   chatId: text('chat_id').notNull().references(() => chats.id, { onDelete: 'cascade' }),

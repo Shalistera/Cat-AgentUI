@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema, now, getSetting } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
@@ -23,7 +23,7 @@ import { recordUsage } from '../usage.js';
 import { canUseModel, grantedModelIds, imageModelsAllowed, providerAllowed } from '../model-access.js';
 import { checkModelLimit, checkQuota, modelLimitBlockMessage, modelLimitReason, quotaBlockMessage } from '../quota.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
-import { buildProjectPrompt } from './projects.js';
+import { buildProjectPrompt, projectFilesPrompt } from './projects.js';
 import { callProjectTool, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
@@ -32,8 +32,12 @@ import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-se
 import { GENERATE_IMAGE_TOOL, buildImageToolPrompt, callImageTool, imageToolDefinition, imageToolModelsFor } from '../image-tool.js';
 import { COMPARE_DATA_TOOL, DATA_COMPARISON_PROMPT, callCompareData, comparisonPresentationIntent, comparisonToolDefinition } from '../data-comparison.js';
 import { SUBAGENT_TOOL_DEFS, buildSubagentPrompt, formatSubagentResult, isSubagentTool, runSubagent, subagentAvailableFor } from '../subagent.js';
+import {
+  branchSummary, clearSummaries, historyBudget, isSummaryLead, planHistory, saveSummary, summaryLead, summaryTargetChars, writeSummary,
+  type HistoryPlan,
+} from '../compaction.js';
 import type {
-  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry,
+  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry, UsageInfo,
 } from '../types.js';
 import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
@@ -280,12 +284,28 @@ function carriedDocParts(rows: { parts: string }[]): FilePart[] {
   return out;
 }
 
-/** The replay window of an ancestor chain, plus the documents that fell out of it. */
-function historyWindow(chain: MessageRow[], max: number): { window: MessageRow[]; carried: FilePart[] } {
-  return {
-    window: chain.slice(-max),
-    carried: carriedDocParts(chain.slice(0, Math.max(0, chain.length - max))),
-  };
+/** Image models only look at the last few turns; they never compact. */
+const IMAGE_HISTORY_MESSAGES = 40;
+/** A summary that takes longer than this is abandoned; the turn goes on without it. */
+const COMPACT_TIMEOUT_MS = 180_000;
+
+/** Parts that mark a reply without being part of its content. */
+const isMetaPart = (p: MessagePart) => p.type === 'service_tier' || p.type === 'context_summary';
+
+/** Approximate replay size of each message, in characters, for compaction
+    planning: text and tool parts as replayed, text documents by their size
+    (PDFs and images count against the media budgets instead). */
+function replayCosts(rows: { parts: string }[]): number[] {
+  const parsed = rows.map((r) => parseParts(r.parts));
+  const ids = [...new Set(parsed.flatMap((ps) => ps.flatMap((p) => (p.type === 'file' && p.uploadId ? [p.uploadId] : []))))];
+  const docChars = new Map<string, number>();
+  if (ids.length) {
+    for (const u of db.select({ id: schema.uploads.id, size: schema.uploads.size, mime: schema.uploads.mime })
+      .from(schema.uploads).where(inArray(schema.uploads.id, ids)).all()) {
+      docChars.set(u.id, isTextDocMime(u.mime) ? Math.min(u.size, config.maxMessageTextChars) : 0);
+    }
+  }
+  return parsed.map((ps) => ps.reduce((n, p) => n + (p.type === 'file' ? docChars.get(p.uploadId) ?? 0 : adapterTextCost(p)), 0));
 }
 
 /**
@@ -295,8 +315,11 @@ function historyWindow(chain: MessageRow[], max: number): { window: MessageRow[]
  * turn in the window, so a long conversation keeps its files in view.
  */
 async function buildBoundedHistory(
-  rows: { role: string; parts: string }[], ownerId: string, includeImages: boolean, carried: FilePart[] = [],
+  rows: { role: string; parts: string }[], ownerId: string, includeImages: boolean, carried: FilePart[],
+  budget: { textChars: number; lead: string | null; reserve: number },
 ): Promise<{ messages: AdapterMessage[]; mediaLease: AdmissionLease }> {
+  // The summary (or room for the one about to be written) comes off the top.
+  const leadChars = (budget.lead?.length ?? 0) + budget.reserve;
   // The history count budget must fit one permitted batch of images/PDFs.
   // Byte and text budgets still bound the total provider payload.
   const contextMediaLimit = Math.max(config.maxContextImages, maxAttachmentsPerMessage());
@@ -428,7 +451,7 @@ async function buildBoundedHistory(
         if (converted) planned.push(converted);
       }
       if (!planned.length) continue;
-      const over = textChars + rowText > config.maxContextTextChars
+      const over = textChars + rowText > budget.textChars
         || imageBytes + rowImageBytes > config.maxContextImageBytes
         || imageCount + rowImageCount > contextMediaLimit;
       if (over) {
@@ -448,8 +471,8 @@ async function buildBoundedHistory(
   // even the newest turn can't share the budget with them, the turn wins and
   // the documents are named instead of included.
   let carriedIn = carriedPlanned.length > 0;
-  if (!(await fill(carriedText, carriedBytes, carriedCount))) {
-    if (!carriedIn || !(await fill(0, 0, 0))) {
+  if (!(await fill(leadChars + carriedText, carriedBytes, carriedCount))) {
+    if (!carriedIn || !(await fill(leadChars, 0, 0))) {
       throw new InputBudgetError('当前消息超过模型上下文预算,请缩短文字或减少图片');
     }
     carriedIn = false;
@@ -462,6 +485,7 @@ async function buildBoundedHistory(
       : { type: 'text', text: `(本对话早前上传的附件因上下文预算未能包含:${carried.map((p) => p.name || '附件').join('、')})` };
     chosen[0].parts = [lead, ...(carriedIn ? carriedPlanned : []), ...chosen[0].parts];
   }
+  if (budget.lead && chosen.length) chosen[0].parts = [{ type: 'text', text: budget.lead }, ...chosen[0].parts];
   const mediaLease = tryReserveContextImageBytes(ownerId, imageBytes);
   if (!mediaLease) {
     throw new InputBudgetError('当前图片上下文总量繁忙,请等待其他图片对话完成后重试', 429);
@@ -971,6 +995,9 @@ export async function chatRoutes(app: FastifyInstance) {
               lines.push('搜索来源:', ...p.sources.map((s) => `- [${s.title || s.uri}](${s.uri})`), '');
             }
             break;
+          case 'context_summary':
+            if (p.state === 'done') lines.push('*(较早的对话已压缩成摘要后继续)*', '');
+            break;
           default:
             break; // followups are UI sugar, not conversation content
         }
@@ -1083,6 +1110,8 @@ export async function chatRoutes(app: FastifyInstance) {
     // message's parent, so no subtree is orphaned.
     db.update(schema.messages).set({ parentId: msg.parentId })
       .where(and(eq(schema.messages.chatId, chatId), eq(schema.messages.parentId, messageId))).run();
+    // A summary may still quote it; the next long turn writes a fresh one.
+    clearSummaries(chatId);
     db.update(schema.chats).set({
       updatedAt: now(),
       ...(c.currentLeafId === messageId ? { currentLeafId: msg.parentId } : {}),
@@ -1127,6 +1156,7 @@ export async function chatRoutes(app: FastifyInstance) {
     db.update(schema.messages).set({ parts: JSON.stringify(out) })
       .where(eq(schema.messages.id, messageId)).run();
     db.update(schema.chats).set({ updatedAt: now() }).where(eq(schema.chats.id, chatId)).run();
+    clearSummaries(chatId); // summaries were written from the old text
     const updated = db.select().from(schema.messages).where(eq(schema.messages.id, messageId)).get()!;
     return { message: messageDto(updated) };
   });
@@ -1405,7 +1435,7 @@ export async function chatRoutes(app: FastifyInstance) {
         eq(schema.models.modelId, failed.model ?? ''), eq(schema.models.providerId, failed.providerId ?? ''),
       )).get();
       if (!failed || !source || (failed.errorCode !== 'provider_busy' && failed.errorCode !== 'provider_empty')
-        || parseParts(failed.parts).some((p) => p.type !== 'service_tier')
+        || parseParts(failed.parts).some((p) => !isMetaPart(p))
         || configuredModelFallback(source.id) !== model.id || !canUseModel(user, source.id)) {
         return reply.code(400).send({ error: '这条回复不适合自动兜底,请手动选择模型重试' });
       }
@@ -1430,15 +1460,13 @@ export async function chatRoutes(app: FastifyInstance) {
       });
     let userMessageId: string | null = null;
     let assistantParentId: string | null;
-    let history: { role: string; parts: string }[];
-    let carriedDocs: FilePart[] = [];
+    // The whole branch, oldest first, ending on the message being answered.
+    let chain: { id: string; role: string; parts: string }[];
     let applyHistoryMutation: () => void;
     if (body.regenerateMessageId) {
       const target = rows.find((m) => m.id === body.regenerateMessageId);
       if (!target || target.role !== 'assistant') return reply.code(404).send({ error: '消息不存在' });
-      const win = historyWindow(ancestorChain(rows, target.parentId), config.maxContextMessages);
-      carriedDocs = win.carried;
-      history = usableHistory(win.window);
+      chain = usableHistory(ancestorChain(rows, target.parentId));
       assistantParentId = target.parentId;
       applyHistoryMutation = () => { /* new sibling only — nothing to rewrite */ };
     } else if (body.editMessageId) {
@@ -1449,12 +1477,7 @@ export async function chatRoutes(app: FastifyInstance) {
       userMessageId = newId();
       const seq = nextSeq(chatId);
       const createdAt = now();
-      const win = historyWindow(ancestorChain(rows, target.parentId), config.maxContextMessages - 1);
-      carriedDocs = win.carried;
-      history = [
-        ...usableHistory(win.window),
-        { role: 'user', parts: normalizedJson },
-      ];
+      chain = [...usableHistory(ancestorChain(rows, target.parentId)), { id: userMessageId, role: 'user', parts: normalizedJson }];
       assistantParentId = userMessageId;
       applyHistoryMutation = () => {
         db.insert(schema.messages).values({
@@ -1472,12 +1495,7 @@ export async function chatRoutes(app: FastifyInstance) {
       const seq = nextSeq(chatId);
       const createdAt = now();
       const normalizedJson = JSON.stringify(normalizedContent);
-      const win = historyWindow(ancestorChain(rows, parentId), config.maxContextMessages - 1);
-      carriedDocs = win.carried;
-      history = [
-        ...usableHistory(win.window),
-        { role: 'user', parts: normalizedJson },
-      ];
+      chain = [...usableHistory(ancestorChain(rows, parentId)), { id: userMessageId, role: 'user', parts: normalizedJson }];
       assistantParentId = userMessageId;
       applyHistoryMutation = () => {
         db.insert(schema.messages).values({
@@ -1486,15 +1504,34 @@ export async function chatRoutes(app: FastifyInstance) {
         }).run();
       };
     }
-    if (!history.length || history[history.length - 1].role !== 'user') {
+    if (!chain.length || chain[chain.length - 1].role !== 'user') {
       return reply.code(400).send({ error: '当前对话状态无法生成回复' });
     }
+
+    // History budget follows the model's context window. What doesn't fit is
+    // folded into a summary (written below, once the stream is open), not
+    // dropped: the summary in force leads the replay, recent turns follow.
+    const budget = historyBudget(model.modelId);
+    const plan: HistoryPlan = model.imageGen
+      ? { start: Math.max(0, chain.length - IMAGE_HISTORY_MESSAGES), summary: null, compact: null }
+      : (() => {
+        const costs = replayCosts(chain);
+        return planHistory(chain.map((m, i) => ({ role: m.role, cost: costs[i] })), branchSummary(chatId, chain.map((m) => m.id)), budget);
+      })();
+    const history = chain.slice(plan.start);
+    // Documents attached in turns that are no longer replayed ride along at the top.
+    const carriedDocs = carriedDocParts(chain.slice(0, plan.start));
+    const compactRows = plan.compact ? chain.slice(plan.compact.from, plan.compact.to + 1) : null;
 
     // Image models are fed pictures too — that's the whole point of "edit this one".
     const withImages = !!model.vision || !!model.imageGen;
     let baseHistory: AdapterMessage[];
     try {
-      const bounded = await buildBoundedHistory(history, user.id, withImages, carriedDocs);
+      const bounded = await buildBoundedHistory(history, user.id, withImages, carriedDocs, {
+        textChars: budget.textChars,
+        lead: plan.summary ? summaryLead(plan.summary.summary) : null,
+        reserve: compactRows ? summaryTargetChars(budget) : 0,
+      });
       baseHistory = bounded.messages;
       contextMediaLease = bounded.mediaLease;
     } catch (err) {
@@ -1538,11 +1575,14 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // Project knowledge leads the prompt: it is the stable, cacheable prefix
     // (per-chat systemPrompt varies more often than the project block does).
-    // Small corpora ride along whole; big ones become a manifest plus the
-    // project_search / project_read_doc tools. Image turns skip all of it.
+    // As many whole documents as fit this model ride along; the rest become a
+    // manifest plus the project_search / project_read_doc tools. Image turns
+    // skip all of it.
     const project = chat.projectId && !model.imageGen
-      ? buildProjectPrompt(chat.projectId, user.id, !!model.tools)
-      : { block: null, tools: null };
+      ? buildProjectPrompt(chat.projectId, user.id, { canUseTools: !!model.tools, modelId: model.modelId })
+      : { block: null, tools: null, docCount: 0 };
+    // Access-checked above (docCount is 0 without access): the sandbox may mount the files.
+    const sandboxProjectId = project.docCount ? chat.projectId : null;
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
     // 工作区 tools are in-process like project knowledge; the manifest block
     // rides in the prompt so the model knows what exists before calling.
@@ -1574,7 +1614,7 @@ export async function chatRoutes(app: FastifyInstance) {
       ? [
         buildWorkspacePrompt(chatId),
         sandboxActive
-          ? buildSandboxPrompt(comparisonActive)
+          ? [buildSandboxPrompt(comparisonActive), ...(sandboxProjectId ? [projectFilesPrompt(project.docCount)] : [])].join('\n')
           : convertActive
           ? buildConvertPrompt()
           : '本对话没有命令执行能力(没有 run_command 之类的工具):不要为了"让人去跑"而主动写脚本或给出终端命令,除非用户明确要的就是脚本本身;不能声称已经执行脚本。当前提供的其他内置工具仍可完成其描述支持的操作,不要把缺少命令执行当作所有内置工具都不可用。',
@@ -1778,6 +1818,46 @@ export async function chatRoutes(app: FastifyInstance) {
       }, state.queued ? 'Provider busy; queued behind shared backoff' : 'Provider busy; retry scheduled');
     };
 
+    // 上下文压缩: fold the turns that no longer fit into the branch's summary,
+    // with the chat's own model, before answering. If it fails the turn still
+    // goes ahead — with the previous summary, or with recent turns only.
+    const compactHistory = async () => {
+      const covered = (plan.summary?.covered ?? 0) + compactRows!.length;
+      const part: Extract<MessagePart, { type: 'context_summary' }> = { type: 'context_summary', state: 'running', covered };
+      parts.push(part);
+      sse.send('context_summary', part);
+      const startedAt = Date.now();
+      let spent: UsageInfo = {};
+      try {
+        const text = await writeSummary({
+          adapter, cfg, model: model.modelId,
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(COMPACT_TIMEOUT_MS)]),
+          onUsage: (u) => { spent = u; },
+        }, plan.summary?.summary ?? null, compactRows!.map((m) => ({ role: m.role, parts: parseParts(m.parts) })), summaryTargetChars(budget));
+        saveSummary(chatId, chain[plan.compact!.to].id, text, covered, model.modelId);
+        const first = baseHistory[0];
+        if (first) {
+          const lead: AdapterMessagePart = { type: 'text', text: summaryLead(text) };
+          if (first.parts[0]?.type === 'text' && isSummaryLead(first.parts[0].text ?? '')) first.parts[0] = lead;
+          else first.parts.unshift(lead);
+        }
+        part.state = 'done';
+        part.text = text;
+      } catch (err) {
+        if (controller.signal.aborted) throw err;
+        part.state = 'failed';
+        sse.send('notice', { message: '较早的对话没能压缩成摘要,这一轮只带上了最近的内容' });
+        req.log.warn({ err: redactSensitiveText(err instanceof Error ? err.message : String(err), secretValues) }, 'History compaction failed');
+      } finally {
+        recordUsage({
+          userId: user.id, chatId, messageId: assistantId, providerId: provider.id, providerType: provider.type,
+          model: model.modelId, kind: 'compaction', images: 0, promptTokens: spent.promptTokens,
+          completionTokens: spent.completionTokens, totalTokens: spent.totalTokens, durationMs: Date.now() - startedAt,
+        });
+      }
+      sse.send('context_summary', part);
+    };
+
     try {
       if (model.imageGen) {
         // ---- image-generation turn ----
@@ -1835,6 +1915,7 @@ export async function chatRoutes(app: FastifyInstance) {
         imageCount = generated.length;
       } else {
         // ---- normal text turn ----
+        if (compactRows) await compactHistory();
         textTurnTimer = setTimeout(() => abortTextForTimeout(
           `对话生成超过 ${Math.ceil(config.chatTurnTimeoutMs / 1000)} 秒总时限`,
         ), config.chatTurnTimeoutMs);
@@ -1842,7 +1923,8 @@ export async function chatRoutes(app: FastifyInstance) {
         for (;;) {
           iterations++;
           const messages = [...baseHistory];
-          if (parts.length) messages.push({ role: 'assistant', parts: toAdapterPartsNoImages(parts) });
+          const sofar = toAdapterPartsNoImages(parts);
+          if (sofar.length) messages.push({ role: 'assistant', parts: sofar });
           if (continuation) messages.push({ role: 'user', parts: [{ type: 'text', text:
             '上一条助手回复因传输中断尚未完成。请从中断位置直接续写剩余内容,不要重复已有文字,不要重新开头,不要解释中断。保留原有结构和代码块状态,不调用任何工具。',
           }] });
@@ -1867,7 +1949,7 @@ export async function chatRoutes(app: FastifyInstance) {
           try {
             for await (const ev of adapter.streamChat({ ...continuationConfig,
               recoverEmptyStreams: !continuation,
-              stopOnBusy: clientFallback && !parts.some((p) => p.type !== 'service_tier'),
+              stopOnBusy: clientFallback && !parts.some((p) => !isMetaPart(p)),
             }, {
               model: model.modelId,
               system: systemPrompt,
@@ -2114,7 +2196,7 @@ export async function chatRoutes(app: FastifyInstance) {
                   return { result: formatSubagentResult(r), isError: r.stopped === 'error' || r.stopped === 'aborted' };
                 })()
                 : isSandboxTool(call.name) && (sandboxActive || (call.name === CONVERT_FILE_TOOL && convertActive))
-                ? await callSandboxTool({ user: { id: user.id, role: user.role }, chatId, messageId: assistantId, signal: controller.signal }, call.args, call.name)
+                ? await callSandboxTool({ user: { id: user.id, role: user.role }, chatId, messageId: assistantId, signal: controller.signal, projectId: sandboxProjectId }, call.args, call.name)
                 // A built-in tool name the model remembers from earlier turns
                 // but that is switched off now (person's 智能工具 setting, or
                 // admin policy): say so plainly instead of the MCP "not found".
@@ -2129,7 +2211,7 @@ export async function chatRoutes(app: FastifyInstance) {
                   { timeoutMs: Math.max(1, Math.min(120_000, remainingTurnMs)) },
                 );
               const safeResult = redactSensitiveText(result, secretValues);
-              const resultLimit = Math.min(100_000, Math.floor(config.maxContextTextChars / 4));
+              const resultLimit = Math.min(100_000, Math.floor(budget.textChars / 4));
               const trimmed = safeResult.length > resultLimit
                 ? `${safeResult.slice(0, resultLimit)}\n…(结果已截断)`
                 : safeResult;

@@ -65,10 +65,13 @@ export const config = {
   maxAttachmentsPerMessage: intEnv('MAX_ATTACHMENTS_PER_MESSAGE', 20, 1, 100),
   maxMessageAttachmentBytes: intEnv('MAX_MESSAGE_ATTACHMENT_MB', 20, 1, 100) * MIB,
   maxMessageTextChars: intEnv('MAX_MESSAGE_TEXT_CHARS', 64_000, 1_000, 500_000),
-  maxContextMessages: intEnv('MAX_CONTEXT_MESSAGES', 40, 2, 500),
+  // Replayed history: caps only. The actual budget is sized per model (about
+  // half its context window, see compaction.ts); what outgrows it is folded
+  // into a summary rather than dropped.
+  maxContextMessages: intEnv('MAX_CONTEXT_MESSAGES', 400, 2, 5_000),
   // 临时对话 idle lifetime before the sweeper deletes it (messages + uploads).
   tempChatTtlMs: intEnv('TEMP_CHAT_TTL_HOURS', 24, 1, 720) * 3600_000,
-  maxContextTextChars: intEnv('MAX_CONTEXT_TEXT_CHARS', 240_000, 10_000, 2_000_000),
+  maxContextTextChars: intEnv('MAX_CONTEXT_TEXT_CHARS', 1_000_000, 10_000, 2_000_000),
   maxContextImageBytes: intEnv('MAX_CONTEXT_IMAGE_MB', 24, 1, 200) * MIB,
   maxContextImages: intEnv('MAX_CONTEXT_IMAGES', 6, 1, 20),
   maxContextImageBytesPerUser: intEnv('MAX_CONTEXT_IMAGE_MB_PER_USER', 48, 1, 500) * MIB,
@@ -116,6 +119,11 @@ export const config = {
   // admin can raise the per-command timeout to.
   maxSandboxConcurrency: intEnv('MAX_SANDBOX_CONCURRENCY', 3, 1, 32),
   maxSandboxTimeoutSec: intEnv('MAX_SANDBOX_TIMEOUT_SECONDS', 600, 10, 3_600),
+
+  // 项目资料 loaded whole into a turn: at most this many characters, and never
+  // more than ~15% of the model's context window (see knowledge.ts). What
+  // doesn't fit stays listed for project_search / project_read_doc.
+  projectInjectMaxChars: intEnv('PROJECT_INJECT_MAX_CHARS', 200_000, 0, 2_000_000),
 
   // Scheduled SQLite snapshots (see backup.ts). 0 hours = disabled.
   backupIntervalHours: intEnv('BACKUP_INTERVAL_HOURS', 24, 0, 720),

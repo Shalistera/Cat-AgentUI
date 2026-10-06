@@ -1,3 +1,4 @@
+import { ANTHROPIC_SIG_PREFIX } from './anthropic.js';
 import { createHash } from 'node:crypto';
 import { GoogleAuth } from 'google-auth-library';
 import type {
@@ -114,10 +115,12 @@ function toContents(messages: AdapterMessage[]): any[] {
           let args: any = {};
           try { args = JSON.parse(p.args || '{}'); } catch { /* keep {} */ }
           // Gemini 3 refuses replayed functionCalls without their original
-          // thought_signature — echo it exactly as it arrived.
+          // thought_signature — echo it exactly as it arrived. A Claude turn's
+          // thinking (same slot, after a model switch) is not Gemini's to read.
+          const sig = p.sig && !p.sig.startsWith(ANTHROPIC_SIG_PREFIX) ? p.sig : undefined;
           modelParts.push({
             functionCall: { name: p.name, args },
-            ...(p.sig ? { thoughtSignature: p.sig } : {}),
+            ...(sig ? { thoughtSignature: sig } : {}),
           });
         }
         // reasoning parts are skipped

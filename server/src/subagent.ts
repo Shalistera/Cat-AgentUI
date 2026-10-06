@@ -13,13 +13,15 @@ import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspa
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from './skills.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from './sandbox/tool.js';
 import { callProjectTool, isProjectTool } from './knowledge.js';
+import { buildProjectPrompt, projectFilesPrompt } from './routes/projects.js';
+import { historyBudget } from './compaction.js';
 
 export const SPAWN_SUBAGENT_TOOL = 'spawn_subagent';
 
 export const SUBAGENT_TOOL_DEFS: ToolDef[] = [
   {
     name: SPAWN_SUBAGENT_TOOL,
-    description: '把一个独立、边界清晰的子任务交给子代理完成(例如通读某份长文档并提炼要点、按大纲写出某一章、跑一次数据分析并给结论)。子代理有同样的工作区/技能/沙盒工具,但看不到本对话的历史,所以 task 必须自带全部背景:输入文件名、要求、期望产出(写到哪个文件、回复什么)。它返回文字结论;写好的文件留在工作区。',
+    description: '把一个独立、边界清晰的子任务交给子代理完成(例如通读某份长文档或几份项目资料并提炼要点、按大纲写出某一章、跑一次数据分析并给结论)。子代理有同样的工作区/技能/沙盒工具和本项目的资料,但看不到本对话的历史,所以 task 必须自带全部背景:输入文件名或资料名、要求、期望产出(写到哪个文件、回复什么)。它返回文字结论;写好的文件留在工作区。',
     parameters: {
       type: 'object',
       properties: {
@@ -44,7 +46,7 @@ export function buildSubagentPrompt(): string {
   const s = getAgentSettings().subagent;
   return [
     '[子代理]',
-    `可以用 spawn_subagent 把独立的子任务委派出去并行推进思路:适合"通读并提炼一份长材料""按大纲写出某一章""跑一遍分析并给结论"这类边界清晰、产出明确的活;简单的、几句话能答的任务不要委派。子代理看不到本对话,task 里要写清背景、输入文件名和期望产出;每轮最多委派 ${s.maxPerTurn} 次。拿到结果后由你整合并对用户负责,不要原样转发。`,
+    `可以用 spawn_subagent 把独立的子任务委派出去并行推进思路:适合"通读并提炼一份长材料""逐份阅读几份项目资料后汇总""按大纲写出某一章""跑一遍分析并给结论"这类边界清晰、产出明确的活;大量阅读交给子代理,也能让本对话的上下文保持精简。简单的、几句话能答的任务不要委派。子代理看不到本对话,但能检索和阅读本项目的资料;task 里要写清背景、要读的资料名或文件名和期望产出;每轮最多委派 ${s.maxPerTurn} 次。拿到结果后由你整合并对用户负责,不要原样转发。`,
   ].join('\n');
 }
 
@@ -116,10 +118,17 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
   if (sandboxOn) tools.push(...SANDBOX_TOOL_DEFS);
   if (convertOn) tools.push(CONVERT_TOOL_DEF);
   if (skillRows.length) tools.push(...SKILL_TOOL_DEFS);
-  const projectOn = !!deps.projectId;
+  // 项目资料 the same way the parent turn gets them, sized for this model.
+  const project = deps.projectId
+    ? buildProjectPrompt(deps.projectId, user.id, { canUseTools: true, modelId: deps.model.modelId })
+    : { block: null, tools: null, docCount: 0 };
+  const projectOn = !!project.tools?.length;
+  if (projectOn) tools.push(...project.tools!);
+  const sandboxProjectId = project.docCount ? deps.projectId : null;
   const blocks = [SUBAGENT_SYSTEM];
+  if (project.block) blocks.push(project.block);
   if (workspaceOn) blocks.push(buildWorkspacePrompt(deps.chatId));
-  if (sandboxOn) blocks.push(buildSandboxPrompt());
+  if (sandboxOn) blocks.push(sandboxProjectId ? `${buildSandboxPrompt()}\n${projectFilesPrompt(project.docCount)}` : buildSandboxPrompt());
   else if (convertOn) blocks.push(buildConvertPrompt());
   if (skillRows.length) blocks.push(buildSkillsPrompt(skillRows, sandboxOn));
   const system = blocks.join('\n\n');
@@ -200,7 +209,7 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
         } else if (isWorkspaceTool(call.name) && workspaceOn) {
           ({ result, isError } = await callWorkspaceTool(deps.chatId, call.name, call.args));
         } else if (isSandboxTool(call.name) && (sandboxOn || (call.name === CONVERT_FILE_TOOL && convertOn))) {
-          ({ result, isError } = await callSandboxTool({ user, chatId: deps.chatId, messageId: deps.parentMessageId, signal }, call.args, call.name));
+          ({ result, isError } = await callSandboxTool({ user, chatId: deps.chatId, messageId: deps.parentMessageId, signal, projectId: sandboxProjectId }, call.args, call.name));
         } else if (isSkillTool(call.name) && skillRows.length) {
           ({ result, isError } = callSkillTool(user, call.name, call.args));
         } else if (isProjectTool(call.name) && projectOn) {
@@ -209,7 +218,7 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
           result = `子代理不能使用工具「${call.name}」`; isError = true;
         }
         const safe = redactSensitiveText(result, deps.secretValues);
-        const cap = Math.min(100_000, Math.floor(config.maxContextTextChars / 4));
+        const cap = Math.min(100_000, Math.floor(historyBudget(deps.model.modelId).textChars / 4));
         const trimmed = safe.length > cap ? `${safe.slice(0, cap)}\n…(结果已截断)` : safe;
         deps.consumeOutput(trimmed.length);
         assistantParts.push({ type: 'tool_result', toolCallId: call.id, name: call.name, result: trimmed || '(空)', isError });

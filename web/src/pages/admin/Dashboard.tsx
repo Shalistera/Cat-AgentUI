@@ -16,6 +16,7 @@ const KIND_LABELS: Record<string, string> = {
   ocr: 'OCR 工坊',
   translate: '翻译工坊',
   subagent: '子代理',
+  compaction: '上下文压缩',
 };
 
 /** One empty-table placeholder, one voice — every card says it the same way. */

@@ -58,7 +58,10 @@ export type MessagePart =
   // saved chats can still render sources.
   | { type: 'grounding'; queries: string[]; sources: GroundingSource[]; supports?: GroundingSupport[]; label?: string }
   // Post-answer follow-up suggestions. UI-only: never replayed to providers.
-  | { type: 'followups'; questions: string[] };
+  | { type: 'followups'; questions: string[] }
+  // 上下文压缩 happened before this reply: older turns now ride as a summary.
+  // UI-only; the summary itself reaches the model through the history.
+  | { type: 'context_summary'; state: 'running' | 'done' | 'failed'; covered: number; text?: string };
 
 export type Role = 'user' | 'assistant';
 
