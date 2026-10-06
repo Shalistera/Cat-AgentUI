@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, desc, eq, getTableColumns, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { config } from '../config.js';
@@ -200,7 +200,7 @@ export async function imageRoutes(app: FastifyInstance) {
     if (!provider) return reply.code(400).send({ error: '模型不可用' });
     if (provider.type === 'novelai') {
       if (!body.data.novelai || (n ?? 1) !== 1 || inputUploadIds?.length || history.length) {
-        return reply.code(400).send({ error: '请使用 NAI 创作弹窗；订阅模式仅支持单张文生图' });
+        return reply.code(400).send({ error: '请在 NAI 创作室中生成；订阅模式仅支持单张文生图' });
       }
     } else if (body.data.novelai) return reply.code(400).send({ error: '该模型不支持 NAI 参数' });
     if (!canUseModel(req.user!, model.id)) {
@@ -411,15 +411,20 @@ export async function imageRoutes(app: FastifyInstance) {
 
   app.get('/api/images', async (req, reply) => {
     requireWorkshop(req, reply);
-    const q = req.query as { limit?: string; offset?: string };
+    const q = req.query as { limit?: string; offset?: string; kind?: string };
     const limit = Math.min(Math.max(Number(q.limit) || 40, 1), 100);
     const offset = Math.max(Number(q.offset) || 0, 0);
+    // kind=novelai: the NAI studio's own history strip. V5 model ids only
+    // exist on NovelAI providers, so the model column is enough to tell.
+    const where = q.kind === 'novelai'
+      ? and(eq(schema.images.userId, req.user!.id), inArray(schema.images.model, [...NAI_MODELS]))
+      : eq(schema.images.userId, req.user!.id);
     const rows = db.select().from(schema.images)
-      .where(eq(schema.images.userId, req.user!.id))
+      .where(where)
       .orderBy(desc(schema.images.createdAt))
       .limit(limit).offset(offset).all();
     const total = db.select({ c: sql<number>`count(*)` }).from(schema.images)
-      .where(eq(schema.images.userId, req.user!.id)).get()?.c ?? 0;
+      .where(where).get()?.c ?? 0;
     return { images: rows, total };
   });
 

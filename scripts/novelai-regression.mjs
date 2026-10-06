@@ -107,6 +107,9 @@ try {
   const restored = await call('GET', `/api/images/novelai/restore/${finished.images[0].id}`, undefined, user.cookie);
   assert.equal(restored.data.modelId, curated); assert.equal(restored.data.image.generationSettings, finished.images[0].generationSettings);
   assert.equal((await call('GET', `/api/images/novelai/restore/${finished.images[0].id}`)).status, 404, 'cannot restore another user’s image');
+  const studioHistory = (await call('GET', '/api/images?kind=novelai&limit=10', undefined, user.cookie)).data;
+  assert.deepEqual(studioHistory.images.map(i => i.id), [finished.images[0].id], 'studio history lists only the user’s own NAI images');
+  assert.equal(studioHistory.total, 1);
   const fullResult = await done(await job({ ...body, modelId: full, novelai: { ...options, ucEnabled: false, imageText: '' }, size: '1024x1024' }));
   assert.equal(fullResult.status, 'done'); assert.equal(requests.at(-1).parameters.negative_prompt, 'hat');
   assert.equal(requests.at(-1).model, 'nai-diffusion-5-full');

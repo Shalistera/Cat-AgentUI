@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import {
   useEffect, useLayoutEffect, useRef, useState,
-  type CSSProperties, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes,
-  type TextareaHTMLAttributes, type SelectHTMLAttributes, type ThHTMLAttributes, type TdHTMLAttributes,
+  type CSSProperties, type ReactNode, type ButtonHTMLAttributes, type ComponentProps,
+  type SelectHTMLAttributes, type ThHTMLAttributes, type TdHTMLAttributes,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { X, CircleCheck, CircleAlert, Info } from 'lucide-react';
@@ -63,12 +63,14 @@ export function Button({ variant = 'outline', size = 'md', className = '', ...pr
 // contrast against both canvases.
 const fieldBase = 'w-full rounded-md bg-bg1 border border-field px-3 text-tx placeholder:text-tx3 transition-colors hover:border-tx3 disabled:cursor-not-allowed disabled:bg-bg2 disabled:text-tx2 disabled:hover:border-field';
 
+// ComponentProps (not *HTMLAttributes) so callers can pass `ref` — a plain
+// prop in React 19.
 export function Input({ className = '', uiSize = 'md', ...props }:
-  InputHTMLAttributes<HTMLInputElement> & { uiSize?: 'sm' | 'md' }) {
+  ComponentProps<'input'> & { uiSize?: 'sm' | 'md' }) {
   return <input className={`${fieldBase} ${uiSize === 'sm' ? 'h-8 text-[13px]' : 'h-9 text-sm'} ${className}`} {...props} />;
 }
 
-export function Textarea({ className = '', ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea({ className = '', ...props }: ComponentProps<'textarea'>) {
   return <textarea className={`${fieldBase} resize-y py-2 text-sm leading-relaxed ${className}`} {...props} />;
 }
 
@@ -104,9 +106,13 @@ export function Field({ label, hint, error, required, children }: {
 // The knob is laid out by flexbox, not `absolute`: an absolutely positioned child
 // with no `left` falls back to its static position, which a button centers — that
 // put the knob mid-track when off and pushed it past the edge when on.
-export function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange(v: boolean): void; disabled?: boolean }) {
+export function Toggle({ checked, onChange, disabled, label }: {
+  checked: boolean; onChange(v: boolean): void; disabled?: boolean;
+  /** Accessible name, for switches whose visible label isn't a <label>. */
+  label?: string;
+}) {
   return (
-    <button type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)}
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}
       className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
         checked ? 'border-accs bg-accs' : 'border-field bg-bg3'}`}>
       {/* The off-state knob needs its own edge — a white knob on a pale track is

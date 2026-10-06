@@ -16,6 +16,7 @@ import ErrorReset from './pages/ErrorReset';
 import Chat from './pages/Chat';
 import Images from './pages/Images';
 import Gallery from './pages/Gallery';
+import NaiStudio from './pages/NaiStudio';
 import ProjectPage from './pages/Project';
 import ProjectsPage from './pages/Projects';
 import Ppt from './pages/Ppt';
@@ -143,6 +144,7 @@ export default function App() {
           <Route path="/projects/:id" element={<ProjectPage />} />
           <Route path="/images" element={<Images />} />
           <Route path="/images/gallery" element={<Gallery />} />
+          <Route path="/images/nai" element={<NaiStudio />} />
           <Route path="/ppt" element={<Ppt />} />
           <Route path="/ocr" element={<Ocr />} />
           <Route path="/translate" element={<Translate />} />

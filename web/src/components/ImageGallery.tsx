@@ -96,7 +96,7 @@ export function ImageLightbox({ image, onClose, onDeleted }: {
             {image.tokens != null && image.tokens > 0 && <span>Tokens {fmtTokens(image.tokens)}</span>}
           </div>
           <ModalActions>
-            {naiImageDraft(image) && <Link to={`/images?naiImage=${encodeURIComponent(image.id)}`} onClick={onClose} className={btnClass('outline', 'md')}>载入 NAI 创作</Link>}
+            {naiImageDraft(image) && <Link to={`/images/nai?from=${encodeURIComponent(image.id)}`} onClick={onClose} className={btnClass('outline', 'md')}>在 NAI 创作室打开</Link>}
             <a
               href={`/api/images/${image.id}/file`}
               download

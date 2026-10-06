@@ -72,7 +72,7 @@ export const novelaiAdapter: ChatAdapter = {
     return NAI_MODELS.map(id => ({ id, name: id.endsWith('curated') ? 'V5 Curated' : 'V5 Full' }));
   },
   async generateImages(cfg, req) {
-    if (!req.novelai) throw new Error('请使用绘图工坊的 NAI 创作面板');
+    if (!req.novelai) throw new Error('请在绘图工坊的 NAI 创作室中生成');
     if (req.n !== undefined && req.n !== 1 || req.inputImages?.length || req.context?.length) throw new Error('NAI 订阅模式仅支持单张文生图');
     const options = novelaiSchema.parse(req.novelai);
     const seed = options.seed ?? randomInt(0, 4294967296);

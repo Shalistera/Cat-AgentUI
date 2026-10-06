@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import {
   PanelLeft, ImagePlus, Sparkles, X, Download, Trash2, Image as ImageIcon,
-  History, Settings2, Plus, ZoomIn, ArrowRight, MessageSquare, Send,
+  History, Settings2, Plus, ZoomIn, ArrowRight, MessageSquare, Send, Palette,
 } from 'lucide-react';
 import { useUi, useAuth } from '../store';
 import { api, ApiError, uploadFile } from '../api';
@@ -16,8 +16,7 @@ import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGaller
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import { Markdown } from '../components/Markdown';
 import { retryStatusText } from '../components/ChatMessage';
-import { NovelAIStudio } from '../components/NovelAIStudio';
-import { naiImageDraft, type NaiDraft, type NaiOptions } from '../novelai';
+import type { NaiOptions } from '../novelai';
 import type { ImageModel, ImageRecord, ProviderRetry } from '../types';
 
 const PAGE_SIZE = 24;
@@ -75,14 +74,15 @@ function normalizeQuick(raw: unknown): QuickPrompt[] {
 
 export default function Images() {
   const user = useAuth((s) => s.user);
+  const [search] = useSearchParams();
   if (user && !user.allowImages) return <NoWorkshopAccess />;
+  // Links from before NAI moved to its own studio page.
+  const legacyNai = search.get('naiImage');
+  if (legacyNai) return <Navigate to={`/images/nai?from=${encodeURIComponent(legacyNai)}`} replace />;
   return <ImagesInner />;
 }
 
 function ImagesInner() {
-  const [search, setSearch] = useSearchParams();
-  const [naiOpen, setNaiOpen] = useState(false);
-  const [naiInitial, setNaiInitial] = useState<{ id: string; draft: NaiDraft } | null>(null);
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const setSidebarOpen = useUi((s) => s.setSidebarOpen);
   const user = useAuth((s) => s.user);
@@ -135,23 +135,10 @@ function ImagesInner() {
   // Which reference slot is open in the zoom preview (index into refSlots).
   const [refPreview, setRefPreview] = useState<number | null>(null);
 
-  const model = models?.find((m) => m.id === modelId) ?? null;
-  const isNai = model?.providerType === 'novelai';
-  const reuseId = search.get('naiImage');
-  useEffect(() => {
-    if (!reuseId || !models) return;
-    let current = true;
-    api.get<{ image: ImageRecord; modelId: string | null }>(`/api/images/novelai/restore/${encodeURIComponent(reuseId)}`).then(r => {
-      if (!current) return;
-      const draft = naiImageDraft(r.image);
-      const target = models.find(m => m.id === r.modelId && m.providerType === 'novelai');
-      if (!draft || !target) { toast('这张图的 NAI 模型已不可用，请先配置或开通该模型', 'err'); return; }
-      setModelId(target.id); setNaiInitial({ id: r.image.id, draft }); setNaiOpen(true); setLightbox(null);
-    }).catch(e => { if (current) toast(e.message, 'err'); }).finally(() => {
-      if (current) setSearch(p => { const next = new URLSearchParams(p); next.delete('naiImage'); return next; }, { replace: true });
-    });
-    return () => { current = false; };
-  }, [reuseId, models, setSearch]);
+  // NovelAI has its own studio (/images/nai); the form here serves the rest.
+  const genericModels = useMemo(() => models?.filter((m) => m.providerType !== 'novelai') ?? null, [models]);
+  const hasNai = !!models?.some((m) => m.providerType === 'novelai');
+  const model = genericModels?.find((m) => m.id === modelId) ?? null;
   // Async job callbacks outlive the render they were created in, so they read
   // the model list through a ref instead of a stale closure.
   const modelsRef = useRef<ImageModel[] | null>(null);
@@ -193,7 +180,6 @@ function ImagesInner() {
   // Ctrl/Cmd+V anywhere on the page uploads clipboard images as references.
   useEffect(() => {
     function onPaste(e: ClipboardEvent) {
-      if (naiOpen || isNai) return;
       const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
       if (!files.length) return;
       e.preventDefault();
@@ -208,7 +194,8 @@ function ImagesInner() {
       .then((r) => {
         const arr = Array.isArray(r) ? r : [];
         setModels(arr);
-        if (arr.length) setModelId((prev) => prev || arr[0].id);
+        const first = arr.find((m) => m.providerType !== 'novelai');
+        if (first) setModelId((prev) => prev || first.id);
       })
       .catch((err) => {
         setModels([]);
@@ -398,7 +385,6 @@ function ImagesInner() {
   }, []);
 
   function generate() {
-    if (isNai) { setNaiOpen(true); return; }
     const p = prompt.trim();
     if (!p || !model) return;
     void submit(model.id, p);
@@ -470,6 +456,9 @@ function ImagesInner() {
   }, [convo]);
   const canGenerate = !!prompt.trim() && !!model && !uploading && !busyModels.has(model.id);
 
+  // NovelAI is the only image model this user has: the studio is their workshop.
+  if (genericModels?.length === 0 && hasNai) return <Navigate to="/images/nai" replace />;
+
   return (
     // The +1px type bump this page pioneered is now app-wide (see index.css).
     <div className="contents">
@@ -481,16 +470,22 @@ function ImagesInner() {
             <PanelLeft size={16} />
           </Button>
         )}
-      />
+      >
+        {hasNai && (
+          <Link to="/images/nai" className={btnClass('outline', 'sm')} title="NovelAI V5 专属创作室">
+            <Palette size={14} />NAI 创作室
+          </Link>
+        )}
+      </PageHeader>
 
       <div className="flex-1 overflow-y-auto bg-bg0">
         <div className="mx-auto max-w-5xl p-6">
           {/* ---- generation form ---- */}
           <Card title="新建生成" desc="描述目标画面,可附参考图作为编辑输入。" className="fade-up"
-            flush={models === null || models.length === 0}>
-            {models === null ? (
+            flush={genericModels === null || genericModels.length === 0}>
+            {genericModels === null ? (
               <div className="flex justify-center py-10 text-tx3"><Spinner className="h-5 w-5" /></div>
-            ) : models.length === 0 ? (
+            ) : genericModels.length === 0 ? (
               user && !user.allowImageModels ? (
                 <EmptyState
                   icon={<ImageIcon size={22} />}
@@ -509,8 +504,8 @@ function ImagesInner() {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-2">
                     <Field label="模型">
-                      <Select value={modelId} onChange={(e) => { setModelId(e.target.value); setGenError(null); if (models.find(m => m.id === e.target.value)?.providerType === 'novelai') setNaiOpen(true); }}>
-                        {models.map((m) => (
+                      <Select value={modelId} onChange={(e) => { setModelId(e.target.value); setGenError(null); }}>
+                        {genericModels.map((m) => (
                           <option key={m.id} value={m.id}>
                             {`${m.displayName || m.modelId} · ${m.providerName}`}
                           </option>
@@ -519,16 +514,12 @@ function ImagesInner() {
                     </Field>
                   </div>
                   <Field label="生成数量">
-                    <Select value={isNai ? '1' : String(n)} disabled={isNai} onChange={(e) => setN(Number(e.target.value))}>
+                    <Select value={String(n)} onChange={(e) => setN(Number(e.target.value))}>
                       {[1, 2, 3, 4].map((i) => <option key={i} value={i}>{i} 张</option>)}
                     </Select>
                   </Field>
                 </div>
 
-                {isNai ? <div className="rounded-lg border border-line bg-bg0 p-5">
-                  <h3 className="text-sm font-medium">NAI 创作</h3><p className="mt-1 text-xs leading-relaxed text-tx3">用中文描述画面，选择喜欢的画风，再按需要安排角色位置。使用 Opus 订阅额度，单张 Normal 分辨率。</p>
-                  <Button variant="primary" className="mt-4" onClick={() => setNaiOpen(true)}><Sparkles size={15} />打开 NAI 创作</Button>
-                </div> : <>
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="text-[13px] font-medium text-tx">提示词</span>
@@ -667,7 +658,6 @@ function ImagesInner() {
                   </div>
                 </div>
 
-                </>}
                 {genError && (
                   <div className={`rounded-md border px-3 py-2 text-[13px] leading-relaxed ${genError.busy ? 'border-line bg-bg2 text-tx2' : 'border-err/30 bg-err/5 text-err'}`}>
                     <p className="whitespace-pre-wrap">{genError.label}: {genError.message}</p>
@@ -771,7 +761,7 @@ function ImagesInner() {
                   </div>
                 )}
 
-                {!isNai && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
                   <p className="text-xs leading-relaxed text-tx3">
                     部分模型生成需要几分钟,请耐心等待;期间可切到其他标签页,完成后标签会有提示。
                     换一个模型即可同时发起下一张,同一模型需等当前任务完成。Cmd / Ctrl + Enter 快速提交。
@@ -783,7 +773,7 @@ function ImagesInner() {
                         ? <><Spinner className="h-4 w-4" />提交中</>
                         : <><Sparkles size={15} />生成图片</>}
                   </Button>
-                </div>}
+                </div>
               </div>
             )}
           </Card>
@@ -872,14 +862,6 @@ function ImagesInner() {
           </section>
         </div>
       </div>
-
-      {user && <NovelAIStudio key={user.id} open={naiOpen} onClose={() => setNaiOpen(false)} userId={user.id}
-        models={(models ?? []).filter(m => m.providerType === 'novelai')} modelId={modelId}
-        onModelChange={id => { setModelId(id); setGenError(null); }} initial={naiInitial}
-        onSubmit={request => submit(request.modelId, request.prompt, undefined, request)}
-        busy={busyModels.has(modelId)} error={genError?.message}
-        image={list.find(img => img.model === model?.modelId && !!naiImageDraft(img))}
-        onCancel={currentJob ? () => void cancelJob(currentJob.id) : undefined} />}
 
       {/* ---- reference image preview ---- */}
       <Modal
