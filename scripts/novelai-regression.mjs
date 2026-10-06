@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { novelaiSchema, buildNovelAIRequest } from '../server/dist/novelai.js';
+import { novelaiSchema, buildNovelAIRequest, promptTags, tagHistory } from '../server/dist/novelai.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-novelai-'));
@@ -20,7 +20,7 @@ const upstream = http.createServer(async (req, res) => {
   const body = raw ? JSON.parse(raw) : null;
   res.setHeader('content-type', 'application/json');
   if (req.url === '/user/subscription') { subReads++; return res.end(JSON.stringify(quota)); }
-  if (req.url.startsWith('/ai/generate-image/suggest-tags')) return res.end(JSON.stringify({ tags: [{ tag: 'watercolor' }] }));
+  if (req.url.startsWith('/ai/generate-image/suggest-tags')) return res.end(JSON.stringify({ tags: [{ tag: 'watercolor', count: 12345, confidence: 0.9 }, { tag: 'watercolor (medium)' }] }));
   if (req.url === '/ai/generate-image') {
     requests.push(body);
     assert.equal(req.headers.accept, 'application/json');
@@ -34,6 +34,11 @@ const upstream = http.createServer(async (req, res) => {
     const user = body.messages.find(m => m.role === 'user');
     const content = typeof user.content === 'string' ? user.content : user.content.map(p => p.text || '').join('');
     const source = JSON.parse(content);
+    if (source.items) {
+      const items = source.items.includes('数量不对') ? [] : source.items.map(t => t.replace('双马尾', 'twintails').replace('红眼睛', 'red eyes'));
+      res.setHeader('content-type', 'text/event-stream');
+      return res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ items }) }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 8, completion_tokens: 6, total_tokens: 14 } })}\n\ndata: [DONE]\n\n`);
+    }
     const prepared = JSON.stringify({ basePrompt: '2girls, cafe. Two girls drink hot chocolate by the window.', negativePrompt: 'hat', characters: source.characters.map((c, i) => ({ prompt: `girl, ${i ? 'black' : 'white'} hair`, negativePrompt: c.negativePrompt ? 'glasses' : '' })) });
     res.setHeader('content-type', 'text/event-stream');
     res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: prepared }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 20, total_tokens: 32 } })}\n\ndata: [DONE]\n\n`);
@@ -75,7 +80,8 @@ try {
   const cfg = (await call('GET', '/api/images/novelai/config')).data;
   assert.equal(cfg.helpers[0].id, helperId); assert(cfg.uc.heavy.includes('artistic error'));
   assert.equal((await call('GET', `/api/images/novelai/${curated}/subscription`)).data.available, true);
-  assert.equal((await call('GET', `/api/images/novelai/${curated}/tags?q=water`)).data.tags[0].tag, 'watercolor');
+  const suggested = (await call('GET', `/api/images/novelai/${curated}/tags?q=water`)).data.tags;
+  assert.deepEqual(suggested, [{ tag: 'watercolor', count: 12345 }, { tag: 'watercolor (medium)', count: null }], 'suggestions carry upstream popularity');
 
   await call('POST', '/api/admin/users', { username: 'naiuser', password: 'nai-test-password', role: 'user', allowImages: true, allowImageModels: true });
   const user = await call('POST', '/api/auth/login', { username: 'naiuser', password: 'nai-test-password' });
@@ -110,6 +116,19 @@ try {
   const studioHistory = (await call('GET', '/api/images?kind=novelai&limit=10', undefined, user.cookie)).data;
   assert.deepEqual(studioHistory.images.map(i => i.id), [finished.images[0].id], 'studio history lists only the user’s own NAI images');
   assert.equal(studioHistory.total, 1);
+  const remembered = (await call('GET', '/api/images/novelai/tag-history', undefined, user.cookie)).data;
+  assert.deepEqual(remembered.tags.map(t => t.tag).sort(), ['2girls', 'artist:test', 'black hair', 'girl', 'white hair'],
+    'tag history keeps prompt, character and artist tags but not sentences');
+  assert.deepEqual(remembered.negative.map(t => t.tag).sort(), ['glasses', 'hat']);
+  assert.equal(remembered.tags.find(t => t.tag === 'girl').count, 1, 'a tag counts once per image');
+  assert.equal((await call('GET', '/api/images/novelai/tag-history', undefined, denied.cookie)).status, 403);
+  assert.deepEqual((await call('GET', '/api/images/novelai/tag-history')).data, { tags: [], negative: [] }, 'history is per user');
+  const tagify = await call('POST', '/api/images/novelai/tagify', { modelId: curated, helperModelId: helperId, items: ['{双马尾}', '红眼睛'] }, user.cookie);
+  assert.equal(tagify.status, 200, JSON.stringify(tagify.data));
+  assert.deepEqual(tagify.data.items, ['{twintails}', 'red eyes']);
+  assert.equal((await call('POST', '/api/images/novelai/tagify', { modelId: curated, helperModelId: helperId, items: [] }, user.cookie)).status, 400);
+  assert.equal((await call('POST', '/api/images/novelai/tagify', { modelId: curated, helperModelId: helperId, items: ['数量不对', 'x'] }, user.cookie)).status, 502, 'a reply of the wrong length is rejected');
+  assert.equal((await call('POST', '/api/images/novelai/tagify', { modelId: curated, helperModelId: helperId, items: ['猫'] }, denied.cookie)).status, 403);
   const fullResult = await done(await job({ ...body, modelId: full, novelai: { ...options, ucEnabled: false, imageText: '' }, size: '1024x1024' }));
   assert.equal(fullResult.status, 'done'); assert.equal(requests.at(-1).parameters.negative_prompt, 'hat');
   assert.equal(requests.at(-1).model, 'nai-diffusion-5-full');
@@ -137,7 +156,21 @@ try {
   behavior = 'success';
   const compiled = buildNovelAIRequest('nai-diffusion-5-full', 'cafe', '832x1216', novelaiSchema.parse({ basePrompt: 'a sign Text: Hello' }), 1);
   assert(compiled.input.endsWith('Text: Hello')); assert(!compiled.input.includes('no text'));
-  console.log('NovelAI regression passed: V5 models, permissions, preparation, UC, coordinates, metadata, subscription gate, request limits, shared credential concurrency and no retry.');
+  const trailing = buildNovelAIRequest('nai-diffusion-5-full', 'x', '832x1216', novelaiSchema.parse({ basePrompt: '1girl, smile, ', negativePrompt: 'hat, ', ucEnabled: false, quality: 'none', characters: [{ prompt: 'girl, ', negativePrompt: '' }] }), 1);
+  assert.equal(trailing.input, '1girl, smile', 'the trailing comma Tag 模式 leaves is not sent');
+  assert.equal(trailing.parameters.negative_prompt, 'hat');
+  assert.equal(trailing.parameters.v4_prompt.caption.char_captions[0].char_caption, 'girl');
+  assert.deepEqual(promptTags('{{Long_Hair}}, 1.2::blue eyes::, o_o, 雨天, she walks along the road., Text: Hello, world'), ['long hair', 'blue eyes', 'o_o']);
+  const day = 86_400_000;
+  const history = tagHistory([
+    { settings: JSON.stringify({ provider: 'novelai', options: { basePrompt: 'smile, cat', negativePrompt: 'hat' } }), createdAt: 10 * day },
+    { settings: JSON.stringify({ provider: 'novelai', options: { basePrompt: 'smile, smile, dog' } }), createdAt: 70 * day },
+    { settings: 'not json', createdAt: 70 * day },
+    { settings: JSON.stringify({ provider: 'openai', options: { basePrompt: 'ignored' } }), createdAt: 70 * day },
+  ], 70 * day);
+  assert.deepEqual(history.tags.map(t => [t.tag, t.count, t.score]), [['smile', 2, 1.25], ['dog', 1, 1], ['cat', 1, 0.25]], 'recent use outranks old use');
+  assert.equal(history.tags[0].last, 70 * day); assert.deepEqual(history.negative.map(t => t.tag), ['hat']);
+  console.log('NovelAI regression passed: V5 models, permissions, preparation, tag history, tag conversion, UC, coordinates, metadata, subscription gate, request limits, shared credential concurrency and no retry.');
   if (process.argv.includes('--serve')) {
     console.log(`UI fixture: ${base} (naiadmin / nai-test-password)`);
     await new Promise(resolve => { process.once('SIGINT', resolve); process.once('SIGTERM', resolve); });

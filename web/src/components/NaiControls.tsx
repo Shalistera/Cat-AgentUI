@@ -1,7 +1,7 @@
-import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Bookmark, ChevronDown, Pencil, Plus, Trash2, X } from 'lucide-react';
-import { api } from '../api';
-import { Button, Input, Textarea, Toggle, toast } from './ui';
+import { Button, Input, Toggle, toast } from './ui';
+import { TagInput, TagTextarea } from './NaiTagEditor';
 import { NAI_CHAR_COLORS, NAI_STYLES, newNaiCharacter, type NaiCharacter, type NaiOptions, type NaiStyle } from '../novelai';
 
 /* ---------------------------------------------------------------------------
@@ -58,158 +58,6 @@ export function Slider({ label, value, min, max, step, onChange, format, hint }:
   );
 }
 
-/* ---------- tag suggestions ---------- */
-
-// Shared across inputs and remounts: the same prefix typed twice costs one call.
-const tagCache = new Map<string, string[]>();
-
-function useTagSuggestions(modelId: string, query: string | null) {
-  const [tags, setTags] = useState<string[]>([]);
-  useEffect(() => {
-    const q = query?.trim() ?? '';
-    // NAI suggests English Danbooru tags only; CJK input would never match.
-    if (!modelId || q.length < 2 || !/[a-z]/i.test(q)) { setTags([]); return; }
-    const key = `${modelId}\n${q.toLowerCase()}`;
-    const hit = tagCache.get(key);
-    if (hit) { setTags(hit); return; }
-    setTags([]);
-    let current = true;
-    const timer = setTimeout(() => {
-      api.get<{ tags: { tag: string }[] }>(`/api/images/novelai/${encodeURIComponent(modelId)}/tags?q=${encodeURIComponent(q.slice(0, 100))}`)
-        .then((r) => {
-          const list = r.tags.map((t) => t.tag).slice(0, 8);
-          if (tagCache.size > 300) tagCache.delete(tagCache.keys().next().value!);
-          tagCache.set(key, list);
-          if (current) setTags(list);
-        })
-        .catch(() => { if (current) setTags([]); });
-    }, 280);
-    return () => { current = false; clearTimeout(timer); };
-  }, [modelId, query]);
-  return tags;
-}
-
-const STOP = ',\n';
-/** The comma-separated chunk the caret sits in, minus leading emphasis syntax ({ [ or 1.2::). */
-function tokenAt(text: string, caret: number) {
-  let start = caret;
-  while (start > 0 && !STOP.includes(text[start - 1])) start--;
-  const raw = text.slice(start, caret);
-  const lead = raw.match(/^\s*(?:[{[]+|-?\d+(?:\.\d+)?::)?\s*/)?.[0].length ?? 0;
-  return { start: start + lead, query: raw.slice(lead) };
-}
-
-function Suggestions({ id, tags, active, onPick }: { id: string; tags: string[]; active: number; onPick(tag: string): void }) {
-  return (
-    <div id={id} role="listbox" className="absolute inset-x-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-line bg-bg1 py-1 shadow-lg">
-      {tags.map((tag, i) => (
-        <button key={tag} id={`${id}-${i}`} type="button" role="option" aria-selected={i === active}
-          onMouseDown={(e) => e.preventDefault()} onClick={() => onPick(tag)}
-          className={`block w-full cursor-pointer truncate px-3 py-1.5 text-left font-mono text-xs ${i === active ? 'bg-acc/10 text-tx' : 'text-tx2 hover:bg-bg2'}`}>
-          {tag}
-        </button>
-      ))}
-      <div className="truncate border-t border-line px-3 pt-1 text-[11px] text-tx3">↑↓ 选择 · Enter 填入 · Esc 关闭</div>
-    </div>
-  );
-}
-
-/** Textarea that, when `suggest` is on, offers NAI tag completions for the chunk being typed. */
-export function TagTextarea({ value, onChange, modelId, suggest, textareaRef, className = '', ...rest }: {
-  value: string; onChange(v: string): void; modelId: string; suggest: boolean;
-  textareaRef?: Ref<HTMLTextAreaElement>; rows?: number; placeholder?: string; maxLength?: number;
-  'aria-label'?: string; className?: string;
-}) {
-  const local = useRef<HTMLTextAreaElement | null>(null);
-  // After a pick the caret is restored programmatically; that select event
-  // must not reopen the list on the tag just inserted. Typing clears it.
-  const picked = useRef(false);
-  const [query, setQuery] = useState<string | null>(null);
-  const [active, setActive] = useState(0);
-  const tags = useTagSuggestions(modelId, suggest ? query : null);
-  const open = suggest && query !== null && tags.length > 0;
-  const listId = useId();
-
-  function sync(el: HTMLTextAreaElement) {
-    if (!suggest || el.selectionStart !== el.selectionEnd || document.activeElement !== el) { setQuery(null); return; }
-    setQuery(tokenAt(el.value, el.selectionStart).query);
-    setActive(0);
-  }
-  function pick(tag: string) {
-    const el = local.current;
-    if (!el) return;
-    const caret = el.selectionStart;
-    const { start } = tokenAt(value, caret);
-    let end = caret;
-    while (end < value.length && !',\n}]:'.includes(value[end])) end++;
-    const atEnd = end >= value.length || value[end] === '\n';
-    const insert = tag + (atEnd ? ', ' : '');
-    const next = value.slice(0, start) + insert + value.slice(end);
-    onChange(next.slice(0, rest.maxLength ?? next.length));
-    setQuery(null);
-    picked.current = true;
-    const pos = start + insert.length;
-    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(pos, pos); });
-  }
-  return (
-    <div className="relative">
-      <Textarea
-        {...rest}
-        ref={(el) => {
-          local.current = el;
-          if (typeof textareaRef === 'function') textareaRef(el);
-          else if (textareaRef) textareaRef.current = el;
-        }}
-        value={value}
-        aria-autocomplete={suggest ? 'list' : undefined}
-        aria-controls={open ? listId : undefined}
-        aria-activedescendant={open ? `${listId}-${active}` : undefined}
-        className={`${suggest ? 'font-mono' : ''} ${className}`}
-        onChange={(e) => { picked.current = false; onChange(e.target.value); sync(e.target); }}
-        onSelect={(e) => { if (!picked.current) sync(e.currentTarget); }}
-        onBlur={() => setQuery(null)}
-        onKeyDown={(e) => {
-          if (!open) return;
-          if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => (i + 1) % tags.length); }
-          else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => (i - 1 + tags.length) % tags.length); }
-          else if ((e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.nativeEvent.isComposing) || e.key === 'Tab') { e.preventDefault(); pick(tags[active]); }
-          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setQuery(null); }
-        }}
-      />
-      {open && <Suggestions id={listId} tags={tags} active={active} onPick={pick} />}
-    </div>
-  );
-}
-
-/** Single-tag input (artist names) with the same completions. */
-function TagInput({ value, onChange, modelId, placeholder, label }: {
-  value: string; onChange(v: string): void; modelId: string; placeholder?: string; label: string;
-}) {
-  const [focused, setFocused] = useState(false);
-  const [active, setActive] = useState(0);
-  const tags = useTagSuggestions(modelId, focused ? value : null).filter((t) => t !== value.trim());
-  const open = focused && tags.length > 0;
-  const listId = useId();
-  function pick(tag: string) { onChange(tag); setFocused(false); }
-  return (
-    <div className="relative min-w-0 flex-1">
-      <Input uiSize="sm" aria-label={label} value={value} maxLength={160} placeholder={placeholder}
-        className="font-mono" aria-autocomplete="list" aria-controls={open ? listId : undefined}
-        aria-activedescendant={open ? `${listId}-${active}` : undefined}
-        onChange={(e) => { onChange(e.target.value); setActive(0); setFocused(true); }}
-        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-        onKeyDown={(e) => {
-          if (!open) return;
-          if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => (i + 1) % tags.length); }
-          else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => (i - 1 + tags.length) % tags.length); }
-          else if ((e.key === 'Enter' && !e.nativeEvent.isComposing) || e.key === 'Tab') { e.preventDefault(); pick(tags[active]); }
-          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setFocused(false); }
-        }} />
-      {open && <Suggestions id={listId} tags={tags} active={active} onPick={pick} />}
-    </div>
-  );
-}
-
 /** Artist weight. Edits a string so the field can be cleared or start with "-"; only valid numbers reach the draft. */
 function WeightInput({ label, value, onChange }: { label: string; value: number; onChange(v: number): void }) {
   const [text, setText] = useState(String(value));
@@ -233,9 +81,20 @@ function WeightInput({ label, value, onChange }: { label: string; value: number;
 
 /* ---------- 画风 ---------- */
 
-export function StylePicker({ options, onChange, saved, onSaved, modelId }: {
+/** One line naming the current 画风, for the collapsed section in Tag 模式. */
+export function styleSummary(o: NaiOptions, saved: NaiStyle[]) {
+  const mine = saved.find((s) => s.tags === o.stylePrompt && JSON.stringify(s.artists) === JSON.stringify(o.artists));
+  if (mine) return mine.name;
+  const artists = o.artists.filter((a) => a.tag.trim()).length;
+  const preset = NAI_STYLES.find((s) => s.tags === o.stylePrompt.trim());
+  const name = preset ? preset.name : '自定义风格词';
+  if (!artists) return preset && !preset.tags ? '自动（不加画风词）' : name;
+  return preset && !preset.tags ? `${artists} 位画师` : `${name} · ${artists} 位画师`;
+}
+
+export function StylePicker({ options, onChange, saved, onSaved }: {
   options: NaiOptions; onChange(v: Partial<NaiOptions>): void;
-  saved: NaiStyle[]; onSaved(next: NaiStyle[]): void; modelId: string;
+  saved: NaiStyle[]; onSaved(next: NaiStyle[]): void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
@@ -305,7 +164,7 @@ export function StylePicker({ options, onChange, saved, onSaved, modelId }: {
           <div className="space-y-2">
             {options.artists.map((a, i) => (
               <div key={i} className="flex items-center gap-1.5">
-                <TagInput label={`画师 ${i + 1}`} value={a.tag} modelId={modelId} placeholder="artist:名字"
+                <TagInput label={`画师 ${i + 1}`} value={a.tag} placeholder="artist:名字"
                   onChange={(tag) => onChange({ artists: options.artists.map((x, n) => n === i ? { ...x, tag } : x) })} />
                 <WeightInput label={`画师 ${i + 1} 权重`} value={a.weight}
                   onChange={(weight) => onChange({ artists: options.artists.map((x, n) => n === i ? { ...x, weight } : x) })} />
@@ -321,7 +180,7 @@ export function StylePicker({ options, onChange, saved, onSaved, modelId }: {
           </div>
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-tx">风格词</span>
-            <TagTextarea rows={2} value={options.stylePrompt} maxLength={2000} modelId={modelId} suggest
+            <TagTextarea rows={2} value={options.stylePrompt} maxLength={2000} suggest
               placeholder="例如 watercolor, soft colors" onChange={(stylePrompt) => onChange({ stylePrompt })} />
           </label>
           <div className="flex gap-2">
@@ -342,8 +201,8 @@ export function StylePicker({ options, onChange, saved, onSaved, modelId }: {
 
 /* ---------- 人物 ---------- */
 
-export function CharacterList({ characters, manual, useCoords, size, modelId, onChange, onUseCoords }: {
-  characters: NaiCharacter[]; manual: boolean; useCoords: boolean; size: string; modelId: string;
+export function CharacterList({ characters, manual, useCoords, size, onChange, onUseCoords }: {
+  characters: NaiCharacter[]; manual: boolean; useCoords: boolean; size: string;
   onChange(next: NaiCharacter[]): void; onUseCoords(v: boolean): void;
 }) {
   const [openNeg, setOpenNeg] = useState<Set<number>>(new Set());
@@ -366,7 +225,7 @@ export function CharacterList({ characters, manual, useCoords, size, modelId, on
                 <Trash2 size={14} />
               </Button>
             </div>
-            <TagTextarea rows={2} aria-label={`人物 ${i + 1} 的描述`} modelId={modelId} suggest={manual}
+            <TagTextarea rows={2} aria-label={`人物 ${i + 1} 的描述`} suggest={manual} tools="compact"
               value={manual ? c.prompt : c.description} maxLength={manual ? 2000 : 1500}
               placeholder={manual ? 'girl, white hair, long hair, blue eyes, school uniform' : '长相、发型、衣着、动作，比如：白色长发，蓝眼睛，穿校服，正在挥手'}
               onChange={(v) => set(i, manual ? { prompt: v } : { description: v })} />

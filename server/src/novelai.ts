@@ -38,13 +38,16 @@ export const novelaiSchema = z.object({
 }).strict();
 export type NovelAIOptions = z.infer<typeof novelaiSchema>;
 
+// Tag 模式 leaves a ", " after the last tag to keep typing; never send it on.
+const tidy = (s: string) => s.replace(/^[\s,]+|[\s,]+$/g, '');
+
 export function buildNovelAIRequest(model: string, prompt: string, size: string, options: NovelAIOptions, seed: number) {
   if (!NAI_MODELS.includes(model as typeof NAI_MODELS[number])) throw new Error('只支持 V5 Full 和 V5 Curated');
   if (!NAI_SIZES.includes(size as typeof NAI_SIZES[number])) throw new Error('订阅模式只支持 Normal 分辨率');
   const o = novelaiSchema.parse(options);
   if (model === NAI_MODELS[0] && o.imageText.length > 374) throw new Error('V5 Curated 的画面文字最多 374 个字符');
   const [width, height] = size.split('x').map(Number);
-  const base = o.basePrompt.trim() || prompt.trim();
+  const base = tidy(o.basePrompt) || tidy(prompt);
   if (!base) throw new Error('请填写画面描述');
   // Text: must stay last, including when the user supplied it manually.
   const textAt = base.indexOf('Text:');
@@ -52,12 +55,12 @@ export function buildNovelAIRequest(model: string, prompt: string, size: string,
   const quality = o.quality === 'none' ? '' : `very aesthetic, ${o.quality === 'light' ? 'amazing quality' : 'masterpiece'}${text ? '' : ', no text'}`;
   const actualPrompt = [
     o.artists.map(a => a.weight === 1 ? a.tag : `${a.weight}::${a.tag}::`).join(', '),
-    o.stylePrompt.trim(), textAt >= 0 ? base.slice(0, textAt).trim() : base,
+    tidy(o.stylePrompt), textAt >= 0 ? tidy(base.slice(0, textAt)) : base,
     o.transparent ? 'transparent background' : '', quality,
   ].filter(Boolean).join(', ') + (text ? ` Text: ${text}` : '');
-  const negative = [o.ucEnabled ? NAI_UC[o.ucPreset] : '', o.negativePrompt.trim()].filter(Boolean).join(', ');
+  const negative = [o.ucEnabled ? NAI_UC[o.ucPreset] : '', tidy(o.negativePrompt)].filter(Boolean).join(', ');
   const captions = (negative: boolean) => o.characters.map(c => ({
-    char_caption: negative ? c.negativePrompt : c.prompt,
+    char_caption: tidy(negative ? c.negativePrompt : c.prompt),
     centers: [{ x: c.x, y: c.y }],
   }));
   return {
@@ -73,4 +76,68 @@ export function buildNovelAIRequest(model: string, prompt: string, size: string,
       sm: false, sm_dyn: false, dynamic_thresholding: false, straight_alpha: true,
     },
   };
+}
+
+/* ---------- remembered tags (Tag 模式 autocomplete and 常用) ---------- */
+
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/**
+ * A prompt chunk in the form tags are compared and remembered in: emphasis
+ * stripped, lowercase, Danbooru underscores as spaces (not in short emoticon
+ * tags like o_o). '' when it isn't worth remembering — sentences, CJK, long
+ * phrases. Mirrors tagKey()/memorable() in web/src/naiTags.ts.
+ */
+export function promptTagKey(raw: string) {
+  let t = raw.replace(/^(?:\s|[{[]|-?(?:\d+(?:\.\d*)?|\.\d+)::)+/, '').replace(/(?:\s|[}\]]|::)+$/, '')
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+  if (t.length > 3) t = t.replace(/([\p{L}\p{N})])_+(?=[\p{L}\p{N}(])/gu, '$1 ');
+  const words = t.split(' ').length;
+  const ok = !!t && t.length <= 60 && words <= 6 && (/[\p{L}\p{N}]/u.test(t) || t.length <= 4)
+    && !CJK.test(t) && !(words > 2 && /[.!?]$/.test(t));
+  return ok ? t : '';
+}
+
+export function promptTags(prompt: string) {
+  const textAt = prompt.indexOf('Text:');
+  return (textAt >= 0 ? prompt.slice(0, textAt) : prompt).split(/[,\n]/).map(promptTagKey).filter(Boolean);
+}
+
+type TagStat = { tag: string; count: number; score: number; last: number };
+const HALF_LIFE_DAYS = 30;
+
+/**
+ * Tags a user has generated with, from the settings saved on their NAI
+ * images: how often (count) and how recently (score — each use counts 1,
+ * halving every 30 days). Separate pools for prompts and exclusions.
+ */
+export function tagHistory(rows: { settings: string | null; createdAt: number }[], now: number) {
+  const pools = { tags: new Map<string, TagStat>(), negative: new Map<string, TagStat>() };
+  const add = (pool: Map<string, TagStat>, tags: string[], at: number) => {
+    const weight = 0.5 ** (Math.max(0, now - at) / 86_400_000 / HALF_LIFE_DAYS);
+    for (const tag of new Set(tags)) {
+      const s = pool.get(tag) ?? { tag, count: 0, score: 0, last: 0 };
+      s.count++; s.score += weight; s.last = Math.max(s.last, at);
+      pool.set(tag, s);
+    }
+  };
+  const str = (v: unknown) => typeof v === 'string' ? v : '';
+  for (const row of rows) {
+    let o: any;
+    try {
+      const v = JSON.parse(row.settings || 'null');
+      if (v?.provider !== 'novelai') continue;
+      o = v.options;
+    } catch { continue; }
+    if (!o || typeof o !== 'object') continue;
+    const chars: any[] = Array.isArray(o.characters) ? o.characters : [];
+    const artists: any[] = Array.isArray(o.artists) ? o.artists : [];
+    add(pools.tags, [str(o.basePrompt), ...chars.map(c => str(c?.prompt))].flatMap(promptTags)
+      .concat(artists.map(a => promptTagKey(str(a?.tag))).filter(Boolean)), row.createdAt);
+    add(pools.negative, [str(o.negativePrompt), ...chars.map(c => str(c?.negativePrompt))].flatMap(promptTags), row.createdAt);
+  }
+  const top = (pool: Map<string, TagStat>, n: number) => [...pool.values()]
+    .sort((a, b) => b.score - a.score || b.count - a.count).slice(0, n)
+    .map(s => ({ ...s, score: Math.round(s.score * 1000) / 1000 }));
+  return { tags: top(pools.tags, 300), negative: top(pools.negative, 150) };
 }

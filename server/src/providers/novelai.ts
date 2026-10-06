@@ -62,7 +62,11 @@ export async function novelaiTags(cfg: ProviderRuntimeConfig, model: string, pro
   if (!NAI_MODELS.includes(model as typeof NAI_MODELS[number])) throw new Error('模型不可用');
   const data = await request(cfg, `/ai/generate-image/suggest-tags?${new URLSearchParams({ model, prompt, lang: 'en' })}`, AbortSignal.timeout(10000));
   const list = Array.isArray(data.tags) ? data.tags : data.tags ? [data.tags] : [];
-  return list.filter((t: any) => typeof t?.tag === 'string').slice(0, 12).map((t: any) => ({ tag: String(t.tag).slice(0, 160) }));
+  // count = how many images carry the tag upstream: the popular spelling wins.
+  return list.filter((t: any) => typeof t?.tag === 'string').slice(0, 12).map((t: any) => ({
+    tag: String(t.tag).slice(0, 160),
+    count: typeof t.count === 'number' && Number.isFinite(t.count) ? Math.max(0, Math.round(t.count)) : null,
+  }));
 }
 
 export const novelaiAdapter: ChatAdapter = {

@@ -13,11 +13,13 @@ import {
 } from '../components/ui';
 import { useLightbox } from '../components/Lightbox';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
-import { CharacterList, Collapsible, PanelSection, Slider, StylePicker, TagTextarea } from '../components/NaiControls';
+import { CharacterList, Collapsible, PanelSection, Slider, StylePicker, styleSummary } from '../components/NaiControls';
+import { NaiTagContext, TagTextarea, type NaiTagEnv } from '../components/NaiTagEditor';
 import {
   NAI_DEFAULTS, NAI_EXAMPLES, NAI_SIZE_OPTIONS, NAI_UC_OPTIONS, advancedChanged, naiImageInfo, newNaiDraft,
   normalizeNaiDraft, sourceSignature, tagsMark, type NaiDraft, type NaiImageInfo, type NaiOptions, type NaiStyle,
 } from '../novelai';
+import { EMPTY_HISTORY, normalizeGroups, normalizeHistory, rememberTags, usedTags, type TagGroup, type TagHistory } from '../naiTags';
 import type { ImageModel, ImageRecord } from '../types';
 
 type NaiConfig = { uc: Record<string, string>; helpers: { id: string; name: string; isDefault: boolean }[] };
@@ -58,6 +60,9 @@ function loadStyles(key: string): NaiStyle[] {
       .map((s) => ({ name: s.name.slice(0, 40), tags: s.tags.slice(0, 2000), artists: normalizeNaiDraft({ options: { artists: s.artists } }).options.artists }));
   } catch { return []; }
 }
+function loadGroups(key: string): TagGroup[] {
+  try { return normalizeGroups(JSON.parse(localStorage.getItem(key) || '[]')); } catch { return []; }
+}
 function copy(text: string) {
   if (!navigator.clipboard) { toast('当前环境不支持复制，请手动选择文字', 'err'); return; }
   navigator.clipboard.writeText(text).then(() => toast('已复制', 'ok'), () => toast('复制失败，请手动选择文字', 'err'));
@@ -77,11 +82,14 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
   const draftKey = `cat-nai-draft:${userId}`;
   const styleKey = `cat-nai-styles:${userId}`;
   const modelKey = `cat-nai-model:${userId}`;
+  const groupKey = `cat-nai-tag-groups:${userId}`;
 
   const [models, setModels] = useState<ImageModel[] | null>(null);
   const [modelId, setModelId] = useState(() => { try { return localStorage.getItem(modelKey) || ''; } catch { return ''; } });
   const [draft, setDraft] = useState(() => loadDraft(draftKey));
   const [styles, setStyles] = useState(() => loadStyles(styleKey));
+  const [tagGroups, setTagGroups] = useState(() => loadGroups(groupKey));
+  const [tagHistory, setTagHistory] = useState<TagHistory>(EMPTY_HISTORY);
   const [conf, setConf] = useState<NaiConfig | null>(null);
   const [sub, setSub] = useState<Subscription | null>(null);
   const [subLoading, setSubLoading] = useState(false);
@@ -101,6 +109,8 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
   const [storageWarning, setStorageWarning] = useState(false);
   const [negOpen, setNegOpen] = useState(() => !!(draft.options.negativeDescription || draft.options.negativePrompt));
   const [advOpen, setAdvOpen] = useState(false);
+  // Tag 模式 folds 画风 away: tags carry the style there, the cards just take room.
+  const [styleOpen, setStyleOpen] = useState(false);
   const [showPrepared, setShowPrepared] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const [, setTick] = useState(0);
@@ -138,6 +148,9 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
   useEffect(() => {
     try { localStorage.setItem(styleKey, JSON.stringify(styles)); } catch { setStorageWarning(true); }
   }, [styleKey, styles]);
+  useEffect(() => {
+    try { localStorage.setItem(groupKey, JSON.stringify(tagGroups)); } catch { setStorageWarning(true); }
+  }, [groupKey, tagGroups]);
   useEffect(() => {
     if (!model) return;
     try { localStorage.setItem(modelKey, model.id); } catch { /* the default model is fine */ }
@@ -182,6 +195,24 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
     }).catch((e) => { if (current) toast(errText(e, '加载 NAI 配置失败'), 'err'); });
     return () => { current = false; };
   }, [hasNai]);
+
+  // Tags from the user's earlier NAI pictures: Tag 模式 offers them first.
+  useEffect(() => {
+    if (!hasNai) return;
+    let current = true;
+    api.get<TagHistory>('/api/images/novelai/tag-history')
+      .then((h) => { if (current) setTagHistory(normalizeHistory(h)); })
+      .catch(() => { /* completions still work without it */ });
+    return () => { current = false; };
+  }, [hasNai]);
+
+  const helperId = conf?.helpers.some((h) => h.id === draft.helperModelId) ? draft.helperModelId : '';
+  const tagModelId = model?.id ?? '';
+  const tagEnv = useMemo<NaiTagEnv>(() => ({
+    modelId: tagModelId, history: tagHistory, groups: tagGroups, onGroups: setTagGroups,
+    convert: tagModelId && helperId ? (items, signal) => api.post<{ items: string[] }>('/api/images/novelai/tagify',
+      { modelId: tagModelId, helperModelId: helperId, items }, signal).then((r) => r.items) : null,
+  }), [tagModelId, helperId, tagHistory, tagGroups]);
 
   const subModel = model?.id;
   useEffect(() => {
@@ -243,6 +274,7 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
   /** Tag 模式 ⇄ 智能描述 without losing what was typed on either side. */
   function setMode(tags: boolean) {
     setShowPrepared(false);
+    setStyleOpen(false);
     setDraft((d) => {
       if (tags === d.manual) return d;
       const opts = d.options;
@@ -356,13 +388,14 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
       const body = {
         modelId: model.id, n: 1, size: d.size,
         // The gallery caption: the user's own words, or the tags in Tag 模式.
-        prompt: (d.manual ? prepared.basePrompt : d.scene).trim().slice(0, 4000),
+        prompt: (d.manual ? prepared.basePrompt.replace(/^[\s,]+|[\s,]+$/g, '') : d.scene.trim()).slice(0, 4000),
         novelai: { ...prepared, sourceMode: d.manual ? 'raw' : 'assisted',
           artists: prepared.artists.filter((a) => a.tag.trim()).map((a) => ({ ...a, tag: a.tag.trim() })) },
       };
       const startedAt = Date.now();
       try {
         const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
+        setTagHistory((h) => rememberTags(h, usedTags(prepared)));
         setFocus('pending');
         void track({ id: jobId, modelId: model.id, startedAt, size: d.size });
       } catch (err) {
@@ -545,13 +578,14 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
         <div className="flex min-h-full flex-col @4xl/studio:h-full @4xl/studio:flex-row">
 
           {/* ---- creation panel ---- */}
+          <NaiTagContext.Provider value={tagEnv}>
           <aside className="order-3 flex min-w-0 flex-col bg-bg1 @4xl/studio:order-1 @4xl/studio:min-h-0 @4xl/studio:w-[380px] @4xl/studio:shrink-0 @4xl/studio:border-r @4xl/studio:border-line @6xl/studio:w-[400px]">
             <div className="mx-auto min-h-0 w-full max-w-2xl flex-1 space-y-6 p-4 sm:p-5 @4xl/studio:max-w-none @4xl/studio:overflow-y-auto">
               <PanelSection title="画面描述" action={
                 <SegmentedControl value={draft.manual ? 'tags' : 'smart'} onChange={(v) => setMode(v === 'tags')}
                   options={[{ value: 'smart', label: '智能描述' }, { value: 'tags', label: 'Tag 模式' }]} />
               }>
-                <TagTextarea textareaRef={promptRef} rows={5} modelId={model.id} suggest={draft.manual} aria-label="画面描述"
+                <TagTextarea textareaRef={promptRef} rows={5} suggest={draft.manual} tools="full" aria-label="画面描述"
                   maxLength={draft.manual ? 6000 : 4000} value={draft.manual ? o.basePrompt : draft.scene}
                   placeholder={draft.manual
                     ? '1girl, white hair, transparent umbrella, rain, neon lights, night, city street, looking back'
@@ -571,7 +605,7 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
                 {draft.manual ? (
                   <p className="flex gap-1.5 text-xs leading-relaxed text-tx3">
                     <Tags size={13} className="mt-0.5 shrink-0" />
-                    内容原样发送给 NovelAI，输入英文时会提示标签。多人画面在开头写人数，比如 2girls。
+                    <span>原样发给 NovelAI。中英文都能联想 tag；光标放在 tag 上按 Ctrl / ⌘ + ↑↓ 调权重，底色越深越重。多人画面先写人数，如 2girls。</span>
                   </p>
                 ) : helperOn ? (
                   <div className="rounded-lg bg-bg0 text-xs">
@@ -604,9 +638,15 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
                 )}
               </PanelSection>
 
-              <PanelSection title="画风">
-                <StylePicker options={o} onChange={options} saved={styles} onSaved={setStyles} modelId={model.id} />
-              </PanelSection>
+              {draft.manual ? (
+                <Collapsible title="画风" open={styleOpen} onToggle={() => setStyleOpen((v) => !v)} summary={styleSummary(o, styles)}>
+                  <StylePicker options={o} onChange={options} saved={styles} onSaved={setStyles} />
+                </Collapsible>
+              ) : (
+                <PanelSection title="画风">
+                  <StylePicker options={o} onChange={options} saved={styles} onSaved={setStyles} />
+                </PanelSection>
+              )}
 
               <PanelSection title="画幅">
                 <div className="grid grid-cols-3 gap-2">
@@ -628,14 +668,14 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
 
               <PanelSection title={<>人物 <span className="font-normal text-tx3">· 可选</span></>}
                 hint={o.characters.length ? undefined : '画多个人时，给每个人单独描述，发型、衣着不容易串到别人身上。'}>
-                <CharacterList characters={o.characters} manual={draft.manual} useCoords={o.useCoords} size={draft.size} modelId={model.id}
+                <CharacterList characters={o.characters} manual={draft.manual} useCoords={o.useCoords} size={draft.size}
                   onChange={(characters) => options({ characters, useCoords: characters.length ? o.useCoords : false })}
                   onUseCoords={(useCoords) => options({ useCoords })} />
               </PanelSection>
 
               <Collapsible title="不想出现的内容" open={negOpen} onToggle={() => setNegOpen((v) => !v)}
                 summary={negText.trim() ? negText : `基础过滤：${ucLabel}`}>
-                <TagTextarea rows={2} modelId={model.id} suggest={draft.manual} aria-label="不想出现的内容"
+                <TagTextarea rows={2} suggest={draft.manual} tools="compact" pool="negative" aria-label="不想出现的内容"
                   maxLength={draft.manual ? 3000 : 2000} value={negText}
                   placeholder={draft.manual ? 'hat, glasses, extra fingers' : '比如：帽子、眼镜、文字水印'}
                   onChange={(v) => options(draft.manual ? { negativePrompt: v } : { negativeDescription: v })} />
@@ -744,6 +784,7 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
               </div>
             </div>
           </aside>
+          </NaiTagContext.Provider>
 
           {/* ---- canvas ---- */}
           <section className={`@container/canvas order-1 flex min-w-0 flex-col @4xl/studio:order-2 @4xl/studio:h-auto @4xl/studio:min-h-0 @4xl/studio:flex-1 ${pending || focused ? 'h-[60vh] min-h-[340px]' : 'h-52'}`}>
@@ -770,8 +811,10 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
                   <div className="absolute inset-0 flex items-center justify-center p-8">
                     <div className="max-w-xs text-center">
                       <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-line bg-bg1 text-tx3"><Palette size={22} /></div>
-                      <p className="text-sm font-medium text-tx">写下想画的画面，点「生成」</p>
-                      <p className="mt-1.5 text-xs leading-relaxed text-tx3">用中文描述就好，AI 会整理成 NovelAI 能理解的提示词。生成的图片会显示在这里。</p>
+                      <p className="text-sm font-medium text-tx">{draft.manual ? '写好 tag，点「生成」' : '写下想画的画面，点「生成」'}</p>
+                      <p className="mt-1.5 text-xs leading-relaxed text-tx3">
+                        {draft.manual ? 'tag 原样发给 NovelAI，用过的 tag 会被记住。' : '用中文描述就好，AI 会整理成 NovelAI 能理解的提示词。'}生成的图片会显示在这里。
+                      </p>
                     </div>
                   </div>
                 </>
