@@ -10,6 +10,7 @@ const KIND_LABELS: Record<string, string> = {
   chat: '对话',
   image: '绘图',
   image_tool: '图片生成工具',
+  image_prompt: 'NAI 提示词助手',
   title: '标题生成',
   followup: '快速追问',
   ocr: 'OCR 工坊',

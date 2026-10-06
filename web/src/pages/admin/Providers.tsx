@@ -238,6 +238,7 @@ function ProviderModal({ provider, onClose, onSaved }: {
             <option value="anthropic">Anthropic</option>
             <option value="gemini">Google Gemini</option>
             <option value="claude-code">本地 Claude Code(仅管理员)</option>
+            <option value="novelai">NovelAI V5(绘图工坊)</option>
           </Select>
         </Field>
         {local ? (
@@ -248,16 +249,17 @@ function ProviderModal({ provider, onClose, onSaved }: {
             温度和最大输出长度不生效。
           </p>
         ) : (<>
-        <Field label="API 地址" hint="留空使用官方地址;可填任意兼容网关,写到 /v1 或整条接口地址都能识别">
+        {type === 'novelai' && <p className="rounded-lg border border-line bg-bg2 p-3 text-xs text-tx2">使用 NovelAI 设置中的 Persistent API Token。仅支持 V5 Full / Curated 的 Opus 订阅额度模式，图片在绘图工坊中生成。添加后拉取并导入两个模型。</p>}
+        <Field label="API 地址" hint={type === 'novelai' ? '留空使用 https://image.novelai.net，填写服务根地址，不加 /v1' : '留空使用官方地址;可填任意兼容网关,写到 /v1 或整条接口地址都能识别'}>
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={DEFAULT_URLS[type]} />
         </Field>
         {!vertexMode && (
-          <Field label="API Key">
+          <Field label={type === 'novelai' ? 'Persistent API Token' : 'API Key'}>
             <div className="flex items-center gap-2">
               <Input
                 type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
                 autoComplete="new-password"
-                placeholder={isEdit && hasKey ? '●●●●●●(已保存,留空保持不变)' : 'sk-…'}
+                placeholder={isEdit && hasKey ? '●●●●●●(已保存,留空保持不变)' : type === 'novelai' ? '粘贴 NovelAI Persistent API Token' : 'sk-…'}
               />
               {isEdit && hasKey && (
                 <Button variant="outline" size="sm" className="shrink-0 whitespace-nowrap" onClick={clearKey}>清除 Key</Button>
@@ -327,7 +329,7 @@ function ProviderModal({ provider, onClose, onSaved }: {
           </Field>
         )}
 
-        {isEdit && !local && (
+        {isEdit && !local && type !== 'novelai' && (
           <div className="space-y-4 rounded-lg border border-line bg-bg2/30 p-3">
             <Field label="主线路名称" hint={vertexMode ? '只在线路列表和切换提示里显示;留空显示为「主线路」,设置了多个区域或 Priority 时显示区域名' : '只在备用线路列表和切换提示里显示;留空显示为「主线路」'}>
               <Input value={primaryName} onChange={(e) => setPrimaryName(e.target.value)} placeholder="如 OpenRouter" maxLength={64} />
@@ -342,7 +344,7 @@ function ProviderModal({ provider, onClose, onSaved }: {
             </div>
           </div>
         )}
-        {isEdit && !local && (
+        {isEdit && !local && type !== 'novelai' && (
           <div className="grid grid-cols-2 gap-3">
             <Field label="故障切换阈值" hint={hasBackups ? '同一线路连续失败这么多次后暂停使用' : '添加备用线路后生效'}>
               <Input type="number" min={1} max={100} value={failoverThreshold}
@@ -1055,7 +1057,7 @@ function ProviderCard({ provider, reload, onEdit }: {
             </div>
           )}
 
-          {!local && <BackupLines provider={provider} reload={reload} />}
+          {!local && provider.type !== 'novelai' && <BackupLines provider={provider} reload={reload} />}
 
           <p className="text-[11px] leading-relaxed text-tx3">
             视觉/工具/推理等能力与可见性在

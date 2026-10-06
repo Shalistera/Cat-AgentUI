@@ -27,7 +27,7 @@ export function imageToolModelsFor(user: ImageToolUser) {
       eq(schema.models.enabled, 1), eq(schema.providers.enabled, 1))).all();
   return settings.modelIds.flatMap((id) => {
     const row = rows.find((r) => r.model.id === id);
-    return row && getAdapter(row.provider.type).generateImages ? [row] : [];
+    return row && row.provider.type !== 'novelai' && getAdapter(row.provider.type).generateImages ? [row] : [];
   });
 }
 

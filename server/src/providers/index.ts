@@ -8,10 +8,12 @@ import { openaiAdapter } from './openai.js';
 import { anthropicAdapter } from './anthropic.js';
 import { geminiAdapter } from './gemini.js';
 import { claudeCodeAdapter } from './claude-code.js';
+import { novelaiAdapter } from './novelai.js';
 import { withFailover } from './failover.js';
 import { priorityModel, vertexLines } from './vertex.js';
 
 const rawAdapters: Record<ProviderType, ChatAdapter> = {
+  novelai: novelaiAdapter,
   openai: openaiAdapter,
   anthropic: anthropicAdapter,
   gemini: geminiAdapter,
@@ -19,6 +21,8 @@ const rawAdapters: Record<ProviderType, ChatAdapter> = {
 };
 
 const adapters: Record<ProviderType, ChatAdapter> = {
+  // Subscription-only generation must never be replayed onto another line.
+  novelai: novelaiAdapter,
   openai: withFailover(openaiAdapter),
   anthropic: withFailover(anthropicAdapter),
   gemini: withFailover(geminiAdapter),

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   PanelLeft, ImagePlus, Sparkles, X, Download, Trash2, Image as ImageIcon,
   History, Settings2, Plus, ZoomIn, ArrowRight, MessageSquare, Send,
@@ -16,6 +16,8 @@ import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGaller
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import { Markdown } from '../components/Markdown';
 import { retryStatusText } from '../components/ChatMessage';
+import { NovelAIStudio } from '../components/NovelAIStudio';
+import { naiImageDraft, type NaiDraft, type NaiOptions } from '../novelai';
 import type { ImageModel, ImageRecord, ProviderRetry } from '../types';
 
 const PAGE_SIZE = 24;
@@ -30,7 +32,7 @@ const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: '去背景', prompt: '去
 
 // A generation in flight. The server admits one job per model per user, so
 // several of these can run side by side — one per model.
-type ImageRequest = { modelId: string; prompt: string; n?: number; size?: string; quality?: string; inputUploadIds?: string[]; history?: ConvoTurn[] };
+type ImageRequest = { modelId: string; prompt: string; n?: number; size?: string; quality?: string; inputUploadIds?: string[]; history?: ConvoTurn[]; novelai?: NaiOptions };
 type RunningJob = { id: string; modelId: string; prompt: string; startedAt: number; request?: ImageRequest; retry?: ProviderRetry | null; cancelling?: boolean };
 type ActiveJobs = { jobs?: { jobId: string; modelId: string; prompt: string; createdAt: number; request?: ImageRequest; retry?: ProviderRetry | null }[] };
 type JobStatus = { status: string; images?: ImageRecord[]; reply?: string; turns?: ConvoTurn[]; error?: string; errorCode?: 'provider_busy'; retry?: ProviderRetry | null };
@@ -78,6 +80,9 @@ export default function Images() {
 }
 
 function ImagesInner() {
+  const [search, setSearch] = useSearchParams();
+  const [naiOpen, setNaiOpen] = useState(false);
+  const [naiInitial, setNaiInitial] = useState<{ id: string; draft: NaiDraft } | null>(null);
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const setSidebarOpen = useUi((s) => s.setSidebarOpen);
   const user = useAuth((s) => s.user);
@@ -131,6 +136,22 @@ function ImagesInner() {
   const [refPreview, setRefPreview] = useState<number | null>(null);
 
   const model = models?.find((m) => m.id === modelId) ?? null;
+  const isNai = model?.providerType === 'novelai';
+  const reuseId = search.get('naiImage');
+  useEffect(() => {
+    if (!reuseId || !models) return;
+    let current = true;
+    api.get<{ image: ImageRecord; modelId: string | null }>(`/api/images/novelai/restore/${encodeURIComponent(reuseId)}`).then(r => {
+      if (!current) return;
+      const draft = naiImageDraft(r.image);
+      const target = models.find(m => m.id === r.modelId && m.providerType === 'novelai');
+      if (!draft || !target) { toast('这张图的 NAI 模型已不可用，请先配置或开通该模型', 'err'); return; }
+      setModelId(target.id); setNaiInitial({ id: r.image.id, draft }); setNaiOpen(true); setLightbox(null);
+    }).catch(e => { if (current) toast(e.message, 'err'); }).finally(() => {
+      if (current) setSearch(p => { const next = new URLSearchParams(p); next.delete('naiImage'); return next; }, { replace: true });
+    });
+    return () => { current = false; };
+  }, [reuseId, models, setSearch]);
   // Async job callbacks outlive the render they were created in, so they read
   // the model list through a ref instead of a stale closure.
   const modelsRef = useRef<ImageModel[] | null>(null);
@@ -172,6 +193,7 @@ function ImagesInner() {
   // Ctrl/Cmd+V anywhere on the page uploads clipboard images as references.
   useEffect(() => {
     function onPaste(e: ClipboardEvent) {
+      if (naiOpen || isNai) return;
       const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
       if (!files.length) return;
       e.preventDefault();
@@ -376,6 +398,7 @@ function ImagesInner() {
   }, []);
 
   function generate() {
+    if (isNai) { setNaiOpen(true); return; }
     const p = prompt.trim();
     if (!p || !model) return;
     void submit(model.id, p);
@@ -390,11 +413,11 @@ function ImagesInner() {
     void submit(convo.modelId, t, convo.turns);
   }
 
-  async function submit(mid: string, p: string, history?: ConvoTurn[], retryRequest?: ImageRequest) {
-    if (uploading || busyModels.has(mid)) return;
+  async function submit(mid: string, p: string, history?: ConvoTurn[], retryRequest?: ImageRequest): Promise<boolean> {
+    if (uploading || busyModels.has(mid)) return false;
     const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
-    if ((retryRequest?.inputUploadIds ?? refSlots.filter(Boolean)).length > limit) {
-      toast(`参考图最多 ${limit} 张,请移除多余附件`, 'err'); return;
+    if ((retryRequest ? retryRequest.inputUploadIds ?? [] : refSlots.filter(Boolean)).length > limit) {
+      toast(`参考图最多 ${limit} 张,请移除多余附件`, 'err'); return false;
     }
     setGenError(null);
     setSubmitting((prev) => [...prev, mid]);
@@ -406,6 +429,7 @@ function ImagesInner() {
       };
       const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
       void runJob({ id: jobId, modelId: mid, prompt: p, startedAt: start, request: body });
+      return true;
     } catch (err) {
       // Pick up anything this window doesn't know about yet — typically a job
       // the same user started in another tab, which is also why a refusal
@@ -418,11 +442,12 @@ function ImagesInner() {
       // An ApiError means the server answered and refused: nothing was queued,
       // so report it. Anything else is a lost response (e.g. a proxy cutting
       // the connection) and one of the jobs above is probably ours.
-      if (!(err instanceof ApiError) && untracked.some((j) => j.modelId === mid)) return;
+      if (!(err instanceof ApiError) && untracked.some((j) => j.modelId === mid)) return true;
       const msg = err instanceof Error ? err.message : '生成失败';
       setGenError({ label: modelLabel(mid), message: msg });
       toast(msg, 'err');
       tabAlert();
+      return false;
     } finally {
       setSubmitting((prev) => prev.filter((x) => x !== mid));
     }
@@ -484,7 +509,7 @@ function ImagesInner() {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-2">
                     <Field label="模型">
-                      <Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                      <Select value={modelId} onChange={(e) => { setModelId(e.target.value); setGenError(null); if (models.find(m => m.id === e.target.value)?.providerType === 'novelai') setNaiOpen(true); }}>
                         {models.map((m) => (
                           <option key={m.id} value={m.id}>
                             {`${m.displayName || m.modelId} · ${m.providerName}`}
@@ -494,12 +519,16 @@ function ImagesInner() {
                     </Field>
                   </div>
                   <Field label="生成数量">
-                    <Select value={String(n)} onChange={(e) => setN(Number(e.target.value))}>
+                    <Select value={isNai ? '1' : String(n)} disabled={isNai} onChange={(e) => setN(Number(e.target.value))}>
                       {[1, 2, 3, 4].map((i) => <option key={i} value={i}>{i} 张</option>)}
                     </Select>
                   </Field>
                 </div>
 
+                {isNai ? <div className="rounded-lg border border-line bg-bg0 p-5">
+                  <h3 className="text-sm font-medium">NAI 创作</h3><p className="mt-1 text-xs leading-relaxed text-tx3">用中文描述画面，选择喜欢的画风，再按需要安排角色位置。使用 Opus 订阅额度，单张 Normal 分辨率。</p>
+                  <Button variant="primary" className="mt-4" onClick={() => setNaiOpen(true)}><Sparkles size={15} />打开 NAI 创作</Button>
+                </div> : <>
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="text-[13px] font-medium text-tx">提示词</span>
@@ -638,6 +667,7 @@ function ImagesInner() {
                   </div>
                 </div>
 
+                </>}
                 {genError && (
                   <div className={`rounded-md border px-3 py-2 text-[13px] leading-relaxed ${genError.busy ? 'border-line bg-bg2 text-tx2' : 'border-err/30 bg-err/5 text-err'}`}>
                     <p className="whitespace-pre-wrap">{genError.label}: {genError.message}</p>
@@ -741,7 +771,7 @@ function ImagesInner() {
                   </div>
                 )}
 
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+                {!isNai && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
                   <p className="text-xs leading-relaxed text-tx3">
                     部分模型生成需要几分钟,请耐心等待;期间可切到其他标签页,完成后标签会有提示。
                     换一个模型即可同时发起下一张,同一模型需等当前任务完成。Cmd / Ctrl + Enter 快速提交。
@@ -753,7 +783,7 @@ function ImagesInner() {
                         ? <><Spinner className="h-4 w-4" />提交中</>
                         : <><Sparkles size={15} />生成图片</>}
                   </Button>
-                </div>
+                </div>}
               </div>
             )}
           </Card>
@@ -842,6 +872,14 @@ function ImagesInner() {
           </section>
         </div>
       </div>
+
+      {user && <NovelAIStudio key={user.id} open={naiOpen} onClose={() => setNaiOpen(false)} userId={user.id}
+        models={(models ?? []).filter(m => m.providerType === 'novelai')} modelId={modelId}
+        onModelChange={id => { setModelId(id); setGenError(null); }} initial={naiInitial}
+        onSubmit={request => submit(request.modelId, request.prompt, undefined, request)}
+        busy={busyModels.has(modelId)} error={genError?.message}
+        image={list.find(img => img.model === model?.modelId && !!naiImageDraft(img))}
+        onCancel={currentJob ? () => void cancelJob(currentJob.id) : undefined} />}
 
       {/* ---- reference image preview ---- */}
       <Modal

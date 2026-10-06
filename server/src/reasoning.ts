@@ -63,6 +63,7 @@ function ladder(...values: string[]): ReasoningLevel[] {
  * tokens and read the position on the ladder.
  */
 const RULES: Record<ProviderType, { re: RegExp; levels: ReasoningLevel[] }[]> = {
+  novelai: [],
   openai: [
     // gpt-5-chat is the non-reasoning sibling of the family below it.
     { re: /^gpt-5[\d.]*-chat/, levels: [] },

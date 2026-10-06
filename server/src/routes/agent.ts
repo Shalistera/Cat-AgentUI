@@ -79,7 +79,7 @@ export async function agentRoutes(app: FastifyInstance) {
         const rows = db.select({ id: schema.models.id, imageGen: schema.models.imageGen, providerType: schema.providers.type })
           .from(schema.models).innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
           .where(inArray(schema.models.id, ids)).all();
-        if (rows.length !== ids.length || rows.some((r) => !r.imageGen || !getAdapter(r.providerType).generateImages)) {
+        if (rows.length !== ids.length || rows.some((r) => r.providerType === 'novelai' || !r.imageGen || !getAdapter(r.providerType).generateImages)) {
           return reply.code(400).send({ error: '图片生成工具只能选择仍然存在且支持图片生成的模型' });
         }
       }

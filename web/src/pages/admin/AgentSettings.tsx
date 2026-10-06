@@ -104,7 +104,7 @@ export default function AgentSettingsPage() {
               <fieldset>
                 <legend className="mb-1.5 text-[13px] font-medium text-tx">工具可调用的图片模型</legend>
                 <div className="max-h-64 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-bg0">
-                  {models.filter((m) => m.imageGen).map((m) => (
+                  {models.filter((m) => m.imageGen && m.providerType !== 'novelai').map((m) => (
                     <label key={m.id} className="flex cursor-pointer items-center gap-3 px-3 py-2">
                       <input type="checkbox" className="accent-acc" checked={s.imageGeneration.modelIds.includes(m.id)} disabled={saving}
                         onChange={(e) => setS({ ...s, imageGeneration: { ...s.imageGeneration, modelIds: e.target.checked

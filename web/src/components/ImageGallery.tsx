@@ -1,4 +1,6 @@
 import { Check, Download, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { naiImageDraft } from '../novelai';
 import { api, fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { Badge, Button, Modal, ModalActions, btnClass, confirmDialog, toast } from './ui';
 import type { ImageRecord } from '../types';
@@ -94,6 +96,7 @@ export function ImageLightbox({ image, onClose, onDeleted }: {
             {image.tokens != null && image.tokens > 0 && <span>Tokens {fmtTokens(image.tokens)}</span>}
           </div>
           <ModalActions>
+            {naiImageDraft(image) && <Link to={`/images?naiImage=${encodeURIComponent(image.id)}`} onClick={onClose} className={btnClass('outline', 'md')}>载入 NAI 创作</Link>}
             <a
               href={`/api/images/${image.id}/file`}
               download

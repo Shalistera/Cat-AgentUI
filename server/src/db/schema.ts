@@ -331,6 +331,7 @@ export const mcpServerAccess = sqliteTable('mcp_server_access', {
 ]);
 
 export const images = sqliteTable('images', {
+  generationSettings: text('generation_settings'),
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   providerId: text('provider_id'),

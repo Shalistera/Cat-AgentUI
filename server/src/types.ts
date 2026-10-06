@@ -70,7 +70,7 @@ export interface UsageInfo {
 
 // ---- Provider adapter contract ----
 
-export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'claude-code';
+export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'claude-code' | 'novelai';
 
 export interface ProviderRuntimeConfig {
   id: string;
@@ -255,6 +255,7 @@ export type AdapterEvent =
   | { type: 'stop'; reason: StopReason };
 
 export interface ImageGenRequest {
+  novelai?: import('./novelai.js').NovelAIOptions;
   model: string;
   prompt: string;
   size?: string; // e.g. '1024x1024' | 'auto'
@@ -272,6 +273,7 @@ export interface ImageGenRequest {
 }
 
 export interface GeneratedImage {
+  generationSettings?: Record<string, unknown>;
   mime: string;
   dataBase64: string;
   usage?: UsageInfo;

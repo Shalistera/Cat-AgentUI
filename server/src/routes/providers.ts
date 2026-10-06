@@ -22,6 +22,7 @@ import {
   MAX_LEVELS, defaultLevels, effectiveLevels, normalizeLevels, parseLevels, parseMode,
 } from '../reasoning.js';
 import type { ProviderType } from '../types.js';
+import { NAI_MODELS } from '../novelai.js';
 
 type ProviderRow = typeof schema.providers.$inferSelect;
 type ModelRow = typeof schema.models.$inferSelect;
@@ -212,7 +213,7 @@ function sendAvatar(reply: FastifyReply, parsed: { mime: string; buf: Buffer }) 
 // (.optional() alone rejects null, which 400s every form that blanks a field.)
 const providerCreateSchema = z.object({
   name: z.string().min(1).max(64),
-  type: z.enum(['openai', 'anthropic', 'gemini', 'claude-code']),
+  type: z.enum(['openai', 'anthropic', 'gemini', 'claude-code', 'novelai']),
   baseUrl: z.string().max(300).nullish(),
   apiKey: z.string().max(500).nullish(),
   useResponses: z.boolean().nullish(),
@@ -226,7 +227,7 @@ const providerCreateSchema = z.object({
 
 const providerPatchSchema = z.object({
   name: z.string().min(1).max(64).optional(),
-  type: z.enum(['openai', 'anthropic', 'gemini', 'claude-code']).optional(),
+  type: z.enum(['openai', 'anthropic', 'gemini', 'claude-code', 'novelai']).optional(),
   baseUrl: z.string().max(300).nullish(),
   apiKey: z.string().max(500).nullish(),
   useResponses: z.boolean().nullish(),
@@ -834,6 +835,9 @@ export async function providerRoutes(app: FastifyInstance) {
     const { providerId, models } = body.data;
     const provider = getProvider(providerId);
     if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
+    if (provider.type === 'novelai' && models.some(m => !NAI_MODELS.includes(m.modelId as typeof NAI_MODELS[number]))) {
+      return reply.code(400).send({ error: 'NovelAI 只支持 V5 Full 和 V5 Curated' });
+    }
 
     const existing = new Set(
       db.select({ modelId: schema.models.modelId }).from(schema.models)
@@ -845,15 +849,15 @@ export async function providerRoutes(app: FastifyInstance) {
     for (const m of models) {
       if (existing.has(m.modelId)) { skipped++; continue; }
       existing.add(m.modelId); // also dedupe within the request batch
-      const looksImageGen = IMAGE_MODEL_RE.test(m.modelId);
+      const looksImageGen = provider.type === 'novelai' || IMAGE_MODEL_RE.test(m.modelId);
       db.insert(schema.models).values({
         id: newId(),
         providerId,
         modelId: m.modelId,
         displayName: m.displayName ?? null,
-        vision: (m.vision ?? !looksImageGen) ? 1 : 0,
-        tools: (m.tools ?? !looksImageGen) ? 1 : 0,
-        imageGen: (m.imageGen ?? looksImageGen) ? 1 : 0,
+        vision: provider.type === 'novelai' ? 0 : (m.vision ?? !looksImageGen) ? 1 : 0,
+        tools: provider.type === 'novelai' ? 0 : (m.tools ?? !looksImageGen) ? 1 : 0,
+        imageGen: provider.type === 'novelai' ? 1 : (m.imageGen ?? looksImageGen) ? 1 : 0,
         createdAt: now(),
       }).run();
       added++;
@@ -872,6 +876,9 @@ export async function providerRoutes(app: FastifyInstance) {
     const d = body.data;
 
     const patch: Partial<typeof schema.models.$inferInsert> = {};
+    if (getProvider(row.providerId)?.type === 'novelai' && (d.imageGen === false || d.vision === true || d.tools === true)) {
+      return reply.code(400).send({ error: 'NovelAI 仅用于绘图工坊，必须保持图像模型且关闭视觉和工具' });
+    }
     if (d.displayName !== undefined) patch.displayName = d.displayName || null;
     if (d.description !== undefined) patch.description = d.description?.trim() || null;
     if (d.vision !== undefined) patch.vision = d.vision ? 1 : 0;
@@ -968,7 +975,7 @@ export async function providerRoutes(app: FastifyInstance) {
       .orderBy(asc(schema.models.sortOrder), asc(schema.models.modelId))
       .all();
     const list = accessibleOnly(rows, req.user!)
-      .filter((r) => !r.imageGen || imageModelsAllowed(req.user!))
+      .filter((r) => r.providerType !== 'novelai' && (!r.imageGen || imageModelsAllowed(req.user!)))
       .map((r) => ({
       id: r.id,
       fallbackModelId: configuredModelFallback(r.id),

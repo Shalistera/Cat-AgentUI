@@ -3,6 +3,7 @@ import type { AdminProvider } from '../../types';
 export type ProviderType = AdminProvider['type'];
 
 export const TYPE_LABELS: Record<ProviderType, string> = {
+  novelai: 'NovelAI V5',
   openai: 'OpenAI 兼容',
   anthropic: 'Anthropic',
   gemini: 'Google Gemini',
@@ -10,6 +11,7 @@ export const TYPE_LABELS: Record<ProviderType, string> = {
 };
 
 export const DEFAULT_URLS: Record<ProviderType, string> = {
+  novelai: 'https://image.novelai.net',
   openai: 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com',
   gemini: 'https://generativelanguage.googleapis.com',

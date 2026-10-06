@@ -253,6 +253,13 @@
       "when": 1790391619996,
       "tag": "0035_retire_experimental_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1791273600000,
+      "tag": "0036_novelai_image_settings",
+      "breakpoints": true
     }
   ]
 }

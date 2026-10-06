@@ -228,7 +228,7 @@ export interface ModelInfo {
   vision: boolean; tools: boolean; imageGen: boolean; nativeSearch: boolean; isDefault: boolean;
   /** Admin default for the 联网搜索 toggle on new chats with this model. */
   defaultWebSearch: boolean;
-  providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini' | 'claude-code';
+  providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini' | 'claude-code' | 'novelai';
   /** Content-addressed URL of this model's own icon; wins over the provider avatar. */
   avatarUrl: string | null;
   /** Content-addressed URL of the provider's custom avatar; null = built-in mark. */
@@ -264,6 +264,7 @@ export interface ImageModel {
 }
 
 export interface ImageRecord {
+  generationSettings?: string | null;
   id: string; model: string | null; prompt: string; size: string | null;
   durationMs: number | null; createdAt: number; tokens?: number | null;
 }
@@ -425,7 +426,7 @@ export interface AdminProviderEndpoint {
 }
 
 export interface AdminProvider {
-  id: string; name: string; type: 'openai' | 'anthropic' | 'gemini' | 'claude-code';
+  id: string; name: string; type: 'openai' | 'anthropic' | 'gemini' | 'claude-code' | 'novelai';
   baseUrl: string | null; hasKey: boolean;
   useResponses: boolean; useVertex: boolean;
   vertexProject: string | null; vertexLocation: string | null; hasVertexSa: boolean;

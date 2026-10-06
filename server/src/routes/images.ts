@@ -21,11 +21,13 @@ import {
   MIME_BY_EXT, quotaErrorMessage, readMediaBase64, tryReserveStorage,
 } from '../storage.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
+import { novelaiSchema, NAI_MODELS } from '../novelai.js';
 
 const MAX_HISTORY_TURNS = 12;
 type ConvoTurn = { role: 'user' | 'assistant'; text: string };
 
 const generateSchema = z.object({
+  novelai: novelaiSchema.optional(),
   modelId: z.string(),
   prompt: z.string().min(1).max(4000),
   size: z.string().max(20).optional(),
@@ -83,6 +85,7 @@ function cleanupJobs() {
   }
 }
 export interface SavedImage {
+  generationSettings?: string | null;
   id: string; model: string; prompt: string; size: string | null;
   durationMs: number; createdAt: number; tokens: number | null;
 }
@@ -109,6 +112,7 @@ export async function saveGeneratedImage(opts: {
       model: opts.model,
       source: opts.source,
       prompt: opts.prompt,
+      generationSettings: opts.img.generationSettings ? JSON.stringify(opts.img.generationSettings) : null,
       size: opts.size,
       filename,
       byteSize: decoded.buffer.length,
@@ -122,6 +126,7 @@ export async function saveGeneratedImage(opts: {
   return {
     id, model: opts.model, prompt: opts.prompt, size: opts.size,
     durationMs: opts.durationMs, createdAt, tokens: opts.img.usage?.totalTokens ?? null,
+    generationSettings: opts.img.generationSettings ? JSON.stringify(opts.img.generationSettings) : null,
   };
 }
 
@@ -165,7 +170,7 @@ export async function imageRoutes(app: FastifyInstance) {
       ))
       .orderBy(schema.models.sortOrder)
       .all();
-    return accessibleOnly(rows, req.user!).map(({ accessMode: _, ...m }) => m);
+    return accessibleOnly(rows, req.user!).filter(m => m.providerType !== 'novelai' || NAI_MODELS.includes(m.modelId as typeof NAI_MODELS[number])).map(({ accessMode: _, ...m }) => m);
   });
 
   app.post('/api/images/generate', async (req, reply) => {
@@ -193,6 +198,11 @@ export async function imageRoutes(app: FastifyInstance) {
     const provider = db.select().from(schema.providers)
       .where(and(eq(schema.providers.id, model.providerId), eq(schema.providers.enabled, 1))).get();
     if (!provider) return reply.code(400).send({ error: '模型不可用' });
+    if (provider.type === 'novelai') {
+      if (!body.data.novelai || (n ?? 1) !== 1 || inputUploadIds?.length || history.length) {
+        return reply.code(400).send({ error: '请使用 NAI 创作弹窗；订阅模式仅支持单张文生图' });
+      }
+    } else if (body.data.novelai) return reply.code(400).send({ error: '该模型不支持 NAI 参数' });
     if (!canUseModel(req.user!, model.id)) {
       return reply.code(403).send({ error: '该模型未对你开放' });
     }
@@ -285,6 +295,7 @@ export async function imageRoutes(app: FastifyInstance) {
         try {
           const result = await adapter.generateImages!(toRuntimeConfig(provider), {
             model: model.modelId, prompt, size, quality, n: requestedN,
+            novelai: body.data.novelai,
             signal, inputImages, context,
             onRetry(state) { job.retry = state; },
             onFailover(info) {
