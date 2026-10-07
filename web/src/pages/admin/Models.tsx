@@ -153,12 +153,6 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
       <Td className="text-center"><Toggle checked={model.vision} disabled={busy} onChange={(v) => patch({ vision: v })} /></Td>
       <Td className="text-center"><Toggle checked={model.tools} disabled={busy} onChange={(v) => patch({ tools: v })} /></Td>
       <Td className="text-center"><Toggle checked={model.imageGen} disabled={busy} onChange={(v) => patch({ imageGen: v })} /></Td>
-      <Td className="text-center">
-        <Toggle
-          checked={model.defaultWebSearch} disabled={busy || model.imageGen}
-          onChange={(v) => patch({ defaultWebSearch: v }, v ? '新对话将默认开启联网搜索' : '已关闭默认联网')}
-        />
-      </Td>
       <Td><AccessCell model={model} reload={reload} /></Td>
       <Td className="text-center">
         <Button variant="ghost" size="iconXs"
@@ -223,7 +217,7 @@ export default function Models() {
       <div className="min-w-0">
         <h1 className="text-base font-semibold tracking-tight text-tx">模型设置</h1>
         <p className="mt-0.5 text-xs leading-relaxed text-tx3">
-          配置每个模型的能力、默认联网、可见性与默认模型;点击模型名或行尾按钮进入详细设置(模型描述、单价、使用限制、推理档位)。添加模型和启用开关在
+          配置每个模型的能力、可见性与默认模型;点击模型名或行尾按钮进入详细设置(模型描述、单价、使用限制、推理档位)。添加模型和启用开关在
           <Link to="/admin/providers" className="mx-0.5 text-acc hover:underline">模型服务</Link>
           栏目。
         </p>
@@ -282,7 +276,6 @@ export default function Models() {
                       <Th className="text-center">视觉</Th>
                       <Th className="text-center">工具</Th>
                       <Th className="text-center">绘图</Th>
-                      <Th className="text-center" title="新对话默认开启联网搜索(需要该模型可用搜索)">默认联网</Th>
                       <Th>可见性</Th>
                       <Th className="text-center">默认</Th>
                       <Th className="text-center">状态</Th>

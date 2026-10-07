@@ -202,7 +202,7 @@ function ChatSection() {
       <Section title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">
         <ToggleRow
           label="智能工具"
-          desc="允许助手使用管理员开放的能力:把长内容写成文件、在沙盒里运行代码、生成图片、调用技能或子代理。文件显示在「文件」标签里,生成的图片直接显示在对话中。"
+          desc="允许助手使用管理员开放的能力:联网搜索、把长内容写成文件、在沙盒里运行代码、生成图片、调用技能或子代理。文件显示在「文件」标签里,生成的图片直接显示在对话中。"
           checked={agentTools}
           onChange={(v) => { setAgentTools(v); void saveSetting('agentTools', v, setAgentTools); }}
         />

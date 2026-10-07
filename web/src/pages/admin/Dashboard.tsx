@@ -17,6 +17,7 @@ const KIND_LABELS: Record<string, string> = {
   translate: '翻译工坊',
   subagent: '子代理',
   compaction: '上下文压缩',
+  web_search: '联网搜索',
 };
 
 /** One empty-table placeholder, one voice — every card says it the same way. */

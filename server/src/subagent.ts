@@ -1,11 +1,11 @@
 // 子代理 — a nested model run the parent turn delegates a self-contained task
 // to. It gets its own context (only the task text, never the parent's
-// history), the same in-process tools (工作区 / 技能 / 项目资料 and, when
-// allowed, 沙盒), no MCP, no further nesting, and hands back plain text; any
+// history), the same in-process tools (工作区 / 技能 / 项目资料 / 联网搜索
+// and, when allowed, 沙盒), no MCP, no further nesting, and hands back plain text; any
 // files it wrote stay in the shared workspace.
 import type { AdapterMessage, AdapterMessagePart, ChatAdapter, ProviderRuntimeConfig, ToolDef } from './types.js';
 import { config } from './config.js';
-import { schema } from './db/index.js';
+import { schema, today } from './db/index.js';
 import { recordUsage } from './usage.js';
 import { StreamingSecretRedactor, redactSensitiveText } from './secrets.js';
 import { getAgentSettings, policyAllows, type AgentUser } from './agent-settings.js';
@@ -15,13 +15,14 @@ import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPro
 import { callProjectTool, isProjectTool } from './knowledge.js';
 import { buildProjectPrompt, projectFilesPrompt } from './routes/projects.js';
 import { historyBudget } from './compaction.js';
+import { WEB_SEARCH_TOOL, WEB_SEARCH_TOOL_DEF, runWebSearch, webSearchToolAvailable } from './web-search.js';
 
 export const SPAWN_SUBAGENT_TOOL = 'spawn_subagent';
 
 export const SUBAGENT_TOOL_DEFS: ToolDef[] = [
   {
     name: SPAWN_SUBAGENT_TOOL,
-    description: '把一个独立、边界清晰的子任务交给子代理完成(例如通读某份长文档或几份项目资料并提炼要点、按大纲写出某一章、跑一次数据分析并给结论)。子代理有同样的工作区/技能/沙盒工具和本项目的资料,但看不到本对话的历史,所以 task 必须自带全部背景:输入文件名或资料名、要求、期望产出(写到哪个文件、回复什么)。它返回文字结论;写好的文件留在工作区。',
+    description: '把一个独立、边界清晰的子任务交给子代理完成(例如通读某份长文档或几份项目资料并提炼要点、按大纲写出某一章、跑一次数据分析并给结论、就某个话题联网调研)。子代理有同样的工作区/技能/沙盒/联网搜索工具和本项目的资料,但看不到本对话的历史,所以 task 必须自带全部背景:输入文件名或资料名、要求、期望产出(写到哪个文件、回复什么)。它返回文字结论;写好的文件留在工作区。',
     parameters: {
       type: 'object',
       properties: {
@@ -99,7 +100,7 @@ function summarizeArgs(name: string, args: string): string {
 
 const VERB: Record<string, string> = {
   workspace_read: '读取', workspace_write: '写入', workspace_edit: '修改', workspace_delete: '删除', workspace_list: '查看工作区',
-  run_command: '执行', convert_file: '转换', load_skill: '加载技能', read_skill_file: '读取技能文件', project_search: '检索资料', project_read_doc: '读取资料',
+  run_command: '执行', convert_file: '转换', web_search: '搜索', load_skill: '加载技能', read_skill_file: '读取技能文件', project_search: '检索资料', project_read_doc: '读取资料',
 };
 
 export async function runSubagent(deps: SubagentDeps, task: string): Promise<SubagentResult> {
@@ -113,11 +114,13 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
   const sandboxOn = workspaceOn && s.allowSandbox && sandboxAvailableFor(user);
   const convertOn = workspaceOn && convertAvailableFor(user);
   const skillRows = policyAllows(agent.skills, user) ? skillsFor(user) : [];
+  const searchOn = webSearchToolAvailable(user);
   const tools: ToolDef[] = [];
   if (workspaceOn) tools.push(...WORKSPACE_TOOL_DEFS);
   if (sandboxOn) tools.push(...SANDBOX_TOOL_DEFS);
   if (convertOn) tools.push(CONVERT_TOOL_DEF);
   if (skillRows.length) tools.push(...SKILL_TOOL_DEFS);
+  if (searchOn) tools.push(WEB_SEARCH_TOOL_DEF);
   // 项目资料 the same way the parent turn gets them, sized for this model.
   const project = deps.projectId
     ? buildProjectPrompt(deps.projectId, user.id, { canUseTools: true, modelId: deps.model.modelId })
@@ -131,6 +134,7 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
   if (sandboxOn) blocks.push(sandboxProjectId ? `${buildSandboxPrompt()}\n${projectFilesPrompt(project.docCount)}` : buildSandboxPrompt());
   else if (convertOn) blocks.push(buildConvertPrompt());
   if (skillRows.length) blocks.push(buildSkillsPrompt(skillRows, sandboxOn));
+  if (searchOn) blocks.push(`[联网搜索]\n今天是 ${today()}。需要时效性信息或要核实的事实时用 web_search 搜索;结论里引用搜索结果时附上来源的完整 URL(Markdown 链接),上级会据此标注出处。`);
   const system = blocks.join('\n\n');
 
   const messages: AdapterMessage[] = [{ role: 'user', parts: [{ type: 'text', text: task }] }];
@@ -214,6 +218,8 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
           ({ result, isError } = callSkillTool(user, call.name, call.args));
         } else if (isProjectTool(call.name) && projectOn) {
           ({ result, isError } = callProjectTool(deps.projectId!, call.name, call.args));
+        } else if (call.name === WEB_SEARCH_TOOL && searchOn) {
+          ({ result, isError } = await runWebSearch({ user, chatId: deps.chatId, messageId: deps.parentMessageId, signal }, call.args));
         } else {
           result = `子代理不能使用工具「${call.name}」`; isError = true;
         }

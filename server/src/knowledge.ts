@@ -99,7 +99,17 @@ function occurrences(hay: string, needle: string, cap = 8): number {
   return n;
 }
 
-interface Hit { name: string; offset: number; text: string; docChars: number }
+/** A document's citation handle: the first 8 hex digits of its id. Stable
+    across turns (unlike a per-turn index), short enough for a model to copy,
+    and what `[名称](doc:ref)` links in replies point at. */
+export function docRef(id: string): string {
+  return id.replace(/-/g, '').slice(0, 8);
+}
+
+/** How the model is asked to cite project documents. */
+export const DOC_CITE_RULE = '引用资料时,在依据它的句子末尾用 Markdown 链接标注出处:[文档名](doc:ref),ref 是该文档的编号,例如「……须在 30 日内完成[合同.md](doc:1a2b3c4d)」。界面会把它显示成可点开的资料标签;只标注真正用到的资料,不要编造编号,不要在文末再罗列。';
+
+interface Hit { name: string; ref: string; offset: number; text: string; docChars: number }
 
 /** Ranks chunks by query terms weighted by rarity (idf) and term frequency,
     then by how much of the query a chunk covers. A project's corpus is capped
@@ -108,10 +118,10 @@ interface Hit { name: string; offset: number; text: string; docChars: number }
 function searchDocs(projectId: string, query: string): Hit[] {
   const { terms, grams } = queryTerms(query);
   if (!terms.length) return [];
-  const docs = rawDb.prepare('SELECT name, content FROM project_docs WHERE project_id = ? ORDER BY created_at')
-    .all(projectId) as { name: string; content: string }[];
+  const docs = rawDb.prepare('SELECT id, name, content FROM project_docs WHERE project_id = ? ORDER BY created_at')
+    .all(projectId) as { id: string; name: string; content: string }[];
   const chunks = docs.flatMap((d) => chunkDoc(d.content).map((c) => ({
-    ...c, name: d.name, lowerName: d.name.toLowerCase(), lower: c.text.toLowerCase(), docChars: d.content.length,
+    ...c, name: d.name, ref: docRef(d.id), lowerName: d.name.toLowerCase(), lower: c.text.toLowerCase(), docChars: d.content.length,
   })));
   if (!chunks.length) return [];
   const idf = (key: string) => {
@@ -143,7 +153,7 @@ function searchDocs(projectId: string, query: string): Hit[] {
     return { c, score: score * (0.5 + covered / terms.length) };
   }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
 
-  return scored.slice(0, SEARCH_LIMIT).map(({ c }) => ({ name: c.name, offset: c.offset, text: c.text, docChars: c.docChars }));
+  return scored.slice(0, SEARCH_LIMIT).map(({ c }) => ({ name: c.name, ref: c.ref, offset: c.offset, text: c.text, docChars: c.docChars }));
 }
 
 // ---- tools ----
@@ -192,7 +202,7 @@ export function callProjectTool(
     const parts: string[] = [];
     let used = 0;
     for (const h of hits) {
-      const block = `【${h.name} · 第 ${h.offset}–${h.offset + h.text.length} 字符 / 共 ${h.docChars} 字符】\n${h.text}`;
+      const block = `【${h.name} · ref ${h.ref} · 第 ${h.offset}–${h.offset + h.text.length} 字符 / 共 ${h.docChars} 字符】\n${h.text}`;
       if (used + block.length > SEARCH_RESULT_CAP) break;
       parts.push(block);
       used += block.length;
@@ -204,8 +214,8 @@ export function callProjectTool(
     const docName = typeof args.name === 'string' ? args.name.trim() : '';
     const offset = Number.isInteger(args.offset) && (args.offset as number) > 0 ? args.offset as number : 0;
     if (!docName) return { result: '缺少 name 参数', isError: true };
-    const rows = rawDb.prepare('SELECT name, content FROM project_docs WHERE project_id = ?')
-      .all(projectId) as { name: string; content: string }[];
+    const rows = rawDb.prepare('SELECT id, name, content FROM project_docs WHERE project_id = ?')
+      .all(projectId) as { id: string; name: string; content: string }[];
     const doc = rows.find((r) => r.name === docName)
       ?? rows.find((r) => r.name.includes(docName) || docName.includes(r.name));
     if (!doc) {
@@ -215,7 +225,7 @@ export function callProjectTool(
     const slice = doc.content.slice(offset, offset + READ_WINDOW);
     if (!slice) return { result: `offset ${offset} 超出文档长度(共 ${doc.content.length} 字符)`, isError: true };
     const end = offset + slice.length;
-    const header = `【${doc.name}】第 ${offset}–${end} 字符,共 ${doc.content.length} 字符`;
+    const header = `【${doc.name} · ref ${docRef(doc.id)}】第 ${offset}–${end} 字符,共 ${doc.content.length} 字符`;
     const footer = end < doc.content.length ? `\n\n(未完,继续读取请传 offset=${end})` : '\n\n(已到文档末尾)';
     return { result: `${header}\n\n${slice}${footer}`, isError: false };
   }

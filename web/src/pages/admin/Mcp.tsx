@@ -215,7 +215,7 @@ function ServerCard({ server, reload, onEdit }: {
   async function setSearch(v: boolean) {
     try {
       await api.put('/api/admin/mcp/search', { serverId: v ? server.id : null });
-      toast(v ? '已设为联网搜索源,输入框会出现「联网」开关' : '已取消联网搜索源', 'ok');
+      toast(v ? '已设为备用搜索源:Google 搜索不可用或本月额度用完时改用它' : '已取消备用搜索源', 'ok');
       await reload();
     } catch (e) { toast(errMsg(e), 'err'); }
   }
@@ -246,8 +246,8 @@ function ServerCard({ server, reload, onEdit }: {
           <Button
             variant={server.isSearch ? 'primary' : 'ghost'} size="sm"
             title={server.isSearch
-              ? '当前的联网搜索源,点击取消'
-              : '设为联网搜索源:用户输入框会出现「联网」开关,模型按需调用该服务器搜索'}
+              ? '当前的备用搜索源,点击取消'
+              : '设为备用搜索源:没有可用的 Gemini 服务商或本月 Google 搜索额度用完时,模型改用该服务器搜索(Agent 能力 → 联网搜索)'}
             onClick={() => setSearch(!server.isSearch)}
           >
             <Globe size={13} />{server.isSearch ? '搜索源' : '设为搜索源'}
@@ -346,7 +346,7 @@ function PresetCard({ preset, servers, reload }: {
       </div>
       <p className="text-xs leading-relaxed text-tx3">
         {preset.description} 服务器包会下载到本机数据目录,启动时不依赖网络;API Key 加密保存,不回显。
-        {preset.search && !deployed && ' 部署后会自动设为联网搜索源。'}
+        {preset.search && !deployed && ' 部署后会自动设为备用搜索源。'}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Input

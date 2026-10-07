@@ -270,11 +270,11 @@ try {
   // The reported wording receives a per-turn intent hint without changing
   // Vertex native grounding or the set of agent tools.
   db.update(schema.providers).set({ useVertex: 1, vertexProject: 'fixture', vertexLocation: 'global' }).where(eq(schema.providers.id, 'provider')).run();
-  const native = await turn([lineSample], 'native', { text: reportedPrompt, webSearch: true });
+  const native = await turn([lineSample], 'native', { text: reportedPrompt });
   assert.equal(native.charts.length, 1);
   assert(latestPrompt.includes('[本轮图表意图]') && latestPrompt.includes('优先绘制时间曲线'));
   assert(upstreamRequests.every((r) => r.webSearch === true));
-  assert(upstreamRequests.every((r) => !r.tools.some((t) => t.name === 'google_search')));
+  assert(upstreamRequests.every((r) => !r.tools.some((t) => t.name === 'web_search')));
   assert(upstreamRequests[0].tools.some((t) => t.name === 'compare_data'));
   assert.deepEqual(upstreamRequests[0].tools.find((t) => t.name === 'compare_data').parameters.properties.chart.enum, ['line']);
   assert(!upstreamRequests[1].tools.some((t) => t.name === 'compare_data'), 'hide the chart tool after successful rendering');

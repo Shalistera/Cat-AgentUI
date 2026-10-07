@@ -4,7 +4,7 @@ import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { db, rawDb, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
-import { PROJECT_TOOL_DEFS, projectInjectBudget, removeProjectFiles } from '../knowledge.js';
+import { DOC_CITE_RULE, PROJECT_TOOL_DEFS, docRef, projectInjectBudget, removeProjectFiles } from '../knowledge.js';
 import {
   accessibleProjects, canEditProject, projectAccess, projectMemberCounts, projectMembers,
   replaceProjectMembers, userDirectory, type ProjectRole,
@@ -55,13 +55,13 @@ function totalChars(projectId: string): number {
 
 /** One manifest line: size, the opening line and the first headings — enough
     for the model to judge whether a document is worth fetching. */
-function manifestLine(d: { name: string; chars: number; content: string }): string {
+function manifestLine(d: { id: string; name: string; chars: number; content: string }): string {
   const lines = d.content.split('\n').map((l) => l.trim()).filter(Boolean);
   const opening = (lines[0] ?? '').replace(/^#+\s*/, '').slice(0, 60);
   const headings = lines.slice(1).filter((l) => /^#{1,3}\s/.test(l)).slice(0, 4)
     .map((l) => l.replace(/^#+\s*/, '').slice(0, 24));
   const hint = [opening, headings.length ? `目录:${headings.join(' / ')}` : ''].filter(Boolean).join(' | ');
-  return `- ${d.name}(${d.chars.toLocaleString()} 字符)${hint ? `:${hint}` : ''}`;
+  return `- ${d.name}(ref ${docRef(d.id)},${d.chars.toLocaleString()} 字符)${hint ? `:${hint}` : ''}`;
 }
 
 export interface ProjectTurnContext {
@@ -99,20 +99,20 @@ export function buildProjectPrompt(projectId: string, userId: string, opts: { ca
   }
   const loaded = docs.filter((d) => whole.has(d.id));
   const listed = docs.filter((d) => !whole.has(d.id));
-  const documents = loaded.map((d) => `<document name=${JSON.stringify(d.name)}>\n${d.content}\n</document>`).join('\n\n');
+  const documents = loaded.map((d) => `<document name=${JSON.stringify(d.name)} ref="${docRef(d.id)}">\n${d.content}\n</document>`).join('\n\n');
 
   let tools: ToolDef[] | null = null;
   if (!listed.length) {
-    blocks.push(`[项目资料]\n以下是本项目的全部参考文档(已整篇载入)。回答与项目相关的问题时,优先依据这些资料;资料没有覆盖的内容,如实说明;引用时注明文档名。\n\n${documents}`);
+    blocks.push(`[项目资料]\n以下是本项目的全部参考文档(已整篇载入)。回答与项目相关的问题时,优先依据这些资料;资料没有覆盖的内容,如实说明。${DOC_CITE_RULE}\n\n${documents}`);
   } else if (!opts.canUseTools) {
-    blocks.push(`[项目资料]\n以下是本项目的部分参考文档。回答与项目相关的问题时,优先依据这些资料;资料没有覆盖的内容,如实说明。\n\n${documents}`
+    blocks.push(`[项目资料]\n以下是本项目的部分参考文档。回答与项目相关的问题时,优先依据这些资料;资料没有覆盖的内容,如实说明。${DOC_CITE_RULE}\n\n${documents}`
       + `\n\n(资料过多,另有 ${listed.length} 个文档未能载入:${listed.map((d) => d.name).join('、')})`);
   } else {
     if (loaded.length) {
-      blocks.push(`[项目资料]\n以下 ${loaded.length} 个文档已整篇载入。回答与项目相关的问题时,优先依据这些资料;引用时注明文档名。\n\n${documents}`);
+      blocks.push(`[项目资料]\n以下 ${loaded.length} 个文档已整篇载入。回答与项目相关的问题时,优先依据这些资料。${DOC_CITE_RULE}\n\n${documents}`);
     }
     blocks.push(
-      `[项目资料清单]\n${loaded.length ? `另有 ${listed.length} 个文档` : `本项目的 ${listed.length} 个参考文档`}篇幅较大,只列出清单、内容未载入。问题可能涉及它们时,先用 project_search 检索(结果带文档名和字符位置),需要完整上下文再用 project_read_doc 从对应位置读取原文;引用时注明文档名。与资料无关的问题不必调用。\n`
+      `[项目资料清单]\n${loaded.length ? `另有 ${listed.length} 个文档` : `本项目的 ${listed.length} 个参考文档`}篇幅较大,只列出清单、内容未载入。问题可能涉及它们时,先用 project_search 检索(结果带文档名、ref 和字符位置),需要完整上下文再用 project_read_doc 从对应位置读取原文。与资料无关的问题不必调用。${loaded.length ? '引用格式同上。' : DOC_CITE_RULE}\n`
       + listed.map(manifestLine).join('\n'),
     );
     tools = PROJECT_TOOL_DEFS;
@@ -309,6 +309,28 @@ export async function projectRoutes(app: FastifyInstance) {
     db.update(schema.projects).set({ updatedAt: now() }).where(eq(schema.projects.id, id)).run();
     const doc = db.select().from(schema.projectDocs).where(eq(schema.projectDocs.id, docId)).get()!;
     return { doc: docMeta(doc) };
+  });
+
+  // A `doc:ref` citation in a reply → the document it names, among the
+  // projects this person can open. Replies are rendered outside their chat
+  // too (收藏, 工作区 previews), so the ref alone has to be enough.
+  app.get('/api/project-docs/:ref', async (req, reply) => {
+    requireAuth(req, reply);
+    const { ref } = req.params as { ref: string };
+    if (!/^[0-9a-f]{8}$/i.test(ref)) return reply.code(404).send({ error: '资料不存在' });
+    const candidates = db.select({ id: schema.projectDocs.id, projectId: schema.projectDocs.projectId, name: schema.projectDocs.name })
+      .from(schema.projectDocs).where(sql`replace(${schema.projectDocs.id}, '-', '') LIKE ${`${ref.toLowerCase()}%`}`).all();
+    for (const d of candidates) {
+      const access = projectAccess(d.projectId, req.user!.id);
+      if (!access) continue;
+      return {
+        doc: { id: d.id, projectId: d.projectId, name: d.name },
+        project: { id: access.project.id, name: access.project.name },
+        canEdit: canEditProject(access.role),
+        maxDocChars: PROJECT_LIMITS.maxDocChars,
+      };
+    }
+    return reply.code(404).send({ error: '资料不存在,或你没有这个项目的访问权限' });
   });
 
   app.get('/api/projects/:id/docs/:docId', async (req, reply) => {

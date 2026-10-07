@@ -1,4 +1,4 @@
-// Agent 能力 master switches: 工作区, 图表对比, 图片生成, 技能, 子代理. (沙盒 keeps its own richer
+// Agent 能力 master switches: 工作区, 图表对比, 图片生成, 技能, 子代理, 联网搜索. (沙盒 keeps its own richer
 // settings in sandbox/settings.ts.) One JSON blob in app_settings so the admin
 // page saves it atomically; every chat turn reads it fresh.
 import { getSetting, setSetting } from './db/index.js';
@@ -36,6 +36,24 @@ export interface AgentSettings {
     /** May a subagent use run_command (when the sandbox itself is on)? */
     allowSandbox: boolean;
   };
+  webSearch: AccessPolicy & {
+    /** Gemini provider the searches run on; '' = first enabled one, Vertex preferred. */
+    providerId: string;
+    /** Model id on that provider, e.g. 'gemini-3.5-flash-lite'. */
+    model: string;
+    /** Gemini provider for the fallback model; '' = the search provider. */
+    fallbackProviderId: string;
+    /** Tried when the search model fails or times out; '' = none. */
+    fallbackModel: string;
+    /** Last resort: the search MCP designated on the MCP page (Brave). */
+    mcpFallback: boolean;
+    /** Google-grounded queries per calendar month; past it only the MCP is tried. 0 = unlimited. */
+    monthlyLimit: number;
+    /** web_search calls per ordinary user per server-local day; 0 = unlimited. */
+    dailyLimit: number;
+    /** The same for admins; 0 = unlimited. */
+    adminDailyLimit: number;
+  };
 }
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -46,6 +64,13 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   subagent: {
     enabled: false, accessMode: 'shared', allowedUserIds: [],
     modelId: '', maxPerTurn: 4, maxIterations: 12, timeoutSec: 300, maxResultChars: 12_000, allowSandbox: true,
+  },
+  // 5000 = Google's monthly free allowance for grounded search on Gemini 3.x.
+  webSearch: {
+    enabled: true, accessMode: 'shared', allowedUserIds: [],
+    providerId: '', model: 'gemini-3.5-flash-lite',
+    fallbackProviderId: '', fallbackModel: 'gemini-3.1-flash-lite', mcpFallback: true,
+    monthlyLimit: 5000, dailyLimit: 100, adminDailyLimit: 0,
   },
 };
 
@@ -71,6 +96,7 @@ export function normalizeAgentSettings(raw: DeepPartial<AgentSettings> | null | 
   const d = DEFAULT_AGENT_SETTINGS;
   const sub = raw?.subagent ?? {};
   const images = raw?.imageGeneration ?? {};
+  const search = raw?.webSearch ?? {};
   return {
     dataComparison: policy(raw?.dataComparison as Partial<AccessPolicy>, d.dataComparison),
     workspace: policy(raw?.workspace as Partial<AccessPolicy>, d.workspace),
@@ -92,6 +118,17 @@ export function normalizeAgentSettings(raw: DeepPartial<AgentSettings> | null | 
       maxResultChars: clamp(sub.maxResultChars, d.subagent.maxResultChars, 1000, 100_000),
       allowSandbox: sub.allowSandbox === undefined ? d.subagent.allowSandbox : !!sub.allowSandbox,
     },
+    webSearch: {
+      ...policy(search as Partial<AccessPolicy>, d.webSearch),
+      providerId: typeof search.providerId === 'string' ? search.providerId.slice(0, 64) : d.webSearch.providerId,
+      model: typeof search.model === 'string' && search.model.trim() ? search.model.trim().slice(0, 128) : d.webSearch.model,
+      fallbackProviderId: typeof search.fallbackProviderId === 'string' ? search.fallbackProviderId.slice(0, 64) : d.webSearch.fallbackProviderId,
+      fallbackModel: typeof search.fallbackModel === 'string' ? search.fallbackModel.trim().slice(0, 128) : d.webSearch.fallbackModel,
+      mcpFallback: search.mcpFallback === undefined ? d.webSearch.mcpFallback : !!search.mcpFallback,
+      monthlyLimit: clamp(search.monthlyLimit, d.webSearch.monthlyLimit, 0, 10_000_000),
+      dailyLimit: clamp(search.dailyLimit, d.webSearch.dailyLimit, 0, 100_000),
+      adminDailyLimit: clamp(search.adminDailyLimit, d.webSearch.adminDailyLimit, 0, 100_000),
+    },
   };
 }
 
@@ -107,6 +144,7 @@ export function saveAgentSettings(patch: DeepPartial<AgentSettings>): AgentSetti
     skills: { ...cur.skills, ...(patch.skills ?? {}) },
     imageGeneration: { ...cur.imageGeneration, ...(patch.imageGeneration ?? {}) },
     subagent: { ...cur.subagent, ...(patch.subagent ?? {}) },
+    webSearch: { ...cur.webSearch, ...(patch.webSearch ?? {}) },
   } as DeepPartial<AgentSettings>);
   setSetting(AGENT_SETTINGS_KEY, next);
   return next;

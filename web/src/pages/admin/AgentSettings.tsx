@@ -80,7 +80,7 @@ export default function AgentSettingsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-base font-semibold tracking-tight text-tx">Agent 能力</h1>
-          <p className="mt-0.5 text-xs text-tx3">工作区、图表对比、图片生成、技能、子代理的总开关与访问范围。沙盒(命令执行)的开关、限额与运行库在<Link to="/admin/sandbox" className="mx-0.5 text-acc hover:underline">沙盒</Link>页;技能内容在<Link to="/admin/skills" className="mx-0.5 text-acc hover:underline">技能</Link>页。</p>
+          <p className="mt-0.5 text-xs text-tx3">工作区、联网搜索、图表对比、图片生成、技能、子代理的总开关与访问范围。沙盒(命令执行)的开关、限额与运行库在<Link to="/admin/sandbox" className="mx-0.5 text-acc hover:underline">沙盒</Link>页;技能内容在<Link to="/admin/skills" className="mx-0.5 text-acc hover:underline">技能</Link>页。</p>
         </div>
         <Button variant="primary" size="sm" disabled={!dirty || saving} onClick={save}>{saving && <Spinner className="h-3.5 w-3.5" />}保存更改</Button>
       </div>
@@ -88,6 +88,62 @@ export default function AgentSettingsPage() {
       <Card title="工作区" desc="每个对话一个私有文件目录,模型通过 workspace_* 工具读写;关闭后输入栏不再出现「工作区」按钮,已有文件保留但模型不可用。沙盒、子代理都建立在工作区之上。">
         <AccessEditor value={s.workspace} onChange={(v) => setS({ ...s, workspace: v })} users={users} disabled={saving}
           enabledLabel="允许使用工作区" enabledDesc={`每对话上限 ${fmtMb(data.limits.workspaceBytes)} / ${data.limits.workspaceFiles} 个文件,单文件 ${fmtMb(data.limits.workspaceFileBytes)}(环境变量 MAX_WORKSPACE_*)`} />
+      </Card>
+
+      <Card title="联网搜索" desc="和 ChatGPT、Claude、Gemini 官方应用一样没有开关:模型自己判断要不要搜。Vertex 上的 Gemini 直接用原生 Google 搜索;其他模型(本地 Claude Code、OpenAI 兼容等)和子代理通过内置的 web_search 工具搜索。每次搜索依次尝试:搜索模型 → 备用模型 → 备用搜索源(MCP),前一步失败或超过 20 秒就换下一步;失败过的模型会暂停使用 2 分钟。">
+        <div className="space-y-4">
+          <AccessEditor value={s.webSearch} onChange={(v) => setS({ ...s, webSearch: { ...s.webSearch, ...v } })} users={users} disabled={saving}
+            enabledLabel="允许联网搜索" enabledDesc="默认开启;需要用户开启智能工具,当前聊天模型支持工具调用" />
+          {s.webSearch.enabled && (() => {
+            const ws = s.webSearch;
+            const set = (patch: Partial<typeof ws>) => setS({ ...s, webSearch: { ...ws, ...patch } });
+            const providerName = (id: string | null) => data.webSearch.providers.find((p) => p.id === id)?.name ?? '—';
+            const providerOptions = data.webSearch.providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}{p.vertex ? ' · Vertex' : ''}{p.enabled ? '' : '(已停用)'}</option>
+            ));
+            const mcp = data.webSearch.fallbackMcp;
+            return (
+              <div className="space-y-5">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="搜索模型" hint="只负责搜索和整理要点,推荐便宜快速的 Flash-Lite;回答仍由聊天模型完成">
+                    <Input value={ws.model} onChange={(e) => set({ model: e.target.value })} placeholder="gemini-3.5-flash-lite" disabled={saving} />
+                  </Field>
+                  <Field label="搜索模型的服务商" hint={data.webSearch.providers.length ? '自动 = 第一个启用的 Gemini 服务商,优先 Vertex' : '还没有 Gemini 服务商,只能使用备用搜索源'}>
+                    <Select value={ws.providerId} onChange={(e) => set({ providerId: e.target.value })} disabled={saving}>
+                      <option value="">自动{!ws.providerId && data.webSearch.activeProviderId ? `(当前:${providerName(data.webSearch.activeProviderId)})` : ''}</option>
+                      {providerOptions}
+                    </Select>
+                  </Field>
+                  <Field label="备用模型" hint="搜索模型出错或超时时改用;留空表示不用。gemini-3.1-flash-lite 更便宜,但约一半回答不带来源链接">
+                    <Input value={ws.fallbackModel} onChange={(e) => set({ fallbackModel: e.target.value })} placeholder="gemini-3.1-flash-lite" disabled={saving} />
+                  </Field>
+                  <Field label="备用模型的服务商" hint="选另一个服务商(如 AI Studio)可以在 Vertex 整体出问题时继续用 Google 搜索">
+                    <Select value={ws.fallbackProviderId} onChange={(e) => set({ fallbackProviderId: e.target.value })} disabled={saving || !ws.fallbackModel}>
+                      <option value="">与搜索模型相同</option>
+                      {providerOptions}
+                    </Select>
+                  </Field>
+                </div>
+                <ToggleRow label="最后改用备用搜索源(MCP)"
+                  desc={mcp
+                    ? `Google 搜索都失败,或本月额度用完时,改用「${mcp.name}」${mcp.enabled ? '' : '(该服务器已停用,不会生效)'}。在 MCP 页更换。`
+                    : '还没有指定备用搜索源:在 MCP 页部署 Brave Search 或把某个服务器「设为搜索源」后生效。'}
+                  checked={ws.mcpFallback} onChange={(v) => set({ mcpFallback: v })} disabled={saving} />
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Field label="每月 Google 搜索上限(次)" hint={`web_search 本月已用 ${data.webSearch.monthQueries} 次(不含 Gemini 对话自带的原生搜索,两者共用 Google 的免费额度)。Gemini 3.x 每月共享 5000 次免费,超出约 $14 / 1000 次;一次提问常会搜 2–3 次。到达上限后只用备用搜索源;0 为不限。`}>
+                    {num(ws.monthlyLimit, (n) => set({ monthlyLimit: n }), 0, 10000000, 'max-w-40')}
+                  </Field>
+                  <Field label="普通用户每日上限(次)" hint="每人每天 web_search 调用次数,按服务器时间 0 点重置;0 为不限。">
+                    {num(ws.dailyLimit, (n) => set({ dailyLimit: n }), 0, 100000)}
+                  </Field>
+                  <Field label="管理员每日上限(次)" hint="同上,作用于管理员账号;0 为不限。">
+                    {num(ws.adminDailyLimit, (n) => set({ adminDailyLimit: n }), 0, 100000)}
+                  </Field>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
       </Card>
 
       <Card title="图表对比" desc="比较同一指标、同一单位的数值,支持柱状图和多曲线折线图,可切换为数据表。数据来源和数值始终可见。">
@@ -140,7 +196,7 @@ export default function AgentSettingsPage() {
           enabledLabel="允许使用技能" enabledDesc="模型只看到技能名称与用途,任务匹配时才加载完整说明" />
       </Card>
 
-      <Card title="子代理" desc="模型可用 spawn_subagent 把独立子任务委派给一个看不到对话历史的子代理:同样的工作区 / 技能 / 沙盒工具,不能再嵌套,不能用 MCP;结果以文字回给主对话,文件留在工作区。每次委派都是一次完整的模型调用,token 记入发起用户(用量看板里的「子代理」)。">
+      <Card title="子代理" desc="模型可用 spawn_subagent 把独立子任务委派给一个看不到对话历史的子代理:同样的工作区 / 技能 / 沙盒 / 联网搜索工具,不能再嵌套,不能用 MCP;结果以文字回给主对话,文件留在工作区。每次委派都是一次完整的模型调用,token 记入发起用户(用量看板里的「子代理」)。">
         <div className="space-y-4">
           <AccessEditor value={s.subagent} onChange={(v) => setS({ ...s, subagent: { ...s.subagent, ...v } })} users={users} disabled={saving}
             enabledLabel="允许使用子代理" enabledDesc="默认关闭;需要工作区同时开启" />

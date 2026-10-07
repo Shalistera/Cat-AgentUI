@@ -319,7 +319,6 @@ export interface ChatHandoffPayload {
   attachments: PendingAttachment[];
   modelId: string | null;
   settings: ComposerSettings;
-  webSearch: boolean;
   mcpSelected: string[];
 }
 export const chatHandoff: { payload: ChatHandoffPayload | null } = { payload: null };

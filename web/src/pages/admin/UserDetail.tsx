@@ -26,6 +26,7 @@ const KIND_LABELS: Record<string, string> = {
   ppt: 'PPT 工坊',
   subagent: '子代理',
   compaction: '上下文压缩',
+  web_search: '联网搜索',
 };
 
 /**

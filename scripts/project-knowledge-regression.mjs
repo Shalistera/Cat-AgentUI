@@ -58,29 +58,30 @@ try {
   // 128K model: only what fits loads whole, smallest first; the rest is a manifest + tools.
   const small = buildProjectPrompt(projectId, owner, { canUseTools: true, modelId: 'gpt-4o-mini' });
   assert(small.block.startsWith('[项目指令]\n用中文回答'));
-  assert(small.block.includes('<document name="简介.md">'));
-  assert(!small.block.includes('<document name="员工手册.md">'));
-  assert(small.block.includes('[项目资料清单]') && small.block.includes('- 员工手册.md('), small.block.slice(0, 600));
+  assert(small.block.includes('<document name="简介.md" ref="dsmall">'), 'documents carry their citation ref');
+  assert(!small.block.includes('<document name="员工手册.md"'));
+  assert(small.block.includes('[项目资料清单]') && small.block.includes('- 员工手册.md(ref dbig,'), small.block.slice(0, 600));
+  assert(small.block.includes('[文档名](doc:ref)'), 'citation format is explained');
   assert(small.block.includes('目录:差旅 / Budget'), 'manifest lists headings');
   assert.deepEqual(small.tools.map((t) => t.name), ['project_search', 'project_read_doc']);
   assert.equal(small.docCount, 3);
   // 1M model: everything fits → no manifest, no tools.
   const large = buildProjectPrompt(projectId, owner, { canUseTools: true, modelId: 'claude-opus-5-5' });
-  assert(large.block.includes('全部参考文档') && large.block.includes('<document name="员工手册.md">'));
+  assert(large.block.includes('全部参考文档') && large.block.includes('<document name="员工手册.md" ref="dbig">') && large.block.includes('(doc:ref)'));
   assert.equal(large.tools, null);
   // Same inputs, same bytes: the block is a cacheable prefix.
   assert.equal(buildProjectPrompt(projectId, owner, { canUseTools: true, modelId: 'gpt-4o-mini' }).block, small.block);
   // No tools: at least the old 100K allowance, and a note for what was left out.
   const noTools = buildProjectPrompt(projectId, owner, { canUseTools: false, modelId: 'gpt-4o-mini' });
   assert.equal(noTools.tools, null);
-  assert(noTools.block.includes('<document name="简介.md">'));
+  assert(noTools.block.includes('<document name="简介.md" ref="dsmall">'));
   // No access, nothing.
   assert.deepEqual(buildProjectPrompt(projectId, 'u-other', { canUseTools: true, modelId: 'gpt-4o-mini' }), { block: null, tools: null, docCount: 0 });
 
   // Search: space-separated two-character Chinese terms, offsets that point at the original text.
   const hit = callProjectTool(projectId, 'project_search', JSON.stringify({ query: '差旅 报销 标准' }));
   assert(!hit.isError && hit.result.includes('每天300元'), hit.result.slice(0, 300));
-  const m = hit.result.match(/【员工手册\.md · 第 (\d+)–(\d+) 字符/);
+  const m = hit.result.match(/【员工手册\.md · ref dbig · 第 (\d+)–(\d+) 字符/);
   assert(m, hit.result.slice(0, 200));
   assert(bigDoc.slice(Number(m[1]), Number(m[2])).includes('差旅费报销标准'), 'offsets point into the document');
   // No spaces and a different wording still matches through two-character pieces.
@@ -88,7 +89,7 @@ try {
   assert(callProjectTool(projectId, 'project_search', JSON.stringify({ query: 'budget approval' })).result.includes('go to finance'));
   assert(callProjectTool(projectId, 'project_search', JSON.stringify({ query: '量子纠缠' })).result.startsWith('没有找到'));
   const read = callProjectTool(projectId, 'project_read_doc', JSON.stringify({ name: '员工手册.md', offset: Number(m[1]) }));
-  assert(read.result.includes('每天300元') && read.result.includes(`第 ${m[1]}–`));
+  assert(read.result.includes('每天300元') && read.result.includes(`【员工手册.md · ref dbig】第 ${m[1]}–`));
 
   // Sandbox copies: sanitized unique names, reused while unchanged, a new version after an edit.
   const dir = projectFilesDir(projectId);
@@ -182,13 +183,29 @@ try {
   const events = await stream.text();
   assert(events.includes('完成:差旅费每天300元'), events.slice(-800));
 
-  assert(mainRequests[0].tools.includes('project_search') && mainRequests[0].system.includes('<document name="简介.md">'));
+  assert(mainRequests[0].tools.includes('project_search') && mainRequests[0].system.includes('<document name="简介.md" ref='));
   const sub = subRequests[0];
   assert(sub, `sub-agent never ran\n${logs.slice(-1500)}`);
   assert(sub.tools.includes('project_search') && sub.tools.includes('project_read_doc'), `sub-agent tools: ${sub.tools}`);
-  assert(sub.system.includes('[项目资料清单]') && sub.system.includes('员工手册.md') && sub.system.includes('<document name="简介.md">'));
+  assert(sub.system.includes('[项目资料清单]') && sub.system.includes('员工手册.md') && sub.system.includes('<document name="简介.md" ref='));
   assert(subRequests[1].toolMessages.some((t) => String(t.content).includes('每天300元')), 'sub-agent search ran against the project');
-  console.log('Project knowledge regression passed: context-sized loading, manifest + tools, CJK search with offsets, sandbox copies, sub-agent access.');
+  // A doc:ref citation resolves to the document for people who can open the project, and to nothing for others.
+  const docs = detail.docs;
+  const ref = docs[0].id.replace(/-/g, '').slice(0, 8);
+  assert(mainRequests[0].system.includes(`ref="${docs.find((d) => d.name === '简介.md').id.replace(/-/g, '').slice(0, 8)}"`));
+  const resolved = await api('GET', `/api/project-docs/${ref}`);
+  assert.equal(resolved.status, 200, JSON.stringify(resolved.data));
+  assert.deepEqual(resolved.data.doc, { id: docs[0].id, projectId: project.id, name: docs[0].name });
+  assert.equal(resolved.data.canEdit, true);
+  assert.equal(resolved.data.project.name, '测试项目');
+  assert.equal((await api('GET', '/api/project-docs/zzzzzzzz')).status, 404);
+  assert.equal((await api('POST', '/api/admin/users', { username: 'outsider', password: 'project-test-password', role: 'user' })).status, 200);
+  const ownerCookie = cookie;
+  cookie = undefined;
+  assert.equal((await api('POST', '/api/auth/login', { username: 'outsider', password: 'project-test-password' })).status, 200);
+  assert.equal((await api('GET', `/api/project-docs/${ref}`)).status, 404, 'private project docs stay hidden');
+  cookie = ownerCookie;
+  console.log('Project knowledge regression passed: context-sized loading, manifest + tools, CJK search with offsets, citation refs + resolve, sandbox copies, sub-agent access.');
 } catch (err) {
   console.error(err);
   if (logs) console.error(`--- server log ---\n${logs.slice(-2000)}`);

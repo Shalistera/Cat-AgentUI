@@ -330,6 +330,32 @@ h1, h2, h3, h4 { letter-spacing: -0.011em; }
 .md a.cite-chip:hover { background: var(--color-acc); color: var(--color-accfg); text-decoration: none; }
 .md a.cite-chip + a.cite-chip { margin-left: 0.1rem; }
 
+/* 项目资料 cited in a reply: [名称](doc:ref) → a chip that opens the document. */
+.doc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 16rem;
+  margin: 0 0.15rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.35rem;
+  font-size: 0.78em;
+  font-weight: 500;
+  line-height: 1.35;
+  vertical-align: 0.05em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-acc);
+  background: color-mix(in srgb, var(--color-acc) 10%, transparent);
+  cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+}
+.doc-chip svg { flex-shrink: 0; }
+.doc-chip:hover:not(:disabled) { background: var(--color-acc); color: var(--color-accfg); }
+.doc-chip:disabled { cursor: default; }
+.doc-chip-missing { color: var(--color-tx3); background: var(--color-bg2); cursor: default; }
+
 .md blockquote {
   border-left: 2px solid var(--color-line2);
   padding: .1em 0 .1em 1em;

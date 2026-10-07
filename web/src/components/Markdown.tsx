@@ -35,6 +35,7 @@ import { MermaidBlock } from './Mermaid';
 import { useLightbox } from './Lightbox';
 import { WorkspaceFileLink } from './WorkspaceFileLink';
 import { resolveWorkspaceLink } from '../workspaceLinks';
+import { ProjectDocLink } from './ProjectDocDialog';
 
 for (const [name, lang] of Object.entries({
   javascript, typescript, python, java, c, cpp, csharp, go, rust, json, yaml,
@@ -301,14 +302,18 @@ export const Markdown = memo(function Markdown({ text, streaming = false, citati
         // all the time; the plugin relaxes the rule for CJK text without touching Latin behaviour.
         remarkPlugins={[remarkGfm, remarkMath, remarkCjkFriendly, remarkBrToBreak]}
         rehypePlugins={[[rehypeKatex, { strict: false }]]}
-        // keep our internal cite: scheme; everything else goes through the default sanitiser
-        urlTransform={(url) => (url.startsWith('cite:') ? url : defaultUrlTransform(url))}
+        // keep our internal cite: / doc: schemes; everything else goes through the default sanitiser
+        urlTransform={(url) => (url.startsWith('cite:') || /^doc:[0-9a-f]{8}$/i.test(url) ? url : defaultUrlTransform(url))}
         components={{
           pre: MarkdownPre,
           a({ children, href }) {
             if (typeof href === 'string' && href.startsWith('cite:') && citations) {
               const n = Number(href.slice(5));
               return Number.isInteger(n) && n > 0 ? <CiteChip n={n} citations={citations} /> : null;
+            }
+            // 项目资料: `[名称](doc:ref)` becomes a chip that opens the document.
+            if (typeof href === 'string' && /^doc:[0-9a-f]{8}$/i.test(href)) {
+              return <ProjectDocLink refId={href.slice(4)}>{children}</ProjectDocLink>;
             }
             // MCP search: the model links the sentence to a result URL; a link
             // that matches one of the sources becomes the same numbered chip.

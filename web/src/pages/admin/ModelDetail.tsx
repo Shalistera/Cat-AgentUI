@@ -521,7 +521,7 @@ export default function ModelDetail() {
           </div>
         </div>
         <p className="text-xs leading-relaxed text-tx3">
-          能力开关、默认联网、可见性等基础项仍在模型设置列表页;这里放需要展开编辑的详细配置。
+          能力开关、可见性等基础项仍在模型设置列表页;这里放需要展开编辑的详细配置。
         </p>
       </div>
 

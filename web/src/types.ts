@@ -623,10 +623,23 @@ export interface AgentSettings {
   subagent: AccessPolicy & {
     modelId: string; maxPerTurn: number; maxIterations: number; timeoutSec: number; maxResultChars: number; allowSandbox: boolean;
   };
+  webSearch: AccessPolicy & {
+    providerId: string; model: string; fallbackProviderId: string; fallbackModel: string; mcpFallback: boolean;
+    monthlyLimit: number; dailyLimit: number; adminDailyLimit: number;
+  };
 }
 export interface AgentAdminData {
   settings: AgentSettings;
   limits: { workspaceBytes: number; workspaceFileBytes: number; workspaceFiles: number; toolIterations: number };
+  webSearch: {
+    /** Google-grounded queries run this calendar month. */
+    monthQueries: number;
+    /** Provider searches actually run on (the pick, or the auto choice). */
+    activeProviderId: string | null;
+    /** The search MCP designated on the MCP page, if any. */
+    fallbackMcp: { name: string; enabled: boolean } | null;
+    providers: { id: string; name: string; enabled: boolean; vertex: boolean }[];
+  };
 }
 /** /api/agent/capabilities — what this person's chats may use right now. */
 export interface AgentCapabilities { agentTools: boolean; dataComparison: boolean; workspace: boolean; sandbox: boolean; convert: boolean; sandboxConfirm: boolean; skills: number; subagent: boolean; imageGeneration: boolean }

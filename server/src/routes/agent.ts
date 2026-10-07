@@ -9,6 +9,8 @@ import { convertAvailableFor, sandboxAvailableFor } from '../sandbox/tool.js';
 import { getSandboxSettings } from '../sandbox/settings.js';
 import { skillsFor } from '../skills.js';
 import { imageToolModelsFor } from '../image-tool.js';
+import { monthlySearchQueries, searchProvider } from '../web-search.js';
+import { getSearchServerId } from './mcp.js';
 import { db, schema } from '../db/index.js';
 import { eq, inArray } from 'drizzle-orm';
 import { getAdapter } from '../providers/index.js';
@@ -47,6 +49,18 @@ export async function agentRoutes(app: FastifyInstance) {
         workspaceBytes: config.maxWorkspaceBytes, workspaceFileBytes: config.maxWorkspaceFileBytes, workspaceFiles: config.maxWorkspaceFiles,
         toolIterations: config.maxToolIterations,
       },
+      webSearch: {
+        monthQueries: monthlySearchQueries(),
+        activeProviderId: searchProvider()?.id ?? null,
+        fallbackMcp: (() => {
+          const id = getSearchServerId();
+          const row = id ? db.select({ name: schema.mcpServers.name, enabled: schema.mcpServers.enabled }).from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).get() : undefined;
+          return row ? { name: row.name, enabled: !!row.enabled } : null;
+        })(),
+        providers: db.select({ id: schema.providers.id, name: schema.providers.name, enabled: schema.providers.enabled, useVertex: schema.providers.useVertex })
+          .from(schema.providers).where(eq(schema.providers.type, 'gemini')).all()
+          .map((p) => ({ id: p.id, name: p.name, enabled: !!p.enabled, vertex: !!p.useVertex })),
+      },
     };
   });
 
@@ -69,6 +83,16 @@ export async function agentRoutes(app: FastifyInstance) {
         maxResultChars: z.number().int().optional(),
         allowSandbox: z.boolean().optional(),
       }).optional(),
+      webSearch: policySchema.extend({
+        providerId: z.string().max(64).optional(),
+        model: z.string().max(128).optional(),
+        fallbackProviderId: z.string().max(64).optional(),
+        fallbackModel: z.string().max(128).optional(),
+        mcpFallback: z.boolean().optional(),
+        monthlyLimit: z.number().int().min(0).max(10_000_000).optional(),
+        dailyLimit: z.number().int().min(0).max(100_000).optional(),
+        adminDailyLimit: z.number().int().min(0).max(100_000).optional(),
+      }).optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     if (body.data.imageGeneration) {
@@ -83,6 +107,18 @@ export async function agentRoutes(app: FastifyInstance) {
           return reply.code(400).send({ error: '图片生成工具只能选择仍然存在且支持图片生成的模型' });
         }
       }
+    }
+    for (const id of [body.data.webSearch?.providerId, body.data.webSearch?.fallbackProviderId]) {
+      if (!id) continue;
+      const row = db.select({ type: schema.providers.type }).from(schema.providers).where(eq(schema.providers.id, id)).get();
+      if (row?.type !== 'gemini') return reply.code(400).send({ error: '联网搜索只能选择 Gemini 服务商' });
+    }
+    const geminiId = /^gemini-[\w.-]+$/i;
+    if (body.data.webSearch?.model !== undefined && !geminiId.test(body.data.webSearch.model.trim())) {
+      return reply.code(400).send({ error: '搜索模型请填写 Gemini 模型 ID,例如 gemini-3.5-flash-lite' });
+    }
+    if (body.data.webSearch?.fallbackModel && !geminiId.test(body.data.webSearch.fallbackModel.trim())) {
+      return reply.code(400).send({ error: '备用搜索模型请填写 Gemini 模型 ID,例如 gemini-3.1-flash-lite;留空表示不用' });
     }
     return { settings: saveAgentSettings(body.data) };
   });

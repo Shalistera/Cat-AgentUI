@@ -288,7 +288,6 @@ export default function Chat() {
   const modelsLoaded = useModels((s) => s.loaded);
   const loadModels = useModels((s) => s.load);
   const loadMcp = useMcp((s) => s.load);
-  const mcpServers = useMcp((s) => s.servers);
   const chatsStore = useChats();
   const queueStore = useQueue();
 
@@ -306,7 +305,6 @@ export default function Chat() {
   const [leafId, setLeafId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [modelSel, setModelSel] = useState<ModelInfo | null>(null);
-  const [webSearch, setWebSearch] = useState(false);
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
   const workspacePanelChat = useWorkspacePanel((s) => s.chatId);
   const workspacePanelHome = useWorkspacePanel((s) => s.home);
@@ -327,9 +325,6 @@ export default function Chat() {
   const stoppingRef = useRef(false);
   const turnIdentityRef = useRef<({ chatId: string } & StreamIdentity) | null>(null);
   const skipLoadRef = useRef<string | null>(null);
-  // A handed-off send chose its own 联网搜索 state; the model-default effect
-  // below must not overwrite it when the model subsequently changes state.
-  const handoffAppliedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Message to scroll to + flash once the conversation has rendered.
   const jumpToRef = useRef<string | null>(null);
@@ -390,8 +385,7 @@ export default function Chat() {
     setToolConfirm(null);
     setFindOpen(false);
     if (!routeId) {
-      handoffAppliedRef.current = false;
-      setChat(null); setMessages([]); setLeafId(null); setWebSearch(false); setMcpSelected([]); setSettings(draftFromChat(null));
+      setChat(null); setMessages([]); setLeafId(null); setMcpSelected([]); setSettings(draftFromChat(null));
       useWorkspacePanel.getState().close();
       return;
     }
@@ -400,7 +394,6 @@ export default function Chat() {
       .then((r) => {
         if (cancelled) return;
         setChat(r.chat); setMessages(r.messages);
-        setWebSearch(r.chat.webSearch);
         setMcpSelected(r.chat.mcpServerIds); setSettings(draftFromChat(r.chat));
         // The panel belongs to one chat; leaving that chat closes it (the
         // header chip reopens it). Prime the file count for the chip.
@@ -442,17 +435,6 @@ export default function Chat() {
     return () => { cancelled = true; };
   }, [routeId, nav]);
 
-  // New chats adopt the admin-configured 联网搜索 default of the selected model
-  // (only when search is actually available to it). Loaded chats keep their own
-  // saved preference; a handed-off send carries its own explicit choice, which
-  // this must not clobber — hence the payload/applied guards.
-  useEffect(() => {
-    if (routeId || chat || !modelSel || chatHandoff.payload || handoffAppliedRef.current) return;
-    const fallback = mcpServers.some((s) => s.isSearch && s.enabled);
-    const available = modelSel.nativeSearch || (fallback && modelSel.tools && !modelSel.imageGen);
-    setWebSearch(available && modelSel.defaultWebSearch);
-  }, [routeId, chat, mcpServers, modelSel]);
-
   // A payload handed off from the project page's composer: adopt its model /
   // settings / MCP choices, then fire it through the normal send path.
   // Consumed exactly once — see chatHandoff.
@@ -462,13 +444,11 @@ export default function Chat() {
     const m = (h.modelId ? models.find((x) => x.id === h.modelId) : null) ?? modelSel;
     if (!m) return; // no models yet (default pick lands next render) — keep the payload
     chatHandoff.payload = null;
-    handoffAppliedRef.current = true;
     setModelSel(m);
     setSettings(h.settings);
-    setWebSearch(h.webSearch);
     setMcpSelected(h.mcpSelected);
     void send(h.text, h.attachments, {
-      modelId: m.id, settings: h.settings, webSearch: h.webSearch, mcpSelected: h.mcpSelected,
+      modelId: m.id, settings: h.settings, mcpSelected: h.mcpSelected,
     });
   }, [routeId, modelsLoaded, models, modelSel, streaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -530,14 +510,6 @@ export default function Chat() {
     }, 600);
   }
 
-  function persistWebSearch(enabled: boolean) {
-    setWebSearch(enabled);
-    const target = chatRef.current;
-    if (!target) return;
-    api.patch(`/api/chats/${target.id}`, { webSearch: enabled })
-      .catch(() => toast('保存联网搜索设置失败', 'err'));
-  }
-
   function toggleWorkspacePanel() {
     const panel = useWorkspacePanel.getState();
     const target = chatRef.current;
@@ -563,7 +535,6 @@ export default function Chat() {
   interface SendOverrides {
     modelId?: string;
     settings?: ComposerSettings;
-    webSearch?: boolean;
     mcpSelected?: string[];
   }
 
@@ -576,11 +547,10 @@ export default function Chat() {
     });
     let created = r.chat;
     const patch = draftToPatch(o?.settings ?? settings);
-    const search = o?.webSearch ?? webSearch;
     const mcp = o?.mcpSelected ?? mcpSelected;
-    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || search || mcp.length) {
+    if (patch.systemPrompt || patch.reasoningEffort !== 'off' || mcp.length) {
       const p = await api.patch<{ chat: ChatDetail }>(`/api/chats/${created.id}`, {
-        ...patch, webSearch: search, mcpServerIds: mcp,
+        ...patch, mcpServerIds: mcp,
       });
       created = p.chat;
     }
@@ -1276,8 +1246,6 @@ export default function Chat() {
       disabled={modelsLoaded && models.length === 0}
       model={modelSel}
       onModelChange={selectModel}
-      webSearch={webSearch}
-      onWebSearchChange={persistWebSearch}
       mcpSelected={mcpSelected}
       onMcpChange={persistMcp}
       onWorkspaceClick={toggleWorkspacePanel}

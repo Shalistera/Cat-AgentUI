@@ -9,6 +9,7 @@ import { Sidebar } from './components/Sidebar';
 import { HtmlPreviewPanel } from './components/HtmlPreviewPanel';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { LightboxHost } from './components/Lightbox';
+import { ProjectDocHost } from './components/ProjectDocDialog';
 import { notifyNavigate } from './notify';
 import type { SettingsTab } from './store';
 import Login from './pages/Login';
@@ -96,6 +97,7 @@ function Shell() {
       <WorkspacePanel />
       <SettingsDialog />
       <LightboxHost />
+      <ProjectDocHost />
     </div>
   );
 }

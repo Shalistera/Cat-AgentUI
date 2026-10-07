@@ -8,6 +8,7 @@ import {
   chatHandoff, LAST_MODEL_KEY, useChats, useMcp, useModels, useProjects, useUi,
 } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
+import { ProjectDocDialog } from '../components/ProjectDocDialog';
 import {
   Badge, Button, Card, EmptyState, Field, Input, Modal, ModalActions, PageHeader, Select, Spinner, Textarea,
   confirmDialog, toast,
@@ -155,14 +156,12 @@ export default function ProjectPage() {
   const [savingMeta, setSavingMeta] = useState(false);
 
   // Composer state — same defaults as a fresh chat on the chat page: last used
-  // model → admin default, and 联网搜索 following the model's admin default.
+  // model → admin default.
   const models = useModels((s) => s.models);
   const modelsLoaded = useModels((s) => s.loaded);
   const loadModels = useModels((s) => s.load);
   const loadMcp = useMcp((s) => s.load);
-  const mcpServers = useMcp((s) => s.servers);
   const [modelSel, setModelSel] = useState<ModelInfo | null>(null);
-  const [webSearch, setWebSearch] = useState(false);
   const [mcpSelected, setMcpSelected] = useState<string[]>([]);
   const [settings, setSettings] = useState<ComposerSettings>({ systemPrompt: '', reasoningEffort: 'off' });
 
@@ -184,20 +183,10 @@ export default function ProjectPage() {
     setModelSel(pick);
   }, [modelsLoaded, models]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (!modelSel) return;
-    const fallback = mcpServers.some((s) => s.isSearch && s.enabled);
-    const available = modelSel.nativeSearch || (fallback && modelSel.tools && !modelSel.imageGen);
-    setWebSearch(available && modelSel.defaultWebSearch);
-  }, [mcpServers, modelSel]);
-
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  // One dialog views, edits and creates a document; id null = not saved yet.
-  const [docEditor, setDocEditor] = useState<{
-    id: string | null; name: string; content: string; savedName: string; savedContent: string;
-  } | null>(null);
-  const [savingDoc, setSavingDoc] = useState(false);
+  // One dialog views, edits and creates a document; id null = a new one.
+  const [docDialog, setDocDialog] = useState<{ id: string | null } | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -217,7 +206,7 @@ export default function ProjectPage() {
   function startChat(text: string, attachments: PendingAttachment[]) {
     if (!project) return;
     chatHandoff.payload = {
-      text, attachments, modelId: modelSel?.id ?? null, settings, webSearch, mcpSelected,
+      text, attachments, modelId: modelSel?.id ?? null, settings, mcpSelected,
     };
     nav(`/?project=${project.id}`);
   }
@@ -312,66 +301,13 @@ export default function ProjectPage() {
     }
   }
 
-  async function openDoc(doc: ProjectDoc) {
-    if (!project) return;
-    try {
-      const r = await api.get<{ doc: ProjectDoc & { content: string } }>(`/api/projects/${project.id}/docs/${doc.id}`);
-      setDocEditor({ id: r.doc.id, name: r.doc.name, content: r.doc.content, savedName: r.doc.name, savedContent: r.doc.content });
-    } catch (e) { toast(errText(e, '读取失败'), 'err'); }
+  function openDoc(doc: ProjectDoc) {
+    setDocDialog({ id: doc.id });
   }
 
   function newDoc() {
     if (limits && docs.length >= limits.maxDocs) { toast(`每个项目最多 ${limits.maxDocs} 个文档`, 'err'); return; }
-    setDocEditor({ id: null, name: '', content: '', savedName: '', savedContent: '' });
-  }
-
-  const docDirty = docEditor != null
-    && (docEditor.name !== docEditor.savedName || docEditor.content !== docEditor.savedContent);
-
-  // Escape reaches this dialog and the confirm on top of it alike; one ask at a time.
-  const askingDiscard = useRef(false);
-  async function closeDocEditor() {
-    if (askingDiscard.current) return;
-    if (docDirty) {
-      askingDiscard.current = true;
-      const discard = await confirmDialog('放弃修改', '这份资料的修改还没有保存,确定关闭吗?');
-      askingDiscard.current = false;
-      if (!discard) return;
-    }
-    setDocEditor(null);
-  }
-
-  async function saveDoc() {
-    if (!project || !limits || !docEditor || savingDoc || !docDirty) return;
-    const name = docEditor.name.trim();
-    const { content } = docEditor;
-    if (!name) { toast('请填写资料名称', 'err'); return; }
-    if (!content.trim()) { toast('资料内容不能为空', 'err'); return; }
-    if (content.length > limits.maxDocChars) {
-      toast(`超出单文档上限(${limits.maxDocChars.toLocaleString()} 字符)`, 'err');
-      return;
-    }
-    setSavingDoc(true);
-    try {
-      if (docEditor.id) {
-        const r = await api.patch<{ doc: ProjectDoc & { content: string } }>(
-          `/api/projects/${project.id}/docs/${docEditor.id}`,
-          {
-            ...(name !== docEditor.savedName ? { name } : {}),
-            ...(content !== docEditor.savedContent ? { content } : {}),
-          },
-        );
-        const { content: saved, ...meta } = r.doc;
-        setDocs((prev) => prev.map((d) => (d.id === meta.id ? meta : d)));
-        setDocEditor({ id: meta.id, name: meta.name, content: saved, savedName: meta.name, savedContent: saved });
-      } else {
-        const r = await api.post<{ doc: ProjectDoc }>(`/api/projects/${project.id}/docs`, { name, content });
-        setDocs((prev) => [...prev, r.doc]);
-        setDocEditor({ id: r.doc.id, name: r.doc.name, content, savedName: r.doc.name, savedContent: content });
-      }
-      toast('资料已保存', 'ok');
-    } catch (e) { toast(errText(e, '保存失败'), 'err'); }
-    finally { setSavingDoc(false); }
+    setDocDialog({ id: null });
   }
 
   async function removeDoc(doc: ProjectDoc) {
@@ -469,8 +405,6 @@ export default function ProjectPage() {
               disabled={modelsLoaded && models.length === 0}
               model={modelSel}
               onModelChange={(m) => { setModelSel(m); localStorage.setItem(LAST_MODEL_KEY, m.id); }}
-              webSearch={webSearch}
-              onWebSearchChange={setWebSearch}
               mcpSelected={mcpSelected}
               onMcpChange={setMcpSelected}
               settings={settings}
@@ -548,7 +482,7 @@ export default function ProjectPage() {
                       <div key={d.id} className="group flex items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-bg2">
                         <FileText size={13} className="shrink-0 text-tx3" />
                         <button className="min-w-0 flex-1 cursor-pointer truncate text-left text-xs text-tx hover:text-acc"
-                          title={`${d.name} · ${d.chars.toLocaleString()} 字符${canEdit ? ' · 点击编辑' : ''}`} onClick={() => void openDoc(d)}>
+                          title={`${d.name} · ${d.chars.toLocaleString()} 字符${canEdit ? ' · 点击编辑' : ''}`} onClick={() => openDoc(d)}>
                           {d.name}
                         </button>
                         {canEdit && (
@@ -601,40 +535,14 @@ export default function ProjectPage() {
           onSaved={(p, m) => { setProject(p); setMembers(m); setMemberCount(m.length); syncStore(p); }} />
       )}
 
-      <Modal open={docEditor !== null} onClose={() => void closeDocEditor()} wide
-        title={!canEdit ? docEditor?.name ?? '' : docEditor?.id ? '编辑资料' : '新建资料'}>
-        {docEditor && (canEdit ? (
-          <form onSubmit={(e) => { e.preventDefault(); void saveDoc(); }} className="space-y-4"
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); void saveDoc(); }
-            }}>
-            <Field label="名称" required>
-              <Input value={docEditor.name} maxLength={200} autoFocus={!docEditor.id}
-                placeholder="如 产品规范.md"
-                onChange={(e) => setDocEditor({ ...docEditor, name: e.target.value })} />
-            </Field>
-            <Field label="内容" required>
-              <Textarea value={docEditor.content} rows={18} autoFocus={!!docEditor.id}
-                className="max-h-[60vh] font-mono text-xs"
-                onChange={(e) => setDocEditor({ ...docEditor, content: e.target.value })} />
-            </Field>
-            <ModalActions>
-              <span className={`mr-auto self-center text-[11px] tabular-nums ${
-                limits && docEditor.content.length > limits.maxDocChars ? 'text-err' : 'text-tx3'}`}>
-                {docEditor.content.length.toLocaleString()} / {limits?.maxDocChars.toLocaleString()} 字符
-              </span>
-              <Button variant="outline" onClick={() => void closeDocEditor()}>关闭</Button>
-              <Button type="submit" variant="primary" disabled={!docDirty || savingDoc}>
-                {savingDoc && <Spinner className="h-3.5 w-3.5" />}保存
-              </Button>
-            </ModalActions>
-          </form>
-        ) : (
-          <pre className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-tx2">
-            {docEditor.content}
-          </pre>
-        ))}
-      </Modal>
+      {docDialog && limits && (
+        <ProjectDocDialog projectId={project.id} docId={docDialog.id} canEdit={canEdit} maxDocChars={limits.maxDocChars}
+          onSaved={(doc, created) => {
+            setDocs((prev) => (created ? [...prev, doc] : prev.map((d) => (d.id === doc.id ? doc : d))));
+            if (created) setDocDialog({ id: doc.id });
+          }}
+          onClose={() => setDocDialog(null)} />
+      )}
     </div>
   );
 }
