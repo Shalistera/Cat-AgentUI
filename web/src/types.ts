@@ -626,6 +626,7 @@ export interface AgentSettings {
   webSearch: AccessPolicy & {
     providerId: string; model: string; fallbackProviderId: string; fallbackModel: string; mcpFallback: boolean;
     monthlyLimit: number; dailyLimit: number; adminDailyLimit: number;
+    fetchEnabled: boolean; fetchModel: string; fetchDailyLimit: number; fetchAdminDailyLimit: number;
   };
 }
 export interface AgentAdminData {

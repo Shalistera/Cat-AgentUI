@@ -53,6 +53,13 @@ export interface AgentSettings {
     dailyLimit: number;
     /** The same for admins; 0 = unlimited. */
     adminDailyLimit: number;
+    /** web_fetch: open pages and read their text. */
+    fetchEnabled: boolean;
+    /** Model that reads long pages first; '' = the search model. */
+    fetchModel: string;
+    /** web_fetch calls per ordinary user / admin per day; 0 = unlimited. */
+    fetchDailyLimit: number;
+    fetchAdminDailyLimit: number;
   };
 }
 
@@ -71,6 +78,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
     providerId: '', model: 'gemini-3.5-flash-lite',
     fallbackProviderId: '', fallbackModel: 'gemini-3.1-flash-lite', mcpFallback: true,
     monthlyLimit: 5000, dailyLimit: 100, adminDailyLimit: 0,
+    fetchEnabled: true, fetchModel: '', fetchDailyLimit: 200, fetchAdminDailyLimit: 0,
   },
 };
 
@@ -128,6 +136,10 @@ export function normalizeAgentSettings(raw: DeepPartial<AgentSettings> | null | 
       monthlyLimit: clamp(search.monthlyLimit, d.webSearch.monthlyLimit, 0, 10_000_000),
       dailyLimit: clamp(search.dailyLimit, d.webSearch.dailyLimit, 0, 100_000),
       adminDailyLimit: clamp(search.adminDailyLimit, d.webSearch.adminDailyLimit, 0, 100_000),
+      fetchEnabled: search.fetchEnabled === undefined ? d.webSearch.fetchEnabled : !!search.fetchEnabled,
+      fetchModel: typeof search.fetchModel === 'string' ? search.fetchModel.trim().slice(0, 128) : d.webSearch.fetchModel,
+      fetchDailyLimit: clamp(search.fetchDailyLimit, d.webSearch.fetchDailyLimit, 0, 100_000),
+      fetchAdminDailyLimit: clamp(search.fetchAdminDailyLimit, d.webSearch.fetchAdminDailyLimit, 0, 100_000),
     },
   };
 }

@@ -323,6 +323,14 @@ const RUN_COMMAND = 'run_command';
 const GENERATE_IMAGE = 'generate_image';
 const COMPARE_DATA = 'compare_data';
 const SPAWN_SUBAGENT = 'spawn_subagent';
+const WEB_FETCH = 'web_fetch';
+/** web_fetch rows show the site, not the raw URL. */
+function fetchHost(call: ToolCallPart): string {
+  try {
+    const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
+    return typeof a.url === 'string' ? new URL(a.url).hostname.replace(/^www\./, '') : '';
+  } catch { return ''; }
+}
 function subagentTitle(call: ToolCallPart): string {
   try {
     const a = JSON.parse(call.args || '{}') as Record<string, unknown>;
@@ -412,17 +420,29 @@ function ToolRun({ calls, results, organizing, chatId }: {
     return result && !result.isError;
   });
   const searching = calls.some((c) => isSearchTool(c.name));
+  const fetches = calls.filter((c) => c.name === WEB_FETCH);
+  const fetchOnly = fetches.length === calls.length;
   const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name) || c.name === RUN_COMMAND || c.name === SPAWN_SUBAGENT || c.name === GENERATE_IMAGE);
   const hasCommand = calls.some((c) => c.name === RUN_COMMAND);
   const hasSubagent = calls.some((c) => c.name === SPAWN_SUBAGENT);
   const hasImageGeneration = calls.some((c) => c.name === GENERATE_IMAGE);
   const active = pending.length > 0;
   const busy = active || organizing;
-  const noun = searching ? '搜索' : '调用工具';
+  const noun = searching ? '搜索' : fetchOnly ? '阅读' : '调用工具';
 
   let label: ReactNode;
   const lastPending = pending[pending.length - 1];
-  if (active && lastPending.name === COMPARE_DATA) {
+  if (active && lastPending.name === WEB_FETCH) {
+    const host = fetchHost(lastPending);
+    label = host ? `正在阅读「${host}」…` : '正在阅读网页…';
+  } else if ((fetchOnly || (searching && fetches.length)) && !active && !organizing) {
+    const failedFetches = fetches.filter((c) => results.get(c.id)?.isError).length;
+    const searches = calls.length - fetches.length;
+    label = fetchOnly
+      ? fetches.length === 1 && fetchHost(fetches[0]) ? `阅读了「${fetchHost(fetches[0])}」` : `阅读了 ${fetches.length} 个网页`
+      : `已搜索 ${searches} 次,阅读了 ${fetches.length} 个网页`;
+    if (failed.length) label += failedFetches === failed.length ? `,${failedFetches} 个打不开` : `,${failed.length} 次失败`;
+  } else if (active && lastPending.name === COMPARE_DATA) {
     label = '正在对比数据…';
   } else if (comparisonOnly) {
     label = !comparisonDone && failed.length ? '数据对比未完成' : organizing ? '数据对比完成,正在整理结论…' : '数据对比完成';
@@ -473,7 +493,7 @@ function ToolRun({ calls, results, organizing, chatId }: {
     label = calls.length === 1 ? `${noun}完成` : `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次`;
   }
 
-  const Icon = calls.every((c) => c.name === COMPARE_DATA) ? BarChart3 : searching ? Globe : hasImageGeneration ? ImagePlus : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
+  const Icon = calls.every((c) => c.name === COMPARE_DATA) ? BarChart3 : searching || fetches.length ? Globe : hasImageGeneration ? ImagePlus : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
 
   return (
     <Disclosure
@@ -500,9 +520,10 @@ function ToolRun({ calls, results, organizing, chatId }: {
                 {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
                   : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
                   : <Check size={13} className="shrink-0 text-ok" />}
-                <span className="shrink-0 text-tx2">{isSearchTool(c.name) ? '搜索' : c.name === COMPARE_DATA ? '数据对比' : c.name === GENERATE_IMAGE ? '生成图片' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
+                <span className="shrink-0 text-tx2">{c.name === WEB_FETCH ? '阅读' : isSearchTool(c.name) ? '搜索' : c.name === COMPARE_DATA ? '数据对比' : c.name === GENERATE_IMAGE ? '生成图片' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
                 {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">「{subagentTitle(c)}」</span>}
                 {q && <span className="truncate text-tx3">「{q}」</span>}
+                {c.name === WEB_FETCH && fetchHost(c) && <span className="truncate text-tx3">「{fetchHost(c)}」</span>}
                 {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">{workspaceFileName(c, chatId, r)}</span>}
               </div>
               {c.name === SPAWN_SUBAGENT && (

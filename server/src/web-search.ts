@@ -244,6 +244,25 @@ export async function runWebSearch(ctx: WebSearchContext, argsJson: string): Pro
       errors.push(`备用搜索源:${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  // Google sometimes grounds an answer without returning its sources. The
+  // model then has nothing to open or cite: try once more for links — the
+  // search MCP (cheap, direct URLs) if there is one, else the same line again.
+  let extraLinks: GroundingSource[] = [];
+  if (found && found.label === 'Google 搜索' && !found.sources.length && !ctx.signal.aborted) {
+    console.warn(`[web_search] ${found.model} grounded without sources (${found.queries.length} queries)`);
+    if (mcpId) {
+      extraLinks = await searchMcp(mcpId, ctx.user, query).then((r) => r.sources.slice(0, 8)).catch(() => []);
+    } else {
+      const line = toTry.find((l) => l.model === found!.model);
+      const again = line && googleAllowanceLeft()
+        ? await searchGoogle(line, query, AbortSignal.any([ctx.signal, AbortSignal.timeout(STEP_TIMEOUT_MS)])).catch(() => null)
+        : null;
+      if (again) {
+        addMonthlyQueries(again.queries.length);
+        if (again.sources.length) found = { ...found, ...again, promptTokens: found.promptTokens + again.promptTokens, completionTokens: found.completionTokens + again.completionTokens };
+      }
+    }
+  }
   if (found) spent = { promptTokens: found.promptTokens, completionTokens: found.completionTokens };
   // One row per call whatever the route, so the daily cap counts searches.
   recordUsage({
@@ -259,9 +278,12 @@ export async function runWebSearch(ctx: WebSearchContext, argsJson: string): Pro
     return { result: found.text, isError: false, query, queries: found.queries, sources: found.sources, label: found.label };
   }
   const list = found.sources.length
-    ? `\n\n来源(引用时用 Markdown 链接指向对应 URL):\n${found.sources.map((src, i) => `[${i + 1}] ${src.title} — ${src.uri}`).join('\n')}`
-    : '\n\n(本次搜索没有返回来源链接,以上内容无法逐条核实)';
-  return { result: `${found.text.trim()}${list}`, isError: false, query, queries: found.queries, sources: found.sources, label: found.label };
+    ? `\n\n来源(引用时用 Markdown 链接指向对应 URL;需要核实细节可以用 web_fetch 打开):\n${found.sources.map((src, i) => `[${i + 1}] ${src.title} — ${src.uri}`).join('\n')}`
+    : extraLinks.length
+    ? `\n\n(Google 这次没有返回来源链接。以下是同一查询的其他搜索结果,与上面的要点不一定一一对应;核实请用 web_fetch 打开,引用时只链接你打开核实过的页面)\n${extraLinks.map((src, i) => `[${i + 1}] ${src.title} — ${src.uri}`).join('\n')}`
+    : '\n\n(本次搜索没有返回来源链接,以上内容无法逐条核实;可以换个说法再搜,或用 web_fetch 打开相关网站核实)';
+  const sources = found.sources.length ? found.sources : extraLinks;
+  return { result: `${found.text.trim()}${list}`, isError: false, query, queries: found.queries, sources, label: found.label };
 }
 
 /** For tests: forget line failures. */

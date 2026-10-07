@@ -10,7 +10,10 @@ server.registerTool('search', {
   description: '一个测试用的搜索工具',
   inputSchema: { query: z.string().describe('搜索关键词') },
 }, async ({ query }) => ({
-  content: [{ type: 'text', text: `搜索「${query}」的结果:黑猫今天心情很好。` }],
+  content: [
+    { type: 'text', text: `搜索「${query}」的结果:黑猫今天心情很好。` },
+    { type: 'text', text: JSON.stringify({ url: 'https://example.com/cat-news', title: '黑猫日报' }) },
+  ],
 }));
 
 server.registerTool('get_time', {

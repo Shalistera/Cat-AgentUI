@@ -21,6 +21,7 @@ const { authRoutes } = await import('../server/dist/routes/auth.js');
 const { agentRoutes } = await import('../server/dist/routes/agent.js');
 const { chatRoutes } = await import('../server/dist/routes/chats.js');
 const { getAdapter } = await import('../server/dist/providers/index.js');
+const { geminiAdapter } = await import('../server/dist/providers/gemini.js');
 
 const app = Fastify();
 app.setErrorHandler((err, _req, reply) => reply.code(err.message === 'forbidden' ? 403 : err.message === 'unauthorized' ? 401 : 500).send({ error: err.message }));
@@ -174,6 +175,42 @@ try {
   const failed = await runWebSearch(ctx(admin), JSON.stringify({ query: 'x' }));
   assert(failed.isError && failed.result.includes('gemini-3.5-flash-lite 503') && failed.result.includes('gemini-3.1-flash-lite 503'));
 
+  // Grounded without sources and no MCP: one more try on the same line.
+  resetSearchCooldowns();
+  let attempts = 0;
+  gemini.streamChat = async function* () {
+    attempts++;
+    yield { type: 'text', text: '- 要点' };
+    yield { type: 'grounding', grounding: { queries: ['q'], sources: attempts === 1 ? [] : [SOURCE] } };
+    yield { type: 'stop', reason: 'stop' };
+  };
+  const retried = await runWebSearch(ctx(admin), JSON.stringify({ query: 'x' }));
+  assert.equal(attempts, 2);
+  assert.equal(retried.sources[0].uri, SOURCE.uri);
+  assert(retried.result.includes(`[1] nodejs.org — ${SOURCE.uri}`));
+
+  // The adapter keeps sources from an earlier chunk when a later grounding
+  // chunk only repeats the queries.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response([
+    { candidates: [{ content: { parts: [{ text: 'a' }] }, groundingMetadata: { webSearchQueries: ['q1'], groundingChunks: [{ web: { uri: SOURCE.uri, title: 'nodejs.org' } }] } }] },
+    { candidates: [{ content: { parts: [{ text: 'b' }] }, finishReason: 'STOP', groundingMetadata: { webSearchQueries: ['q1', 'q2'] } }] },
+  ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+  let merged;
+  try {
+    for await (const ev of geminiAdapter.streamChat({ id: 't', type: 'gemini', baseUrl: 'https://fixture.invalid', apiKey: null, extraHeaders: {}, useVertex: false },
+      { model: 'gemini-3.5-flash-lite', webSearch: true, messages: [{ role: 'user', parts: [{ type: 'text', text: 'x' }] }], signal: new AbortController().signal })) {
+      if (ev.type === 'grounding') merged = ev.grounding;
+    }
+  } finally { globalThis.fetch = realFetch; }
+  assert.deepEqual(merged.queries, ['q1', 'q2']);
+  assert.equal(merged.sources[0].uri, SOURCE.uri);
+  gemini.streamChat = async function* (cfg, req) {
+    tried.push(req.model);
+    if (failing.has(req.model)) throw new Error(`${req.model} 503`);
+    yield* searchStub.call(this, cfg, { ...req, model: 'gemini-3.5-flash-lite' });
+  };
+
   // With a designated search MCP, it answers last.
   db.insert(schema.mcpServers).values({ id: 'brave', name: 'Mock Brave', transport: 'stdio', command: process.execPath,
     args: JSON.stringify([path.join(path.dirname(new URL(import.meta.url).pathname), 'mock-mcp.mjs')]), createdAt: Date.now() }).run();
@@ -184,12 +221,26 @@ try {
   assert.equal(viaMcp.isError, false, viaMcp.result);
   assert.equal(viaMcp.label, 'Mock Brave');
   assert(viaMcp.result.includes('搜索「黑猫」的结果'));
+  assert.deepEqual(viaMcp.sources, [{ uri: 'https://example.com/cat-news', title: '黑猫日报' }]);
   assert.deepEqual(tried, ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']);
   // Past the month's Google limit only the MCP is asked, and the tool stays offered.
   saveAgentSettings({ webSearch: { monthlyLimit: 1 } });
   tried.length = 0;
   assert.equal((await runWebSearch(ctx(admin), JSON.stringify({ query: '黑猫' }))).label, 'Mock Brave');
   assert.deepEqual(tried, []);
+  // Google answers without sources: the MCP's links ride along, labelled as such.
+  saveAgentSettings({ webSearch: { monthlyLimit: 0 } });
+  resetSearchCooldowns();
+  gemini.streamChat = async function* () {
+    yield { type: 'text', text: '- 无来源的要点' };
+    yield { type: 'grounding', grounding: { queries: ['q'], sources: [] } };
+    yield { type: 'stop', reason: 'stop' };
+  };
+  const patched = await runWebSearch(ctx(admin), JSON.stringify({ query: '黑猫' }));
+  assert.equal(patched.label, 'Google 搜索');
+  assert(patched.result.includes('Google 这次没有返回来源链接') && patched.result.includes('https://example.com/cat-news'));
+  assert.equal(patched.sources[0].uri, 'https://example.com/cat-news');
+  saveAgentSettings({ webSearch: { monthlyLimit: 1 } });
   callSearch = true;
   gemini.streamChat = searchStub;
   const mcpTurn = await turn('gpt', 'admin');
@@ -214,7 +265,7 @@ try {
   assert.equal(saved.json().settings.webSearch.model, 'gemini-3.1-flash-lite');
   const status = (await request('GET', '/api/admin/agent', undefined, 'admin')).json().webSearch;
   assert.equal(status.activeProviderId, 'google');
-  assert.equal(status.monthQueries, 8);
+  assert.equal(status.monthQueries, 11);
   assert.deepEqual(status.fallbackMcp, { name: 'Mock Brave', enabled: true });
   assert.deepEqual(status.providers.map((p) => p.id), ['google']);
 

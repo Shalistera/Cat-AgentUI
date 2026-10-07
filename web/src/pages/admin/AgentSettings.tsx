@@ -129,6 +129,24 @@ export default function AgentSettingsPage() {
                     ? `Google 搜索都失败,或本月额度用完时,改用「${mcp.name}」${mcp.enabled ? '' : '(该服务器已停用,不会生效)'}。在 MCP 页更换。`
                     : '还没有指定备用搜索源:在 MCP 页部署 Brave Search 或把某个服务器「设为搜索源」后生效。'}
                   checked={ws.mcpFallback} onChange={(v) => set({ mcpFallback: v })} disabled={saving} />
+                <div className="space-y-3 rounded-lg border border-line bg-bg0 p-3">
+                  <ToggleRow label="允许打开网页阅读原文(web_fetch)"
+                    desc="模型可以打开搜索结果或任意网页核实原文。服务器本机抓取并提取正文;长网页先由读网页的模型挑出相关的原文段落,逐字核对后再交给聊天模型,通常只占整页的 1/10,对本地 Claude Code 的额度更友好。本机读不到的网页交给 Gemini 代读并标注未核对。禁止访问内网与本机地址。"
+                    checked={ws.fetchEnabled} onChange={(v) => set({ fetchEnabled: v })} disabled={saving} />
+                  {ws.fetchEnabled && (
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <Field label="读网页的模型" hint="留空 = 与搜索模型相同;每篇长文约 $0.005,不占 Google 搜索额度">
+                        <Input value={ws.fetchModel} onChange={(e) => set({ fetchModel: e.target.value })} placeholder={ws.model || 'gemini-3.5-flash-lite'} disabled={saving} />
+                      </Field>
+                      <Field label="普通用户每日上限(次)" hint="每人每天打开网页的次数;0 为不限">
+                        {num(ws.fetchDailyLimit, (n) => set({ fetchDailyLimit: n }), 0, 100000)}
+                      </Field>
+                      <Field label="管理员每日上限(次)" hint="0 为不限">
+                        {num(ws.fetchAdminDailyLimit, (n) => set({ fetchAdminDailyLimit: n }), 0, 100000)}
+                      </Field>
+                    </div>
+                  )}
+                </div>
                 <div className="grid gap-4 sm:grid-cols-3">
                   <Field label="每月 Google 搜索上限(次)" hint={`web_search 本月已用 ${data.webSearch.monthQueries} 次(不含 Gemini 对话自带的原生搜索,两者共用 Google 的免费额度)。Gemini 3.x 每月共享 5000 次免费,超出约 $14 / 1000 次;一次提问常会搜 2–3 次。到达上限后只用备用搜索源;0 为不限。`}>
                     {num(ws.monthlyLimit, (n) => set({ monthlyLimit: n }), 0, 10000000, 'max-w-40')}

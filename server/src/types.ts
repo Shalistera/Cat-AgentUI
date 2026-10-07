@@ -216,6 +216,8 @@ export interface ChatRequest {
   tools?: ToolDef[];
   /** Enable the provider-native web-search tool for this request. */
   webSearch?: boolean;
+  /** Gemini only: let the model read URLs named in the prompt (urlContext tool). */
+  urlContext?: boolean;
   temperature?: number;
   maxTokens?: number;
   hardMaxTokens?: number;

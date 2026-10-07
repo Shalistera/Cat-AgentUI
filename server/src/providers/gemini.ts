@@ -210,6 +210,7 @@ function buildChatBody(req: ChatRequest): any {
   // 2.5 (see supportsVertexSearchWithFunctions).
   const tools: any[] = [];
   if (req.webSearch) tools.push({ googleSearch: {} });
+  if (req.urlContext) tools.push({ urlContext: {} });
   if (req.tools?.length) {
     tools.push({
       functionDeclarations: req.tools.map((t) => ({
@@ -305,7 +306,15 @@ export const geminiAdapter: ChatAdapter = {
         const cand = chunk.candidates?.[0];
         if (!cand) continue;
         if (typeof cand.finishReason === 'string' && cand.finishReason) finishReason = cand.finishReason.slice(0, 80);
-        grounding = groundingOf(cand.groundingMetadata) ?? grounding;
+        // Metadata may arrive over several chunks; a later one that only
+        // repeats the queries must not wipe sources an earlier one carried.
+        const next = groundingOf(cand.groundingMetadata);
+        const prev = grounding as GroundingInfo | null;
+        if (next) {
+          grounding = prev?.sources.length && !next.sources.length
+            ? { ...prev, queries: [...new Set([...prev.queries, ...next.queries])] }
+            : next;
+        }
         for (const part of cand.content?.parts ?? []) {
           if (part.thought === true && part.text) {
             yield { type: 'reasoning', text: part.text };

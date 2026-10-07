@@ -18,6 +18,7 @@ const KIND_LABELS: Record<string, string> = {
   subagent: '子代理',
   compaction: '上下文压缩',
   web_search: '联网搜索',
+  web_fetch: '网页阅读',
 };
 
 /** One empty-table placeholder, one voice — every card says it the same way. */

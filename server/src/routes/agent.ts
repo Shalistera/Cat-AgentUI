@@ -92,6 +92,10 @@ export async function agentRoutes(app: FastifyInstance) {
         monthlyLimit: z.number().int().min(0).max(10_000_000).optional(),
         dailyLimit: z.number().int().min(0).max(100_000).optional(),
         adminDailyLimit: z.number().int().min(0).max(100_000).optional(),
+        fetchEnabled: z.boolean().optional(),
+        fetchModel: z.string().max(128).optional(),
+        fetchDailyLimit: z.number().int().min(0).max(100_000).optional(),
+        fetchAdminDailyLimit: z.number().int().min(0).max(100_000).optional(),
       }).optional(),
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
@@ -116,6 +120,9 @@ export async function agentRoutes(app: FastifyInstance) {
     const geminiId = /^gemini-[\w.-]+$/i;
     if (body.data.webSearch?.model !== undefined && !geminiId.test(body.data.webSearch.model.trim())) {
       return reply.code(400).send({ error: '搜索模型请填写 Gemini 模型 ID,例如 gemini-3.5-flash-lite' });
+    }
+    if (body.data.webSearch?.fetchModel && !geminiId.test(body.data.webSearch.fetchModel.trim())) {
+      return reply.code(400).send({ error: '读网页的模型请填写 Gemini 模型 ID;留空表示与搜索模型相同' });
     }
     if (body.data.webSearch?.fallbackModel && !geminiId.test(body.data.webSearch.fallbackModel.trim())) {
       return reply.code(400).send({ error: '备用搜索模型请填写 Gemini 模型 ID,例如 gemini-3.1-flash-lite;留空表示不用' });
