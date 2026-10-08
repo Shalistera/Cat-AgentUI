@@ -26,11 +26,11 @@ function parseArgs(args?: string): unknown {
   try { return JSON.parse(args || '{}'); } catch { return {}; }
 }
 
-/** Claude 4.6+ and the 5 family: adaptive thinking steered by `effort`.
+/** Claude 4.6+ and the 5 family (Haiku from 5.5): adaptive thinking steered by `effort`.
     budget_tokens and sampling parameters are rejected (400) on most of them. */
 function adaptiveModel(model: string): boolean {
   const id = (model.split('/').pop() ?? '').toLowerCase();
-  return /claude-(opus|sonnet)-4[-.][6-9]|claude-(opus|sonnet|fable|mythos)-[5-9]/.test(id);
+  return /claude-(opus|sonnet)-4[-.][6-9]|claude-(opus|sonnet|haiku|fable|mythos)-[5-9]/.test(id);
 }
 
 // Thinking blocks ride on a tool call's `sig` (the slot Gemini uses for its
@@ -160,7 +160,7 @@ function thinkingFields(req: ChatRequest): { fields: Record<string, unknown>; ma
     // The 5 family thinks even with `thinking` omitted, and several of them
     // (Opus 5.5, Fable) can't turn it off: there "off" means the lowest
     // effort. 4.6–4.8 simply don't think when it's omitted.
-    const thinksByDefault = /claude-(opus|sonnet|fable|mythos)-[5-9]/.test(id);
+    const thinksByDefault = /claude-(opus|sonnet|haiku|fable|mythos)-[5-9]/.test(id);
     const legacy46 = /4[-.]6/.test(id);
     let effort: string | null = !on ? (thinksByDefault ? 'low' : null)
       : EFFORTS.includes(req.reasoning!.level) ? req.reasoning!.level

@@ -62,7 +62,9 @@ export interface AgentSettings {
     adminDailyLimit: number;
     /** web_fetch: open pages and read their text. */
     fetchEnabled: boolean;
-    /** Model that reads long pages first; '' = the search model. */
+    /** Provider that reads long pages (Gemini, Anthropic or OpenAI-compatible); '' = the search provider. */
+    fetchProviderId: string;
+    /** Model that reads long pages first; '' = the search model (only when reading on Gemini). */
     fetchModel: string;
     /** web_fetch calls per ordinary user / admin per day; 0 = unlimited. */
     fetchDailyLimit: number;
@@ -87,7 +89,7 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
     allowVertexAgentTools: false,
     maxPerTurn: 2, fetchMaxPerTurn: 2, fastMaxPerTurn: 1, fastFetchMaxPerTurn: 1,
     monthlyLimit: 5000, dailyLimit: 100, adminDailyLimit: 0,
-    fetchEnabled: true, fetchModel: '', fetchDailyLimit: 200, fetchAdminDailyLimit: 0,
+    fetchEnabled: true, fetchProviderId: '', fetchModel: '', fetchDailyLimit: 200, fetchAdminDailyLimit: 0,
   },
 };
 
@@ -151,6 +153,7 @@ export function normalizeAgentSettings(raw: DeepPartial<AgentSettings> | null | 
       dailyLimit: clamp(search.dailyLimit, d.webSearch.dailyLimit, 0, 100_000),
       adminDailyLimit: clamp(search.adminDailyLimit, d.webSearch.adminDailyLimit, 0, 100_000),
       fetchEnabled: search.fetchEnabled === undefined ? d.webSearch.fetchEnabled : !!search.fetchEnabled,
+      fetchProviderId: typeof search.fetchProviderId === 'string' ? search.fetchProviderId.slice(0, 64) : d.webSearch.fetchProviderId,
       fetchModel: typeof search.fetchModel === 'string' ? search.fetchModel.trim().slice(0, 128) : d.webSearch.fetchModel,
       fetchDailyLimit: clamp(search.fetchDailyLimit, d.webSearch.fetchDailyLimit, 0, 100_000),
       fetchAdminDailyLimit: clamp(search.fetchAdminDailyLimit, d.webSearch.fetchAdminDailyLimit, 0, 100_000),

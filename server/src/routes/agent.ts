@@ -10,6 +10,7 @@ import { getSandboxSettings } from '../sandbox/settings.js';
 import { skillsFor } from '../skills.js';
 import { imageToolModelsFor } from '../image-tool.js';
 import { monthlySearchQueries, searchProvider } from '../web-search.js';
+import { FETCH_PROVIDER_TYPES } from '../web-fetch.js';
 import { getSearchServerId } from './mcp.js';
 import { db, schema } from '../db/index.js';
 import { eq, inArray } from 'drizzle-orm';
@@ -60,6 +61,9 @@ export async function agentRoutes(app: FastifyInstance) {
         providers: db.select({ id: schema.providers.id, name: schema.providers.name, enabled: schema.providers.enabled, useVertex: schema.providers.useVertex })
           .from(schema.providers).where(eq(schema.providers.type, 'gemini')).all()
           .map((p) => ({ id: p.id, name: p.name, enabled: !!p.enabled, vertex: !!p.useVertex })),
+        fetchProviders: db.select({ id: schema.providers.id, name: schema.providers.name, type: schema.providers.type, enabled: schema.providers.enabled })
+          .from(schema.providers).where(inArray(schema.providers.type, FETCH_PROVIDER_TYPES)).all()
+          .map((p) => ({ id: p.id, name: p.name, type: p.type, enabled: !!p.enabled })),
       },
     };
   });
@@ -98,6 +102,7 @@ export async function agentRoutes(app: FastifyInstance) {
         dailyLimit: z.number().int().min(0).max(100_000).optional(),
         adminDailyLimit: z.number().int().min(0).max(100_000).optional(),
         fetchEnabled: z.boolean().optional(),
+        fetchProviderId: z.string().max(64).optional(),
         fetchModel: z.string().max(128).optional(),
         fetchDailyLimit: z.number().int().min(0).max(100_000).optional(),
         fetchAdminDailyLimit: z.number().int().min(0).max(100_000).optional(),
@@ -126,8 +131,22 @@ export async function agentRoutes(app: FastifyInstance) {
     if (body.data.webSearch?.model !== undefined && !geminiId.test(body.data.webSearch.model.trim())) {
       return reply.code(400).send({ error: '搜索模型请填写 Gemini 模型 ID,例如 gemini-3.5-flash-lite' });
     }
-    if (body.data.webSearch?.fetchModel && !geminiId.test(body.data.webSearch.fetchModel.trim())) {
-      return reply.code(400).send({ error: '读网页的模型请填写 Gemini 模型 ID;留空表示与搜索模型相同' });
+    if (body.data.webSearch?.fetchProviderId !== undefined || body.data.webSearch?.fetchModel !== undefined) {
+      // Judged together: a model ID only means something on its provider.
+      const ws = { ...getAgentSettings().webSearch, ...body.data.webSearch };
+      const fetchModel = ws.fetchModel.trim();
+      const type = ws.fetchProviderId
+        ? db.select({ type: schema.providers.type }).from(schema.providers).where(eq(schema.providers.id, ws.fetchProviderId)).get()?.type
+        : 'gemini';
+      if (!type || !FETCH_PROVIDER_TYPES.includes(type)) {
+        return reply.code(400).send({ error: '读网页的服务商只能选择 Gemini、Anthropic 或 OpenAI 兼容服务商' });
+      }
+      if (type === 'gemini' && fetchModel && !geminiId.test(fetchModel)) {
+        return reply.code(400).send({ error: '读网页的模型请填写 Gemini 模型 ID;留空表示与搜索模型相同' });
+      }
+      if (type !== 'gemini' && !fetchModel) {
+        return reply.code(400).send({ error: '选择非 Gemini 服务商读网页时,请填写读网页的模型 ID,例如 claude-haiku-5-5' });
+      }
     }
     if (body.data.webSearch?.fallbackModel && !geminiId.test(body.data.webSearch.fallbackModel.trim())) {
       return reply.code(400).send({ error: '备用搜索模型请填写 Gemini 模型 ID,例如 gemini-3.1-flash-lite;留空表示不用' });

@@ -85,6 +85,11 @@ try {
   // Older models keep token budgets (and sampling when not thinking).
   ({ body } = await run({ model: 'claude-sonnet-4-5', messages: [user('hi')], reasoning: { level: 'medium', ratio: 0.5 } }));
   assert.deepEqual(body.thinking, { type: 'enabled', budget_tokens: 17_408 }); assert(body.max_tokens >= 17_408 + 4096);
+  // Haiku 5.5 joins the 5 family: thinks by default, rejects sampling and budgets.
+  ({ body } = await run({ model: 'claude-haiku-5-5', messages: [user('hi')], temperature: 0.2 }));
+  assert.equal(body.thinking, undefined); assert.deepEqual(body.output_config, { effort: 'low' }); assert.equal(body.temperature, undefined);
+  ({ body } = await run({ model: 'claude-haiku-5-5', messages: [user('hi')], reasoning: { level: 'high', ratio: 1 } }));
+  assert.deepEqual(body.thinking, { type: 'adaptive', display: 'summarized' }); assert.deepEqual(body.output_config, { effort: 'high' });
   ({ body } = await run({ model: 'claude-haiku-4-5', messages: [user('hi')], temperature: 0.2 }));
   assert.equal(body.temperature, 0.2); assert.equal(body.thinking, undefined);
 

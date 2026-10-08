@@ -29,7 +29,8 @@ const app = Fastify();
 app.setErrorHandler((err, _req, reply) => reply.code(err.message === 'forbidden' ? 403 : err.message === 'unauthorized' ? 401 : 500).send({ error: err.message }));
 const openai = getAdapter('openai');
 const gemini = getAdapter('gemini');
-const originals = { openai: openai.streamChat, gemini: gemini.streamChat };
+const anthropic = getAdapter('anthropic');
+const originals = { openai: openai.streamChat, gemini: gemini.streamChat, anthropic: anthropic.streamChat };
 const loopback = http.createServer((_req, res) => res.end('<html><body><p>secret</p></body></html>'));
 await new Promise((r) => loopback.listen(8080, '127.0.0.1', r).on('error', () => r()));
 
@@ -132,6 +133,46 @@ try {
   saveAgentSettings({ webSearch: { fetchDailyLimit: 0, fetchModel: '' } });
   assert((await call({})).isError, 'url required');
 
+  // A non-Gemini reader: Haiku picks the quotes and is billed for them; pages
+  // this server can't read still go to Gemini, on the search model.
+  db.insert(schema.providers).values({ id: 'claude', name: 'Claude', type: 'anthropic', createdAt: Date.now() }).run();
+  const haikuRequests = [];
+  anthropic.streamChat = async function* (_cfg, req) {
+    haikuRequests.push(req);
+    yield { type: 'text', text: `概括。\n>> ${FACT}` };
+    yield { type: 'usage', usage: { promptTokens: 7000, completionTokens: 60 } };
+    yield { type: 'stop', reason: 'stop' };
+  };
+  saveAgentSettings({ webSearch: { fetchProviderId: 'claude', fetchModel: 'claude-haiku-5-5' } });
+  distillRequests = [];
+  const byHaiku = await call({ url: 'https://news.example/long', focus: '伤亡人数' }, { id: 'admin', role: 'admin' });
+  assert(byHaiku.result.includes(FACT) && byHaiku.result.includes('已与网页正文逐字核对'));
+  assert.equal(haikuRequests.length, 1); assert.equal(haikuRequests[0].model, 'claude-haiku-5-5');
+  // Anthropic gets at most 60k characters (under its 100k-token price tier); Gemini 80k.
+  primeFetchCache('https://news.example/huge', { title: '超长', text: `${FACT}\n${'长'.repeat(90_000)}` });
+  await call({ url: 'https://news.example/huge', focus: '伤亡人数' }, { id: 'admin', role: 'admin' });
+  const sent = haikuRequests[1].messages[0].parts[0].text;
+  assert(sent.split('正文:\n')[1].length === 60_000, `anthropic input ${sent.length}`);
+  haikuRequests.length = 1;
+  assert.equal(distillRequests.length, 0, 'Gemini not asked to read');
+  const haikuRow = db.select().from(schema.usageLog).where(and(eq(schema.usageLog.userId, 'admin'), eq(schema.usageLog.kind, 'web_fetch'), eq(schema.usageLog.promptTokens, 7000))).get();
+  assert.equal(haikuRow.providerType, 'anthropic'); assert.equal(haikuRow.providerId, 'claude'); assert.equal(haikuRow.model, 'claude-haiku-5-5');
+  distillReply = `>> ${FACT}`;
+  const unreadable = await call({ url: 'http://example.invalid/page', focus: '伤亡人数' }, { id: 'admin', role: 'admin' });
+  assert(unreadable.result.includes('由 Gemini 代为读取'), unreadable.result);
+  assert.equal(distillRequests.at(-1).model, 'gemini-3.5-flash-lite'); assert.equal(distillRequests.at(-1).urlContext, true);
+  assert.equal(haikuRequests.length, 1);
+  // A disabled reader falls back to the page's beginning instead of failing.
+  db.update(schema.providers).set({ enabled: 0 }).where(eq(schema.providers.id, 'claude')).run();
+  const noReader = await call({ url: 'https://news.example/long', focus: '伤亡人数' }, { id: 'admin', role: 'admin' });
+  assert(noReader.result.includes(LONG.slice(0, 40)) && !noReader.isError);
+  db.update(schema.providers).set({ enabled: 1 }).where(eq(schema.providers.id, 'claude')).run();
+  saveAgentSettings({ webSearch: { fetchProviderId: '', fetchModel: '' } });
+  anthropic.streamChat = originals.anthropic;
+  distillRequests = [];
+  await call({ url: 'https://news.example/huge', focus: '伤亡人数' }, { id: 'admin', role: 'admin' });
+  assert.equal(distillRequests[0].messages[0].parts[0].text.split('正文:\n')[1].length, 80_000, 'Gemini keeps 80k');
+
   // In a chat turn: offered without a switch, no confirmation, sources shown.
   await app.register(cookie);
   await authPlugin(app); await authRoutes(app); await agentRoutes(app); await chatRoutes(app);
@@ -172,6 +213,16 @@ try {
   // Admin validation.
   assert.equal((await request('PUT', '/api/admin/agent', { webSearch: { fetchModel: 'gpt-4o' } }, 'admin')).statusCode, 400);
   assert.equal((await request('PUT', '/api/admin/agent', { webSearch: { fetchModel: 'gemini-3.1-flash-lite' } }, 'admin')).statusCode, 200);
+  // Model and provider are judged together; CLI providers can't read.
+  assert.equal((await request('PUT', '/api/admin/agent', { webSearch: { fetchProviderId: 'claude', fetchModel: '' } }, 'admin')).statusCode, 400, 'model required');
+  assert.equal((await request('PUT', '/api/admin/agent', { webSearch: { fetchProviderId: 'claude', fetchModel: 'claude-haiku-5-5' } }, 'admin')).statusCode, 200);
+  db.insert(schema.providers).values({ id: 'cli', name: 'CLI', type: 'claude-code', createdAt: Date.now() }).run();
+  const adminView = JSON.parse((await request('GET', '/api/admin/agent', undefined, 'admin')).body);
+  assert(adminView.webSearch.fetchProviders.some((p) => p.id === 'claude' && p.type === 'anthropic'));
+  assert(adminView.webSearch.fetchProviders.some((p) => p.id === 'chat'));
+  assert(!adminView.webSearch.fetchProviders.some((p) => p.type === 'claude-code'));
+  assert.equal((await request('PUT', '/api/admin/agent', { webSearch: { fetchProviderId: 'cli', fetchModel: 'x' } }, 'admin')).statusCode, 400);
+  assert.equal((await request('PUT', '/api/admin/agent', { webSearch: { fetchProviderId: '', fetchModel: '' } }, 'admin')).statusCode, 200);
 
   // Fast turns extract verbatim relevant windows without a second LLM call.
   saveAgentSettings({ webSearch: { fetchDailyLimit: 0 } });
@@ -209,6 +260,7 @@ try {
   clearFetchCache();
   openai.streamChat = originals.openai;
   gemini.streamChat = originals.gemini;
+  anthropic.streamChat = originals.anthropic;
   loopback.close();
   await app.close(); rawDb.close(); fs.rmSync(temp, { recursive: true, force: true });
 }

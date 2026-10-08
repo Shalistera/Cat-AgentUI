@@ -639,7 +639,7 @@ export interface AgentSettings {
     allowVertexAgentTools: boolean;
     maxPerTurn: number; fetchMaxPerTurn: number; fastMaxPerTurn: number; fastFetchMaxPerTurn: number;
     monthlyLimit: number; dailyLimit: number; adminDailyLimit: number;
-    fetchEnabled: boolean; fetchModel: string; fetchDailyLimit: number; fetchAdminDailyLimit: number;
+    fetchEnabled: boolean; fetchProviderId: string; fetchModel: string; fetchDailyLimit: number; fetchAdminDailyLimit: number;
   };
 }
 export interface AgentAdminData {
@@ -653,6 +653,8 @@ export interface AgentAdminData {
     /** The search MCP designated on the MCP page, if any. */
     fallbackMcp: { name: string; enabled: boolean } | null;
     providers: { id: string; name: string; enabled: boolean; vertex: boolean }[];
+    /** Providers that can read pages for web_fetch (Gemini, Anthropic, OpenAI-compatible). */
+    fetchProviders: { id: string; name: string; type: string; enabled: boolean }[];
   };
 }
 /** /api/agent/capabilities — what this person's chats may use right now. */

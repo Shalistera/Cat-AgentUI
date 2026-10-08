@@ -6,6 +6,8 @@ import type { AccessPolicy, AdminUser, AgentAdminData, AgentSettings, ModelInfo 
 
 function fmtMb(n: number): string { return `${Math.round(n / 1048576)} MB`; }
 
+const FETCH_TYPE_LABEL: Record<string, string> = { gemini: 'Gemini', anthropic: 'Anthropic', openai: 'OpenAI 兼容' };
+
 /** enabled + 全员/指定用户 + user list: the one access block every capability shares. */
 function AccessEditor({ value, onChange, users, disabled, enabledLabel, enabledDesc }: {
   value: AccessPolicy; onChange(v: AccessPolicy): void; users: AdminUser[]; disabled?: boolean;
@@ -157,10 +159,25 @@ export default function AgentSettingsPage() {
                     desc="模型按明确的阅读目标打开网页。未开启思考时,长网页直接返回关键词附近的原文片段,省去额外模型整理;开启思考时由阅读模型筛选并逐字核对摘录。本机读不到的网页交给 Gemini 代读并标注未核对。禁止访问内网与本机地址。"
                     checked={ws.fetchEnabled} onChange={(v) => set({ fetchEnabled: v })} disabled={saving} />
                   {ws.fetchEnabled && (
-                    <div className="grid gap-4 sm:grid-cols-3">
-                      <Field label="读网页的模型" hint="用于思考模式的长文摘录及本机读取失败后的代读;留空 = 与搜索模型相同,不占 Google 搜索额度">
-                        <Input value={ws.fetchModel} onChange={(e) => set({ fetchModel: e.target.value })} placeholder={ws.model || 'gemini-3.5-flash-lite'} disabled={saving} />
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="读网页的服务商" hint="用于思考模式的长文摘录,可选 Gemini、Anthropic 或 OpenAI 兼容服务商。本机读取失败后的代读始终由搜索用的 Gemini 完成">
+                        {/* A model ID only fits its own provider, so switching clears it. */}
+                        <Select value={ws.fetchProviderId} onChange={(e) => set({ fetchProviderId: e.target.value, fetchModel: '' })} disabled={saving}>
+                          <option value="">与搜索模型相同</option>
+                          {data.webSearch.fetchProviders.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name} · {FETCH_TYPE_LABEL[p.type] ?? p.type}{p.enabled ? '' : '(已停用)'}</option>
+                          ))}
+                        </Select>
                       </Field>
+                      {(() => {
+                        const type = data.webSearch.fetchProviders.find((p) => p.id === ws.fetchProviderId)?.type ?? 'gemini';
+                        return (
+                          <Field label="读网页的模型" hint={type === 'gemini' ? '留空 = 与搜索模型相同,不占 Google 搜索额度' : '必填,例如 claude-haiku-5-5;推荐便宜快速的小模型'}>
+                            <Input value={ws.fetchModel} onChange={(e) => set({ fetchModel: e.target.value })}
+                              placeholder={type === 'gemini' ? ws.model || 'gemini-3.5-flash-lite' : type === 'anthropic' ? 'claude-haiku-5-5' : '模型 ID'} disabled={saving} />
+                          </Field>
+                        );
+                      })()}
                       <Field label="普通用户每日上限(次)" hint="每人每天打开网页的次数;0 为不限">
                         {num(ws.fetchDailyLimit, (n) => set({ fetchDailyLimit: n }), 0, 100000)}
                       </Field>
