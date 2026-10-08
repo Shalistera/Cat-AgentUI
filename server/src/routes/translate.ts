@@ -1,10 +1,6 @@
-// 翻译工坊: a Google-Translate-style text box pair. The admin picks two ordered
-// model chains (快速 / 思考) in 应用设置; users never see a model name — they
-// pick a mode and, for 思考, one of three intensity rungs which we map onto
-// whatever reasoning ladder the chosen model actually has unless the admin
-// sets a per-model mode and native effort. A chain walks to
-// the next model when one fails before producing any output, so a provider
-// having a bad moment doesn't blank the page.
+// Translation has three independent model chains. 'default' uses each
+// model's admin preset; explicit fast/think always honor the user's choice.
+// Failover proceeds only before output reaches the user.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
@@ -17,7 +13,7 @@ import { recordUsage } from '../usage.js';
 import { checkModelLimit, checkQuota, modelLimitBlockMessage, quotaBlockMessage } from '../quota.js';
 import { providerAllowed } from '../model-access.js';
 import { tryAcquireChatTurn } from '../admission.js';
-import { readTranslateChain, translateReasoning, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel } from '../translate-settings.js';
+import { readTranslateChain, translateReasoning, TRANSLATE_DEFAULT_KEY, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel } from '../translate-settings.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
 import type { ProviderType } from '../types.js';
 
@@ -53,7 +49,7 @@ const bodySchema = z.object({
   text: z.string().min(1).max(MAX_TRANSLATE_CHARS),
   source: z.enum(['auto', ...langCodes]),
   target: z.enum(langCodes),
-  mode: z.enum(['fast', 'think']),
+  mode: z.enum(['default', 'fast', 'think']).default('default'),
   level: z.number().int().min(1).max(3).default(2),
   scene: z.string().max(MAX_SCENE_CHARS).default(''),
 });
@@ -129,6 +125,7 @@ export async function translateRoutes(app: FastifyInstance) {
   app.get('/api/translate/config', async (req, reply) => {
     requireAuth(req, reply);
     return {
+      default: resolveChain(TRANSLATE_DEFAULT_KEY).length > 0,
       fast: resolveChain(TRANSLATE_FAST_KEY).length > 0,
       think: resolveChain(TRANSLATE_THINK_KEY).length > 0,
       languages: LANGUAGES,
@@ -144,7 +141,7 @@ export async function translateRoutes(app: FastifyInstance) {
     const { text, source, target, mode, level, scene } = body.data;
     const userId = req.user!.id;
 
-    const configured = resolveChain(mode === 'fast' ? TRANSLATE_FAST_KEY : TRANSLATE_THINK_KEY);
+    const configured = resolveChain(mode === 'default' ? TRANSLATE_DEFAULT_KEY : mode === 'fast' ? TRANSLATE_FAST_KEY : TRANSLATE_THINK_KEY);
     if (!configured.length) return reply.code(400).send({ error: '管理员尚未为该模式配置翻译模型' });
 
     const quota = checkQuota(userId);
@@ -214,7 +211,7 @@ export async function translateRoutes(app: FastifyInstance) {
             system,
             messages: [{ role: 'user', parts: [{ type: 'text', text }] }],
             maxTokens: config.maxModelOutputTokens,
-            reasoning: translateReasoning(settings, level, model, provider.type as ProviderType),
+            reasoning: translateReasoning(settings, mode, level, model, provider.type as ProviderType),
             signal: abort.signal,
           })) {
             if (ev.type === 'text') {

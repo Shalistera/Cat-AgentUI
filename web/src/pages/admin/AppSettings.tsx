@@ -22,8 +22,8 @@ function fmtBytes(n: number): string {
 const CHAIN_MAX = 6;
 
 /** Ordered model chain: the first is tried first, the rest are fallbacks. */
-function ModelChain({ entries, mode, onChange, models, disabled }: {
-  entries: TranslateModel[]; mode: TranslateModel['mode'];
+function ModelChain({ entries, mode, configureDefaults = false, onChange, models, disabled }: {
+  entries: TranslateModel[]; mode: TranslateModel['mode']; configureDefaults?: boolean;
   onChange(next: TranslateModel[]): void; models: ModelInfo[]; disabled?: boolean;
 }) {
   const byId = new Map(models.map((m) => [m.id, m]));
@@ -62,7 +62,7 @@ function ModelChain({ entries, mode, onChange, models, disabled }: {
                     className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-err disabled:opacity-30"
                     onClick={() => onChange(entries.filter((_, index) => index !== i))}><X size={13} /></button>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                {configureDefaults && <div className="grid grid-cols-2 gap-2">
                   <label className="space-y-1 text-xs text-tx3">
                     <span>默认模式</span>
                     <Select value={entry.mode} disabled={disabled}
@@ -77,14 +77,14 @@ function ModelChain({ entries, mode, onChange, models, disabled }: {
                     <Select value={entry.reasoningEffort ?? ''}
                       disabled={disabled || entry.mode === 'fast' || (!levels.length && !staleEffort)}
                       onChange={(e) => update(i, { reasoningEffort: e.target.value || null })}>
-                      <option value="">{entry.mode === 'fast' ? '不启用思考' : levels.length ? '跟随用户强度' : '无可用思考档位'}</option>
+                      <option value="">{entry.mode === 'fast' ? '不启用思考' : levels.length ? '中间档位' : '无可用思考档位'}</option>
                       {staleEffort && <option value={entry.reasoningEffort!} disabled>已失效：{entry.reasoningEffort}</option>}
                       {levels.map((l) => <option key={l.value} value={l.value}>{l.label} ({l.value})</option>)}
                     </Select>
                   </label>
-                </div>
-                {staleEffort && <p className="text-xs text-err">思考档位已变更,请重新选择等级或切换为快速模式。</p>}
-                {entry.mode === 'think' && !levels.length && !staleEffort && (
+                </div>}
+                {configureDefaults && staleEffort && <p className="text-xs text-err">思考档位已变更,请重新选择等级或切换为快速模式。</p>}
+                {configureDefaults && entry.mode === 'think' && !levels.length && !staleEffort && (
                   <p className="text-xs text-tx3">该模型未配置思考档位,将按普通模式调用。可在模型设置中配置思考档位。</p>
                 )}
               </li>
@@ -457,6 +457,7 @@ export default function AppSettings() {
   const [followupModel, setFollowupModel] = useState('');
   const [announcement, setAnnouncement] = useState('');
   const [usageCurrency, setUsageCurrency] = useState('$');
+  const [translateDefault, setTranslateDefault] = useState<TranslateModel[]>([]);
   const [translateFast, setTranslateFast] = useState<TranslateModel[]>([]);
   const [translateThink, setTranslateThink] = useState<TranslateModel[]>([]);
   const [textModels, setTextModels] = useState<ModelInfo[]>([]);
@@ -478,8 +479,11 @@ export default function AppSettings() {
     setFollowupModel(r.followupModelId ?? '');
     setAnnouncement(r.announcement ?? '');
     setUsageCurrency(r.usageCurrency ?? '$');
-    setTranslateFast(r.translateFastModels ?? (r.translateFastModelIds ?? []).map((modelId) => ({ modelId, mode: 'fast', reasoningEffort: null })));
-    setTranslateThink(r.translateThinkModels ?? (r.translateThinkModelIds ?? []).map((modelId) => ({ modelId, mode: 'think', reasoningEffort: null })));
+    setTranslateDefault(r.translateDefaultModels ?? []);
+    setTranslateFast((r.translateFastModels ?? (r.translateFastModelIds ?? []).map((modelId) => ({ modelId })))
+      .map((m) => ({ modelId: m.modelId, mode: 'fast', reasoningEffort: null })));
+    setTranslateThink((r.translateThinkModels ?? (r.translateThinkModelIds ?? []).map((modelId) => ({ modelId })))
+      .map((m) => ({ modelId: m.modelId, mode: 'think', reasoningEffort: null })));
   }
 
   useEffect(() => {
@@ -529,6 +533,7 @@ export default function AppSettings() {
         followupModelId: followupModel || null,
         announcement: announcement.trim(),
         usageCurrency: usageCurrency.trim() || '$',
+        translateDefaultModels: translateDefault,
         translateFastModels: translateFast,
         translateThinkModels: translateThink,
       });
@@ -690,19 +695,24 @@ export default function AppSettings() {
 
       <Card
         title="翻译工坊"
-        desc="用户选择「快速 / 思考」后,按对应模型链的顺序调用;前一个失败且尚未输出时自动切换。每个模型可单独设置默认调用模式和思考等级,同一模型在两条链中可使用不同设置。"
+        desc="用户可选「默认 / 快速 / 思考」。默认档使用下面设置的模型模式与等级;用户明确选择快速或思考时,按用户选择执行。各档位按模型顺序调用,失败且尚未输出时自动切换。"
       >
         <div className="space-y-5">
+          <fieldset className="min-w-0">
+            <legend className="mb-1.5 text-[13px] font-medium text-tx">默认档模型</legend>
+            <ModelChain entries={translateDefault} mode="fast" configureDefaults onChange={setTranslateDefault} models={textModels} disabled={busy} />
+            <p className="mt-1.5 text-xs text-tx3">仅在用户选择「默认」时使用这些预设。每个模型可设置快速或思考,思考等级选择模型原生档位;未指定时使用中间档位。</p>
+          </fieldset>
           <div className="grid gap-5 md:grid-cols-2">
             <fieldset className="min-w-0">
               <legend className="mb-1.5 text-[13px] font-medium text-tx">快速模式模型链</legend>
               <ModelChain entries={translateFast} mode="fast" onChange={setTranslateFast} models={textModels} disabled={busy} />
-              <p className="mt-1.5 text-xs text-tx3">新添加的模型默认使用快速模式,也可为个别模型开启思考。快速会关闭思考或使用模型支持的最低强度。</p>
+              <p className="mt-1.5 text-xs text-tx3">用户选择「快速」时使用。关闭思考或使用模型支持的最低强度,不受默认档预设影响。</p>
             </fieldset>
             <fieldset className="min-w-0">
               <legend className="mb-1.5 text-[13px] font-medium text-tx">思考模式模型链</legend>
               <ModelChain entries={translateThink} mode="think" onChange={setTranslateThink} models={textModels} disabled={busy} />
-              <p className="mt-1.5 text-xs text-tx3">可指定模型原生思考等级;选择「跟随用户强度」时,低 / 中 / 高映射到模型的最弱 / 中间 / 最强档位。</p>
+              <p className="mt-1.5 text-xs text-tx3">用户选择「思考」时使用。按用户选择的低 / 中 / 高映射到模型的最弱 / 中间 / 最强档位,不受默认档预设影响。</p>
             </fieldset>
           </div>
           <p className="text-xs leading-relaxed text-tx3">

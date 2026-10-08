@@ -12,24 +12,24 @@ import {
 import type { TranslateConfig, TranslateScene, User } from '../types';
 
 /* 翻译工坊 — a Google-Translate-shaped pair of boxes. The user picks languages,
-   快速/思考, a 3-rung intensity for 思考, and a 场景 (a style sentence that
+   默认/快速/思考, a 3-rung intensity for 思考, and a 场景 (a style sentence that
    lands in one slot of the server's fixed prompt). Models are the admin's
    business: see server/src/routes/translate.ts. Nothing runs until the user
    presses 翻译 — every call costs tokens. */
 
-type Mode = 'fast' | 'think';
+type Mode = 'default' | 'fast' | 'think';
 type Level = 1 | 2 | 3;
 
 const PREFS_KEY = 'cat-translate-prefs';
 const MAX_CUSTOM_SCENES = 4;
 
 interface Prefs { source: string; target: string; mode: Mode; level: Level; scene: string }
-const DEFAULT_PREFS: Prefs = { source: 'auto', target: 'zh-CN', mode: 'fast', level: 2, scene: 'general' };
+const DEFAULT_PREFS: Prefs = { source: 'auto', target: 'zh-CN', mode: 'default', level: 2, scene: 'general' };
 
 function loadPrefs(): Prefs {
   try {
     const raw = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
-    return { ...DEFAULT_PREFS, ...raw };
+    return { ...DEFAULT_PREFS, ...raw, mode: ['default', 'fast', 'think'].includes(raw?.mode) ? raw.mode : 'default' };
   } catch { return DEFAULT_PREFS; }
 }
 
@@ -94,8 +94,10 @@ export default function Translate() {
   // A mode the admin hasn't configured can't stay selected.
   useEffect(() => {
     if (!cfg) return;
-    if (prefs.mode === 'fast' && !cfg.fast && cfg.think) patchPrefs({ mode: 'think' });
-    if (prefs.mode === 'think' && !cfg.think && cfg.fast) patchPrefs({ mode: 'fast' });
+    if (!cfg[prefs.mode]) {
+      const available = (['default', 'fast', 'think'] as const).find((m) => cfg[m]);
+      if (available) patchPrefs({ mode: available });
+    }
   }, [cfg, prefs.mode]);
 
   const languages = cfg?.languages ?? {};
@@ -162,7 +164,7 @@ export default function Translate() {
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const modeAvailable = cfg ? (prefs.mode === 'fast' ? cfg.fast : cfg.think) : false;
+  const modeAvailable = cfg ? cfg[prefs.mode] : false;
 
   const run = useCallback(async (input: string) => {
     const body = input.trim();
@@ -228,7 +230,7 @@ export default function Translate() {
     <Button variant="outline" size="sm" onClick={stop}><Square size={11} fill="currentColor" />停止</Button>
   ) : (
     <Button variant="primary" size="sm" disabled={!canRun} onClick={() => void run(text)}>
-      {prefs.mode === 'fast' ? <Zap size={13} /> : <Brain size={13} />}翻译
+      {prefs.mode === 'default' ? <Languages size={13} /> : prefs.mode === 'fast' ? <Zap size={13} /> : <Brain size={13} />}翻译
     </Button>
   );
   const copyBtn = (
@@ -238,7 +240,7 @@ export default function Translate() {
   );
   const statsLine = (
     <>
-      <span>{prefs.mode === 'fast' ? '快速模式' : `思考模式 · 强度${['', '低', '中', '高'][prefs.level]}`}{activeScene.id !== 'general' ? ` · ${activeScene.name}` : ''}</span>
+      <span>{prefs.mode === 'default' ? '默认 · 管理员预设' : prefs.mode === 'fast' ? '快速模式' : `思考模式 · 强度${['', '低', '中', '高'][prefs.level]}`}{activeScene.id !== 'general' ? ` · ${activeScene.name}` : ''}</span>
       {stats && <span className="tabular-nums">{fmtTokens(stats.totalTokens)} tokens · {fmtDuration(stats.durationMs)}</span>}
     </>
   );
@@ -269,17 +271,17 @@ export default function Translate() {
               <EmptyState icon={<Languages size={22} />} title="翻译工坊暂不可用" hint={cfgError} />
             </Card>
           )}
-          {cfg && !cfg.fast && !cfg.think && (
+          {cfg && !cfg.default && !cfg.fast && !cfg.think && (
             <Card flush>
               <EmptyState
                 icon={<Languages size={22} />}
                 title="管理员尚未配置翻译模型"
-                hint="请管理员在「管理后台 → 应用设置 → 翻译工坊」中为快速或思考模式指定至少一个模型。"
+                hint="请管理员在「管理后台 → 应用设置 → 翻译工坊」中为默认、快速或思考模式指定至少一个模型。"
               />
             </Card>
           )}
 
-          {cfg && (cfg.fast || cfg.think) && (
+          {cfg && (cfg.default || cfg.fast || cfg.think) && (
             <>
               {/* toolbar */}
               <div className="space-y-3 rounded-xl border border-line bg-bg1 px-4 py-3 shadow-xs">
@@ -301,26 +303,26 @@ export default function Translate() {
                     <SegmentedControl<Mode>
                       value={prefs.mode}
                       onChange={(m) => {
+                        if (m === 'default' && !cfg.default) { toast('管理员尚未配置默认档的模型', 'err'); return; }
                         if (m === 'fast' && !cfg.fast) { toast('管理员尚未配置快速模式的模型', 'err'); return; }
                         if (m === 'think' && !cfg.think) { toast('管理员尚未配置思考模式的模型', 'err'); return; }
                         patchPrefs({ mode: m });
                       }}
                       options={[
+                        { value: 'default', label: '默认' },
                         { value: 'fast', label: '快速' },
                         { value: 'think', label: '思考' },
                       ]}
                     />
-                    <div
-                      className={`flex items-center gap-1.5 transition-opacity ${prefs.mode === 'think' ? '' : 'pointer-events-none opacity-40'}`}
-                      title={prefs.mode === 'think' ? '思考强度' : '思考强度仅在思考模式下生效'}
-                    >
+                    {prefs.mode === 'default' && <span className="text-xs text-tx3">使用管理员预设</span>}
+                    {prefs.mode === 'think' && <div className="flex items-center gap-1.5" title="思考强度">
                       <span className="text-xs text-tx3">强度</span>
                       <SegmentedControl<Level>
                         value={prefs.level}
                         onChange={(l) => patchPrefs({ level: l })}
                         options={[{ value: 1, label: '低' }, { value: 2, label: '中' }, { value: 3, label: '高' }]}
                       />
-                    </div>
+                    </div>}
                   </div>
                 </div>
 

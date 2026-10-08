@@ -34,7 +34,7 @@ export interface User {
 export interface TranslateModel {
   modelId: string;
   mode: 'fast' | 'think';
-  /** null follows the user's low / medium / high selection. */
+  /** Default mode only: null uses the middle reasoning tier. */
   reasoningEffort: string | null;
 }
 
@@ -42,7 +42,7 @@ export interface TranslateScene { name: string; text: string }
 
 /** /api/translate/config — which modes the admin has wired up. */
 export interface TranslateConfig {
-  fast: boolean; think: boolean;
+  default: boolean; fast: boolean; think: boolean;
   languages: Record<string, string>;
   maxChars: number; maxSceneChars: number;
 }
@@ -510,7 +510,8 @@ export interface AppSettings {
   announcement: string;
   /** 成本显示所用的货币符号,默认 $。 */
   usageCurrency: string;
-  /** 翻译工坊 快速 / 思考 两条模型链(models.id,按顺序 failover)。 */
+  /** 翻译工坊 默认 / 快速 / 思考 模型链,按顺序 failover。 */
+  translateDefaultModels: TranslateModel[];
   translateFastModels: TranslateModel[];
   translateThinkModels: TranslateModel[];
   translateFastModelIds: string[];

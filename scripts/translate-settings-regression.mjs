@@ -69,58 +69,87 @@ try {
     assert.deepEqual(await translate('think', level), [{ model: 'gpt-5-b', reasoning: { level: effort, ratio } }]);
   }
 
-  // Save/reload native tiers and independently configure the same model in both chains.
-  const fast = [entry('a', 'think', 'high'), entry('b', 'think', 'xhigh')];
-  const think = [entry('a', 'fast')];
-  let res = await save({ translateFastModels: fast, translateThinkModels: think });
+  // Existing chains supply a default until the admin configures one.
+  assert.deepEqual(view.translateDefaultModels, [entry('a', 'fast')]);
+  assert.deepEqual(await translate('default'), [{ model: 'gpt-5-a', reasoning: { level: 'off', ratio: 0 } }]);
+
+  // Admin presets apply only to the new default mode. Legacy overrides left
+  // in explicit chains must never override a user's fast/think selection.
+  const defaults = [entry('a', 'think', 'high'), entry('b', 'think', 'xhigh')];
+  const fast = [...defaults];
+  const think = [entry('a', 'fast'), entry('b', 'fast')];
+  let res = await save({ translateDefaultModels: defaults, translateFastModels: fast, translateThinkModels: think });
   assert.equal(res.statusCode, 200, res.body);
   view = (await request('GET', '/api/admin/settings')).json();
+  assert.deepEqual(view.translateDefaultModels, defaults);
   assert.deepEqual(view.translateFastModels, fast);
   assert.deepEqual(view.translateThinkModels, think);
   assert.deepEqual(view.translateFastModelIds, ['a', 'b']);
-  assert.deepEqual(await translate('fast', 1), [{ model: 'gpt-5-a', reasoning: { level: 'high', ratio: 1 } }]);
-  assert.deepEqual(await translate('think', 3), [{ model: 'gpt-5-a', reasoning: { level: 'off', ratio: 0 } }]);
+  assert.deepEqual(await translate('fast', 1), [{ model: 'gpt-5-a', reasoning: { level: 'off', ratio: 0 } }]);
+  assert.deepEqual(await translate('think', 3), [{ model: 'gpt-5-a', reasoning: { level: 'high', ratio: 1 } }]);
+  for (const level of [1, 3]) assert.deepEqual(await translate('default', level), [{ model: 'gpt-5-a', reasoning: { level: 'high', ratio: 1 } }]);
+  assert.deepEqual(await translate(undefined), [{ model: 'gpt-5-a', reasoning: { level: 'high', ratio: 1 } }], 'omitting mode selects defaults');
   failFirst = true;
-  assert.deepEqual(await translate('fast', 1), [
+  assert.deepEqual(await translate('default', 1), [
     { model: 'gpt-5-a', reasoning: { level: 'high', ratio: 1 } },
     { model: 'gpt-5-b', reasoning: { level: 'xhigh', ratio: 1 } },
   ]);
+  assert.deepEqual(await translate('fast', 3), [
+    { model: 'gpt-5-a', reasoning: { level: 'off', ratio: 0 } },
+    { model: 'gpt-5-b', reasoning: { level: 'off', ratio: 0 } },
+  ]);
+  assert.deepEqual(await translate('think', 1), [
+    { model: 'gpt-5-a', reasoning: { level: 'minimal', ratio: 0 } },
+    { model: 'gpt-5-b', reasoning: { level: 'low', ratio: 0 } },
+  ]);
   failFirst = false;
 
-  // Legacy admin clients can reorder a chain without erasing per-model settings.
+  // Default fast and unspecified effort do not inherit the user's saved intensity.
+  assert.equal((await save({ translateDefaultModels: [entry('a', 'fast')] })).statusCode, 200);
+  assert.deepEqual(await translate('default', 3), [{ model: 'gpt-5-a', reasoning: { level: 'off', ratio: 0 } }]);
+  assert.equal((await save({ translateDefaultModels: [entry('b', 'think')] })).statusCode, 200);
+  for (const level of [1, 3]) assert.deepEqual(await translate('default', level), [{ model: 'gpt-5-b', reasoning: { level: 'high', ratio: 0.5 } }]);
+  assert.equal((await save({ translateDefaultModels: [defaults[1], defaults[0]] })).statusCode, 200);
+
+  // Legacy clients can reorder explicit chains without changing the default chain.
   res = await save({ translateFastModelIds: ['b', 'a'] });
   assert.equal(res.statusCode, 200, res.body);
   assert.deepEqual(res.json().translateFastModels, [fast[1], fast[0]]);
-  assert.deepEqual(await translate('fast', 1), [{ model: 'gpt-5-b', reasoning: { level: 'xhigh', ratio: 1 } }]);
+  assert.deepEqual(res.json().translateDefaultModels, [defaults[1], defaults[0]]);
+  assert.deepEqual(await translate('fast', 1), [{ model: 'gpt-5-b', reasoning: { level: 'off', ratio: 0 } }]);
 
   // Invalid tiers/modes/models and excessive chains fail before any settings change.
   setSetting('brand', 'Before');
   const snapshot = getSetting('translate_fast_models', []);
   for (const invalid of [entry('a', 'think', 'xhigh'), entry('a', 'invalid'), entry('missing', 'fast'),
     entry('image', 'fast'), entry('plain', 'think', 'high'), entry('a', 'think', 'off')]) {
-    res = await save({ brand: 'After', translateFastModels: [], translateThinkModels: [invalid] });
+    res = await save({ brand: 'After', translateFastModels: [], translateDefaultModels: [invalid] });
     assert.equal(res.statusCode, 400, res.body);
     assert.equal(getSetting('brand', ''), 'Before');
     assert.deepEqual(getSetting('translate_fast_models', []), snapshot);
   }
-  assert.equal((await save({ translateFastModels: Array(7).fill(entry('a', 'fast')) })).statusCode, 400);
+  assert.equal((await save({ translateDefaultModels: Array(7).fill(entry('a', 'fast')) })).statusCode, 400);
   assert.equal((await save({ translateFastModels: [] }, 'alice')).statusCode, 403);
 
   // A later ladder edit must not send a stale tier to the provider.
   db.update(schema.models).set({ reasoningLevels: JSON.stringify([{ value: 'low' }, { value: 'high' }]) }).where(eq(schema.models.id, 'b')).run();
-  assert.deepEqual(await translate('fast', 1), [{ model: 'gpt-5-b', reasoning: { level: 'low', ratio: 0 } }]);
+  assert.deepEqual(await translate('default', 1), [{ model: 'gpt-5-b', reasoning: { level: 'high', ratio: 1 } }]);
   db.update(schema.models).set({ enabled: 0 }).where(eq(schema.models.id, 'b')).run();
-  assert.deepEqual(await translate('fast'), [{ model: 'gpt-5-a', reasoning: { level: 'high', ratio: 1 } }]);
+  assert.deepEqual(await translate('default'), [{ model: 'gpt-5-a', reasoning: { level: 'high', ratio: 1 } }]);
 
   // Models without reasoning remain usable; empty chains stay unavailable.
-  res = await save({ translateFastModels: [entry('plain', 'think')], translateThinkModels: [] });
+  res = await save({ translateDefaultModels: [entry('plain', 'fast')], translateFastModels: [], translateThinkModels: [] });
   assert.equal(res.statusCode, 200, res.body);
-  assert.deepEqual(await translate('fast'), [{ model: 'gpt-4o', reasoning: undefined }]);
+  assert.deepEqual(await translate('default'), [{ model: 'gpt-4o', reasoning: undefined }]);
   const publicConfig = (await request('GET', '/api/translate/config', undefined, 'alice')).json();
-  assert.equal(publicConfig.fast, true);
+  assert.equal(publicConfig.default, true);
+  assert.equal(publicConfig.fast, false);
   assert.equal(publicConfig.think, false);
   assert.equal(publicConfig.translateFastModels, undefined, 'model settings stay admin-only');
-  console.log('PASS: translation defaults, native tiers, fallback isolation, legacy compatibility, validation and admin authorization.');
+  assert.equal((await save({ translateDefaultModels: [], translateFastModels: [entry('a', 'fast')] })).statusCode, 200);
+  assert.equal((await request('GET', '/api/translate/config', undefined, 'alice')).json().default, false, 'explicitly empty default chain does not fall back to fast');
+  assert.equal((await request('POST', '/api/translate/stream', { text: 'text', source: 'en', target: 'zh-CN', mode: 'default' }, 'alice')).statusCode, 400);
+  console.log('PASS: explicit fast/think override presets, default mode isolation, translation defaults, native tiers, fallback isolation, legacy compatibility, validation and admin authorization.');
 } finally {
   adapter.streamChat = originalStream;
   await app.close();

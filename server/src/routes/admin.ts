@@ -29,7 +29,7 @@ import {
   MAX_USER_UPLOAD_MB, MAX_USER_UPLOAD_MB_KEY, maxUserUploadMb,
   removeOrphanFiles, removeUnreferencedUploads, storageOverview, unlinkStoredFiles,
 } from '../storage.js';
-import { readTranslateChain, translateModelSchema, TRANSLATE_CHAIN_MAX, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel } from '../translate-settings.js';
+import { readTranslateChain, translateModelSchema, TRANSLATE_CHAIN_MAX, TRANSLATE_DEFAULT_KEY, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel } from '../translate-settings.js';
 import { effectiveLevels } from '../reasoning.js';
 import type { ProviderType } from '../types.js';
 
@@ -179,6 +179,7 @@ const settingsSchema = z.object({
   announcement: z.string().max(4000).optional(), // 站内公告,空 = 不显示
   usageCurrency: z.string().max(8).optional(), // 成本显示的货币符号,如 ¥ / $
   // 翻译工坊的模型链(models.id,按顺序 failover);用户只选模式,不选模型
+  translateDefaultModels: z.array(translateModelSchema).max(TRANSLATE_CHAIN_MAX).optional(),
   translateFastModels: z.array(translateModelSchema).max(TRANSLATE_CHAIN_MAX).optional(),
   translateThinkModels: z.array(translateModelSchema).max(TRANSLATE_CHAIN_MAX).optional(),
   translateFastModelIds: z.array(z.string().max(64)).max(TRANSLATE_CHAIN_MAX).optional(),
@@ -527,6 +528,7 @@ export async function adminRoutes(app: FastifyInstance) {
       followupModelId: getSetting(FOLLOWUP_MODEL_KEY, '') || null,
       announcement: getSetting(ANNOUNCEMENT_KEY, ''),
       usageCurrency: getSetting(USAGE_CURRENCY_KEY, '$'),
+      translateDefaultModels: readTranslateChain(TRANSLATE_DEFAULT_KEY),
       translateFastModels: readTranslateChain(TRANSLATE_FAST_KEY),
       translateThinkModels: readTranslateChain(TRANSLATE_THINK_KEY),
       translateFastModelIds: readTranslateChain(TRANSLATE_FAST_KEY).map((m) => m.modelId),
@@ -543,13 +545,14 @@ export async function adminRoutes(app: FastifyInstance) {
     requireAdmin(req, reply);
     const body = settingsSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
-    // Validate both chains before persisting any settings in this request.
+    // Validate all chains before persisting any settings in this request.
     const translateUpdates: [string, TranslateModel[]][] = [];
     for (const [field, legacyField, key, mode] of [
+      ['translateDefaultModels', null, TRANSLATE_DEFAULT_KEY, 'fast'],
       ['translateFastModels', 'translateFastModelIds', TRANSLATE_FAST_KEY, 'fast'],
       ['translateThinkModels', 'translateThinkModelIds', TRANSLATE_THINK_KEY, 'think'],
     ] as const) {
-      const legacyIds = body.data[legacyField];
+      const legacyIds = legacyField ? body.data[legacyField] : undefined;
       const previous = readTranslateChain(key);
       const entries = body.data[field] ?? legacyIds?.map((modelId) =>
         previous.find((m) => m.modelId === modelId) ?? { modelId, mode, reasoningEffort: null });
