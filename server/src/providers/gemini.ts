@@ -163,7 +163,7 @@ function cleanSchema(schema: any): any {
  * native integration intentionally targets the current googleSearch tool used
  * by currently supported Gemini 2.5 and newer Vertex models. */
 export function supportsVertexGoogleSearch(model: string): boolean {
-  const match = /^gemini-(\d+)(?:\.(\d+))?/i.exec(model.trim());
+  const match = /^gemini-(\d+)(?:\.(\d+))?/i.exec((model.split('/').pop() ?? model).trim());
   if (!match) return false;
   const major = Number(match[1]);
   const minor = Number(match[2] ?? 0);
@@ -176,7 +176,7 @@ export function supportsVertexGoogleSearch(model: string): boolean {
  * against gemini-2.5-pro (400) / gemini-3.1-pro-preview, gemini-3.6-flash (200)
  * on 2026-09-15. */
 export function supportsVertexSearchWithFunctions(model: string): boolean {
-  const match = /^gemini-(\d+)/i.exec(model.trim());
+  const match = /^gemini-(\d+)/i.exec((model.split('/').pop() ?? model).trim());
   return !!match && Number(match[1]) >= 3;
 }
 

@@ -90,7 +90,7 @@ export default function AgentSettingsPage() {
           enabledLabel="允许使用工作区" enabledDesc={`每对话上限 ${fmtMb(data.limits.workspaceBytes)} / ${data.limits.workspaceFiles} 个文件,单文件 ${fmtMb(data.limits.workspaceFileBytes)}(环境变量 MAX_WORKSPACE_*)`} />
       </Card>
 
-      <Card title="联网搜索" desc="和 ChatGPT、Claude、Gemini 官方应用一样没有开关:模型自己判断要不要搜。Vertex 上的 Gemini 直接用原生 Google 搜索;其他模型(本地 Claude Code、OpenAI 兼容等)和子代理通过内置的 web_search 工具搜索。每次搜索依次尝试:搜索模型 → 备用模型 → 备用搜索源(MCP),前一步失败或超过 20 秒就换下一步;失败过的模型会暂停使用 2 分钟。">
+      <Card title="联网搜索" desc="模型按需搜索,资料足够时直接回答。Vertex 上的 Gemini 默认使用原生 Google 搜索;其他模型通过内置 web_search 搜索。搜索失败或超过 20 秒时依次尝试备用模型、备用搜索源(MCP);缺少来源链接不会触发自动重搜。">
         <div className="space-y-4">
           <AccessEditor value={s.webSearch} onChange={(v) => setS({ ...s, webSearch: { ...s.webSearch, ...v } })} users={users} disabled={saving}
             enabledLabel="允许联网搜索" enabledDesc="默认开启;需要用户开启智能工具,当前聊天模型支持工具调用" />
@@ -104,6 +104,29 @@ export default function AgentSettingsPage() {
             const mcp = data.webSearch.fallbackMcp;
             return (
               <div className="space-y-5">
+                <ToggleRow label="允许 Vertex 模型使用 Agent 搜索和网页阅读"
+                  desc="默认关闭:不向 Vertex Gemini 提供 web_search 和 web_fetch,子代理也受限,保留兼容模型的 Google 原生搜索。Gemini 2.5 与其他工具混用时不会回退到 Agent 搜索。开启后可补充网页阅读,在原生搜索不可用时使用 Agent 搜索。"
+                  checked={ws.allowVertexAgentTools} onChange={(v) => set({ allowVertexAgentTools: v })} disabled={saving} />
+                <div className="space-y-3 rounded-lg border border-line bg-bg0 p-3">
+                  <div>
+                    <div className="text-[13px] font-medium text-tx">每轮搜索与阅读上限</div>
+                    <p className="mt-1 text-xs text-tx3">一次回答的主对话和所有子代理共用,管理员同样受限。0 表示禁用该工具;搜索与阅读分别计数,重复查询或同一网页复用已有结果。达到上限后收起工具并要求模型依据已有资料作答。Google 原生搜索内部的查询次数由模型服务控制。</p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="未开启思考：搜索次数">
+                      {num(ws.fastMaxPerTurn, (n) => set({ fastMaxPerTurn: n }), 0, 20)}
+                    </Field>
+                    <Field label="未开启思考：阅读次数">
+                      {num(ws.fastFetchMaxPerTurn, (n) => set({ fastFetchMaxPerTurn: n }), 0, 20)}
+                    </Field>
+                    <Field label="开启思考：搜索次数">
+                      {num(ws.maxPerTurn, (n) => set({ maxPerTurn: n }), 0, 20)}
+                    </Field>
+                    <Field label="开启思考：阅读次数">
+                      {num(ws.fetchMaxPerTurn, (n) => set({ fetchMaxPerTurn: n }), 0, 20)}
+                    </Field>
+                  </div>
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="搜索模型" hint="只负责搜索和整理要点,推荐便宜快速的 Flash-Lite;回答仍由聊天模型完成">
                     <Input value={ws.model} onChange={(e) => set({ model: e.target.value })} placeholder="gemini-3.5-flash-lite" disabled={saving} />
@@ -131,11 +154,11 @@ export default function AgentSettingsPage() {
                   checked={ws.mcpFallback} onChange={(v) => set({ mcpFallback: v })} disabled={saving} />
                 <div className="space-y-3 rounded-lg border border-line bg-bg0 p-3">
                   <ToggleRow label="允许打开网页阅读原文(web_fetch)"
-                    desc="模型可以打开搜索结果或任意网页核实原文。服务器本机抓取并提取正文;长网页先由读网页的模型挑出相关的原文段落,逐字核对后再交给聊天模型,通常只占整页的 1/10,对本地 Claude Code 的额度更友好。本机读不到的网页交给 Gemini 代读并标注未核对。禁止访问内网与本机地址。"
+                    desc="模型按明确的阅读目标打开网页。未开启思考时,长网页直接返回关键词附近的原文片段,省去额外模型整理;开启思考时由阅读模型筛选并逐字核对摘录。本机读不到的网页交给 Gemini 代读并标注未核对。禁止访问内网与本机地址。"
                     checked={ws.fetchEnabled} onChange={(v) => set({ fetchEnabled: v })} disabled={saving} />
                   {ws.fetchEnabled && (
                     <div className="grid gap-4 sm:grid-cols-3">
-                      <Field label="读网页的模型" hint="留空 = 与搜索模型相同;每篇长文约 $0.005,不占 Google 搜索额度">
+                      <Field label="读网页的模型" hint="用于思考模式的长文摘录及本机读取失败后的代读;留空 = 与搜索模型相同,不占 Google 搜索额度">
                         <Input value={ws.fetchModel} onChange={(e) => set({ fetchModel: e.target.value })} placeholder={ws.model || 'gemini-3.5-flash-lite'} disabled={saving} />
                       </Field>
                       <Field label="普通用户每日上限(次)" hint="每人每天打开网页的次数;0 为不限">

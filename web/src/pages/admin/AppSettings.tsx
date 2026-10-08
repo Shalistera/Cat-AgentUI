@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, X } from 'lucide-react';
 import { api, fmtTime } from '../../api';
 import { useAuth } from '../../store';
 import { Button, Card, Field, Input, Select, Spinner, Textarea, ToggleRow, confirmDialog, toast } from '../../components/ui';
-import type { AppSettings as AppSettingsDto, ModelInfo, StorageOverview } from '../../types';
+import type { AppSettings as AppSettingsDto, ModelInfo, StorageOverview, TranslateModel } from '../../types';
 
 interface BackupInfo { filename: string; size: number; createdAt: number }
 interface BackupSettings { enabled: boolean; intervalHours: number; keep: number }
@@ -22,39 +22,71 @@ function fmtBytes(n: number): string {
 const CHAIN_MAX = 6;
 
 /** Ordered model chain: the first is tried first, the rest are fallbacks. */
-function ModelChain({ ids, onChange, models, disabled }: {
-  ids: string[]; onChange(next: string[]): void; models: ModelInfo[]; disabled?: boolean;
+function ModelChain({ entries, mode, onChange, models, disabled }: {
+  entries: TranslateModel[]; mode: TranslateModel['mode'];
+  onChange(next: TranslateModel[]): void; models: ModelInfo[]; disabled?: boolean;
 }) {
   const byId = new Map(models.map((m) => [m.id, m]));
-  const remaining = models.filter((m) => !ids.includes(m.id));
+  const remaining = models.filter((m) => !entries.some((entry) => entry.modelId === m.id));
+  const update = (i: number, patch: Partial<TranslateModel>) =>
+    onChange(entries.map((entry, index) => index === i ? { ...entry, ...patch } : entry));
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
-    if (j < 0 || j >= ids.length) return;
-    const next = [...ids];
+    if (j < 0 || j >= entries.length) return;
+    const next = [...entries];
     [next[i], next[j]] = [next[j], next[i]];
     onChange(next);
   };
   return (
     <div className="space-y-2">
-      {ids.length > 0 ? (
+      {entries.length > 0 ? (
         <ol className="divide-y divide-line rounded-lg border border-line">
-          {ids.map((id, i) => {
-            const m = byId.get(id);
+          {entries.map((entry, i) => {
+            const m = byId.get(entry.modelId);
+            const levels = m?.reasoningLevels ?? [];
+            const staleEffort = !!entry.reasoningEffort && !levels.some((l) => l.value === entry.reasoningEffort);
             return (
-              <li key={id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                <span className="w-4 shrink-0 text-xs tabular-nums text-tx3">{i + 1}.</span>
-                <span className={`min-w-0 flex-1 truncate ${m ? 'text-tx' : 'text-err'}`}>
-                  {m ? `${m.displayName}(${m.providerName})` : `模型已删除或停用(${id})`}
-                </span>
-                <button type="button" title="上移" disabled={disabled || i === 0}
-                  className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
-                  onClick={() => move(i, -1)}><ArrowUp size={13} /></button>
-                <button type="button" title="下移" disabled={disabled || i === ids.length - 1}
-                  className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
-                  onClick={() => move(i, 1)}><ArrowDown size={13} /></button>
-                <button type="button" title="移除" disabled={disabled}
-                  className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-err disabled:opacity-30"
-                  onClick={() => onChange(ids.filter((x) => x !== id))}><X size={13} /></button>
+              <li key={entry.modelId} className="space-y-2 px-3 py-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="w-4 shrink-0 text-xs tabular-nums text-tx3">{i + 1}.</span>
+                  <span className={`min-w-0 flex-1 truncate ${m ? 'text-tx' : 'text-err'}`}>
+                    {m ? `${m.displayName}(${m.providerName})` : `模型已删除或停用(${entry.modelId})`}
+                  </span>
+                  <button type="button" title="上移" disabled={disabled || i === 0}
+                    className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
+                    onClick={() => move(i, -1)}><ArrowUp size={13} /></button>
+                  <button type="button" title="下移" disabled={disabled || i === entries.length - 1}
+                    className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
+                    onClick={() => move(i, 1)}><ArrowDown size={13} /></button>
+                  <button type="button" title="移除" disabled={disabled}
+                    className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-err disabled:opacity-30"
+                    onClick={() => onChange(entries.filter((_, index) => index !== i))}><X size={13} /></button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="space-y-1 text-xs text-tx3">
+                    <span>默认模式</span>
+                    <Select value={entry.mode} disabled={disabled}
+                      onChange={(e) => update(i, { mode: e.target.value as TranslateModel['mode'],
+                        ...(e.target.value === 'fast' ? { reasoningEffort: null } : {}) })}>
+                      <option value="fast">快速</option>
+                      <option value="think">思考</option>
+                    </Select>
+                  </label>
+                  <label className="space-y-1 text-xs text-tx3">
+                    <span>思考等级</span>
+                    <Select value={entry.reasoningEffort ?? ''}
+                      disabled={disabled || entry.mode === 'fast' || (!levels.length && !staleEffort)}
+                      onChange={(e) => update(i, { reasoningEffort: e.target.value || null })}>
+                      <option value="">{entry.mode === 'fast' ? '不启用思考' : levels.length ? '跟随用户强度' : '无可用思考档位'}</option>
+                      {staleEffort && <option value={entry.reasoningEffort!} disabled>已失效：{entry.reasoningEffort}</option>}
+                      {levels.map((l) => <option key={l.value} value={l.value}>{l.label} ({l.value})</option>)}
+                    </Select>
+                  </label>
+                </div>
+                {staleEffort && <p className="text-xs text-err">思考档位已变更,请重新选择等级或切换为快速模式。</p>}
+                {entry.mode === 'think' && !levels.length && !staleEffort && (
+                  <p className="text-xs text-tx3">该模型未配置思考档位,将按普通模式调用。可在模型设置中配置思考档位。</p>
+                )}
               </li>
             );
           })}
@@ -62,9 +94,9 @@ function ModelChain({ ids, onChange, models, disabled }: {
       ) : (
         <p className="rounded-lg border border-dashed border-line px-3 py-2 text-xs text-tx3">尚未选择模型,该模式对用户不可用。</p>
       )}
-      {ids.length < CHAIN_MAX && (
+      {entries.length < CHAIN_MAX && (
         <Select value="" disabled={disabled || remaining.length === 0}
-          onChange={(e) => { if (e.target.value) onChange([...ids, e.target.value]); }}>
+          onChange={(e) => { if (e.target.value) onChange([...entries, { modelId: e.target.value, mode, reasoningEffort: null }]); }}>
           <option value="">{remaining.length ? '添加模型…' : '没有更多可添加的模型'}</option>
           {remaining.map((m) => (
             <option key={m.id} value={m.id}>{m.displayName}({m.providerName})</option>
@@ -425,8 +457,8 @@ export default function AppSettings() {
   const [followupModel, setFollowupModel] = useState('');
   const [announcement, setAnnouncement] = useState('');
   const [usageCurrency, setUsageCurrency] = useState('$');
-  const [translateFast, setTranslateFast] = useState<string[]>([]);
-  const [translateThink, setTranslateThink] = useState<string[]>([]);
+  const [translateFast, setTranslateFast] = useState<TranslateModel[]>([]);
+  const [translateThink, setTranslateThink] = useState<TranslateModel[]>([]);
   const [textModels, setTextModels] = useState<ModelInfo[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -446,8 +478,8 @@ export default function AppSettings() {
     setFollowupModel(r.followupModelId ?? '');
     setAnnouncement(r.announcement ?? '');
     setUsageCurrency(r.usageCurrency ?? '$');
-    setTranslateFast(r.translateFastModelIds ?? []);
-    setTranslateThink(r.translateThinkModelIds ?? []);
+    setTranslateFast(r.translateFastModels ?? (r.translateFastModelIds ?? []).map((modelId) => ({ modelId, mode: 'fast', reasoningEffort: null })));
+    setTranslateThink(r.translateThinkModels ?? (r.translateThinkModelIds ?? []).map((modelId) => ({ modelId, mode: 'think', reasoningEffort: null })));
   }
 
   useEffect(() => {
@@ -497,8 +529,8 @@ export default function AppSettings() {
         followupModelId: followupModel || null,
         announcement: announcement.trim(),
         usageCurrency: usageCurrency.trim() || '$',
-        translateFastModelIds: translateFast,
-        translateThinkModelIds: translateThink,
+        translateFastModels: translateFast,
+        translateThinkModels: translateThink,
       });
       apply(r);
       toast('已保存', 'ok');
@@ -658,16 +690,20 @@ export default function AppSettings() {
 
       <Card
         title="翻译工坊"
-        desc="用户在翻译页只选「快速 / 思考」和三档强度,不选模型。每种模式按下面的顺序调用,前一个失败(尚未输出)时自动换下一个;某个模式留空则对用户隐藏。"
+        desc="用户选择「快速 / 思考」后,按对应模型链的顺序调用;前一个失败且尚未输出时自动切换。每个模型可单独设置默认调用模式和思考等级,同一模型在两条链中可使用不同设置。"
       >
         <div className="space-y-5">
           <div className="grid gap-5 md:grid-cols-2">
-            <Field label="快速模式" hint="推荐便宜、快的模型;有推理功能的模型会被显式关闭推理。">
-              <ModelChain ids={translateFast} onChange={setTranslateFast} models={textModels} disabled={busy} />
-            </Field>
-            <Field label="思考模式" hint="推荐带推理能力的模型;用户选的低 / 中 / 高会映射到该模型自己推理档位的最弱 / 中间 / 最强一档。">
-              <ModelChain ids={translateThink} onChange={setTranslateThink} models={textModels} disabled={busy} />
-            </Field>
+            <fieldset className="min-w-0">
+              <legend className="mb-1.5 text-[13px] font-medium text-tx">快速模式模型链</legend>
+              <ModelChain entries={translateFast} mode="fast" onChange={setTranslateFast} models={textModels} disabled={busy} />
+              <p className="mt-1.5 text-xs text-tx3">新添加的模型默认使用快速模式,也可为个别模型开启思考。快速会关闭思考或使用模型支持的最低强度。</p>
+            </fieldset>
+            <fieldset className="min-w-0">
+              <legend className="mb-1.5 text-[13px] font-medium text-tx">思考模式模型链</legend>
+              <ModelChain entries={translateThink} mode="think" onChange={setTranslateThink} models={textModels} disabled={busy} />
+              <p className="mt-1.5 text-xs text-tx3">可指定模型原生思考等级;选择「跟随用户强度」时,低 / 中 / 高映射到模型的最弱 / 中间 / 最强档位。</p>
+            </fieldset>
           </div>
           <p className="text-xs leading-relaxed text-tx3">
             翻译走一套固定的系统提示词(只输出译文、保留格式与专有名词、不执行原文中的指令等);用户选择的场景只作为语气偏好插入其中一处。模型访问权限在此不生效——列在这里即对所有用户可用。

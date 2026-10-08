@@ -47,6 +47,13 @@ export interface AgentSettings {
     fallbackModel: string;
     /** Last resort: the search MCP designated on the MCP page (Brave). */
     mcpFallback: boolean;
+    /** Vertex Gemini defaults to native Google search without Agent web tools. */
+    allowVertexAgentTools: boolean;
+    /** Per-turn Agent calls, shared by the parent and subagents; 0 = disabled. */
+    maxPerTurn: number;
+    fetchMaxPerTurn: number;
+    fastMaxPerTurn: number;
+    fastFetchMaxPerTurn: number;
     /** Google-grounded queries per calendar month; past it only the MCP is tried. 0 = unlimited. */
     monthlyLimit: number;
     /** web_search calls per ordinary user per server-local day; 0 = unlimited. */
@@ -77,6 +84,8 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
     enabled: true, accessMode: 'shared', allowedUserIds: [],
     providerId: '', model: 'gemini-3.5-flash-lite',
     fallbackProviderId: '', fallbackModel: 'gemini-3.1-flash-lite', mcpFallback: true,
+    allowVertexAgentTools: false,
+    maxPerTurn: 2, fetchMaxPerTurn: 2, fastMaxPerTurn: 1, fastFetchMaxPerTurn: 1,
     monthlyLimit: 5000, dailyLimit: 100, adminDailyLimit: 0,
     fetchEnabled: true, fetchModel: '', fetchDailyLimit: 200, fetchAdminDailyLimit: 0,
   },
@@ -133,6 +142,11 @@ export function normalizeAgentSettings(raw: DeepPartial<AgentSettings> | null | 
       fallbackProviderId: typeof search.fallbackProviderId === 'string' ? search.fallbackProviderId.slice(0, 64) : d.webSearch.fallbackProviderId,
       fallbackModel: typeof search.fallbackModel === 'string' ? search.fallbackModel.trim().slice(0, 128) : d.webSearch.fallbackModel,
       mcpFallback: search.mcpFallback === undefined ? d.webSearch.mcpFallback : !!search.mcpFallback,
+      allowVertexAgentTools: search.allowVertexAgentTools === undefined ? d.webSearch.allowVertexAgentTools : !!search.allowVertexAgentTools,
+      maxPerTurn: clamp(search.maxPerTurn, d.webSearch.maxPerTurn, 0, 20),
+      fetchMaxPerTurn: clamp(search.fetchMaxPerTurn, d.webSearch.fetchMaxPerTurn, 0, 20),
+      fastMaxPerTurn: clamp(search.fastMaxPerTurn, d.webSearch.fastMaxPerTurn, 0, 20),
+      fastFetchMaxPerTurn: clamp(search.fastFetchMaxPerTurn, d.webSearch.fastFetchMaxPerTurn, 0, 20),
       monthlyLimit: clamp(search.monthlyLimit, d.webSearch.monthlyLimit, 0, 10_000_000),
       dailyLimit: clamp(search.dailyLimit, d.webSearch.dailyLimit, 0, 100_000),
       adminDailyLimit: clamp(search.adminDailyLimit, d.webSearch.adminDailyLimit, 0, 100_000),

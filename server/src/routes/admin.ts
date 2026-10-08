@@ -29,7 +29,9 @@ import {
   MAX_USER_UPLOAD_MB, MAX_USER_UPLOAD_MB_KEY, maxUserUploadMb,
   removeOrphanFiles, removeUnreferencedUploads, storageOverview, unlinkStoredFiles,
 } from '../storage.js';
-import { TRANSLATE_CHAIN_MAX, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY } from './translate.js';
+import { readTranslateChain, translateModelSchema, TRANSLATE_CHAIN_MAX, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel } from '../translate-settings.js';
+import { effectiveLevels } from '../reasoning.js';
+import type { ProviderType } from '../types.js';
 
 const DAY_MS = 86_400_000;
 
@@ -177,6 +179,8 @@ const settingsSchema = z.object({
   announcement: z.string().max(4000).optional(), // 站内公告,空 = 不显示
   usageCurrency: z.string().max(8).optional(), // 成本显示的货币符号,如 ¥ / $
   // 翻译工坊的模型链(models.id,按顺序 failover);用户只选模式,不选模型
+  translateFastModels: z.array(translateModelSchema).max(TRANSLATE_CHAIN_MAX).optional(),
+  translateThinkModels: z.array(translateModelSchema).max(TRANSLATE_CHAIN_MAX).optional(),
   translateFastModelIds: z.array(z.string().max(64)).max(TRANSLATE_CHAIN_MAX).optional(),
   translateThinkModelIds: z.array(z.string().max(64)).max(TRANSLATE_CHAIN_MAX).optional(),
 });
@@ -523,8 +527,10 @@ export async function adminRoutes(app: FastifyInstance) {
       followupModelId: getSetting(FOLLOWUP_MODEL_KEY, '') || null,
       announcement: getSetting(ANNOUNCEMENT_KEY, ''),
       usageCurrency: getSetting(USAGE_CURRENCY_KEY, '$'),
-      translateFastModelIds: getSetting<string[]>(TRANSLATE_FAST_KEY, []),
-      translateThinkModelIds: getSetting<string[]>(TRANSLATE_THINK_KEY, []),
+      translateFastModels: readTranslateChain(TRANSLATE_FAST_KEY),
+      translateThinkModels: readTranslateChain(TRANSLATE_THINK_KEY),
+      translateFastModelIds: readTranslateChain(TRANSLATE_FAST_KEY).map((m) => m.modelId),
+      translateThinkModelIds: readTranslateChain(TRANSLATE_THINK_KEY).map((m) => m.modelId),
     };
   };
 
@@ -537,6 +543,31 @@ export async function adminRoutes(app: FastifyInstance) {
     requireAdmin(req, reply);
     const body = settingsSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    // Validate both chains before persisting any settings in this request.
+    const translateUpdates: [string, TranslateModel[]][] = [];
+    for (const [field, legacyField, key, mode] of [
+      ['translateFastModels', 'translateFastModelIds', TRANSLATE_FAST_KEY, 'fast'],
+      ['translateThinkModels', 'translateThinkModelIds', TRANSLATE_THINK_KEY, 'think'],
+    ] as const) {
+      const legacyIds = body.data[legacyField];
+      const previous = readTranslateChain(key);
+      const entries = body.data[field] ?? legacyIds?.map((modelId) =>
+        previous.find((m) => m.modelId === modelId) ?? { modelId, mode, reasoningEffort: null });
+      if (entries === undefined) continue;
+      const unique = [...new Map(entries.map((m) => [m.modelId, m])).values()];
+      for (const entry of unique) {
+        const row = db.select().from(schema.models)
+          .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
+          .where(eq(schema.models.id, entry.modelId)).get();
+        if (!row || row.models.imageGen) return reply.code(400).send({ error: '翻译模型无效,请选择文本模型' });
+        const levels = effectiveLevels(row.models.reasoningMode, row.models.reasoningLevels,
+          row.providers.type as ProviderType, row.models.modelId);
+        if (entry.reasoningEffort !== null && !levels.some((l) => l.value === entry.reasoningEffort)) {
+          return reply.code(400).send({ error: `翻译模型「${row.models.displayName || row.models.modelId}」不支持所选思考等级,请重新选择` });
+        }
+      }
+      translateUpdates.push([key, unique]);
+    }
     if (body.data.signupEnabled !== undefined) setSetting('signup_enabled', body.data.signupEnabled);
     if (body.data.brand !== undefined) setSetting('brand', body.data.brand);
     if (body.data.imageRetentionDays !== undefined) setSetting(IMAGE_RETENTION_KEY, body.data.imageRetentionDays);
@@ -586,19 +617,9 @@ export async function adminRoutes(app: FastifyInstance) {
       }
       setSetting(FOLLOWUP_MODEL_KEY, id ?? '');
     }
-    for (const [field, key] of [
-      ['translateFastModelIds', TRANSLATE_FAST_KEY], ['translateThinkModelIds', TRANSLATE_THINK_KEY],
-    ] as const) {
-      const ids = body.data[field];
-      if (ids === undefined) continue;
-      const unique = [...new Set(ids)];
-      for (const id of unique) {
-        const m = db.select({ id: schema.models.id, imageGen: schema.models.imageGen })
-          .from(schema.models).where(eq(schema.models.id, id)).get();
-        if (!m || m.imageGen) return reply.code(400).send({ error: '翻译模型无效,请选择文本模型' });
-      }
-      setSetting(key, unique);
-    }
+    db.transaction(() => {
+      for (const [key, entries] of translateUpdates) setSetting(key, entries);
+    });
     if (body.data.imageRetentionDays !== undefined || body.data.chatImageRetentionDays !== undefined) {
       // A shortened window should take effect now, not at the next hourly tick.
       sweepExpiredImages();

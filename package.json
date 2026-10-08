@@ -14,6 +14,7 @@
     "test:security": "npm run build && node scripts/security-regression.mjs",
     "test:workspace-links": "node --import tsx scripts/workspace-links-regression.mjs",
     "test:model-fallback": "node --import tsx scripts/model-fallback-regression.mjs",
+    "test:translate-settings": "npm run build -w server && node scripts/translate-settings-regression.mjs",
     "test:image-tool": "npm run build -w server && node scripts/image-tool-regression.mjs",
     "test:novelai": "npm run build -w server && node scripts/novelai-regression.mjs",
     "test:nai-tags": "node --import tsx scripts/nai-tags-regression.mjs",

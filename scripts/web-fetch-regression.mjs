@@ -15,14 +15,15 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-web-fetch-'));
 process.env.DATA_DIR = temp;
 process.env.SECRET_KEY = 'web-fetch-regression-secret';
 const { db, rawDb, schema, runMigrations, setSetting } = await import('../server/dist/db/index.js');
-const { saveAgentSettings } = await import('../server/dist/agent-settings.js');
-const { runWebFetch, urlProblem, isBlockedAddress, extractArticle, primeFetchCache, clearFetchCache } = await import('../server/dist/web-fetch.js');
+const { saveAgentSettings, getAgentSettings } = await import('../server/dist/agent-settings.js');
+const { runWebFetch, urlProblem, isBlockedAddress, extractArticle, primeFetchCache, clearFetchCache, focusedWindows } = await import('../server/dist/web-fetch.js');
 const { authPlugin } = await import('../server/dist/auth.js');
 const { sha256hex } = await import('../server/dist/crypto.js');
 const { authRoutes } = await import('../server/dist/routes/auth.js');
 const { agentRoutes } = await import('../server/dist/routes/agent.js');
 const { chatRoutes } = await import('../server/dist/routes/chats.js');
 const { getAdapter } = await import('../server/dist/providers/index.js');
+const { WebToolBudget } = await import('../server/dist/web-tool-policy.js');
 
 const app = Fastify();
 app.setErrorHandler((err, _req, reply) => reply.code(err.message === 'forbidden' ? 403 : err.message === 'unauthorized' ? 401 : 500).send({ error: err.message }));
@@ -172,7 +173,38 @@ try {
   assert.equal((await request('PUT', '/api/admin/agent', { webSearch: { fetchModel: 'gpt-4o' } }, 'admin')).statusCode, 400);
   assert.equal((await request('PUT', '/api/admin/agent', { webSearch: { fetchModel: 'gemini-3.1-flash-lite' } }, 'admin')).statusCode, 200);
 
-  console.log('PASS: web_fetch address guards (loopback refused), reader-view extraction, verbatim-checked excerpts, offset windows, short pages whole, reading model + daily caps, chat turn with sources, switch, admin validation.');
+  // Fast turns extract verbatim relevant windows without a second LLM call.
+  saveAgentSettings({ webSearch: { fetchDailyLimit: 0 } });
+  const deepPage = `${filler(800)}\n${FACT}\n${filler(800)}`;
+  const deepUrl = 'https://news.example/deep';
+  primeFetchCache(deepUrl, { title: '长篇事故通报', text: deepPage });
+  const fastContext = () => ({ ...ctx(), budget: new WebToolBudget(getAgentSettings().webSearch, false) });
+  distillRequests = [];
+  const fast = await runWebFetch(fastContext(), JSON.stringify({ url: deepUrl, focus: '受伤人数' }));
+  assert.equal(fast.isError, false);
+  assert(fast.result.includes(FACT), 'find relevant material far beyond the first window');
+  assert(fast.result.includes('未覆盖全文'), 'do not imply the whole article was read');
+  assert.equal(distillRequests.length, 0, 'no hidden reading-model request in fast mode');
+  const windows = focusedWindows(deepPage, '受伤人数');
+  assert(windows.length > 0);
+  assert(windows.reduce((n, w) => n + w.text.length, 0) <= 6000);
+  for (const w of windows) assert.equal(w.text, deepPage.slice(w.at, w.at + w.text.length), 'all excerpts and offsets are verbatim');
+  const unmatched = await runWebFetch(fastContext(), JSON.stringify({ url: deepUrl, focus: '不存在的关键字 xyzzy' }));
+  assert(unmatched.result.includes('未匹配到目标关键词'));
+  assert(unmatched.result.includes(deepPage.slice(0, 100)));
+  assert.equal(distillRequests.length, 0);
+  // Explicit offsets retain full sequential reading when the user needs it.
+  const offset = deepPage.indexOf(FACT);
+  const atFact = await runWebFetch(fastContext(), JSON.stringify({ url: deepUrl, focus: '受伤', offset }));
+  assert(atFact.result.includes(FACT));
+  assert.equal(distillRequests.length, 0);
+  const thought = await runWebFetch({ ...ctx(), budget: new WebToolBudget(getAgentSettings().webSearch, true) },
+    JSON.stringify({ url: deepUrl, focus: '受伤人数' }));
+  assert.equal(thought.isError, false);
+  assert.equal(distillRequests.length, 1, 'thinking mode retains the reading model');
+  assert(thought.result.includes(FACT));
+
+  console.log('PASS: web_fetch address guards (loopback refused), reader-view extraction, verbatim-checked excerpts, offset windows, short pages whole, reading model + daily caps, chat turn with sources, switch, fast local excerpts without LLM calls, thinking excerpts and admin validation.');
 } finally {
   clearFetchCache();
   openai.streamChat = originals.openai;

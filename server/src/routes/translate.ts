@@ -1,13 +1,14 @@
 // 翻译工坊: a Google-Translate-style text box pair. The admin picks two ordered
 // model chains (快速 / 思考) in 应用设置; users never see a model name — they
 // pick a mode and, for 思考, one of three intensity rungs which we map onto
-// whatever reasoning ladder the chosen model actually has. A chain walks to
+// whatever reasoning ladder the chosen model actually has unless the admin
+// sets a per-model mode and native effort. A chain walks to
 // the next model when one fails before producing any output, so a provider
 // having a bad moment doesn't blank the page.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
-import { db, getSetting, schema } from '../db/index.js';
+import { db, schema } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
@@ -16,13 +17,9 @@ import { recordUsage } from '../usage.js';
 import { checkModelLimit, checkQuota, modelLimitBlockMessage, quotaBlockMessage } from '../quota.js';
 import { providerAllowed } from '../model-access.js';
 import { tryAcquireChatTurn } from '../admission.js';
-import { OFF, effectiveLevels } from '../reasoning.js';
+import { readTranslateChain, translateReasoning, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel } from '../translate-settings.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
-import type { ProviderType, ReasoningRequest } from '../types.js';
-
-export const TRANSLATE_FAST_KEY = 'translate_fast_models';
-export const TRANSLATE_THINK_KEY = 'translate_think_models';
-export const TRANSLATE_CHAIN_MAX = 6;
+import type { ProviderType } from '../types.js';
 
 export const MAX_TRANSLATE_CHARS = 20_000;
 export const MAX_SCENE_CHARS = 300;
@@ -92,30 +89,18 @@ function translatePrompt(source: string, target: string, scene: string): string 
   return lines.join('\n');
 }
 
-/** Three user-facing rungs onto a model's own ladder: weakest / middle / strongest. */
-function reasoningFor(
-  mode: 'fast' | 'think', level: number,
-  model: typeof schema.models.$inferSelect, type: ProviderType,
-): ReasoningRequest | undefined {
-  const levels = effectiveLevels(model.reasoningMode, model.reasoningLevels, type, model.modelId);
-  if (!levels.length) return undefined;
-  if (mode === 'fast') return { level: OFF, ratio: 0 };
-  const idx = Math.round((levels.length - 1) * (level - 1) / 2);
-  return { level: levels[idx].value, ratio: levels.length > 1 ? idx / (levels.length - 1) : 1 };
-}
-
 /** Saved chain → usable (enabled, text) model+provider rows, in admin order. */
 export function resolveChain(key: string) {
-  const ids = getSetting<string[]>(key, []);
-  const out: { models: typeof schema.models.$inferSelect; providers: typeof schema.providers.$inferSelect }[] = [];
-  for (const id of ids) {
+  const entries = readTranslateChain(key);
+  const out: { models: typeof schema.models.$inferSelect; providers: typeof schema.providers.$inferSelect; settings: TranslateModel }[] = [];
+  for (const settings of entries) {
     const row = db.select().from(schema.models)
       .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
       .where(and(
-        eq(schema.models.id, id), eq(schema.models.enabled, 1),
+        eq(schema.models.id, settings.modelId), eq(schema.models.enabled, 1),
         eq(schema.models.imageGen, 0), eq(schema.providers.enabled, 1),
       )).get();
-    if (row) out.push(row);
+    if (row) out.push({ ...row, settings });
   }
   return out;
 }
@@ -192,7 +177,7 @@ export async function translateRoutes(app: FastifyInstance) {
 
     try {
       for (let i = 0; i < chain.length && !abort.signal.aborted; i++) {
-        const { models: model, providers: provider } = chain[i];
+        const { models: model, providers: provider, settings } = chain[i];
         const usage = { prompt: 0, completion: 0, total: 0 };
         let emitted = false;
         // Language-mark parsing: hold the head of the stream until we know
@@ -229,7 +214,7 @@ export async function translateRoutes(app: FastifyInstance) {
             system,
             messages: [{ role: 'user', parts: [{ type: 'text', text }] }],
             maxTokens: config.maxModelOutputTokens,
-            reasoning: reasoningFor(mode, level, model, provider.type as ProviderType),
+            reasoning: translateReasoning(settings, level, model, provider.type as ProviderType),
             signal: abort.signal,
           })) {
             if (ev.type === 'text') {

@@ -30,6 +30,14 @@ export interface User {
   };
 }
 
+/** Per-model invocation settings within a translation fallback chain. */
+export interface TranslateModel {
+  modelId: string;
+  mode: 'fast' | 'think';
+  /** null follows the user's low / medium / high selection. */
+  reasoningEffort: string | null;
+}
+
 export interface TranslateScene { name: string; text: string }
 
 /** /api/translate/config — which modes the admin has wired up. */
@@ -503,6 +511,8 @@ export interface AppSettings {
   /** 成本显示所用的货币符号,默认 $。 */
   usageCurrency: string;
   /** 翻译工坊 快速 / 思考 两条模型链(models.id,按顺序 failover)。 */
+  translateFastModels: TranslateModel[];
+  translateThinkModels: TranslateModel[];
   translateFastModelIds: string[];
   translateThinkModelIds: string[];
 }
@@ -625,6 +635,8 @@ export interface AgentSettings {
   };
   webSearch: AccessPolicy & {
     providerId: string; model: string; fallbackProviderId: string; fallbackModel: string; mcpFallback: boolean;
+    allowVertexAgentTools: boolean;
+    maxPerTurn: number; fetchMaxPerTurn: number; fastMaxPerTurn: number; fastFetchMaxPerTurn: number;
     monthlyLimit: number; dailyLimit: number; adminDailyLimit: number;
     fetchEnabled: boolean; fetchModel: string; fetchDailyLimit: number; fetchAdminDailyLimit: number;
   };

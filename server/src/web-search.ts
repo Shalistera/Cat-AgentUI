@@ -24,16 +24,17 @@ import { getAgentSettings, policyAllows, type AgentUser } from './agent-settings
 import { callTool, getToolsForServers } from './mcp/manager.js';
 import { canUseMcpServer } from './mcp/access.js';
 import { getSearchServerId } from './routes/mcp.js';
+import type { WebToolBudget } from './web-tool-policy.js';
 import type { GroundingSource, ToolDef } from './types.js';
 
 export const WEB_SEARCH_TOOL = 'web_search';
 
 export const WEB_SEARCH_TOOL_DEF: ToolDef = {
   name: WEB_SEARCH_TOOL,
-  description: '搜索网页,返回要点与编号来源链接。问题涉及时效性信息、近期事件、具体数据、价格版本或你不确定的事实时调用;一次一个查询,结果不够可以换个说法再搜。',
+  description: '搜索网页,返回针对查询的答案与来源。用户要求查证,或答案依赖当前信息/缺失的关键事实时使用。已有材料足够、稳定知识或计算问题无需搜索。一次聚焦查询通常足够;结果已回答问题时直接引用作答,无需再打开来源或换说法重搜。',
   parameters: {
     type: 'object',
-    properties: { query: { type: 'string', description: '搜索查询,用具体的关键词或问题;涉及时间时写明年份' } },
+    properties: { query: { type: 'string', description: '本次要解决的具体问题,包含关键实体/条件;仅查询有时间要求时写明日期,不要扩大成背景调查' } },
     required: ['query'],
     additionalProperties: false,
   },
@@ -124,6 +125,7 @@ export interface WebSearchContext {
   chatId: string;
   messageId: string;
   signal: AbortSignal;
+  budget?: WebToolBudget;
 }
 
 export interface WebSearchOutcome {
@@ -142,7 +144,7 @@ async function searchGoogle(line: GoogleLine, query: string, signal: AbortSignal
   const out: StepResult = { text: '', queries: [], sources: [], promptTokens: 0, completionTokens: 0 };
   for await (const ev of getAdapter(line.provider.type).streamChat(toRuntimeConfig(line.provider), {
     model: line.model,
-    system: `今天是 ${today()}。你是搜索助手。用 Google 搜索回答下面的查询,用中文给出信息完整、含具体数据/日期/名称/版本的要点(6 条以内),每条尽量注明依据哪个来源;信息互相矛盾时如实说明;不要寒暄,不要在文末罗列链接。`,
+    system: `今天是 ${today()}。你是搜索助手。只搜索并回答下面这个具体问题。优先找直接相关的官方或原始来源,得到足够证据就停止,不要为凑来源或覆盖背景扩展查询。先给直接答案,再列必要依据(简单问题 1–3 条即可,最多 6 条),保留影响结论的日期、版本和适用条件。只把来源支持的事实写成结论;若缺少关键事实或存在冲突,明确指出具体缺口。不要寒暄,不要提出继续搜索/打开网页的行动建议,不要在文末罗列链接。`,
     messages: [{ role: 'user', parts: [{ type: 'text', text: query }] }],
     webSearch: true,
     maxTokens: 2048,
@@ -194,6 +196,12 @@ async function searchMcp(serverId: string, user: AgentUser, query: string): Prom
 }
 
 export async function runWebSearch(ctx: WebSearchContext, argsJson: string): Promise<WebSearchOutcome> {
+  if (ctx.budget) return ctx.budget.run(WEB_SEARCH_TOOL, argsJson, () => search(ctx, argsJson),
+    (result) => ({ result, isError: true, query: '', queries: [], sources: [] }));
+  return search(ctx, argsJson);
+}
+
+async function search(ctx: WebSearchContext, argsJson: string): Promise<WebSearchOutcome> {
   let query = '';
   try { const a = JSON.parse(argsJson || '{}') as { query?: unknown }; query = typeof a.query === 'string' ? a.query.trim().slice(0, 500) : ''; } catch { /* empty */ }
   const fail = (result: string): WebSearchOutcome => ({ result, isError: true, query, queries: [], sources: [] });
@@ -244,25 +252,8 @@ export async function runWebSearch(ctx: WebSearchContext, argsJson: string): Pro
       errors.push(`备用搜索源:${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  // Google sometimes grounds an answer without returning its sources. The
-  // model then has nothing to open or cite: try once more for links — the
-  // search MCP (cheap, direct URLs) if there is one, else the same line again.
-  let extraLinks: GroundingSource[] = [];
-  if (found && found.label === 'Google 搜索' && !found.sources.length && !ctx.signal.aborted) {
-    console.warn(`[web_search] ${found.model} grounded without sources (${found.queries.length} queries)`);
-    if (mcpId) {
-      extraLinks = await searchMcp(mcpId, ctx.user, query).then((r) => r.sources.slice(0, 8)).catch(() => []);
-    } else {
-      const line = toTry.find((l) => l.model === found!.model);
-      const again = line && googleAllowanceLeft()
-        ? await searchGoogle(line, query, AbortSignal.any([ctx.signal, AbortSignal.timeout(STEP_TIMEOUT_MS)])).catch(() => null)
-        : null;
-      if (again) {
-        addMonthlyQueries(again.queries.length);
-        if (again.sources.length) found = { ...found, ...again, promptTokens: found.promptTokens + again.promptTokens, completionTokens: found.completionTokens + again.completionTokens };
-      }
-    }
-  }
+  // Missing citations are a result limitation, not a failed search. Do not
+  // silently add another Google/MCP request just to obtain links.
   if (found) spent = { promptTokens: found.promptTokens, completionTokens: found.completionTokens };
   // One row per call whatever the route, so the daily cap counts searches.
   recordUsage({
@@ -271,18 +262,16 @@ export async function runWebSearch(ctx: WebSearchContext, argsJson: string): Pro
     model: found?.model ?? toTry[0]?.model ?? 'mcp', kind: 'web_search', ...spent, durationMs: Date.now() - t0,
   });
   if (ctx.signal.aborted) return fail('对话已停止');
-  if (!found) return fail(`搜索失败(${errors.join(';')})。可以换个说法再试一次,或直接回答并说明没能联网核实`);
+  if (!found) return fail(`搜索失败(${errors.join(';')})。请依据已有信息回答并说明没能联网核实;仅在缺少关键事实且仍有本轮额度时再试`);
 
   if (found.label !== 'Google 搜索') {
     // Raw results from the MCP: hand them over as-is; the model reads and cites.
     return { result: found.text, isError: false, query, queries: found.queries, sources: found.sources, label: found.label };
   }
   const list = found.sources.length
-    ? `\n\n来源(引用时用 Markdown 链接指向对应 URL;需要核实细节可以用 web_fetch 打开):\n${found.sources.map((src, i) => `[${i + 1}] ${src.title} — ${src.uri}`).join('\n')}`
-    : extraLinks.length
-    ? `\n\n(Google 这次没有返回来源链接。以下是同一查询的其他搜索结果,与上面的要点不一定一一对应;核实请用 web_fetch 打开,引用时只链接你打开核实过的页面)\n${extraLinks.map((src, i) => `[${i + 1}] ${src.title} — ${src.uri}`).join('\n')}`
-    : '\n\n(本次搜索没有返回来源链接,以上内容无法逐条核实;可以换个说法再搜,或用 web_fetch 打开相关网站核实)';
-  const sources = found.sources.length ? found.sources : extraLinks;
+    ? `\n\n来源(引用时用 Markdown 链接指向对应 URL;要点已足够时直接引用,仅缺少关键细节时才用 web_fetch 打开):\n${found.sources.map((src, i) => `[${i + 1}] ${src.title} — ${src.uri}`).join('\n')}`
+    : '\n\n(本次搜索没有返回来源链接,以上内容无法逐条核实。回答时说明这一限制,不要编造出处,也不要仅为补链接重复搜索。)';
+  const sources = found.sources;
   return { result: `${found.text.trim()}${list}`, isError: false, query, queries: found.queries, sources, label: found.label };
 }
 
