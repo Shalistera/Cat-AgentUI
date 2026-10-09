@@ -703,10 +703,10 @@ const streamBodySchema = z.object({
   parentMessageId: z.string().max(64).optional(),
 });
 
-const TITLE_PROMPT = '请为上面这段对话生成一个简短的标题(不超过16个字),直接输出标题文本,不要任何引号、句号或解释。';
+const TITLE_PROMPT = '请为上面这段对话生成一个简短的标题(中文不超过16个字,其他语言不超过6个单词),标题必须使用用户提问所用的语言,直接输出标题文本,不要任何引号、句号或解释。';
 // Per-user opt-in (settings.titleEmoji): same prompt, but the title leads with
 // one topic-matching emoji.
-const TITLE_PROMPT_EMOJI = '请为上面这段对话生成一个简短的标题(不超过16个字),标题的第一个字符必须是一个最能代表对话主题的 emoji,其后紧跟标题文本。直接输出标题,不要任何引号、句号或解释。';
+const TITLE_PROMPT_EMOJI = '请为上面这段对话生成一个简短的标题(中文不超过16个字,其他语言不超过6个单词),标题必须使用用户提问所用的语言,标题的第一个字符必须是一个最能代表对话主题的 emoji,其后紧跟标题文本。直接输出标题,不要任何引号、句号或解释。';
 
 function wantsTitleEmoji(settingsJson: string): boolean {
   try { return !!(JSON.parse(settingsJson) as { titleEmoji?: unknown }).titleEmoji; }

@@ -6,6 +6,7 @@ import { CatLogo, CatMark } from '../components/Logo';
 import { appVersionLabel } from '../version';
 import { Button, Input, Field, toast } from '../components/ui';
 import type { User } from '../types';
+import { t } from '../i18n';
 
 export default function Login() {
   const nav = useNavigate();
@@ -29,7 +30,7 @@ export default function Login() {
     e.preventDefault();
     if (busy) return;
     if (mode === 'register' && password !== password2) {
-      toast('两次输入的密码不一致', 'err');
+      toast(t('两次输入的密码不一致'), 'err');
       return;
     }
     setBusy(true);
@@ -38,10 +39,10 @@ export default function Login() {
         `/api/auth/${mode}`, { username, password },
       );
       useAuth.setState({ user: r.user });
-      if (r.isFirstUser) toast('已创建管理员账号,欢迎使用', 'ok');
+      if (r.isFirstUser) toast(t('已创建管理员账号,欢迎使用'), 'ok');
       nav('/', { replace: true });
     } catch (err) {
-      toast(err instanceof Error ? err.message : '操作失败', 'err');
+      toast(err instanceof Error ? err.message : t('操作失败'), 'err');
     } finally {
       setBusy(false);
     }
@@ -86,12 +87,12 @@ export default function Login() {
           </div>
 
           <h1 className="mt-5 text-xl font-semibold tracking-tight text-tx lg:mt-0">
-            {bootstrap?.needsSetup ? '初始化管理员账号' : mode === 'login' ? `登录 ${brand}` : '创建账号'}
+            {bootstrap?.needsSetup ? t('初始化管理员账号') : mode === 'login' ? t('登录 {brand}', { brand }) : t('创建账号')}
           </h1>
           <p className="mt-1.5 text-[13px] leading-relaxed text-tx2">
             {bootstrap?.needsSetup
-              ? '这是第一次启动,注册的首个账号将自动获得管理员权限。'
-              : mode === 'login' ? '请输入你的账号信息以继续。' : '填写下列信息完成注册。'}
+              ? t('这是第一次启动,注册的首个账号将自动获得管理员权限。')
+              : mode === 'login' ? t('请输入你的账号信息以继续。') : t('填写下列信息完成注册。')}
           </p>
 
           <form onSubmit={submit} className="mt-7">
@@ -99,17 +100,17 @@ export default function Login() {
                 a larger offset, and a margin utility on a space-y sibling loses
                 without !important. */}
             <div className="space-y-4">
-              <Field label="用户名" required>
+              <Field label={t('用户名')} required>
                 {/* 登录态放宽到 64:从 Open WebUI 迁移的账号以邮箱为用户名,可能超过注册上限 32 */}
                 <Input value={username} onChange={(e) => setUsername(e.target.value)} disabled={busy}
                   autoFocus autoComplete="username" maxLength={mode === 'login' ? 64 : 32} required />
               </Field>
-              <Field label="密码" hint={mode === 'register' ? '至少 8 位字符' : undefined} required>
+              <Field label={t('密码')} hint={mode === 'register' ? t('至少 8 位字符') : undefined} required>
                 <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy}
                   autoComplete={mode === 'login' ? 'current-password' : 'new-password'} maxLength={128} required />
               </Field>
               {mode === 'register' && (
-                <Field label="确认密码" required>
+                <Field label={t('确认密码')} required>
                   <Input type="password" value={password2} onChange={(e) => setPassword2(e.target.value)} disabled={busy}
                     autoComplete="new-password" maxLength={128} required />
                 </Field>
@@ -117,15 +118,15 @@ export default function Login() {
             </div>
 
             <Button type="submit" variant="primary" size="lg" className="mt-6 w-full" disabled={busy}>
-              {busy ? '请稍候…' : bootstrap?.needsSetup ? '创建管理员账号' : mode === 'login' ? '登录' : '注册'}
+              {busy ? t('请稍候…') : bootstrap?.needsSetup ? t('创建管理员账号') : mode === 'login' ? t('登录') : t('注册')}
             </Button>
 
             {canRegister && !bootstrap?.needsSetup && (
               <p className="mt-4 pt-1 text-center text-[13px] text-tx2">
-                {mode === 'login' ? '还没有账号?' : '已有账号?'}
+                {mode === 'login' ? t('还没有账号?') : t('已有账号?')}
                 <button type="button" className="ml-1 cursor-pointer font-medium text-acc hover:underline"
                   onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
-                  {mode === 'login' ? '注册' : '返回登录'}
+                  {mode === 'login' ? t('注册') : t('返回登录')}
                 </button>
               </p>
             )}

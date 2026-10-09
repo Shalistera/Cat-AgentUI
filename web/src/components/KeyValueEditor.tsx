@@ -1,5 +1,6 @@
 import { Plus, X } from 'lucide-react';
 import { Button, Input } from './ui';
+import { t } from '../i18n';
 
 // Shared by the provider modal (自定义请求头) and the MCP server modal (环境变量) —
 // one editor, one visual weight for "添加一行" everywhere.
@@ -36,14 +37,14 @@ export function KeyValueEditor({ pairs, onChange, keyPlaceholder = 'Key', valueP
             placeholder={valuePlaceholder} value={p.v}
             onChange={(e) => onChange(pairs.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))}
           />
-          <Button variant="ghost" size="icon" title="删除此行" className="shrink-0"
+          <Button variant="ghost" size="icon" title={t('删除此行')} className="shrink-0"
             onClick={() => onChange(pairs.filter((_, j) => j !== i))}>
             <X size={14} />
           </Button>
         </div>
       ))}
       <Button variant="outline" size="sm" onClick={() => onChange([...pairs, { k: '', v: '' }])}>
-        <Plus size={13} />添加一行
+        <Plus size={13} />{t('添加一行')}
       </Button>
     </div>
   );

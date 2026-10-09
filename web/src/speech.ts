@@ -3,6 +3,8 @@
 // this exists at all. Feature-detected: unsupported browsers (e.g. Firefox for
 // recognition) simply never see the buttons.
 
+import { locale, t } from './i18n';
+
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
 export interface SpeechRecognitionLike {
@@ -38,7 +40,7 @@ export function startDictation(onText: (text: string) => void, onEnd: () => void
   const Ctor = recognitionCtor();
   if (!Ctor) return null;
   const rec = new Ctor();
-  rec.lang = navigator.language || 'zh-CN';
+  rec.lang = navigator.language || locale;
   rec.continuous = true;
   rec.interimResults = true;
   rec.onresult = (e) => {
@@ -61,9 +63,9 @@ export function ttsSupported(): boolean {
 /** Markdown reads terribly aloud; keep the words, drop the syntax. */
 function speakableText(md: string): string {
   return md
-    .replace(/```[\s\S]*?```/g, '(代码块)')
+    .replace(/```[\s\S]*?```/g, t('(代码块)'))
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '(图片)')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, t('(图片)'))
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')

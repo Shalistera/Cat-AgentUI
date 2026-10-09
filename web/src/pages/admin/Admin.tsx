@@ -4,6 +4,7 @@ import {
   ArrowUpDown, BarChart3, Bot, Boxes, DatabaseZap, Plug, Settings2, ShieldCheck, Sparkles, Terminal, Users as UsersIcon, Wrench, X,
 } from 'lucide-react';
 import { Button } from '../../components/ui';
+import { t } from '../../i18n';
 import Chat from '../Chat';
 import Dashboard from './Dashboard';
 import Users from './Users';
@@ -27,17 +28,17 @@ import AgentSettingsPage from './AgentSettings';
    inert, so closing the dialog lands you on something rather than a void. */
 
 const SECTIONS: { to: string; label: string; icon: typeof BarChart3; end?: boolean; group?: string }[] = [
-  { to: '/admin', label: '总览', icon: BarChart3, end: true },
-  { to: '/admin/users', label: '用户', icon: UsersIcon },
-  { to: '/admin/providers', label: '模型服务', icon: Plug, group: '模型' },
-  { to: '/admin/models', label: '模型设置', icon: Boxes },
-  { to: '/admin/model-order', label: '模型排序', icon: ArrowUpDown },
-  { to: '/admin/agent', label: '总控', icon: Bot, group: 'Agent 能力' },
+  { to: '/admin', label: t('总览'), icon: BarChart3, end: true },
+  { to: '/admin/users', label: t('用户@@nav'), icon: UsersIcon },
+  { to: '/admin/providers', label: t('模型服务'), icon: Plug, group: t('模型@@nav') },
+  { to: '/admin/models', label: t('模型设置'), icon: Boxes },
+  { to: '/admin/model-order', label: t('模型排序'), icon: ArrowUpDown },
+  { to: '/admin/agent', label: t('总控'), icon: Bot, group: t('Agent 能力') },
   { to: '/admin/mcp', label: 'MCP', icon: Wrench },
-  { to: '/admin/sandbox', label: '沙盒', icon: Terminal },
-  { to: '/admin/skills', label: '技能', icon: Sparkles },
-  { to: '/admin/settings', label: '站点设置', icon: Settings2, group: '站点' },
-  { to: '/admin/import', label: '数据迁移', icon: DatabaseZap },
+  { to: '/admin/sandbox', label: t('沙盒'), icon: Terminal },
+  { to: '/admin/skills', label: t('技能'), icon: Sparkles },
+  { to: '/admin/settings', label: t('站点设置'), icon: Settings2, group: t('站点') },
+  { to: '/admin/import', label: t('数据迁移'), icon: DatabaseZap },
 ];
 
 /** Where "关闭" goes: the page the person came from, remembered by whoever
@@ -69,7 +70,7 @@ export default function Admin() {
       <div className="flex h-full flex-col" inert aria-hidden>
         <Chat />
       </div>
-      <div className="fixed inset-0 z-40 flex items-center justify-center sm:p-4" role="dialog" aria-modal="true" aria-label="管理后台">
+      <div className="fixed inset-0 z-40 flex items-center justify-center sm:p-4" role="dialog" aria-modal="true" aria-label={t('管理后台')}>
         <div className="absolute inset-0 bg-scrim" onClick={close} />
         <div className="fade-up relative flex h-full w-full flex-col overflow-hidden bg-bg1 shadow-xl sm:h-[min(52rem,92vh)] sm:max-w-6xl sm:flex-row sm:rounded-xl sm:border sm:border-line">
           <aside className="flex shrink-0 flex-col border-b border-line bg-bg0 sm:w-52 sm:border-b-0 sm:border-r">
@@ -78,12 +79,12 @@ export default function Admin() {
                 <ShieldCheck size={15} />
               </span>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold tracking-tight text-tx">管理后台</div>
-                <div className="truncate text-[11px] text-tx3">用量、账号、模型与站点配置</div>
+                <div className="truncate text-sm font-semibold tracking-tight text-tx">{t('管理后台')}</div>
+                <div className="truncate text-[11px] text-tx3">{t('用量、账号、模型与站点配置')}</div>
               </div>
-              <Button variant="ghost" size="iconSm" onClick={close} title="关闭" className="sm:hidden"><X size={15} /></Button>
+              <Button variant="ghost" size="iconSm" onClick={close} title={t('关闭')} className="sm:hidden"><X size={15} /></Button>
             </div>
-            <nav className="flex gap-1 overflow-x-auto px-3 pb-3 sm:flex-1 sm:flex-col sm:overflow-y-auto sm:px-3 sm:pb-4" aria-label="管理分区">
+            <nav className="flex gap-1 overflow-x-auto px-3 pb-3 sm:flex-1 sm:flex-col sm:overflow-y-auto sm:px-3 sm:pb-4" aria-label={t('管理分区')}>
               {SECTIONS.map((s) => {
                 const Icon = s.icon;
                 return (
@@ -110,7 +111,7 @@ export default function Admin() {
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="hidden items-center justify-between border-b border-line px-6 py-3.5 sm:flex">
               <h2 className="text-sm font-semibold tracking-tight text-tx">{active.label}</h2>
-              <Button variant="ghost" size="iconSm" onClick={close} title="关闭"><X size={15} /></Button>
+              <Button variant="ghost" size="iconSm" onClick={close} title={t('关闭')}><X size={15} /></Button>
             </div>
             <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-bg0/40">
               <Routes>

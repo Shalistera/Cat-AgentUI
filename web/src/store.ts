@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api } from './api';
+import { adoptAccountLang } from './i18n';
 import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, Project, User, AgentCapabilities } from './types';
 import type { ComposerSettings, PendingAttachment } from './components/Composer';
 
@@ -175,9 +176,13 @@ export const useAuth = create<AuthState>((set) => ({
       const r = await api.get<{ user: User }>('/api/auth/me');
       user = r.user;
     } catch { /* not logged in */ }
+    adoptAccountLang(user?.settings.lang);
     set({ user, bootstrap, loaded: true });
   },
-  setUser(u) { set({ user: u }); },
+  setUser(u) {
+    adoptAccountLang(u?.settings.lang);
+    set({ user: u });
+  },
   async logout() {
     await api.post('/api/auth/logout').catch(() => { /* ignore */ });
     set({ user: null });

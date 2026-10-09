@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CalendarDays } from 'lucide-react';
 import { Modal } from './ui';
+import { isEn, t } from '../i18n';
 import {
   appVersion,
   appVersionLabel,
@@ -16,7 +17,7 @@ export function ReleaseNotesButton({ className = '' }: { className?: string }) {
       <button
         type="button"
         className={`cursor-pointer rounded-sm font-mono transition-colors ${className}`}
-        title="查看更新日志"
+        title={t('查看更新日志')}
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}
       >
@@ -26,7 +27,7 @@ export function ReleaseNotesButton({ className = '' }: { className?: string }) {
       <Modal
         open={open}
         onClose={() => setOpen(false)}
-        title={`更新日志 · v${appVersion}`}
+        title={t('更新日志 · v{version}', { version: appVersion })}
         wide
       >
         <div className="space-y-6">
@@ -42,12 +43,15 @@ export function ReleaseNotesButton({ className = '' }: { className?: string }) {
                 <time>{group.date}</time>
               </div>
               <ul className="mt-2 space-y-1.5 text-[13px] leading-relaxed text-tx2">
-                {group.items.map((item) => (
-                  <li key={item} className="flex gap-2">
-                    <span aria-hidden className="mt-[0.65em] h-1 w-1 shrink-0 rounded-full bg-tx3" />
-                    <span>{item}</span>
-                  </li>
-                ))}
+                {group.items.map((item) => {
+                  const text = isEn ? item.en : item.zh;
+                  return (
+                    <li key={text} className="flex gap-2">
+                      <span aria-hidden className="mt-[0.65em] h-1 w-1 shrink-0 rounded-full bg-tx3" />
+                      <span>{text}</span>
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           ))}

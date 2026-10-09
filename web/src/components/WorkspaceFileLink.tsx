@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useWorkspacePanel } from '../store';
 import { workspaceFileHref } from '../workspaceLinks';
+import { t } from '../i18n';
 
 export function WorkspaceFileLink({ chatId, path, children, className }: {
   chatId: string; path: string; children: ReactNode; className?: string;
@@ -9,7 +10,7 @@ export function WorkspaceFileLink({ chatId, path, children, className }: {
   const location = useLocation();
   return (
     <Link to={workspaceFileHref(chatId, path)} className={className}
-      title={`在工作区打开「${path}」`}
+      title={t('在工作区打开「{path}」', { path })}
       onClick={(e) => {
         e.stopPropagation();
         if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

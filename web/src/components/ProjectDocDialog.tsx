@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { api } from '../api';
 import { Button, Field, Input, Modal, ModalActions, Spinner, Textarea, confirmDialog, toast } from './ui';
 import type { ProjectDoc } from '../types';
+import { locale, t } from '../i18n';
 
 function errText(e: unknown, fallback: string) {
   return e instanceof Error ? e.message : fallback;
@@ -32,7 +33,7 @@ export function ProjectDocDialog({ projectId, docId, canEdit, maxDocChars, desc,
     let cancelled = false;
     api.get<{ doc: ProjectDoc & { content: string } }>(`/api/projects/${projectId}/docs/${docId}`)
       .then((r) => { if (!cancelled) setEditor({ id: r.doc.id, name: r.doc.name, content: r.doc.content, savedName: r.doc.name, savedContent: r.doc.content }); })
-      .catch((e) => { if (!cancelled) { toast(errText(e, '读取失败'), 'err'); onClose(); } });
+      .catch((e) => { if (!cancelled) { toast(errText(e, t('读取失败')), 'err'); onClose(); } });
     return () => { cancelled = true; };
   }, [projectId, docId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -44,7 +45,7 @@ export function ProjectDocDialog({ projectId, docId, canEdit, maxDocChars, desc,
     if (askingDiscard.current) return;
     if (dirty) {
       askingDiscard.current = true;
-      const discard = await confirmDialog('放弃修改', '这份资料的修改还没有保存,确定关闭吗?');
+      const discard = await confirmDialog(t('放弃修改'), t('这份资料的修改还没有保存,确定关闭吗?'));
       askingDiscard.current = false;
       if (!discard) return;
     }
@@ -55,10 +56,10 @@ export function ProjectDocDialog({ projectId, docId, canEdit, maxDocChars, desc,
     if (!editor || saving || !dirty) return;
     const name = editor.name.trim();
     const { content } = editor;
-    if (!name) { toast('请填写资料名称', 'err'); return; }
-    if (!content.trim()) { toast('资料内容不能为空', 'err'); return; }
+    if (!name) { toast(t('请填写资料名称'), 'err'); return; }
+    if (!content.trim()) { toast(t('资料内容不能为空'), 'err'); return; }
     if (content.length > maxDocChars) {
-      toast(`超出单文档上限(${maxDocChars.toLocaleString()} 字符)`, 'err');
+      toast(t('超出单文档上限({limit} 字符)', { limit: maxDocChars.toLocaleString(locale) }), 'err');
       return;
     }
     setSaving(true);
@@ -79,14 +80,14 @@ export function ProjectDocDialog({ projectId, docId, canEdit, maxDocChars, desc,
         setEditor({ id: r.doc.id, name: r.doc.name, content, savedName: r.doc.name, savedContent: content });
         onSaved?.(r.doc, true);
       }
-      toast('资料已保存', 'ok');
-    } catch (e) { toast(errText(e, '保存失败'), 'err'); }
+      toast(t('资料已保存'), 'ok');
+    } catch (e) { toast(errText(e, t('保存失败')), 'err'); }
     finally { setSaving(false); }
   }
 
   return (
     <Modal open onClose={() => void close()} wide desc={desc}
-      title={!canEdit ? editor?.name ?? '资料' : editor?.id || docId ? '编辑资料' : '新建资料'}>
+      title={!canEdit ? editor?.name ?? t('资料') : editor?.id || docId ? t('编辑资料') : t('新建资料')}>
       {!editor ? (
         <div className="flex justify-center py-12 text-tx3"><Spinner className="h-5 w-5" /></div>
       ) : canEdit ? (
@@ -94,12 +95,12 @@ export function ProjectDocDialog({ projectId, docId, canEdit, maxDocChars, desc,
           onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); }
           }}>
-          <Field label="名称" required>
+          <Field label={t('名称')} required>
             <Input value={editor.name} maxLength={200} autoFocus={!editor.id}
-              placeholder="如 产品规范.md"
+              placeholder={t('如 产品规范.md')}
               onChange={(e) => setEditor({ ...editor, name: e.target.value })} />
           </Field>
-          <Field label="内容" required>
+          <Field label={t('内容')} required>
             <Textarea value={editor.content} rows={18} autoFocus={!!editor.id}
               className="max-h-[60vh] font-mono text-xs"
               onChange={(e) => setEditor({ ...editor, content: e.target.value })} />
@@ -107,11 +108,11 @@ export function ProjectDocDialog({ projectId, docId, canEdit, maxDocChars, desc,
           <ModalActions>
             <span className={`mr-auto self-center text-[11px] tabular-nums ${
               editor.content.length > maxDocChars ? 'text-err' : 'text-tx3'}`}>
-              {editor.content.length.toLocaleString()} / {maxDocChars.toLocaleString()} 字符
+              {t('{used} / {limit} 字符', { used: editor.content.length.toLocaleString(locale), limit: maxDocChars.toLocaleString(locale) })}
             </span>
-            <Button variant="outline" onClick={() => void close()}>关闭</Button>
+            <Button variant="outline" onClick={() => void close()}>{t('关闭')}</Button>
             <Button type="submit" variant="primary" disabled={!dirty || saving}>
-              {saving && <Spinner className="h-3.5 w-3.5" />}保存
+              {saving && <Spinner className="h-3.5 w-3.5" />}{t('保存')}
             </Button>
           </ModalActions>
         </form>
@@ -161,11 +162,15 @@ export function ProjectDocLink({ refId, children }: { refId: string; children: R
     return () => { cancelled = true; };
   }, [refId]);
   if (doc === null) {
-    return <span className="doc-chip doc-chip-missing" title="这份资料已删除,或你没有该项目的访问权限"><FileText size={11} />{children}</span>;
+    return <span className="doc-chip doc-chip-missing" title={t('这份资料已删除,或你没有该项目的访问权限')}><FileText size={11} />{children}</span>;
   }
   return (
     <button type="button" className="doc-chip" disabled={!doc}
-      title={doc ? `打开「${doc.project.name}」的资料「${doc.doc.name}」${doc.canEdit ? ',可修改' : ''}` : undefined}
+      title={doc
+        ? (doc.canEdit
+          ? t('打开「{project}」的资料「{doc}」,可修改', { project: doc.project.name, doc: doc.doc.name })
+          : t('打开「{project}」的资料「{doc}」', { project: doc.project.name, doc: doc.doc.name }))
+        : undefined}
       onClick={() => doc && useDocDialog.getState().open(doc)}>
       <FileText size={11} />{children}
     </button>
@@ -180,7 +185,9 @@ export function ProjectDocHost() {
   return (
     <ProjectDocDialog key={target.doc.id} projectId={target.doc.projectId} docId={target.doc.id}
       canEdit={target.canEdit} maxDocChars={target.maxDocChars}
-      desc={`项目「${target.project.name}」的参考资料${target.canEdit ? ',保存后新的回答会按修改后的内容来' : '(只读)'}`}
+      desc={target.canEdit
+        ? t('项目「{project}」的参考资料,保存后新的回答会按修改后的内容来', { project: target.project.name })
+        : t('项目「{project}」的参考资料(只读)', { project: target.project.name })}
       onSaved={(meta) => {
         const next = { ...target, doc: { ...target.doc, name: meta.name } };
         resolved.set(target.doc.id.replace(/-/g, '').slice(0, 8), Promise.resolve(next));

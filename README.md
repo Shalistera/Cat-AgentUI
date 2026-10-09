@@ -1,318 +1,320 @@
+English | [简体中文](README.zh-CN.md)
+
 <div align="center">
   <img src="web/public/cat.svg" alt="Cat-AgentUI" width="96" height="96" />
   <h1>Cat-AgentUI 🐈‍⬛</h1>
-  <p><strong>轻量 · 多用户 · 多模型 AI 对话与绘图面板</strong></p>
-  <p>OpenAI(兼容/Responses API)· Anthropic Claude · Google Gemini(AI Studio / Vertex)· MCP 工具</p>
+  <p><strong>Lightweight · Multi-user · Multi-model AI chat and image panel</strong></p>
+  <p>OpenAI (compatible / Responses API) · Anthropic Claude · Google Gemini (AI Studio / Vertex) · MCP tools</p>
 </div>
 
 ---
 
-一个刻意保持"轻"的自托管 AI 面板:没有 RAG、没有插件市场、没有用不上的功能——只把对话体验、绘图、多用户用量管理和 MCP 做到位。
+A self-hosted AI panel that deliberately stays "light": no RAG, no plugin marketplace, no features nobody uses — it just gets the chat experience, image generation, multi-user usage management and MCP right.
 
-## ✨ 功能
+## ✨ Features
 
-- **多模型对话**:OpenAI 兼容 API(可选新版 Responses API)、Anthropic、Gemini(可选 Vertex AI),每个 Provider 均可自定义 API 地址(Base URL)与自定义 Header,适配各类中转/网关
-- **备用线路(故障切换)**:一个 Provider 下可挂多条同类型网关(如主用 OpenRouter、备用 LiteLLM),共用同一份模型列表、权限与用量;按优先级顺序使用而非负载均衡(保住提示缓存),主线路在返回内容前失败即在同一请求内改走下一条(该线路没有此模型也算,但不计入熔断),连续失败达到阈值后熔断一段时间再单次试探,恢复即切回;支持按线路改写模型名前缀、单独开关 Responses API,管理后台可看各线路状态、手动重置,并可把备用线路一键设为主线路(整体对调)
-- **Vertex 多区域与 Priority PayGo**:Vertex 模式可按优先级排列多个区域(如 global → us → eu,us/eu 自动使用多区域专用地址),某个区域被限流或出故障时同一请求内自动换下一个区域,熔断与切换提示同备用线路;可选 Priority PayGo(单价更高、更不易被限流):关闭、限流时启用(标准请求累计被限流 5 次或各区域都试过后改走 Priority,并在对话里提示正在使用优先通道),或始终使用;某条线路没有该模型时记住一小时,期间该模型直接跳过这条线路
-- **限流兜底换模型**:模型提供方持续限流时,重试等待超过 10 秒或最终报错后,回复里会推荐一个其他服务商的模型(按个人模型排序取第一个,跳过图像模型、对话里有图片时不支持识图的、用到工具时不支持工具的和额度已用完的),一键改用它重新生成这条回复,之后的对话也改用它
-- **流式输出**:SSE 流式回复、思考过程(reasoning)展示、随时停止
-- **每条回复的透明统计**:耗时、首字延迟、输入/输出 tokens、tokens/s
-- **绘图工坊**:OpenAI `gpt-image-1` 与 Google Nano Banana(`gemini-*-image`)系列,支持参考图(图生图/编辑)、画廊管理;NovelAI V5 有独立的「NAI 创作室」(左侧创作面板 + 大画布 + 历史栏),中文描述自动整理成提示词,支持画风预设与自定义画师组合、多人物站位、官方 UC;Tag 模式带权重上色、一键加减 `{}`/`[]`、按用户记忆的 tag 联想、中文词库和 tag 收藏
-- **对话内直接出图**:在对话里直接选绘图模型即可作画,自动带上当前对话的上下文与图片,可以接着说「换成蓝色」「把背景改成雨天」;生成的图片同样进入画廊
-- **联网搜索**:和 ChatGPT / Claude / Gemini 官方应用一样没有开关,模型自己判断要不要搜。Vertex 上的 Gemini 直接用原生 Google Search Grounding;其他模型(本地 Claude Code、OpenAI 兼容、Anthropic)和子代理通过内置的 `web_search` 工具,由管理员指定的小模型(默认 `gemini-3.5-flash-lite`)代为 Google 搜索并带回要点与来源,出错时依次改用备用模型和 Brave 等搜索 MCP;回答里每句有依据的话后面带编号引用角标,悬停看来源、点击直达。按月计数 Google 实际执行的搜索次数,到达上限后只用备用搜索源
-- **MCP 工具**:stdio / Streamable HTTP / SSE 三种传输,支持全员共享或指定用户访问,对话中按需启用,工具调用过程完整可见
-- **多用户**:首个注册用户自动成为管理员;管理端可建用户、停用、重置密码;可关闭开放注册;管理员可在用户详情页搜索并只读查看该用户的对话记录(临时对话除外)
-- **用量看板**:管理员可查看每用户/每模型/每日的 tokens、请求数与绘图量;用户可见自己的用量
-- **模型使用限制**:可为单个模型设置每人每日/每周的请求次数或 tokens 上限,达到后拒绝或降级到指定模型;用户在模型选择器可见自己的已用额度
-- **项目**:类似 ChatGPT / Claude.ai 的项目,集中放项目指令和参考资料(文本类文件),可共享给指定成员。资料按模型上下文大小尽量整篇载入(约占上下文的 15%,按中文约 1 字 1 token 估算:1M 上下文模型约 15 万字,128K 模型约 2 万字,上限见 `PROJECT_INJECT_MAX_CHARS`),小文档优先,放不下的列成清单(附开头与小标题),由模型用 `project_search`(中英文关键词检索,结果带文档名和字符位置)与 `project_read_doc`(从任意位置读原文)按需调取;子代理同样能检索和阅读项目资料;开启沙盒时,资料还以只读文件挂载在 `/project/`,可用命令跨文档查找、处理数据。回答引用资料时,模型按 `[文档名](doc:ref)` 标注出处(ref 为文档 id 前 8 位,随资料载入和检索结果一起给出),界面显示为资料标签,点开即可查看,有编辑权限的成员可以直接修改保存
-- **长对话自动压缩**:发给模型的历史按模型上下文自动定额(约占一半,按中文约 1 字 1 token 估算:1M 上下文模型约 50 万字,GPT-5 约 20 万字,128K 模型约 6 万字);对话超出时,较早的部分由当前模型压缩成摘要放在历史开头,最近的对话原样保留,回复上方会标出并可展开查看摘要。摘要按分支保存,直到再次超出才重写,历史前缀保持稳定、可以命中提示缓存;删除或修改消息后摘要作废重建。Anthropic 接入同时缓存对话历史,长对话续聊的输入大多按缓存价计费
-- **文档附件贯穿整段对话**:txt / Markdown / CSV / docx 以文本注入,PDF 原生交给视觉模型;早前上传的文档即使超出最近消息回放范围,续聊时仍会带给模型
-- **高级聊天体验**:Markdown、代码高亮 + 一键复制、KaTeX 公式、GFM 表格、图片理解(视觉模型)、编辑重发、重新生成、自动标题
-- **OCR 工坊**:PDF/图片转文字,Gemini 视觉模型直读 PDF 无需预处理;输出连续全文(不分页、不带页码),可选纯文本或 Markdown
-- **对话导出**:侧栏菜单一键导出为 Markdown(当前分支)或 JSON(完整消息树)
-- **全局自定义指令**:每位用户可设置「关于我 / 希望怎么回复」,自动加在所有对话的系统提示前,单个对话的系统提示仍可覆盖
-- **对话内查找与收藏**:Ctrl/Cmd+F 在当前对话内搜索并逐个跳转(从侧栏搜索结果进入时自动定位);任意消息可收藏,集中在「收藏」页回看并一键跳回原处
-- **对话工作区(Agent 式文件工作流)**:每个对话自带一个私有文件目录,模型在需要时通过内置工具列出、读取、写入、局部替换、删除其中的文件——长文、方案、代码等成果写成文件并反复修改,而不是每轮整篇重出;对用户无感:第一次出文件时右侧面板自动弹出,之后由对话顶部的「文件 N」标签开合,面板可预览(Markdown / 代码 / 图片 / PDF / HTML 沙箱)、在线编辑、下载、拖拽上传;用户可在设置 → 对话偏好用「智能工具」一键关闭全部 Agent 能力;文件随对话删除,占用计入存储概览
-- **文档转换一步到位**:内置 `convert_file` 工具,Markdown / HTML / Word 互转与转 PDF(weasyprint,中文排版),命令是固定脚本而非模型拼写,不需要逐条确认,也不依赖「允许模型执行命令」开关(沙盒页单独的「内置文档转换」开关,默认开);技能自带脚本的调用同样视为可信免确认;确认卡片可勾选「本对话内不再询问」
-- **对话图片生成工具**:普通聊天模型可按任务需要调用 `generate_image`,每次生成一张图片并直接展示在对话中。管理员在「Agent 能力 → 图片生成」配置开关、使用范围、多个可用图片模型(首个为默认)、每轮次数及普通用户每日上限(默认 20 次,0 为不限,管理员豁免)。工具授权独立于模型可见权限、直接图像模型权限和绘图工坊权限;不依赖工作区或沙盒。每日次数按服务器日期跨模型合并统计,已发起上游请求计次(含失败/取消),自动重试不重复扣次;限制在并发请求和服务重启后仍生效。用量单列为「图片生成工具」,现有 token、模型使用、并发和存储限额照常生效。当前为文生图,不自动携带聊天历史或参考图片。
-- **沙盒命令执行(实验性)**:在工作区基础上,模型可用 `run_command` 在隔离沙盒里执行 shell 命令——bwrap 命名空间隔离(只读 /usr、只挂本对话工作区、无网络)加 systemd 用户实例 cgroup 限额(内存 / CPU / 进程数 / 超时);管理后台「沙盒」页提供宿主机环境自检(缺什么给出对应 apt / sysctl 命令)、Python 运行库一键安装(推荐库预设 + 自定义包,venv 只读挂进沙盒)、访问范围与执行前确认、执行审计;宿主机准备见 `deploy/sandbox-host-setup.sh`
-- **技能(Agent Skills)**:管理员在后台维护 SKILL.md(frontmatter name/description + 步骤)与附带脚本/资料,支持在线编辑、zip 导入导出、启用与访问范围;对话里模型只看到技能名称与用途,任务匹配时才用 `load_skill` 读取完整说明、`read_skill_file` 读附带文件,技能目录在沙盒内只读挂载于 `/skills/<name>/` 可直接执行脚本;自带两个示例(Markdown 转 Word 报告、pandas + matplotlib 出图)
-- **子代理**:模型可用 `spawn_subagent` 把独立子任务(通读长材料、按大纲写某章、跑一遍分析)委派给看不到对话历史的子代理,它拥有同样的工作区 / 技能 / 沙盒工具,不能嵌套、不用 MCP,结果以文字回给主对话、文件留在工作区;主对话里实时显示子代理的每一步;token 记入发起用户(用量看板「子代理」)
-- **Agent 能力总控**:管理后台「Agent 能力」页统一设置工作区、技能、子代理的开关与访问范围(全员 / 指定用户),子代理可指定模型、每轮次数、工具轮数、超时、回传长度与是否允许执行命令;管理后台整体改为与设置弹窗同构的窗口式界面
-- **MCP 工具执行前确认**:管理员可按服务器开启「调用前需用户确认」,模型想调用时先在对话里展示工具与参数,由用户允许或拒绝;用户也可选择对所有工具都先询问
-- **图表对比**:同一指标、同一单位的 2–12 项数据可通过 `compare_data` 计算最大值、最小值和极差,并直接展示固定柱状图;时间/连续数据支持多曲线折线图(1–6 条曲线,每条 2–120 点,总计最多 600 点),按真实横轴间隔绘制,缺失值断开。支持图例筛选、悬停/键盘读数、切换数据表、正负数和数据来源说明。每轮最多展示一张图,格式错误可修正一次,不生成 HTML/JS。管理后台「Agent 能力」可设置开关与访问范围,受个人「智能工具」开关控制。更新后自动清理原互动画布和加密块的用户设置,历史对话正文保留。
-- **Mermaid 图表与图片灯箱**:回复里的 ```mermaid 代码块直接渲染成图(可切回源码、下载 SVG);对话中的图片点击放大预览
-- **后台完成通知**:切到其他标签页时,回复、绘图、PPT 完成后弹系统通知(浏览器权限,按设备开关)
-- **语音**:语音输入(Chrome/Edge)与回复朗读,全部使用浏览器本地能力,零服务器开销
-- **站内公告**:管理员发布横幅公告,所有登录用户实时可见,可自行关闭
-- **成本折算**:按模型配置每百万 tokens 单价后,用量看板与个人用量页显示折算费用
-- **自动备份**:内置 SQLite 在线快照定时任务 + 轮转,管理后台可手动备份与下载
-- **PWA**:附带清单与全套图标,手机可「添加到主屏幕」
-- **安全**:异步有界 scrypt 队列、HttpOnly 会话 Cookie、CSRF 防护、登录限速、MCP capability ACL、API Key AES-256-GCM 加密存储且永不回传前端
-- **沙盒与工作区的隔离边界**:沙盒内 seccomp 禁止创建符号链接 / 管道 / 挂载与命名空间操作;宿主侧读取工作区文件一律 O_NOFOLLOW 打开后按 inode 校验路径,写入与命令执行共用对话级互斥锁,每次命令结束后清扫非常规文件;/skills 只挂载该用户有权使用的技能目录;zip 导入按实际解压字节数限量
-- **资源保护**:附件/上下文硬预算、按用户与全局存储配额、对话/绘图并发闸门、Provider 图片响应大小与格式校验
+- **Multi-model chat**: OpenAI-compatible APIs (optionally the newer Responses API), Anthropic, Gemini (optionally Vertex AI). Every provider supports a custom API address (Base URL) and custom headers, so it fits all kinds of relays and gateways
+- **Backup routes (failover)**: a single provider can hold several gateways of the same type (for example OpenRouter as primary and LiteLLM as backup), sharing one model list, one set of permissions and one usage record. Routes are used in priority order rather than load-balanced (which preserves prompt caching); if the primary route fails before any content is returned, the same request switches to the next route (a route that simply lacks the model counts too, but is not held against its circuit breaker). After enough consecutive failures a route is tripped for a while, then probed once, and restored as soon as it recovers. You can rewrite the model name prefix per route, toggle the Responses API per route, see each route's status in Admin, reset it manually, and promote a backup route to primary with one click (the two swap places)
+- **Vertex multi-region and Priority PayGo**: in Vertex mode you can order several regions by priority (for example global → us → eu, where us/eu automatically use the multi-region endpoints). If one region is rate-limited or broken, the same request moves to the next region, with the same circuit-breaking and switch notices as backup routes. Priority PayGo (higher unit price, less likely to be rate-limited) is optional: off, on-when-rate-limited (after standard requests have been rate-limited 5 times in total, or after every region has been tried, the request moves to Priority and the chat notes that the priority channel is in use), or always on. When a route does not have a given model, that is remembered for an hour and the model skips that route during the period
+- **Model fallback suggestion on rate limits**: when a model's provider keeps rate-limiting, and the retry wait exceeds 10 seconds or the request finally errors out, the reply recommends a model from a different provider (the first one in your personal model order, skipping image models, models without vision when the chat contains images, models without tool support when tools are in use, and models whose quota is exhausted). One click regenerates this reply with that model, and the rest of the conversation uses it as well
+- **Streaming output**: SSE streamed replies, visible reasoning, stop at any time
+- **Transparent per-reply stats**: elapsed time, time to first token, input/output tokens, tokens/s
+- **Image Studio**: OpenAI `gpt-image-1` and the Google Nano Banana (`gemini-*-image`) family, with reference images (image-to-image / editing) and gallery management. NovelAI V5 has its own **NAI Studio** (creation panel on the left, large canvas, history column), where a Chinese description is turned into prompts automatically, with style presets and custom artist combinations, multi-character positioning and the official UC. Tag mode colors tags by weight, adds or removes `{}`/`[]` in one click, suggests tags remembered per user, and ships a Chinese vocabulary and tag bookmarks
+- **Image generation inside a chat**: just pick an image model in a chat to draw; the current conversation's context and images are carried over, so you can follow up with "make it blue" or "change the background to rain". Generated images also land in the Gallery
+- **Web search**: just like the official ChatGPT / Claude / Gemini apps, there is no toggle — the model decides whether to search. Gemini on Vertex uses native Google Search Grounding directly; other models (local Claude Code, OpenAI-compatible, Anthropic) and subagents use the built-in `web_search` tool, where a small admin-designated model (`gemini-3.5-flash-lite` by default) runs the Google search on their behalf and brings back key points with sources, falling back to the backup model and then to search MCPs such as Brave on error. Every grounded sentence in the answer carries a numbered citation superscript: hover for the source, click to go there. Searches actually executed by Google are counted monthly; once the cap is reached only the backup search sources are used
+- **MCP tools**: stdio / Streamable HTTP / SSE transports, shared with everyone or limited to specific users, enabled per chat as needed, with the full tool call visible
+- **Multi-user**: the first registered user automatically becomes an administrator; Admin can create users, deactivate them and reset passwords, and open registration can be turned off. Administrators can search and read (read-only) a user's chat history from that user's detail page (temporary chats excluded)
+- **Usage dashboard**: administrators can see tokens, request counts and image counts per user / per model / per day; users can see their own usage
+- **Model usage limits**: for a single model you can set a per-person daily/weekly cap on requests or tokens, and either reject or downgrade to a designated model once it is hit; users see their own remaining quota in the model picker
+- **Projects**: projects in the style of ChatGPT / Claude.ai, holding project instructions and reference material (text files) in one place, shareable with specific members. Material is loaded in full as far as the model's context allows (about 15% of the context, estimating roughly 1 token per Chinese character: around 150k characters for a 1M-context model, around 20k for a 128K model; the hard cap is `PROJECT_INJECT_MAX_CHARS`), smaller documents first, with whatever does not fit listed as an index (with its opening lines and subheadings) that the model pulls in on demand via `project_search` (keyword search in Chinese and English, results carry the document name and character offset) and `project_read_doc` (read the original text from any offset). Subagents can search and read project material too. When the sandbox is enabled, the material is also mounted read-only at `/project/`, so commands can search across documents and process data. When an answer cites material, the model marks the source as `[document name](doc:ref)` (ref is the first 8 characters of the document id, supplied along with the loaded material and the search results); the UI shows it as a material tag that opens on click, and members with edit permission can modify and save it directly
+- **Automatic compaction of long chats**: the history sent to the model is budgeted automatically from the model's context (about half of it, estimating roughly 1 token per Chinese character: around 500k characters for a 1M-context model, around 200k for GPT-5, around 60k for a 128K model). When a chat exceeds that, the earlier part is compacted into a summary by the current model and placed at the head of the history while the most recent turns are kept verbatim; the reply is labeled accordingly and the summary can be expanded. Summaries are stored per branch and only rewritten when the budget is exceeded again, so the prefix of the history stays stable and can hit the prompt cache; deleting or editing a message invalidates the summary and it is rebuilt. The Anthropic integration also caches the chat history, so continuing a long conversation is mostly billed at cache rates
+- **Document attachments that persist through the whole chat**: txt / Markdown / CSV / docx are injected as text, PDFs are handed natively to vision models; documents uploaded earlier are still passed to the model when you continue the chat, even once they fall outside the replay window of recent messages
+- **Advanced chat experience**: Markdown, syntax highlighting with one-click copy, KaTeX formulas, GFM tables, image understanding (vision models), edit and resend, regenerate, automatic titles
+- **UI language**: the interface is available in Simplified Chinese and English, switchable under Settings → Appearance; non-Chinese browsers default to English
+- **OCR Studio**: PDF/image to text, with Gemini vision models reading PDFs directly without preprocessing; the output is continuous full text (no pagination, no page numbers) as plain text or Markdown
+- **Chat export**: one click in the sidebar menu exports to Markdown (the current branch) or JSON (the full message tree)
+- **Global custom instructions**: each user can set "about me / how I want replies", which is prepended to the system prompt of every chat; a single chat's own system prompt still overrides it
+- **In-chat search and Bookmarks**: Ctrl/Cmd+F searches within the current chat and jumps through the hits one by one (entering from a sidebar search result scrolls there automatically); any message can be bookmarked, reviewed on the **Bookmarks** page and jumped back to in one click
+- **Chat Workspace (agent-style file workflow)**: every chat comes with its own private file directory, which the model can list, read, write, patch and delete through built-in tools when it needs to — long documents, plans, code and other deliverables are written to files and revised repeatedly instead of being re-emitted in full every turn. It is seamless for the user: the panel on the right opens by itself the first time a file appears, and after that the "Files N" tab at the top of the chat toggles it. The panel previews (Markdown / code / images / PDF / sandboxed HTML), edits online, downloads and accepts drag-and-drop uploads. Users can turn off all agent capabilities at once with "smart tools" under Settings → Chat preferences. Files are deleted with the chat and count toward the storage overview
+- **One-step document conversion**: the built-in `convert_file` tool converts between Markdown / HTML / Word and to PDF (weasyprint, with CJK typography). The command is a fixed script rather than something the model spells out, so it needs no per-call confirmation and does not depend on the "allow the model to run commands" switch (the Sandbox page has its own "built-in document conversion" switch, on by default). Calls to scripts shipped with a skill are likewise treated as trusted and need no confirmation; the confirmation card has a "don't ask again in this chat" checkbox
+- **In-chat image generation tool**: ordinary chat models can call `generate_image` when the task calls for it, producing one image per call and showing it directly in the chat. Administrators configure the switch, the scope, several available image models (the first is the default), the per-turn count and the daily cap for regular users under **Agent capabilities → Image generation** (20 per day by default, 0 means unlimited, administrators are exempt). Tool authorization is independent of model visibility permissions, direct image model permissions and Image Studio permissions, and does not depend on the Workspace or the Sandbox. The daily count is aggregated across models by server date, and a call counts once an upstream request has been issued (including failures and cancellations), while automatic retries do not count again. The limit still holds across concurrent requests and service restarts. Usage is listed separately as "image generation tool", and the existing token, model usage, concurrency and storage limits apply as usual. For now it is text-to-image: chat history and reference images are not attached automatically.
+- **Sandboxed command execution (experimental)**: on top of the Workspace, the model can run shell commands in an isolated sandbox with `run_command` — bwrap namespace isolation (read-only /usr, only this chat's workspace mounted, no network) plus systemd user instance cgroup limits (memory / CPU / process count / timeout). The **Sandbox** page in Admin offers a host environment self-check (telling you the matching apt / sysctl command for anything missing), one-click installation of Python runtime libraries (recommended presets plus custom packages, with the venv mounted read-only into the sandbox), scope and pre-execution confirmation, and an execution audit log. For host preparation see `deploy/sandbox-host-setup.sh`
+- **Skills (Agent Skills)**: administrators maintain SKILL.md (frontmatter name/description plus steps) and the accompanying scripts and material in the backend, with online editing, zip import/export, enabling and scope. In a chat the model only sees a skill's name and purpose, and reads the full instructions with `load_skill` and the accompanying files with `read_skill_file` only when the task matches. The skill directory is mounted read-only inside the sandbox at `/skills/<name>/`, so its scripts can be run directly. Two examples ship with it (Markdown to Word report, and pandas + matplotlib charting)
+- **Subagents**: the model can use `spawn_subagent` to delegate a self-contained subtask (reading through long material, writing a chapter from an outline, running an analysis) to a subagent that cannot see the chat history. It has the same Workspace / Skills / Sandbox tools, cannot nest, does not use MCP, returns its result as text and leaves files in the workspace. Every step of the subagent is shown live in the main chat, and its tokens are charged to the user who started it ("subagents" in the usage dashboard)
+- **Agent capability master switches**: the **Agent capabilities** page in Admin sets the switches and scope (everyone / specific users) for the Workspace, Skills and Subagents in one place; for subagents you can specify the model, the per-turn count, the tool iteration count, the timeout, the returned length and whether command execution is allowed. The whole admin backend has been reworked into a window-style UI matching the settings dialog
+- **Confirmation before MCP tool execution**: administrators can enable "requires user confirmation before calling" per server, so when the model wants to call a tool, the tool and its arguments are shown in the chat first for the user to allow or deny; users can also choose to be asked for every tool
+- **Chart comparison**: 2–12 data points sharing one metric and one unit can be run through `compare_data`, which computes the maximum, minimum and range and renders a fixed bar chart directly. Time-series / continuous data supports multi-line charts (1–6 series, 2–120 points each, up to 600 points in total), drawn on the real horizontal axis spacing, with gaps for missing values. Legend filtering, hover/keyboard readout, switching to the data table, negative numbers and a data source note are all supported. At most one chart is shown per turn, a format error can be corrected once, and no HTML/JS is generated. The switch and scope live under **Agent capabilities** in Admin, and the personal "smart tools" switch applies. On upgrade, user settings for the old Interactive Canvas and encrypted blocks are cleaned up automatically, while the body of past chats is preserved.
+- **Mermaid diagrams and an image lightbox**: ```mermaid code blocks in a reply are rendered as diagrams (you can switch back to the source and download the SVG); images in a chat open enlarged on click
+- **Background completion notifications**: when you switch to another tab, a system notification fires once a reply, an image or a PPT is finished (browser permission, toggled per device)
+- **Voice**: voice input (Chrome/Edge) and read-aloud replies, all using local browser capabilities with zero server cost
+- **Site announcements**: administrators publish a banner announcement that every logged-in user sees in real time and can dismiss
+- **Cost conversion**: once a price per million tokens is configured per model, the usage dashboard and the personal usage page show the converted cost
+- **Automatic backups**: a built-in scheduled SQLite online snapshot task with rotation; Admin can back up and download manually
+- **PWA**: a manifest and a full icon set are included, so phones can "add to home screen"
+- **Security**: an asynchronous bounded scrypt queue, HttpOnly session cookies, CSRF protection, login rate limiting, MCP capability ACLs, and API keys stored AES-256-GCM encrypted and never returned to the frontend
+- **The isolation boundary of the Sandbox and the Workspace**: inside the sandbox, seccomp forbids creating symlinks / pipes / mounts and namespace operations; on the host side, workspace files are always opened O_NOFOLLOW and the path verified by inode, writes and command execution share a per-chat mutex, and irregular files are swept after every command. Only the skill directories the user is allowed to use are mounted at /skills, and zip imports are limited by the actual number of bytes extracted
+- **Resource protection**: hard budgets for attachments/context, per-user and global storage quotas, chat/image concurrency gates, and validation of provider image response size and format
 
-## 🚀 快速开始
+## 🚀 Quick start
 
-要求:Node.js ≥ 20(建议 22)。
+Requirements: Node.js ≥ 20 (22 recommended).
 
 ```bash
 git clone git@github.com:Shalistera/Cat-AgentUI.git
 cd Cat-AgentUI
 npm install
-npm run build          # 构建前端 + 后端
-npm start              # 监听 0.0.0.0:3000
+npm run build          # Build frontend + backend
+npm start              # Listens on 0.0.0.0:3000
 ```
 
-打开 `http://localhost:3000`,注册第一个账号(自动成为管理员),然后进入 **管理后台 → 模型服务** 添加 Provider、拉取模型即可开聊。初始化完成后公开注册默认关闭,后续账号由管理员创建;需要时可在站点设置中手动开放。
+Open `http://localhost:3000`, register the first account (which automatically becomes an administrator), then go to **Admin → Providers** to add a provider and pull its models, and you are ready to chat. After initialization, open registration is off by default and later accounts are created by an administrator; you can open it manually in the site settings if you need to.
 
-### NovelAI V5 绘图
+### NovelAI V5 image generation
 
-1. 在「管理后台 → 模型服务」添加 **NovelAI V5** Provider。API 地址留空使用 `https://image.novelai.net`;填写 NovelAI 账号设置中的 **Persistent API Token**。Token 沿用服务端加密存储,不会发到浏览器。
-2. 拉取并导入 `nai-diffusion-5-curated` 与 `nai-diffusion-5-full`。按需要给指定用户开放这两个模型,并开启该用户的「绘图工坊」和「图像模型」权限。
-3. 从绘图工坊右上角的「NAI 创作室」进入(`/images/nai`;用户只有 NAI 模型时直接打开)。所有设置在一屏内:描述画面、点选画风、选画幅,需要时添加人物并拖动站位,然后点「生成」或 Ctrl / ⌘ + Enter。结果显示在中间画布,历史栏列出该用户的 NAI 作品,可查看实际提示词、载入设置、固定种子继续微调。草稿和自定义画风按用户保存在当前浏览器;离开页面不会停止已提交的生成,回来后自动接上进度。
-4. 默认「智能描述」模式:提示词助手使用用户有权访问的文字模型(默认选默认文字模型,可在高级设置中切换或关闭),可先点「预览」查看整理结果。它只整理描述与角色,不会修改画师组合;同一描述重复出图会复用整理结果。文字模型消耗独立记录为「NAI 提示词助手」,不消耗 Anlas。没有可用文字模型时可直接输入自然语言或 tags。
-5. 「Tag 模式」直接编辑发送给 NAI 的原始提示词,从智能描述切换过来会带上最新的整理结果,画风区默认收起。输入时先联想该用户生成过的 tag(服务端按其 NAI 作品的生成参数统计次数和新近程度,`GET /api/images/novelai/tag-history`),再列出 NAI 的标签建议(附使用量)和内置中文词库,输入中文也能联想到对应 tag。输入框按权重上色,光标所在或选中的 tag 可用「加强 / 减弱」或 Ctrl / ⌘ + ↑↓ 增减一层 `{}` / `[]`(已有数字权重时按 0.1 调整),这些编辑都能 Ctrl / ⌘ + Z 撤销;中文逗号、括号等自动换成英文。「整理」统一逗号和空格、下划线换成空格、拆开从 Danbooru 复制的空格分隔列表并去重。「tag 库」里有常用 tag、收藏的 tag 组合(按用户保存在当前浏览器)和分类词库,点一下加入、再点移除。仍有中文时可以用提示词助手只把中文片段转成 tag(`POST /api/images/novelai/tagify`,其余内容不发送,用量同样记为「NAI 提示词助手」)。官方 UC(界面上叫「基础过滤」)默认启用 Heavy,与自定义排除词分开保存;画面文字放在最终提示词末尾,有文字时不追加 `no text`。作品集图片详情的「在 NAI 创作室打开」会恢复描述、人物、画师权重、UC 和尺寸;种子默认改回随机,需要复现时在画布上点「固定种子」。
+1. Add a **NovelAI V5** provider under **Admin → Providers**. Leave the API address empty to use `https://image.novelai.net`; fill in the **Persistent API Token** from your NovelAI account settings. The token uses the same server-side encrypted storage and is never sent to the browser.
+2. Pull and import `nai-diffusion-5-curated` and `nai-diffusion-5-full`. Grant these two models to specific users as needed, and enable the **Image Studio** and **image models** permissions for those users.
+3. Enter via **NAI Studio** in the top-right corner of the Image Studio (`/images/nai`; it opens directly for users who only have NAI models). Everything is on one screen: describe the image, pick a style, choose an aspect ratio, add characters and drag their positions if needed, then click "Generate" or press Ctrl / ⌘ + Enter. The result appears on the canvas in the middle, and the history column lists that user's NAI works, where you can see the actual prompt, load the settings, and pin the seed to keep refining. Drafts and custom styles are saved per user in the current browser; leaving the page does not stop a submitted generation, and progress is picked up again when you come back.
+4. "Smart description" mode is the default: the prompt assistant uses a text model the user has access to (the default text model is selected by default; you can switch it or turn it off in the advanced settings), and you can click "Preview" to see the cleaned-up result first. It only tidies the description and the characters and never changes the artist combination; generating the same description again reuses the cleaned-up result. Text model consumption is recorded separately as "NAI prompt assistant" and consumes no Anlas. When no text model is available you can type natural language or tags directly.
+5. **Tag mode** edits the raw prompt sent to NAI directly; switching over from smart description brings along the latest cleaned-up result, and the style section is collapsed by default. As you type, it first suggests tags that user has generated with before (the server counts frequency and recency from the generation parameters of their NAI works, `GET /api/images/novelai/tag-history`), then lists NAI's own tag suggestions (with usage counts) and the built-in Chinese vocabulary, so typing Chinese also suggests the matching tag. The input box colors tags by weight, and the tag at the cursor or in the selection can be strengthened / weakened, or have a layer of `{}` / `[]` added or removed with Ctrl / ⌘ + ↑↓ (adjusted in steps of 0.1 when it already has a numeric weight); all of these edits can be undone with Ctrl / ⌘ + Z, and Chinese commas, brackets and so on are converted to their ASCII equivalents automatically. "Tidy" normalizes commas and spaces, turns underscores into spaces, splits space-separated lists copied from Danbooru, and deduplicates. The "tag library" holds common tags, bookmarked tag combinations (saved per user in the current browser) and categorized vocabularies: click to add, click again to remove. If Chinese text remains, you can use the prompt assistant to convert only the Chinese fragments into tags (`POST /api/images/novelai/tagify`; nothing else is sent, and the usage is likewise recorded as "NAI prompt assistant"). The official UC (called "base filter" in the UI) defaults to Heavy and is saved separately from your custom exclusions; text that should appear in the image goes at the end of the final prompt, and `no text` is not appended when there is such text. "Open in NAI Studio" in the image details of a collection restores the description, characters, artist weights, UC and size; the seed goes back to random by default, so click "pin seed" on the canvas when you need to reproduce an image.
 
-**订阅额度模式**仅支持有效 Opus 订阅、单张文生图、最多 28 steps,以及 `1216×832`、`832×1216`、`1024×1024` 三种 Normal 尺寸。默认 23 steps、Guidance 7、Euler Ancestral。服务端每次生成前读取最新订阅状态;额度未知、不可用或不足 1% 时停止。同一 Token 的两个模型在服务进程内共用并发锁。生成请求不自动重试、不切备用线路,也不降级到旧模型。Anlas 余额仅供查看,暂不提供 Vibe Transfer、图生图、重绘、放大或批量生成。
+**Subscription allowance mode** only supports a valid Opus subscription, single-image text-to-image, at most 28 steps, and the three Normal sizes `1216×832`, `832×1216` and `1024×1024`. The defaults are 23 steps, Guidance 7 and Euler Ancestral. The server reads the latest subscription status before every generation and stops when the allowance is unknown, unavailable or below 1%. The two models under the same token share a concurrency lock within the service process. Generation requests are not retried automatically, do not switch to a backup route, and do not downgrade to an older model. The Anlas balance is for viewing only; Vibe Transfer, image-to-image, inpainting, upscaling and batch generation are not available yet.
 
-NovelAI 的公开 API 没有已确认的原子「费用必须为 0」参数。上述前置检查不能锁住其他客户端:若同一账号在官网或另一服务进程同时耗尽额度,上游仍可能转为消耗 Anlas。这里实现的是保留 1% 余量的订阅前置限制,不能把 Normal 尺寸本身当作零扣费保证。需要严格隔离时,应避免同一账号跨客户端并发生成。
+NovelAI's public API has no confirmed atomic "cost must be 0" parameter. The pre-checks above cannot lock out other clients: if the same account exhausts its allowance on the website or in another service process at the same time, the upstream may still switch to consuming Anlas. What is implemented here is a subscription pre-check that keeps a 1% margin, not a guarantee that a Normal size is free of charge. If you need strict isolation, avoid generating concurrently with the same account from several clients.
 
-API 协议和预设参考 [官方 API](https://image.novelai.net/docs/index.html)、[角色位置](https://docs.novelai.net/en/image/multiplecharacters/)、[UC 预设](https://docs.novelai.net/en/image/undesiredcontent/)及[订阅额度说明](https://journal.novelai.net/opus-usage-limit-explained/)。回归验证使用本地模拟服务: `npm run test:novelai`,不会调用真实 NAI 或消耗额度;Tag 模式的文本工具和词库由 `npm run test:nai-tags` 覆盖。
+For the API protocol and the presets, see the [official API](https://image.novelai.net/docs/index.html), [character positions](https://docs.novelai.net/en/image/multiplecharacters/), [UC presets](https://docs.novelai.net/en/image/undesiredcontent/) and the [subscription allowance explainer](https://journal.novelai.net/opus-usage-limit-explained/). Regression testing uses a local mock service: `npm run test:novelai`, which calls neither the real NAI nor your allowance; the text tools and vocabulary of tag mode are covered by `npm run test:nai-tags`.
 
-### 使用 pm2 常驻(推荐)
+### Running persistently with pm2 (recommended)
 
 ```bash
 npx pm2 start deploy/ecosystem.config.cjs
 npx pm2 save
-# 开机自启(无 root 时):crontab -e 添加
+# Start on boot (without root): run crontab -e and add
 # @reboot cd /path/to/Cat-AgentUI && npx pm2 resurrect
 ```
 
-### 环境变量(`.env`,自动生成)
+### Environment variables (`.env`, generated automatically)
 
-| 变量 | 说明 | 默认 |
+| Variable | Description | Default |
 |------|------|------|
-| `PORT` | 监听端口 | `3000` |
-| `HOST` | 监听地址 | `0.0.0.0` |
-| `SECRET_KEY` | 会话与密钥加密种子(首次启动自动生成,**勿泄露/丢失**) | 自动生成 |
-| `DATA_DIR` | 数据目录(SQLite、上传、生成图片) | `./data` |
-| `COOKIE_SECURE` | HTTPS 部署时设为 `true` | `false` |
-| `TRUST_PROXY` | 反代(nginx 等)后设为 `true` | `false` |
-| `SESSION_TTL_DAYS` | 会话有效期 | `30` |
-| `MAX_UPLOAD_MB` | 图片上传上限 | `20` |
-| `MAX_ATTACHMENTS_PER_MESSAGE` | 每条消息最多附件数默认值(1–100);管理员可在「应用设置 → 存储空间」覆盖,保存后立即生效,OCR/绘图附件校验共用 | `20` |
-| `MAX_MESSAGE_ATTACHMENT_MB` | 每条消息附件原始字节总量 | `20` |
-| `MAX_MESSAGE_TEXT_CHARS` | 每条消息文字字符上限 | `64000` |
-| `MAX_CONTEXT_MESSAGES` | 原样回放的消息条数上限(超出即压缩成摘要) | `400` |
-| `MAX_CONTEXT_TEXT_CHARS` | 对话历史的字符上限;实际预算按模型上下文约一半自动计算,取两者较小值 | `1000000` |
-| `PROJECT_INJECT_MAX_CHARS` | 项目资料整篇载入的字符上限;实际还不超过模型上下文的约 15%,放不下的部分改为按需检索 | `200000` |
-| `MAX_CONTEXT_IMAGE_MB` | 模型上下文图片原始字节预算 | `24` |
-| `MAX_CONTEXT_IMAGES` | 上下文图片/PDF 数量预算;实际取此值与当前单次附件上限的较大值,保证一批附件可进入上下文 | `6` |
-| `MAX_CONTEXT_IMAGE_MB_PER_USER` | 单用户同时驻留的上下文图片字节预算 | `48` |
-| `MAX_CONTEXT_IMAGE_MB_GLOBAL` | 全站同时驻留的上下文图片字节预算 | `96` |
-| `DEFAULT_MODEL_OUTPUT_TOKENS` | 未单独设置时每次模型请求的输出 token 上限;Gemini 包含思考,不等于模型最大容量 | `8192` |
-| `MAX_MODEL_OUTPUT_TOKENS` | 单次模型输出 token 硬上限 | `65536` |
-| `MAX_TURN_OUTPUT_CHARS` | 单轮回复累计字符硬上限(含思考和工具结果) | `500000` |
-| `CHAT_TURN_TIMEOUT_SECONDS` | 普通文本对话单轮总超时 | `900` |
-| `CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS` | Provider 流连续无事件的空闲超时 | `120` |
-| `PROVIDER_RETRY_MAX_WAIT_SECONDS` | 上游 429/503/529 限流时单次请求最多等待重试的总时长 | `60` |
-| `FAILOVER_RETRY_WAIT_SECONDS` | 配置了备用线路时,前面的线路被限流最多等多久就改走下一条 | `10` |
-| `VERTEX_REGION_RETRY_WAIT_SECONDS` | Vertex 某个区域被限流时最多等多久就换下一个区域(或 Priority 重试) | `3` |
-| `VERTEX_PRIORITY_AFTER_RETRIES` | Priority PayGo 设为「限流时启用」时,一次请求里标准请求累计被限流几次就改走 Priority | `5` |
-| `MAX_USER_UPLOAD_MB` | 单用户附件存储配额默认值;管理员可在「站点设置 → 存储空间」覆盖,保存后立即生效;用户在「设置 → 附件存储」能看到自己的占用并删除附件 | `512` |
-| `MAX_USER_IMAGE_MB` | 单用户生成图片存储配额 | `1024` |
-| `MAX_TOTAL_STORAGE_MB` | 全站附件与生成图片总配额 | `10240` |
-| `MAX_GENERATED_IMAGE_MB` | 单张生成图片大小上限 | `20` |
-| `MAX_CHAT_CONCURRENCY_PER_USER` | 单用户并发对话数 | `2` |
-| `MAX_CHAT_CONCURRENCY_GLOBAL` | 全站并发对话数 | `20` |
-| `MAX_IMAGE_CONCURRENCY_PER_USER` | 单用户并发绘图数(同一模型始终只能跑一个,需换模型才能并发) | `3` |
-| `MAX_IMAGE_CONCURRENCY_GLOBAL` | 全站并发绘图数 | `8` |
-| `PASSWORD_CONCURRENCY` | scrypt 同时执行数 | `2` |
-| `PASSWORD_QUEUE_MAX` | scrypt 等待队列长度 | `32` |
-| `MAX_TOOL_ITERATIONS` | 单次回复最多 MCP 工具轮数 | `10` |
-| `MAX_WORKSPACE_MB` | 单个对话工作区总大小上限 | `64` |
-| `MAX_WORKSPACE_FILE_MB` | 工作区单个文件大小上限 | `8` |
-| `MAX_WORKSPACE_FILES` | 单个对话工作区文件数上限 | `500` |
-| `MAX_SANDBOX_CONCURRENCY` | 全站同时执行的沙盒命令数(每人 1 条) | `3` |
-| `MAX_SANDBOX_TIMEOUT_SECONDS` | 管理员可设置的单条命令超时上限 | `600` |
-| `BACKUP_INTERVAL_HOURS` | 数据库自动快照间隔的初始默认值(0 = 默认关闭);实际策略在后台「应用设置 → 数据库备份」中设置并存库 | `24` |
-| `BACKUP_KEEP` | 快照保留份数的初始默认值,后台可改 | `14` |
+| `PORT` | Listening port | `3000` |
+| `HOST` | Listening address | `0.0.0.0` |
+| `SECRET_KEY` | Seed for session and secret encryption (generated on first start, **do not leak or lose it**) | generated |
+| `DATA_DIR` | Data directory (SQLite, uploads, generated images) | `./data` |
+| `COOKIE_SECURE` | Set to `true` for HTTPS deployments | `false` |
+| `TRUST_PROXY` | Set to `true` behind a reverse proxy (nginx etc.) | `false` |
+| `SESSION_TTL_DAYS` | Session lifetime | `30` |
+| `MAX_UPLOAD_MB` | Image upload limit | `20` |
+| `MAX_ATTACHMENTS_PER_MESSAGE` | Default maximum attachments per message (1–100); administrators can override it under "App settings → Storage", it takes effect immediately on save, and the OCR/image attachment checks share it | `20` |
+| `MAX_MESSAGE_ATTACHMENT_MB` | Total raw bytes of attachments per message | `20` |
+| `MAX_MESSAGE_TEXT_CHARS` | Character limit of the text of one message | `64000` |
+| `MAX_CONTEXT_MESSAGES` | Maximum number of messages replayed verbatim (beyond that they are compacted into a summary) | `400` |
+| `MAX_CONTEXT_TEXT_CHARS` | Character limit of the chat history; the actual budget is computed automatically as about half the model's context, and the smaller of the two is used | `1000000` |
+| `PROJECT_INJECT_MAX_CHARS` | Character limit for loading project material in full; in practice it also stays under about 15% of the model's context, and whatever does not fit is retrieved on demand instead | `200000` |
+| `MAX_CONTEXT_IMAGE_MB` | Raw byte budget for images in the model context | `24` |
+| `MAX_CONTEXT_IMAGES` | Budget for the number of images/PDFs in the context; the larger of this value and the current per-message attachment limit is used, so one batch of attachments can always enter the context | `6` |
+| `MAX_CONTEXT_IMAGE_MB_PER_USER` | Byte budget for context images resident at once for one user | `48` |
+| `MAX_CONTEXT_IMAGE_MB_GLOBAL` | Byte budget for context images resident at once site-wide | `96` |
+| `DEFAULT_MODEL_OUTPUT_TOKENS` | Output token limit per model request when nothing else is set; for Gemini it includes thinking and is not the model's maximum capacity | `8192` |
+| `MAX_MODEL_OUTPUT_TOKENS` | Hard limit on output tokens for one model call | `65536` |
+| `MAX_TURN_OUTPUT_CHARS` | Hard limit on the accumulated characters of one turn (including thinking and tool results) | `500000` |
+| `CHAT_TURN_TIMEOUT_SECONDS` | Total timeout of one turn of ordinary text chat | `900` |
+| `CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS` | Idle timeout for a provider stream with no events | `120` |
+| `PROVIDER_RETRY_MAX_WAIT_SECONDS` | Maximum total wait for retries within one request when the upstream returns 429/503/529 | `60` |
+| `FAILOVER_RETRY_WAIT_SECONDS` | With backup routes configured, how long a rate-limited earlier route is waited on before moving to the next one | `10` |
+| `VERTEX_REGION_RETRY_WAIT_SECONDS` | How long a rate-limited Vertex region is waited on before switching to the next region (or retrying on Priority) | `3` |
+| `VERTEX_PRIORITY_AFTER_RETRIES` | With Priority PayGo set to "on when rate-limited", how many times standard requests must be rate-limited within one request before moving to Priority | `5` |
+| `MAX_USER_UPLOAD_MB` | Default per-user attachment storage quota; administrators can override it under "Site settings → Storage" and it takes effect immediately on save; users can see their own usage and delete attachments under "Settings → Attachment storage" | `512` |
+| `MAX_USER_IMAGE_MB` | Per-user storage quota for generated images | `1024` |
+| `MAX_TOTAL_STORAGE_MB` | Site-wide quota for attachments plus generated images | `10240` |
+| `MAX_GENERATED_IMAGE_MB` | Size limit for a single generated image | `20` |
+| `MAX_CHAT_CONCURRENCY_PER_USER` | Concurrent chats per user | `2` |
+| `MAX_CHAT_CONCURRENCY_GLOBAL` | Concurrent chats site-wide | `20` |
+| `MAX_IMAGE_CONCURRENCY_PER_USER` | Concurrent image generations per user (one model can only ever run one, so concurrency requires different models) | `3` |
+| `MAX_IMAGE_CONCURRENCY_GLOBAL` | Concurrent image generations site-wide | `8` |
+| `PASSWORD_CONCURRENCY` | Number of scrypt runs at once | `2` |
+| `PASSWORD_QUEUE_MAX` | Length of the scrypt wait queue | `32` |
+| `MAX_TOOL_ITERATIONS` | Maximum MCP tool iterations for one reply | `10` |
+| `MAX_WORKSPACE_MB` | Total size limit of one chat's workspace | `64` |
+| `MAX_WORKSPACE_FILE_MB` | Size limit of a single workspace file | `8` |
+| `MAX_WORKSPACE_FILES` | File count limit of one chat's workspace | `500` |
+| `MAX_SANDBOX_CONCURRENCY` | Sandbox commands running at once site-wide (1 per person) | `3` |
+| `MAX_SANDBOX_TIMEOUT_SECONDS` | Upper bound an administrator can set for a single command's timeout | `600` |
+| `BACKUP_INTERVAL_HOURS` | Initial default for the automatic database snapshot interval (0 = off by default); the actual policy is set under "App settings → Database backup" in the backend and stored in the database | `24` |
+| `BACKUP_KEEP` | Initial default for the number of snapshots kept; changeable in the backend | `14` |
 
-### 图表工具参数与恢复
+### Chart tool parameters and recovery
 
-`compare_data` 的说明提供柱状图和折线图的最小 JSON 示例。按 `chart` 选择需要的字段,忽略另一种图的字段和占位值;
-折线示例展示两条曲线共用横轴,不依赖 Python/scipy/matplotlib。模型确需计算或拟合数据时仍可使用沙盒,
-但已知数值的对话内图表直接走 `compare_data`;沙盒与技能提示按本轮图表权限引导,不会要求安装绘图库才能画多曲线。
-当前用户消息明确要求某类图形,或命中“对比 + 按时间展示”时,只提供对应图形的参数和示例,运行时也会拒绝不匹配的图形。
-用户明确指定柱状图优先于时序默认值;模糊请求保留两种选择。该检查能拦截错用图形,不能证明数值、指标或来源语义正确。
-缺少目标数据时优先定向补查原始资料,仍取不到则简短说明;不能用峰值/总量凑成不回答时间变化的图,不能无依据补造曲线。
-未指定图形时可从单独提供的 `items` 或 `series` 识别,两套数据都有时要求明确指定。纯数字字符串可转为数值,
-空字符串/布尔值/带单位的字符串不会被当作数字。数据出处允许最多 1000 字以容纳链接。
-数据点数、横轴顺序、曲线长度、缺失值和单位/出处仍会校验;不静默排序、补点或猜测单位。
-格式错误返回具体字段,允许模型根据反馈修正一次;成功或累计两次失败后收起本轮图表工具,运行时也会拦截超限调用。
-没有发出图表调用时,不会额外请求模型重写答案。Responses API 显式发送 `strict: false`,保留共享工具定义中的可选字段,
-避免服务端自动转成严格模式后要求填写不适用的字段;Chat Completions、Anthropic 和 Gemini 沿用各自的参数协议。
-参考:[OpenAI 工具严格模式说明](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)。
+The description of `compare_data` provides minimal JSON examples for a bar chart and a line chart. Pick the fields you need per `chart` and ignore the other chart's fields and placeholder values;
+the line example shows two series sharing one horizontal axis and does not depend on Python/scipy/matplotlib. The model can still use the sandbox when it genuinely needs to compute or fit data,
+but an in-chat chart of known values goes straight through `compare_data`; the sandbox and skill prompts are steered by this turn's chart permission and never ask for a plotting library to be installed just to draw several series.
+When the current user message explicitly asks for a particular kind of chart, or matches "comparison + shown over time", only that chart's parameters and example are offered, and the runtime also rejects a mismatched chart type.
+An explicit request for a bar chart takes precedence over the time-series default; an ambiguous request keeps both options. This check can stop the wrong chart type from being used, but it cannot prove that the values, the metric or the source semantics are correct.
+When the target data is missing, the original material is looked up again first; if it still cannot be obtained, a short explanation is given. A peak or a total must not be cobbled into a chart that fails to answer the change over time, and series must not be invented without a basis.
+When no chart type is specified, it can be inferred from `items` or `series` being supplied on their own; when both sets of data are present, an explicit choice is required. Pure numeric strings can be converted to numbers,
+while empty strings, booleans and strings with units are not treated as numbers. The data source is allowed up to 1000 characters so that links fit.
+The number of data points, the order of the horizontal axis, the series lengths, missing values and units/sources are still validated; nothing is silently sorted, filled in or guessed.
+A format error returns the specific fields and the model may correct itself once based on that feedback; after a success or two cumulative failures, this turn's chart tool is withdrawn, and the runtime also blocks calls past the limit.
+When no chart call was made, the model is not additionally asked to rewrite the answer. The Responses API explicitly sends `strict: false` to keep the optional fields of the shared tool definition,
+so that the server does not convert it to strict mode and then require fields that do not apply; Chat Completions, Anthropic and Gemini keep their own parameter protocols.
+See [OpenAI's strict mode for tools](https://developers.openai.com/api/docs/guides/function-calling#strict-mode).
 
-### 输出上限与 Gemini 思考
+### Output limits and Gemini thinking
 
-普通对话每次模型请求使用 `min(对话 maxTokens 或 DEFAULT_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS)`。
-默认请求上限为 8192;工具会产生多轮请求,回复统计的输出 tokens 会累计各轮,并包含 Gemini 思考 tokens。
-Gemini 3.7/3.8 Flash 按原生 `thinkingLevel` 发送低/中/高档;它们不能完全关闭思考,最低档使用 low 并隐藏思考摘要。
-高思考档触及上限时,可按需要提高部署环境的 `DEFAULT_MODEL_OUTPUT_TOKENS`(例如 32768 或 65536),
-但实际值仍受 `MAX_MODEL_OUTPUT_TOKENS` 和服务商限制;已有对话显式保存的 `maxTokens` 优先。
-提高上限会允许更多思考和输出,不保证低延迟或低成本。图表任务默认先取数据、先出图、后写简短结论。当前用户消息明确要求图表或“对比 + 按时间展示”时,
-会增加简短的本轮图表意图提示;只看当前用户消息,忽略引用和代码片段,跳过明确不画图或纯翻译/编程请求。
-这个判断不另调模型,不改变 Vertex 原生搜索或其他 Agent 工具;生成后的长文也不会被再送去转换。
-Gemini 的流结束日志包含 `requestedMaxOutputTokens`、`thoughtTokens`、`answerTokens`,便于定位实际截断。回合结束日志还会记录 `comparisonIntentMatched`、`comparisonTarget`、`comparisonAttempts`、
-`comparisonRendered`,可区分意图未匹配、工具未调用和工具已调用但未出图。
-参考:[Google 思考与输出预算说明](https://ai.google.dev/gemini-api/docs/generate-content/thinking)。
+Ordinary chat uses `min(the chat's maxTokens or DEFAULT_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS)` for every model request.
+The default request limit is 8192; tools produce several requests per turn, so the output tokens in the reply stats accumulate across them and include Gemini thinking tokens.
+Gemini 3.7/3.8 Flash send the low/medium/high tiers via the native `thinkingLevel`; they cannot turn thinking off entirely, so the lowest tier uses low and hides the thinking summary.
+When a high thinking tier hits the limit, you can raise `DEFAULT_MODEL_OUTPUT_TOKENS` in your deployment as needed (to 32768 or 65536, for example),
+but the effective value is still bound by `MAX_MODEL_OUTPUT_TOKENS` and the provider's limits; a `maxTokens` explicitly saved on an existing chat takes precedence.
+Raising the limit allows more thinking and output; it does not guarantee low latency or low cost. Chart tasks default to fetching the data first, drawing the chart next and writing a short conclusion last. When the current user message explicitly asks for a chart or matches "comparison + shown over time",
+a short chart-intent hint is added for that turn; only the current user message is considered, quotes and code snippets are ignored, and requests that explicitly rule out a chart, as well as pure translation or programming requests, are skipped.
+This decision does not involve another model call and does not change Vertex native search or any other agent tool; nor is a long answer sent off for conversion after it is generated.
+Gemini's stream-end log includes `requestedMaxOutputTokens`, `thoughtTokens` and `answerTokens`, which makes actual truncation easy to locate. The turn-end log also records `comparisonIntentMatched`, `comparisonTarget`, `comparisonAttempts` and
+`comparisonRendered`, which distinguishes an unmatched intent, an uncalled tool, and a tool that was called but drew nothing.
+See [Google's thinking and output budget documentation](https://ai.google.dev/gemini-api/docs/generate-content/thinking).
 
-### 联网搜索
+### Web search
 
-联网搜索是 **管理后台 → Agent 能力 → 联网搜索** 里的一项能力(默认开启,受用户「智能工具」开关控制),
-输入框里没有开关:搜索始终可用,由模型按问题决定是否调用。
+Web search is one of the capabilities under **Admin → Agent capabilities → Web search** (on by default, subject to the user's "smart tools" switch),
+and there is no toggle in the input box: search is always available and the model decides per question whether to call it.
 
-- **Vertex Gemini**:Gemini 2.5/3.x 文本模型在 `generateContent` 请求里直接带
-  `tools: [{ googleSearch: {} }]`,搜索发生在模型自己的推理里,来源按句标注。Gemini 3.x
-  可与函数工具同请求;Gemini 2.5 不允许,同轮有其他工具时改用下面的 `web_search`。
-- **其他模型与子代理**:提供内置函数工具 `web_search(query)`。调用时服务端向「搜索模型」
-  (默认自动选第一个启用的 Gemini 服务商、优先 Vertex,模型 `gemini-3.5-flash-lite`)发一次带
-  Google grounding 的请求,把要点和编号来源作为工具结果交回,来源同时显示为引用角标。
-  本地 Claude Code 通过面板转给它的工具使用同一个 `web_search`。
-- **网页阅读**:内置函数工具 `web_fetch(url, focus?, offset?)`,模型可以打开搜索结果或任意网页核实原文。
-  服务器本机抓取(只允许 http/https 与 80/443/8080/8443 端口;每次连接与跳转都检查解析出的 IP,
-  拒绝内网、本机与保留地址),用 Readability 提取正文;短网页原样返回,长网页先由「读网页的模型」
-  (默认同搜索模型)挑出与 focus 相关的原文段落,逐字核对确实出现在正文里后才交给聊天模型,通常只占
-  整页的 1/10,需要时再按 offset 分段读原文(10 分钟缓存)。本机读不到的网页(被拦、需脚本渲染、PDF)
-  交给 Gemini 的 urlContext 代读并标注未核对。读网页的 token 计入用量看板「网页阅读」,不占 Google 搜索额度。
-- **兜底**:每次 `web_search` 依次尝试 搜索模型 → 备用模型(默认 `gemini-3.1-flash-lite`,可指定
-  另一个 Gemini 服务商,如 AI Studio)→ **管理后台 → MCP** 中设为「搜索源」的服务器(如 Brave),
-  每步 20 秒超时;失败过的模型暂停 2 分钟,Vertex 故障时不必每次都等超时。Google 偶尔会返回要点却不带来源,这时改用搜索 MCP 补充同一查询的链接(没有 MCP 时再搜一次),保证模型有可以打开核实的网址。
-- **费用控制**:Gemini 3.x 的 Google 搜索按实际执行的搜索查询计费(一次提问常搜 2–3 次),
-  每月有共享免费额度。面板按月累计 `web_search` 的搜索次数,到达「每月 Google 搜索上限」
-  (默认 5000)后只用备用搜索源;普通用户与管理员可分别设每日调用上限(默认 100 / 不限)。
-  搜索模型的 token 计入用量看板「联网搜索」。
+- **Vertex Gemini**: Gemini 2.5/3.x text models carry `tools: [{ googleSearch: {} }]` directly in the
+  `generateContent` request, so the search happens inside the model's own reasoning and sources are cited per sentence. Gemini 3.x
+  can combine it with function tools in one request; Gemini 2.5 cannot, so when other tools are present in the same turn, the `web_search` below is used instead.
+- **Other models and subagents**: the built-in function tool `web_search(query)` is provided. When it is called, the server sends one
+  Google-grounded request to the "search model" (by default the first enabled Gemini provider, preferring Vertex, with the model
+  `gemini-3.5-flash-lite`) and hands back the key points and numbered sources as the tool result, with the sources also shown as citation superscripts.
+  The tools that the panel forwards to local Claude Code use the same `web_search`.
+- **Web fetch**: the built-in function tool `web_fetch(url, focus?, offset?)` lets the model open a search result or any web page to verify the original text.
+  Fetching happens on the server itself (only http/https and ports 80/443/8080/8443 are allowed; the resolved IP is checked on every connection and redirect,
+  and private, loopback and reserved addresses are rejected), and the body is extracted with Readability. Short pages are returned verbatim, while for long pages the "web reading model"
+  (the search model by default) first picks out the passages relevant to `focus` and verifies word for word that they really appear in the body before handing them to the chat model — usually about
+  a tenth of the whole page — after which further sections of the original can be read by `offset` as needed (cached for 10 minutes). Pages the server cannot read (blocked, script-rendered, PDF)
+  are read by Gemini's urlContext instead and marked as unverified. Tokens for web reading count toward "web fetch" in the usage dashboard and do not consume the Google search allowance.
+- **Fallbacks**: each `web_search` tries, in order, the search model → the backup model (`gemini-3.1-flash-lite` by default, and you can point it at
+  another Gemini provider such as AI Studio) → the servers marked as a "search source" under **Admin → MCP** (Brave, for example),
+  with a 20-second timeout per step. A model that has failed is paused for 2 minutes, so a Vertex outage does not mean waiting for the timeout every time. Google occasionally returns key points without sources, in which case a search MCP is used to supply links for the same query (and if there is no MCP, the search is simply run again), so the model always has URLs it can open and verify.
+- **Cost control**: Google search for Gemini 3.x is billed per search query actually executed (a single question often searches 2–3 times),
+  and there is a shared monthly free allowance. The panel accumulates the search count of `web_search` per month, and once the "monthly Google search cap"
+  (5000 by default) is reached only the backup search sources are used; regular users and administrators can have separate daily call caps (100 / unlimited by default).
+  The search model's tokens count toward "web search" in the usage dashboard.
 
-支持模型、配额、计费与展示条款以
-[Google Cloud 官方说明](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search)
-为准。
+Supported models, quotas, billing and display terms are governed by the
+[official Google Cloud documentation](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search).
 
-MCP 默认对所有登录用户共享,适合联网搜索等基础工具。文件、命令执行或内部系统等
-敏感 MCP 应在 **管理后台 → MCP → 编辑服务器 → 访问范围** 中改为“仅指定普通用户”;
-管理员权限始终隐式生效。
+MCP is shared with all logged-in users by default, which suits basic tools such as web search. Sensitive MCPs —
+files, command execution, internal systems — should be changed to "only specific regular users" under
+**Admin → MCP → Edit server → Scope**; administrator permission always applies implicitly.
 
-Provider API Key、Vertex 服务账号、Provider 自定义 Headers 以及 MCP env/Headers
-均使用 `SECRET_KEY` 加密落盘并按“只写不回显”处理;Provider/MCP 错误、工具结果和模型流
-也会做密钥脱敏。注意:Stdio MCP 是与本站同一系统账号运行的受信任代码。Shell、文件系统或
-恶意 MCP 可以读取文件并变形外传内容,不能靠字符串脱敏形成真正沙箱,因此不要向普通用户
-开放不可信的本地命令/文件工具。
+Provider API keys, Vertex service accounts, provider custom headers and MCP env/headers are all
+encrypted at rest with `SECRET_KEY` and treated as write-only (never echoed back); provider/MCP errors, tool results and model streams
+are also scrubbed of secrets. Note that a stdio MCP is trusted code running under the same system account as this site. A shell, filesystem or
+malicious MCP can read files and exfiltrate transformed content, and string scrubbing cannot make a real sandbox, so do not expose
+untrusted local command/file tools to regular users.
 
-## 🧰 开发
+## 🧰 Development
 
 ```bash
 npm run dev:server     # tsx watch, :3000
-npm run dev:web        # vite dev, :5173(代理 /api → :3000)
-npm run test:security  # 临时数据库 + Mock Provider/MCP 的隔离安全回归
-npm run test:upload-quota # 临时数据库的附件配额设置与上传回归
-npm run test:provider-retry # 模拟 429:有限重试、取消、附件保留与断流保护
-npm run test:stream-parser # SSE 末尾结束事件、分片编码、延迟结束与真实断流
-npm run test:chat-recovery # 断线后恢复原生成、刷新恢复、明确停止和用户隔离
-npm run test:chat-fallback # 可配置模型兜底、成功后沿用、失败不改选择、权限与防循环
-npm run test:response-integrity # 空回自动换线路、思考缓冲、恢复上限、续写去重和结束确认
-npm run test:provider-failover # 备用线路:优先级切换、熔断阈值与冷却试探、不重放已开始的流;Vertex 区域顺序与 Priority
-npm run test:data-comparison # 图表对比:输入校验、权限、次数、消息持久化与旧实验设置清理
-npm run test:model-fallback   # 持续限流时推荐换用的模型:其他服务商、按个人排序、能力与额度
-node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即可联调
-                               # 提供对话流式、工具调用、生图 / 改图(images/generations 与 images/edits)
+npm run dev:web        # vite dev, :5173 (proxies /api → :3000)
+npm run test:security  # Isolated security regression with a temporary database and mock provider/MCP
+npm run test:upload-quota # Attachment quota settings and upload regression on a temporary database
+npm run test:provider-retry # Simulated 429: bounded retries, cancellation, attachment retention and broken-stream protection
+npm run test:stream-parser # Trailing SSE end events, chunked encoding, late endings and real stream breaks
+npm run test:chat-recovery # Resuming the original generation after a disconnect, recovery on refresh, explicit stops and user isolation
+npm run test:chat-fallback # Configurable model fallback, sticking with it after success, not changing the selection on failure, permissions and loop prevention
+npm run test:response-integrity # Automatic route switch on an empty reply, thinking buffering, recovery limits, continuation dedup and end confirmation
+npm run test:provider-failover # Backup routes: priority switching, circuit-breaker thresholds and cooldown probes, not replaying a stream that has started; Vertex region order and Priority
+npm run test:data-comparison # Chart comparison: input validation, permissions, counts, message persistence and cleanup of the old experimental settings
+npm run test:model-fallback   # The model recommended on sustained rate limiting: other providers, personal order, capabilities and quota
+node scripts/mock-openai.mjs   # A local fake OpenAI (:4141/v1) for integration work without a real key
+                               # Provides chat streaming, tool calls, and image generation / editing (images/generations and images/edits)
 ```
 
-Gemini / Vertex 流结束时,服务端输出 `Provider stream ended` 结构化日志,按
-`chatId` / `messageId` 关联 `Chat turn finished`。前者记录实际 `location`、
-`endpointId`、`priority`、原始 `finishReason`、`transport`、`invalidEvents` 和
-`sinceLastByteMs`,不记录对话正文或密钥。`transport=eof` 且没有 `finishReason`
-只表示连接读完但未确认正常完成;`transport=error` 表示读取异常;
-`transport=aborted` 表示主动取消或本地超时,可结合 `timeout` 判断;
-`clientGone` 只表示浏览器连接已断开,可恢复请求不会仅因该标记取消生成。
-若服务端记录 `finishReason=STOP` 且最终为 `stop`,浏览器仍提示不完整,
-应检查浏览器到面板之间的 SSE 链路。上游心跳也算连接活动,不会因没有新 token
-而触发空闲超时;总生成时限仍然生效。
+When a Gemini / Vertex stream ends, the server emits a structured `Provider stream ended` log, correlated with
+`Chat turn finished` by `chatId` / `messageId`. The former records the actual `location`,
+`endpointId`, `priority`, the raw `finishReason`, `transport`, `invalidEvents` and
+`sinceLastByteMs`, and never the chat body or any secret. `transport=eof` with no `finishReason`
+only means the connection was read to the end without a confirmed normal completion; `transport=error` means a read error;
+`transport=aborted` means an explicit cancellation or a local timeout, which can be told apart with `timeout`;
+`clientGone` only means the browser connection has dropped, and a resumable request is not cancelled by that flag alone.
+If the server records `finishReason=STOP` and ends as `stop` while the browser still reports an incomplete reply,
+check the SSE path between the browser and the panel. Upstream heartbeats count as connection activity, so the idle timeout
+is not triggered merely by the absence of new tokens; the overall generation time limit still applies.
 
-对话请求携带 `requestId` 时,浏览器连接中断不会取消后台生成。页面会通过只读
-`stream-state` 接口恢复同一轮的正文、重试状态和工具确认,直到后台真正结束,
-不会自动重放模型请求。重新打开对话也会继续跟踪;「停止」通过独立接口按请求标识
-取消生成。后台仍受原有总时限限制,不带 `requestId` 的旧客户端保留断线取消行为。
+When a chat request carries a `requestId`, a broken browser connection does not cancel the background generation. The page restores the body, the retry state
+and the tool confirmations of that same turn through the read-only `stream-state` endpoint until the background work really finishes,
+and never replays the model request automatically. Reopening the chat continues tracking it as well; "Stop" cancels the generation by request id
+through a separate endpoint. The background work is still bound by the original overall time limit, and older clients that send no `requestId` keep the cancel-on-disconnect behavior.
 
-Vertex Priority PayGo 可选择「首次失败即启用」:首次可切换线路的错误发生在输出前时,
-直接跳到 Priority,跳过标准通道内部重试和其他标准区域。参数错误、用户取消和
-已开始输出的流不会因此重放。实际使用 Priority 时显示「正在使用优先通道请求」,
-回复保留 Priority 标识;不支持 Priority 的模型/区域不会显示该标识。
+Vertex Priority PayGo can be set to "enable on the first failure": when the first switchable error occurs before any output,
+it jumps straight to Priority, skipping the standard channel's internal retries and the other standard regions. Parameter errors, user cancellations
+and streams that have already started producing output are not replayed because of this. When Priority is actually used, "requesting via the priority channel" is shown
+and the reply keeps the Priority marker; models/regions that do not support Priority do not show it.
 
-「管理后台 → 模型设置 → 模型详情 → 限流或空回时自动兜底」可给每个对话模型指定一个
-兼容的兜底模型,默认关闭,支持同服务商的不同模型。对话前端在首次限流且尚未输出时
-自动用同一条已保存的问题/附件尝试兜底一次;成功后当前对话沿用它,并提供「切回原模型」,
-不修改新对话默认选择。兜底失败则保留原选择,不串联其他兜底规则,已输出或执行过工具的
-回复不自动重放。只有当前用户有权限且额度充足时才启用;比较模型时不自动兜底。
-为让前端先接管,带有效兜底意向的主请求会直接返回首次繁忙拒绝,不会先耗尽该主模型的
-区域/Priority 重试。兜底请求本身仍沿用其服务商的既有重试与 Priority 配置。
+**Admin → Model settings → Model details → Automatic fallback on rate limits or an empty reply** lets you designate one
+compatible fallback model per chat model. It is off by default and supports a different model from the same provider. On the first rate limit before any output, the chat frontend
+automatically tries the fallback once with the same saved question and attachments; on success the current chat sticks with it and offers "switch back to the original model",
+without changing the default selection for new chats. If the fallback fails, the original selection is kept, no other fallback rules are chained, and a reply that has already produced output
+or run a tool is not replayed automatically. It is only enabled when the current user has permission and sufficient quota, and it does not kick in when comparing models.
+So that the frontend can take over first, a primary request with a valid fallback intent returns the first busy rejection directly, rather than first exhausting that primary model's
+region/Priority retries. The fallback request itself still follows its own provider's existing retry and Priority configuration.
 
-对话空回(包括只有思考而没有正文)会先自动恢复一次:有可用备用线路时换线路,
-否则重新连接当前线路。仍然空回时接入已配置的模型兜底。尚未有正文的思考/签名先有限缓冲,
-不会把失败尝试混进最终答案;每次实际返回的用量仍计入统计。空回与真实断流会计入线路健康状态。
-纯文字回复在真实断流后保留原文,自动续写一次,优先使用其他配置线路;恢复过程保持加载,
-成功后显示「已自动续写恢复」,仅剔除续写开头与原文末尾完全匹配的较长重复段。
-已有工具调用或图片的回复不自动续写;用户停止、超时、内容策略拦截和输出长度限制不触发恢复。
-收到正常结束信号后的连接重置不再误判为截断。自动恢复耗尽后才展示失败/不完整提示,
-所有恢复仍受原回合的时间和输出上限约束,不会无限循环。
+An empty chat reply (including thinking with no body) is recovered automatically once first: it switches routes if a backup route is available,
+otherwise it reconnects to the current route. If it is still empty, the configured model fallback kicks in. Thinking/signatures that have no body yet are buffered within limits,
+so failed attempts are not mixed into the final answer; the usage actually returned by each attempt is still counted. Empty replies and real stream breaks count toward route health.
+A pure text reply keeps its text after a real stream break and is continued once automatically, preferring the other configured routes; the recovery keeps the loading state,
+shows "automatically continued and recovered" on success, and only strips the longer duplicated segment where the start of the continuation exactly matches the end of the original text.
+Replies that already contain tool calls or images are not continued automatically; a user stop, a timeout, a content policy block and the output length limit do not trigger recovery.
+A connection reset after a normal end signal is no longer misread as truncation.
+The failure/incomplete notice is only shown once automatic recovery is exhausted, and every recovery is still bound by the original turn's time and output limits, so it cannot loop forever.
 
-## 🗄️ 数据与迁移
+## 🗄️ Data and migration
 
-- 数据库为 SQLite(WAL 模式),文件在 `data/cat-agentui.db`,10-20 人并发完全够用;schema 由 [Drizzle ORM](https://orm.drizzle.team) 管理,迁移文件在 `server/drizzle/`
-- 备份:服务每 24 小时自动做一次 SQLite 在线快照到 `data/backups/`(保留最近 14 份,可在管理后台手动备份/下载);快照只含数据库,附件与生成图片仍需连同 `.env` 一起做 `data/` 整目录备份(密钥用 `SECRET_KEY` 加密,两者需成对保存)
-- 导出:`npm run db:export -w server` 生成全量 JSON,便于日后迁移到 PostgreSQL 等
+- The database is SQLite (WAL mode), in the file `data/cat-agentui.db`, which is plenty for 10–20 concurrent people; the schema is managed by [Drizzle ORM](https://orm.drizzle.team) and the migration files are in `server/drizzle/`
+- Backups: the service takes an online SQLite snapshot into `data/backups/` every 24 hours (keeping the latest 14; Admin can back up and download manually). A snapshot only contains the database, so attachments and generated images still need a full backup of the `data/` directory together with `.env` (the secrets are encrypted with `SECRET_KEY`, so the two must be kept as a pair)
+- Export: `npm run db:export -w server` produces a full JSON dump, which makes a later migration to PostgreSQL or similar easier
 
-### 从 Open WebUI 迁移
+### Migrating from Open WebUI
 
-**方式一(推荐):管理后台 → 数据迁移**,上传 webui.db 即可,支持试运行预览、可选填写服务器上的
-Open WebUI data 目录来搬运附件(图片与文档;PDF / 旧版 Office 等会带着 Open WebUI 已提取的文本一起迁入,回复里的引用来源保留为「参考来源」)。
+**Option 1 (recommended): Admin → Data migration.** Just upload webui.db. It supports a dry-run preview, and you can optionally fill in the
+Open WebUI data directory on the server to bring the attachments over (images and documents; PDFs, legacy Office files and so on are migrated along with the text Open WebUI already extracted, and citations in replies are preserved as "reference sources").
 
-**方式二:命令行**
+**Option 2: the command line**
 
 ```bash
-# 先停掉 Open WebUI,然后:
+# Stop Open WebUI first, then:
 npm run db:import-openwebui -w server -- \
   --db /path/to/open-webui/data/webui.db \
-  --data-dir /path/to/open-webui/data     # 可选,用于搬运聊天附件与生成图片
+  --data-dir /path/to/open-webui/data     # Optional, for moving chat attachments and generated images
 ```
 
-**大库(GB 级)建议:** 内嵌图片多的 webui.db 动辄数 GB,别走浏览器上传——先在源机器压瘦再拷到
-本机跑命令行:
+**For a large database (GB scale):** a webui.db with many embedded images easily runs to several GB — do not go through a browser upload. Slim it down on the source machine first and copy it to
+this machine to run the command line:
 
 ```bash
-sqlite3 webui.db "PRAGMA wal_checkpoint(TRUNCATE)"       # 把 WAL 合并进主文件
-sqlite3 webui.db "VACUUM INTO 'webui-compact.db'"        # 去掉空闲页,通常显著变小
-rsync webui-compact.db your-server:/tmp/                 # 附件目录(data/uploads 等)也一并拷
+sqlite3 webui.db "PRAGMA wal_checkpoint(TRUNCATE)"       # Merge the WAL into the main file
+sqlite3 webui.db "VACUUM INTO 'webui-compact.db'"        # Drop free pages; usually much smaller
+rsync webui-compact.db your-server:/tmp/                 # Copy the attachment directories (data/uploads etc.) too
 ```
 
-导入按会话逐个提交、内存占用与库大小无关;中途中断或个别会话解析失败都不影响其余,重跑即续传。
+The import commits one conversation at a time, so memory use is independent of the database size; an interruption part-way through or a single conversation failing to parse does not affect the rest, and re-running resumes.
 
-- **用户**:登录名 = 原邮箱(小写),显示名、角色(admin/user)、停用状态照搬;
-  **原密码直接可用**——bcrypt/argon2 哈希原样迁入,首次登录成功后自动升级为本站 scrypt 格式。
-  不需要 Open WebUI 的 `WEBUI_SECRET_KEY`(它只签 JWT 会话,不参与密码哈希)
-- **聊天记录**:迁入每个会话的当前分支(与 Open WebUI 界面所见一致),推理过程
-  (`<details type="reasoning">` 或 0.11+ 结构化 output)、工具调用、附件图片都会解析为本站消息格式
-- OAuth/LDAP 登录且无本地密码的账号会迁入但暂不可登录,报告中会列出,管理员在后台重置密码即可
-- 支持 `--dry-run`(只看报告不写入)、`--skip-archived`(跳过归档会话);重复执行安全(已存在的用户/会话自动跳过)
+- **Users**: the login name is the original email (lowercased), and the display name, role (admin/user) and deactivated state are carried over as-is;
+  **the original passwords work directly** — bcrypt/argon2 hashes are migrated verbatim and upgraded to this site's scrypt format automatically after the first successful login.
+  Open WebUI's `WEBUI_SECRET_KEY` is not needed (it only signs JWT sessions and is not involved in password hashing)
+- **Chat history**: the current branch of each conversation is migrated (matching what the Open WebUI interface shows), and reasoning
+  (`<details type="reasoning">` or the structured output of 0.11+), tool calls and attached images are all parsed into this site's message format
+- Accounts that logged in via OAuth/LDAP and have no local password are migrated but cannot log in yet; they are listed in the report and an administrator only needs to reset the password in the backend
+- `--dry-run` (report only, no writes) and `--skip-archived` (skip archived conversations) are supported; re-running is safe (existing users/conversations are skipped automatically)
 
-## 🏗️ 架构
+## 🏗️ Architecture
 
 ```
-web/     React 19 + Vite + Tailwind v4(构建后由后端托管)
-server/  Fastify 5 + better-sqlite3 + Drizzle(TypeScript, ESM)
-  ├─ providers/   openai.ts · anthropic.ts · gemini.ts(统一流式适配器接口)· failover.ts(备用线路熔断切换)
-  ├─ mcp/         @modelcontextprotocol/sdk 客户端管理器
-  └─ routes/      auth · chats(SSE)· images · uploads · mcp · admin · providers
+web/     React 19 + Vite + Tailwind v4 (served by the backend after the build)
+server/  Fastify 5 + better-sqlite3 + Drizzle (TypeScript, ESM)
+  ├─ providers/   openai.ts · anthropic.ts · gemini.ts (unified streaming adapter interface) · failover.ts (backup route circuit breaking and switching)
+  ├─ mcp/         @modelcontextprotocol/sdk client manager
+  └─ routes/      auth · chats (SSE) · images · uploads · mcp · admin · providers
 ```
 
 ## License

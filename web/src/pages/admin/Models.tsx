@@ -7,6 +7,7 @@ import {
   Spinner, Td, Th, Toggle, btnClass, toast,
 } from '../../components/ui';
 import { ProviderAvatar } from '../../components/ModelAvatar';
+import { t } from '../../i18n';
 import type { AdminModel, AdminProvider, AdminUser, ModelAccessMode } from '../../types';
 import { TYPE_LABELS } from './provider-common';
 
@@ -36,37 +37,37 @@ function AccessModal({ model, reload, onClose }: {
     try {
       await api.patch(`/api/admin/models/${model.id}`, { accessMode: mode, allowedUserIds: allowed });
       await reload();
-      toast('已更新模型可见性', 'ok');
+      toast(t('已更新模型可见性'), 'ok');
       onClose();
     } catch (e) { toast(errMsg(e), 'err'); }
     finally { setBusy(false); }
   }
 
   return (
-    <Modal open onClose={onClose} title="模型可见性" desc={model.modelId}>
+    <Modal open onClose={onClose} title={t('模型可见性')} desc={model.modelId}>
       <div className="space-y-4">
-        <Field label="访问范围" hint="贵模型建议仅指定用户,与配额同属成本治理">
+        <Field label={t('访问范围')} hint={t('贵模型建议仅指定用户,与配额同属成本治理')}>
           <Select value={mode} onChange={(e) => setMode(e.target.value as ModelAccessMode)}>
-            <option value="shared">所有登录用户</option>
-            <option value="restricted">仅指定普通用户</option>
+            <option value="shared">{t('所有登录用户')}</option>
+            <option value="restricted">{t('仅指定普通用户')}</option>
           </Select>
         </Field>
 
         {mode === 'restricted' && (
-          <Field label="指定普通用户" hint="管理员始终可用;未勾选的用户在模型列表里看不到它">
+          <Field label={t('指定普通用户')} hint={t('管理员始终可用;未勾选的用户在模型列表里看不到它')}>
             {!users ? (
               <div className="flex justify-center py-4 text-tx3"><Spinner className="h-4 w-4" /></div>
             ) : (
               <div className="max-h-48 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-bg0">
                 {users.length === 0 ? (
-                  <div className="px-3 py-3 text-xs text-tx3">暂无普通用户</div>
+                  <div className="px-3 py-3 text-xs text-tx3">{t('暂无普通用户')}</div>
                 ) : users.map((u) => (
                   <div key={u.id} className="flex items-center gap-3 px-3 py-2">
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[13px] font-medium text-tx">{u.displayName || u.username}</div>
                       {u.displayName && <div className="truncate text-[11px] text-tx3">@{u.username}</div>}
                     </div>
-                    {u.disabled && <Badge tone="err">已停用</Badge>}
+                    {u.disabled && <Badge tone="err">{t('已停用')}</Badge>}
                     <Toggle
                       checked={allowed.includes(u.id)}
                       onChange={(checked) => setAllowed(checked
@@ -81,9 +82,9 @@ function AccessModal({ model, reload, onClose }: {
         )}
 
         <ModalActions>
-          <Button variant="outline" onClick={onClose}>取消</Button>
+          <Button variant="outline" onClick={onClose}>{t('取消')}</Button>
           <Button variant="primary" disabled={busy} onClick={save}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}保存
+            {busy && <Spinner className="h-3.5 w-3.5" />}{t('保存')}
           </Button>
         </ModalActions>
       </div>
@@ -99,12 +100,14 @@ function AccessCell({ model, reload }: { model: AdminModel; reload(): Promise<vo
     <>
       <button
         type="button"
-        title="设置模型可见性"
+        title={t('设置模型可见性')}
         onClick={() => setOpen(true)}
         className="flex cursor-pointer items-center gap-1.5 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-bg3"
       >
         <Badge tone={restricted ? 'acc' : 'default'}>
-          {restricted ? <><Users size={10} />指定 {model.allowedUserIds.length}</> : '全员'}
+          {restricted
+            ? <><Users size={10} />{t('指定 {n}', { n: model.allowedUserIds.length })}</>
+            : t('全员')}
         </Badge>
         <Pencil size={11} className="shrink-0 text-tx3" />
       </button>
@@ -117,16 +120,20 @@ function AccessCell({ model, reload }: { model: AdminModel; reload(): Promise<vo
 function limitLabel(m: AdminModel): string | null {
   if (!m.limitRequests && !m.limitTokens) return null;
   const parts: string[] = [];
-  if (m.limitRequests) parts.push(`${m.limitRequests} 次`);
+  if (m.limitRequests) parts.push(t('{n} 次', { n: m.limitRequests }));
   if (m.limitTokens) parts.push(`${fmtTokens(m.limitTokens)} tokens`);
-  return `${m.limitPeriod === 'week' ? '每周' : '每日'}每人 ${parts.join(' · ')}`;
+  const parts_ = parts.join(' · ');
+  return m.limitPeriod === 'week'
+    ? t('每周每人 {parts}', { parts: parts_ })
+    : t('每日每人 {parts}', { parts: parts_ });
 }
 
 // ---------- capability row ----------
 function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
   const [busy, setBusy] = useState(false);
+  const limit = limitLabel(model);
 
-  async function patch(body: Record<string, unknown>, okMsg = '已更新') {
+  async function patch(body: Record<string, unknown>, okMsg = t('已更新')) {
     if (busy) return;
     setBusy(true);
     try {
@@ -140,12 +147,12 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
   return (
     <tr className={`group transition-colors hover:bg-bg2/60 ${model.enabled ? '' : 'opacity-55'}`}>
       <Td className="max-w-[260px]">
-        <Link to={`/admin/models/${model.id}`} title="打开详细设置" className="group/name block">
+        <Link to={`/admin/models/${model.id}`} title={t('打开详细设置')} className="group/name block">
           <div className="truncate font-mono text-tx group-hover/name:underline">{model.modelId}</div>
           {model.displayName && <div className="truncate text-[11px] text-tx3">{model.displayName}</div>}
-          {limitLabel(model) && (
-            <div className="mt-0.5 truncate text-[11px] tabular-nums text-warn" title="使用限制(在详细设置中修改)">
-              限 {limitLabel(model)}
+          {limit && (
+            <div className="mt-0.5 truncate text-[11px] tabular-nums text-warn" title={t('使用限制(在详细设置中修改)')}>
+              {t('限 {label}', { label: limit })}
             </div>
           )}
         </Link>
@@ -156,18 +163,18 @@ function ModelRow({ model, reload }: { model: AdminModel; reload(): Promise<void
       <Td><AccessCell model={model} reload={reload} /></Td>
       <Td className="text-center">
         <Button variant="ghost" size="iconXs"
-          title={model.isDefault ? '当前默认模型' : '设为默认'} disabled={busy || model.isDefault}
-          onClick={() => patch({ isDefault: true }, '已设为默认')}>
+          title={model.isDefault ? t('当前默认模型') : t('设为默认')} disabled={busy || model.isDefault}
+          onClick={() => patch({ isDefault: true }, t('已设为默认'))}>
           <Star size={14} className={model.isDefault ? 'text-acc' : ''} fill={model.isDefault ? 'currentColor' : 'none'} />
         </Button>
       </Td>
       <Td className="text-center">
         {model.enabled
-          ? <Badge tone="ok">启用中</Badge>
-          : <Badge>已停用</Badge>}
+          ? <Badge tone="ok">{t('启用中')}</Badge>
+          : <Badge>{t('已停用')}</Badge>}
       </Td>
       <Td className="text-center">
-        <Link to={`/admin/models/${model.id}`} title="详细设置:描述、单价、使用限制、推理档位"
+        <Link to={`/admin/models/${model.id}`} title={t('详细设置:描述、单价、使用限制、推理档位')}
           className={btnClass('ghost', 'iconXs')}>
           <SlidersHorizontal size={14} />
         </Link>
@@ -215,11 +222,11 @@ export default function Models() {
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
       <div className="min-w-0">
-        <h1 className="text-base font-semibold tracking-tight text-tx">模型设置</h1>
+        <h1 className="text-base font-semibold tracking-tight text-tx">{t('模型设置')}</h1>
         <p className="mt-0.5 text-xs leading-relaxed text-tx3">
-          配置每个模型的能力、可见性与默认模型;点击模型名或行尾按钮进入详细设置(模型描述、单价、使用限制、推理档位)。添加模型和启用开关在
-          <Link to="/admin/providers" className="mx-0.5 text-acc hover:underline">模型服务</Link>
-          栏目。
+          {t('配置每个模型的能力、可见性与默认模型;点击模型名或行尾按钮进入详细设置(模型描述、单价、使用限制、推理档位)。添加模型和启用开关在')}
+          <Link to="/admin/providers" className="mx-0.5 text-acc hover:underline">{t('模型服务')}</Link>
+          {t('栏目。')}
         </p>
       </div>
 
@@ -229,11 +236,11 @@ export default function Models() {
         <div className="rounded-xl border border-line bg-bg1 shadow-xs">
           <EmptyState
             icon={<Server size={22} />}
-            title="还没有任何模型"
-            hint="先到「模型服务」接入提供商并添加模型,再回到这里配置能力。"
+            title={t('还没有任何模型')}
+            hint={t('先到「模型服务」接入提供商并添加模型,再回到这里配置能力。')}
             action={(
               <Link to="/admin/providers">
-                <Button variant="primary" size="sm">前往模型服务</Button>
+                <Button variant="primary" size="sm">{t('前往模型服务')}</Button>
               </Link>
             )}
           />
@@ -242,21 +249,21 @@ export default function Models() {
         <>
           <div className="flex flex-wrap items-center gap-2">
             <div className="w-full sm:w-56">
-              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索模型 ID / 显示名…" uiSize="sm" />
+              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('搜索模型 ID / 显示名…')} uiSize="sm" />
             </div>
             <Select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)} className="w-auto text-xs">
-              <option value="all">全部服务商</option>
+              <option value="all">{t('全部服务商')}</option>
               {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>
             <label className="flex cursor-pointer items-center gap-1.5 text-xs text-tx2">
               <Toggle checked={onlyEnabled} onChange={setOnlyEnabled} />
-              仅显示已启用
+              {t('仅显示已启用')}
             </label>
           </div>
 
           {sections.length === 0 ? (
             <p className="rounded-xl border border-dashed border-line2 px-3 py-8 text-center text-xs text-tx3">
-              没有匹配的模型
+              {t('没有匹配的模型')}
             </p>
           ) : sections.map(({ provider, models }) => (
             <div key={provider.id} className="overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
@@ -265,21 +272,21 @@ export default function Models() {
                   avatarUrl={provider.avatarUrl} size={24} />
                 <span className="text-[13px] font-semibold text-tx">{provider.name}</span>
                 <Badge>{TYPE_LABELS[provider.type]}</Badge>
-                {!provider.enabled && <Badge tone="err">服务商已禁用</Badge>}
-                <span className="ml-auto text-[11px] tabular-nums text-tx3">{models.length} 个模型</span>
+                {!provider.enabled && <Badge tone="err">{t('服务商已禁用')}</Badge>}
+                <span className="ml-auto text-[11px] tabular-nums text-tx3">{t('{n} 个模型', { n: models.length })}</span>
               </div>
               <div className="overflow-x-auto px-4 py-2">
                 <table className="w-full text-xs">
                   <thead>
                     <tr>
-                      <Th>模型</Th>
-                      <Th className="text-center">视觉</Th>
-                      <Th className="text-center">工具</Th>
-                      <Th className="text-center">绘图</Th>
-                      <Th>可见性</Th>
-                      <Th className="text-center">默认</Th>
-                      <Th className="text-center">状态</Th>
-                      <Th className="text-center" title="模型描述、单价、使用限制、推理档位等详细配置">详情</Th>
+                      <Th>{t('模型')}</Th>
+                      <Th className="text-center">{t('视觉')}</Th>
+                      <Th className="text-center">{t('工具')}</Th>
+                      <Th className="text-center">{t('绘图')}</Th>
+                      <Th>{t('可见性')}</Th>
+                      <Th className="text-center">{t('默认')}</Th>
+                      <Th className="text-center">{t('状态')}</Th>
+                      <Th className="text-center" title={t('模型描述、单价、使用限制、推理档位等详细配置')}>{t('详情')}</Th>
                     </tr>
                   </thead>
                   <tbody>

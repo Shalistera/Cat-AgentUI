@@ -6,6 +6,7 @@ import {
   Badge, Button, Card, EmptyState, Field, Input, Select, SegmentedControl, Spinner, Textarea, toast,
 } from '../../components/ui';
 import { ProviderAvatar } from '../../components/ModelAvatar';
+import { t } from '../../i18n';
 import type { AdminModel, AdminProvider, LimitPeriod, ReasoningLevel, ReasoningMode } from '../../types';
 import { TYPE_LABELS } from './provider-common';
 
@@ -13,7 +14,7 @@ import { TYPE_LABELS } from './provider-common';
    passing; anything that needs a form — the user-facing blurb, the reasoning
    ladder, and whatever detail settings come next — lives here. */
 
-const MODE_LABELS: Record<ReasoningMode, string> = { auto: '默认', custom: '自定义', off: '关闭' };
+const MODE_LABELS: Record<ReasoningMode, string> = { auto: t('默认'), custom: t('自定义'), off: t('关闭@@off') };
 const DESCRIPTION_MAX = 500;
 
 function FallbackCard({ model, providers, reload }: { model: AdminModel; providers: AdminProvider[]; reload(): Promise<void> }) {
@@ -29,22 +30,22 @@ function FallbackCard({ model, providers, reload }: { model: AdminModel; provide
     try {
       await api.patch(`/api/admin/models/${model.id}`, { fallbackModelId: selected || null });
       await reload();
-      toast('已保存兜底模型', 'ok');
+      toast(t('已保存兜底模型'), 'ok');
     } catch (err) { toast(errMsg(err), 'err'); }
     finally { setBusy(false); }
   }
-  return <Card title="限流或空回时自动兜底" desc="首次限流或空回自动恢复失败、且尚未输出正文时,自动尝试指定模型一次。成功后当前对话沿用兜底模型,新对话默认模型不变。">
+  return <Card title={t('限流或空回时自动兜底')} desc={t('首次限流或空回自动恢复失败、且尚未输出正文时,自动尝试指定模型一次。成功后当前对话沿用兜底模型,新对话默认模型不变。')}>
     <div className="space-y-3">
-      <Field label="兜底模型" hint="可以选择同一服务商的其他模型。仅对有权限、额度充足且能力兼容的用户生效。">
-        <Select aria-label="兜底模型" value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy}>
-          <option value="">关闭自动兜底</option>
-          {missing && <option value={selected} disabled>原兜底模型已不可用,请重新选择</option>}
+      <Field label={t('兜底模型')} hint={t('可以选择同一服务商的其他模型。仅对有权限、额度充足且能力兼容的用户生效。')}>
+        <Select aria-label={t('兜底模型')} value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy}>
+          <option value="">{t('关闭自动兜底')}</option>
+          {missing && <option value={selected} disabled>{t('原兜底模型已不可用,请重新选择')}</option>}
           {candidates.map((m) => <option key={m.id} value={m.id}>{m.displayName || m.modelId} · {m.providerName}</option>)}
         </Select>
       </Field>
-      <p className="text-xs text-tx3">不会丢弃已开始的回复或重做工具操作。兜底也失败时停止自动切换,由用户决定下一步。</p>
+      <p className="text-xs text-tx3">{t('不会丢弃已开始的回复或重做工具操作。兜底也失败时停止自动切换,由用户决定下一步。')}</p>
       <div className="flex justify-end"><Button size="sm" disabled={busy || missing || selected === (model.fallbackModelId ?? '')} onClick={save}>
-        {busy && <Spinner className="h-3.5 w-3.5" />}保存兜底模型
+        {busy && <Spinner className="h-3.5 w-3.5" />}{t('保存兜底模型')}
       </Button></div>
     </div>
   </Card>;
@@ -58,7 +59,7 @@ function readAsDataUri(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result));
-    r.onerror = () => reject(new Error('读取文件失败'));
+    r.onerror = () => reject(new Error(t('读取文件失败')));
     r.readAsDataURL(file);
   });
 }
@@ -94,7 +95,7 @@ function IconCard({ provider, model, reload }: {
     setBusy(true);
     try {
       await api.put(`/api/admin/models/${model.id}/avatar`, { avatar });
-      toast(avatar ? '模型图标已更新' : '已恢复默认图标', 'ok');
+      toast(avatar ? t('模型图标已更新') : t('已恢复默认图标'), 'ok');
       await reload();
     } catch (e) { toast(errMsg(e), 'err'); }
     finally { setBusy(false); }
@@ -104,16 +105,16 @@ function IconCard({ provider, model, reload }: {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!ICON_MIMES.includes(file.type)) { toast('仅支持 SVG / PNG / JPEG / WebP / GIF', 'err'); return; }
-    if (file.size > ICON_MAX_BYTES) { toast('图标不能超过 128 KB', 'err'); return; }
+    if (!ICON_MIMES.includes(file.type)) { toast(t('仅支持 SVG / PNG / JPEG / WebP / GIF'), 'err'); return; }
+    if (file.size > ICON_MAX_BYTES) { toast(t('图标不能超过 128 KB'), 'err'); return; }
     try {
       await save(await readAsDataUri(file));
     } catch (err) { toast(errMsg(err), 'err'); }
   }
 
   return (
-    <Card title="模型图标"
-      desc="推荐 SVG(也支持 PNG / JPEG / WebP / GIF,不超过 128 KB)。上传后模型选择器、对话页与新对话首页都优先显示它;未上传时沿用 Provider 头像或内置品牌图标。">
+    <Card title={t('模型图标')}
+      desc={t('推荐 SVG(也支持 PNG / JPEG / WebP / GIF,不超过 128 KB)。上传后模型选择器、对话页与新对话首页都优先显示它;未上传时沿用 Provider 头像或内置品牌图标。')}>
       <div className="flex items-center gap-4">
         {busy ? (
           <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-line2 bg-bg2 text-tx3">
@@ -124,11 +125,11 @@ function IconCard({ provider, model, reload }: {
         )}
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" disabled={busy} onClick={() => fileRef.current?.click()}>
-            <Upload size={13} />上传图标
+            <Upload size={13} />{t('上传图标')}
           </Button>
           {model.avatarUrl && (
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => save(null)}>
-              <X size={13} />恢复默认
+              <X size={13} />{t('恢复默认')}
             </Button>
           )}
         </div>
@@ -151,25 +152,25 @@ function DescriptionCard({ model, reload }: { model: AdminModel; reload(): Promi
     try {
       await api.patch(`/api/admin/models/${model.id}`, { description: text.trim() || null });
       await reload();
-      toast('已更新模型描述', 'ok');
+      toast(t('已更新模型描述'), 'ok');
     } catch (e) { toast(errMsg(e), 'err'); }
     finally { setBusy(false); }
   }
 
   return (
-    <Card title="模型描述" desc="展示给用户:出现在新对话首页的模型名称下方。留空则不显示。">
+    <Card title={t('模型描述')} desc={t('展示给用户:出现在新对话首页的模型名称下方。留空则不显示。')}>
       <div className="space-y-3">
         <Textarea
           rows={3}
           maxLength={DESCRIPTION_MAX}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="例如:现在世界上最强的模型,但是很贵"
+          placeholder={t('例如:现在世界上最强的模型,但是很贵')}
         />
         <div className="flex items-center justify-between">
           <span className="text-[11px] tabular-nums text-tx3">{text.length}/{DESCRIPTION_MAX}</span>
           <Button variant="primary" size="sm" disabled={busy || !dirty} onClick={save}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}保存描述
+            {busy && <Spinner className="h-3.5 w-3.5" />}{t('保存描述')}
           </Button>
         </div>
       </div>
@@ -198,41 +199,41 @@ function PricingCard({ model, reload }: { model: AdminModel; reload(): Promise<v
     const inputPrice = parse(input);
     const outputPrice = parse(output);
     if (inputPrice === undefined || outputPrice === undefined) {
-      toast('单价必须是不小于 0 的数字,留空表示未配置', 'err');
+      toast(t('单价必须是不小于 0 的数字,留空表示未配置'), 'err');
       return;
     }
     setBusy(true);
     try {
       await api.patch(`/api/admin/models/${model.id}`, { inputPrice, outputPrice });
       await reload();
-      toast('已更新模型单价', 'ok');
+      toast(t('已更新模型单价'), 'ok');
     } catch (e) { toast(errMsg(e), 'err'); }
     finally { setBusy(false); }
   }
 
   return (
     <Card
-      title="模型单价"
-      desc="每 100 万 tokens 的价格,用于用量看板的成本折算(按当前单价估算历史用量)。货币符号在「应用设置 → 成本治理」配置。两项都留空 = 不参与成本统计。"
+      title={t('模型单价')}
+      desc={t('每 100 万 tokens 的价格,用于用量看板的成本折算(按当前单价估算历史用量)。货币符号在「应用设置 → 成本治理」配置。两项都留空 = 不参与成本统计。')}
     >
       <div className="space-y-3">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="输入单价 / 1M tokens">
+          <Field label={t('输入单价 / 1M tokens')}>
             <Input
-              inputMode="decimal" value={input} placeholder="未配置"
+              inputMode="decimal" value={input} placeholder={t('未配置')}
               onChange={(e) => setInput(e.target.value)}
             />
           </Field>
-          <Field label="输出单价 / 1M tokens">
+          <Field label={t('输出单价 / 1M tokens')}>
             <Input
-              inputMode="decimal" value={output} placeholder="未配置"
+              inputMode="decimal" value={output} placeholder={t('未配置')}
               onChange={(e) => setOutput(e.target.value)}
             />
           </Field>
         </div>
         <div className="flex justify-end">
           <Button variant="primary" size="sm" disabled={busy || !dirty} onClick={save}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}保存单价
+            {busy && <Spinner className="h-3.5 w-3.5" />}{t('保存单价')}
           </Button>
         </div>
       </div>
@@ -241,7 +242,7 @@ function PricingCard({ model, reload }: { model: AdminModel; reload(): Promise<v
 }
 
 // ---------- 使用限制 ----------
-const PERIOD_LABELS: Record<LimitPeriod, string> = { day: '每日', week: '每周' };
+const PERIOD_LABELS: Record<LimitPeriod, string> = { day: t('每日'), week: t('每周') };
 
 /**
  * Per-account allowance on this one model, on top of the monthly quota:
@@ -270,25 +271,25 @@ function UsageLimitCard({ model, reload }: { model: AdminModel; reload(): Promis
     const limitRequests = parse(requests);
     const limitTokens = parse(tokens);
     if (limitRequests === undefined || limitTokens === undefined) {
-      toast('上限必须是不小于 0 的整数,留空或 0 表示不限', 'err');
+      toast(t('上限必须是不小于 0 的整数,留空或 0 表示不限'), 'err');
       return;
     }
     setBusy(true);
     try {
       await api.patch(`/api/admin/models/${model.id}`, { limitPeriod: period, limitRequests, limitTokens });
       await reload();
-      toast('已更新使用限制', 'ok');
+      toast(t('已更新使用限制'), 'ok');
     } catch (e) { toast(errMsg(e), 'err'); }
     finally { setBusy(false); }
   }
 
   return (
     <Card
-      title="使用限制"
-      desc="每个账号在这个模型上的周期用量上限,用来控制贵模型的使用频率或成本;两项都留空 = 不限制。管理员不受限制。"
+      title={t('使用限制')}
+      desc={t('每个账号在这个模型上的周期用量上限,用来控制贵模型的使用频率或成本;两项都留空 = 不限制。管理员不受限制。')}
     >
       <div className="space-y-4">
-        <Field label="统计周期" hint="每日在服务器本地时间 0 点重置;每周在周一 0 点重置。">
+        <Field label={t('统计周期')} hint={t('每日在服务器本地时间 0 点重置;每周在周一 0 点重置。')}>
           <SegmentedControl<LimitPeriod>
             value={period}
             onChange={setPeriod}
@@ -297,31 +298,30 @@ function UsageLimitCard({ model, reload }: { model: AdminModel; reload(): Promis
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
-            label={`${PERIOD_LABELS[period]}次数上限(每人)`}
-            hint="只计用户主动发起的请求:对话、绘图、OCR、翻译、PPT;自动生成的标题与追问不计次。"
+            label={t('{period}次数上限(每人)', { period: PERIOD_LABELS[period] })}
+            hint={t('只计用户主动发起的请求:对话、绘图、OCR、翻译、PPT;自动生成的标题与追问不计次。')}
           >
             <Input
-              type="number" min={0} step={1} inputMode="numeric" value={requests} placeholder="不限"
+              type="number" min={0} step={1} inputMode="numeric" value={requests} placeholder={t('不限')}
               onChange={(e) => setRequests(e.target.value)}
             />
           </Field>
           <Field
-            label={`${PERIOD_LABELS[period]} token 上限(每人)`}
-            hint="该模型在周期内的全部 token 消耗(输入 + 输出,含自动标题与追问)。"
+            label={t('{period} token 上限(每人)', { period: PERIOD_LABELS[period] })}
+            hint={t('该模型在周期内的全部 token 消耗(输入 + 输出,含自动标题与追问)。')}
           >
             <Input
-              type="number" min={0} step={1} inputMode="numeric" value={tokens} placeholder="不限"
+              type="number" min={0} step={1} inputMode="numeric" value={tokens} placeholder={t('不限')}
               onChange={(e) => setTokens(e.target.value)}
             />
           </Field>
         </div>
         <p className="text-xs leading-relaxed text-tx3">
-          达到上限后按「应用设置 → 成本治理 → 超额后的处理」执行:拒绝请求,或(仅文字对话)降级到指定模型。
-          用户在模型选择器和新对话首页能看到自己在该模型上的已用额度。
+          {t('达到上限后按「应用设置 → 成本治理 → 超额后的处理」执行:拒绝请求,或(仅文字对话)降级到指定模型。用户在模型选择器和新对话首页能看到自己在该模型上的已用额度。')}
         </p>
         <div className="flex justify-end">
           <Button variant="primary" size="sm" disabled={busy || !dirty} onClick={save}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}保存使用限制
+            {busy && <Spinner className="h-3.5 w-3.5" />}{t('保存使用限制')}
           </Button>
         </div>
       </div>
@@ -359,7 +359,7 @@ function ReasoningCard({ model, reload }: { model: AdminModel; reload(): Promise
 
   async function save() {
     if (busy) return;
-    if (mode === 'custom' && !filled.length) { toast('请至少填写一个档位', 'err'); return; }
+    if (mode === 'custom' && !filled.length) { toast(t('请至少填写一个档位'), 'err'); return; }
     setBusy(true);
     try {
       await api.patch(`/api/admin/models/${model.id}`, {
@@ -369,13 +369,13 @@ function ReasoningCard({ model, reload }: { model: AdminModel; reload(): Promise
         ...(mode === 'custom' ? { reasoningLevels: filled } : {}),
       });
       await reload();
-      toast('已更新推理档位', 'ok');
+      toast(t('已更新推理档位'), 'ok');
     } catch (e) { toast(errMsg(e), 'err'); }
     finally { setBusy(false); }
   }
 
   return (
-    <Card title="推理档位" desc="决定聊天页「推理强度」菜单里的选项,以及发送给服务端的值。">
+    <Card title={t('推理档位')} desc={t('决定聊天页「推理强度」菜单里的选项,以及发送给服务端的值。')}>
       <div className="space-y-4">
         <SegmentedControl<ReasoningMode>
           value={mode}
@@ -385,7 +385,7 @@ function ReasoningCard({ model, reload }: { model: AdminModel; reload(): Promise
 
         {mode === 'auto' && (defaults.length ? (
           <div className="space-y-2">
-            <p className="text-xs leading-relaxed text-tx3">按该模型所属系列的常见档位自动设置,用户端显示中文。</p>
+            <p className="text-xs leading-relaxed text-tx3">{t('按该模型所属系列的常见档位自动设置,用户端显示中文。')}</p>
             <div className="flex flex-wrap gap-1.5">
               {defaults.map((l) => (
                 <Badge key={l.value}>{l.label}<span className="font-mono text-tx3">{l.value}</span></Badge>
@@ -394,19 +394,20 @@ function ReasoningCard({ model, reload }: { model: AdminModel; reload(): Promise
           </div>
         ) : (
           <p className="text-xs leading-relaxed text-tx3">
-            未识别到该模型的推理档位,聊天页不会显示推理强度。如果它其实支持,改用「自定义」填写即可。
+            {t('未识别到该模型的推理档位,聊天页不会显示推理强度。如果它其实支持,改用「自定义」填写即可。')}
           </p>
         ))}
 
         {mode === 'custom' && (
           <div className="space-y-2">
             <p className="text-xs leading-relaxed text-tx3">
-              从弱到强排列。左侧是发送给服务端的值(OpenAI 会原样作为 <span className="font-mono">reasoning_effort</span> 发出),
-              右侧是用户看到的名称,留空则自动取常见档位的中文名。
+              {t('从弱到强排列。左侧是发送给服务端的值(OpenAI 会原样作为 ')}
+              <span className="font-mono">reasoning_effort</span>
+              {t(' 发出),右侧是用户看到的名称,留空则自动取常见档位的默认名。')}
             </p>
             <div className="flex gap-2 pr-[4.5rem] text-[11px] text-tx3">
-              <span className="flex-1">值(英文)</span>
-              <span className="flex-1">显示名</span>
+              <span className="flex-1">{t('值(英文)')}</span>
+              <span className="flex-1">{t('显示名')}</span>
             </div>
             {rows.map((r, i) => (
               <div key={i} className="flex items-center gap-2">
@@ -415,17 +416,17 @@ function ReasoningCard({ model, reload }: { model: AdminModel; reload(): Promise
                   onChange={(e) => setRow(i, { value: e.target.value })}
                 />
                 <Input
-                  value={r.label} placeholder="留空自动" uiSize="sm" className="flex-1 text-xs"
+                  value={r.label} placeholder={t('留空自动')} uiSize="sm" className="flex-1 text-xs"
                   onChange={(e) => setRow(i, { label: e.target.value })}
                 />
                 <div className="flex shrink-0">
-                  <Button variant="ghost" size="iconXs" title="上移" disabled={i === 0} onClick={() => move(i, -1)}>
+                  <Button variant="ghost" size="iconXs" title={t('上移')} disabled={i === 0} onClick={() => move(i, -1)}>
                     <ChevronUp size={13} />
                   </Button>
-                  <Button variant="ghost" size="iconXs" title="下移" disabled={i === rows.length - 1} onClick={() => move(i, 1)}>
+                  <Button variant="ghost" size="iconXs" title={t('下移')} disabled={i === rows.length - 1} onClick={() => move(i, 1)}>
                     <ChevronDown size={13} />
                   </Button>
-                  <Button variant="dangerGhost" size="iconXs" title="删除此档位"
+                  <Button variant="dangerGhost" size="iconXs" title={t('删除此档位')}
                     onClick={() => setRows(rows.filter((_, j) => j !== i))}>
                     <X size={13} />
                   </Button>
@@ -434,10 +435,10 @@ function ReasoningCard({ model, reload }: { model: AdminModel; reload(): Promise
             ))}
             <div className="flex gap-2 pt-0.5">
               <Button variant="outline" size="sm" onClick={() => setRows([...rows, { value: '', label: '' }])}>
-                <Plus size={13} />添加档位
+                <Plus size={13} />{t('添加档位')}
               </Button>
               {defaults.length > 0 && (
-                <Button variant="ghost" size="sm" onClick={() => setRows(defaults)}>填入默认档位</Button>
+                <Button variant="ghost" size="sm" onClick={() => setRows(defaults)}>{t('填入默认档位')}</Button>
               )}
             </div>
           </div>
@@ -445,13 +446,13 @@ function ReasoningCard({ model, reload }: { model: AdminModel; reload(): Promise
 
         {mode === 'off' && (
           <p className="text-xs leading-relaxed text-tx3">
-            视为该模型没有推理模式:聊天页隐藏推理强度,请求里也不会带上这个字段。
+            {t('视为该模型没有推理模式:聊天页隐藏推理强度,请求里也不会带上这个字段。')}
           </p>
         )}
 
         <div className="flex justify-end">
           <Button variant="primary" size="sm" disabled={busy} onClick={save}>
-            {busy && <Spinner className="h-3.5 w-3.5" />}保存推理档位
+            {busy && <Spinner className="h-3.5 w-3.5" />}{t('保存推理档位')}
           </Button>
         </div>
       </div>
@@ -492,9 +493,9 @@ export default function ModelDetail() {
     return (
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
         <EmptyState
-          title="模型不存在"
-          hint="它可能已被删除。"
-          action={<Link to="/admin/models"><Button variant="outline" size="sm">返回模型设置</Button></Link>}
+          title={t('模型不存在')}
+          hint={t('它可能已被删除。')}
+          action={<Link to="/admin/models"><Button variant="outline" size="sm">{t('返回模型设置')}</Button></Link>}
         />
       </div>
     );
@@ -506,7 +507,7 @@ export default function ModelDetail() {
       <div className="space-y-3">
         <Link to="/admin/models"
           className="inline-flex items-center gap-1 text-xs text-tx3 transition-colors hover:text-tx">
-          <ArrowLeft size={13} />返回模型设置
+          <ArrowLeft size={13} />{t('返回模型设置')}
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <ModelIcon provider={provider} model={model} size={40} />
@@ -515,13 +516,13 @@ export default function ModelDetail() {
             <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-tx3">
               {model.displayName && <span className="text-tx2">{model.displayName}</span>}
               <Badge>{provider.name} · {TYPE_LABELS[provider.type]}</Badge>
-              {model.isDefault && <Badge tone="acc">默认模型</Badge>}
-              {model.enabled ? <Badge tone="ok">启用中</Badge> : <Badge>已停用</Badge>}
+              {model.isDefault && <Badge tone="acc">{t('默认模型')}</Badge>}
+              {model.enabled ? <Badge tone="ok">{t('启用中')}</Badge> : <Badge>{t('已停用')}</Badge>}
             </div>
           </div>
         </div>
         <p className="text-xs leading-relaxed text-tx3">
-          能力开关、可见性等基础项仍在模型设置列表页;这里放需要展开编辑的详细配置。
+          {t('能力开关、可见性等基础项仍在模型设置列表页;这里放需要展开编辑的详细配置。')}
         </p>
       </div>
 

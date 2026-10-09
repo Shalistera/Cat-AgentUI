@@ -16,6 +16,7 @@ import { CreateProjectModal } from './CreateProjectModal';
 import { ReleaseNotesButton } from './ReleaseNotes';
 import { WORKSHOPS, pinnedWorkshops } from '../workshops';
 import type { ChatSummary, SearchResult, User } from '../types';
+import { t } from '../i18n';
 
 /** Wrap the first occurrence of `q` (case-insensitive) in a highlight mark. */
 function highlightMatch(text: string, q: string) {
@@ -44,10 +45,10 @@ function SearchResultRow({ r, q, active, onOpen }: {
       <span className="flex items-center gap-1.5">
         {r.pinned && <Pin size={10} className="shrink-0 text-acc" />}
         <span className="min-w-0 flex-1 truncate text-[13px] text-tx">
-          {highlightMatch(r.title || '新对话', q)}
+          {highlightMatch(r.title || t('新对话'), q)}
         </span>
         {r.archived && (
-          <span className="shrink-0 rounded-sm bg-bg3 px-1 py-px text-[10px] text-tx3">归档</span>
+          <span className="shrink-0 rounded-sm bg-bg3 px-1 py-px text-[10px] text-tx3">{t('归档')}</span>
         )}
         {r.matchCount > 1 && (
           <span className="shrink-0 rounded-full bg-bg3 px-1.5 text-[10px] tabular-nums text-tx3">{r.matchCount}</span>
@@ -77,9 +78,9 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
     try {
       await api.patch(`/api/chats/${chat.id}`, { projectId });
       patch(chat.id, { projectId });
-      toast(projectId ? `已移入「${name}」` : '已移出项目', 'ok');
+      toast(projectId ? t('已移入「{name}」', { name: name ?? '' }) : t('已移出项目'), 'ok');
     } catch (e) {
-      toast(e instanceof Error ? e.message : '移动失败', 'err');
+      toast(e instanceof Error ? e.message : t('移动失败'), 'err');
     }
   }
 
@@ -93,7 +94,7 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
     setMenuOpen(false);
     await api.patch(`/api/chats/${chat.id}`, { archived: !chat.archived });
     patch(chat.id, { archived: !chat.archived });
-    toast(chat.archived ? '已取消归档' : '已归档,可在侧栏底部或搜索 archived:true 找回', 'ok');
+    toast(chat.archived ? t('已取消归档') : t('已归档,可在侧栏底部或搜索 archived:true 找回'), 'ok');
   }
 
   function exportChat(format: 'markdown' | 'json') {
@@ -116,7 +117,7 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
 
   async function doDelete() {
     setMenuOpen(false);
-    if (!(await confirmDialog('删除对话', `确定删除「${chat.title || '新对话'}」?此操作不可恢复。`))) return;
+    if (!(await confirmDialog(t('删除对话'), t('确定删除「{title}」?此操作不可恢复。', { title: chat.title || t('新对话') })))) return;
     await api.del(`/api/chats/${chat.id}`);
     remove(chat.id);
     if (active) nav('/');
@@ -137,7 +138,7 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
       >
         {chat.pinned && <Pin size={10} className="shrink-0 text-acc" />}
         <span className={`truncate text-[13px] ${active ? 'font-medium text-tx' : 'text-tx2'}`}>
-          {chat.title || '新对话'}
+          {chat.title || t('新对话')}
         </span>
       </button>
       <div className="pr-1">
@@ -145,7 +146,7 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
             absolutely positioned panel would clip against the overflow rail. */}
         <Popover open={menuOpen} setOpen={setMenuOpen} align="right" width="w-44" trigger={
           <button
-            title="更多操作"
+            title={t('更多操作')}
             className={`cursor-pointer rounded-sm p-1 text-tx3 transition-opacity hover:bg-bg3 hover:text-tx ${menuOpen ? '' : 'opacity-0 group-focus-within:opacity-100 group-hover:opacity-100'}`}
           >
             <MoreHorizontal size={14} />
@@ -153,26 +154,26 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
         }>
           <div className="p-1">
             <button className={menuItem} onClick={togglePin}>
-              {chat.pinned ? <PinOff size={12} /> : <Pin size={12} />}{chat.pinned ? '取消置顶' : '置顶'}
+              {chat.pinned ? <PinOff size={12} /> : <Pin size={12} />}{chat.pinned ? t('取消置顶') : t('置顶')}
             </button>
             <button className={menuItem}
               onClick={() => { setMenuOpen(false); setTitle(chat.title); setRenaming(true); }}>
-              <Pencil size={12} />重命名
+              <Pencil size={12} />{t('重命名')}
             </button>
             <button className={menuItem} onClick={toggleArchive}>
               {chat.archived ? <ArchiveRestore size={12} /> : <Archive size={12} />}
-              {chat.archived ? '取消归档' : '归档'}
+              {chat.archived ? t('取消归档') : t('归档')}
             </button>
             <button className={menuItem} onClick={() => exportChat('markdown')}>
-              <FileDown size={12} />导出 Markdown
+              <FileDown size={12} />{t('导出 Markdown')}
             </button>
             <button className={menuItem} onClick={() => exportChat('json')}>
-              <FileJson size={12} />导出 JSON
+              <FileJson size={12} />{t('导出 JSON')}
             </button>
             {(moveTargets.length > 0 || chat.projectId) && (
               <>
                 <div className="my-1 border-t border-line" />
-                <div className="eyebrow px-2 py-1">移动到项目</div>
+                <div className="eyebrow px-2 py-1">{t('移动到项目')}</div>
                 {moveTargets.map((p) => (
                   <button key={p.id} className={menuItem} onClick={() => moveToProject(p.id, p.name)}>
                     <FolderClosed size={12} className="shrink-0" />
@@ -181,24 +182,24 @@ function ChatRow({ chat, active }: { chat: ChatSummary; active: boolean }) {
                 ))}
                 {chat.projectId && (
                   <button className={menuItem} onClick={() => moveToProject(null)}>
-                    <FolderOutput size={12} className="shrink-0" />移出项目
+                    <FolderOutput size={12} className="shrink-0" />{t('移出项目')}
                   </button>
                 )}
                 <div className="my-1 border-t border-line" />
               </>
             )}
             <button className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-err transition-colors hover:bg-err/10" onClick={doDelete}>
-              <Trash2 size={12} />删除
+              <Trash2 size={12} />{t('删除')}
             </button>
           </div>
         </Popover>
       </div>
-      <Modal open={renaming} onClose={() => setRenaming(false)} title="重命名对话">
+      <Modal open={renaming} onClose={() => setRenaming(false)} title={t('重命名对话')}>
         <form onSubmit={(e) => { e.preventDefault(); doRename(); }}>
           <Input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus maxLength={120} />
           <ModalActions>
-            <Button variant="outline" onClick={() => setRenaming(false)}>取消</Button>
-            <Button variant="primary" onClick={doRename}>保存</Button>
+            <Button variant="outline" onClick={() => setRenaming(false)}>{t('取消')}</Button>
+            <Button variant="primary" onClick={doRename}>{t('保存')}</Button>
           </ModalActions>
         </form>
       </Modal>
@@ -229,7 +230,7 @@ function WorkshopRail({ onNavigate }: { onNavigate(): void }) {
       const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { workshopPins: next } });
       setUser(r.user);
     } catch (e) {
-      toast(e instanceof Error ? e.message : '保存失败', 'err');
+      toast(e instanceof Error ? e.message : t('保存失败'), 'err');
     } finally {
       setSaving(false);
     }
@@ -261,14 +262,14 @@ function WorkshopRail({ onNavigate }: { onNavigate(): void }) {
         </button>
       ))}
       <Popover open={open} setOpen={setOpen} align="right" width="w-56" trigger={
-        <button type="button" title="全部工坊 / 钉选" aria-label="全部工坊"
+        <button type="button" title={t('全部工坊 / 钉选')} aria-label={t('全部工坊')}
           className={`${iconBtn(open)} ${pinned.length ? 'max-w-9 px-2' : ''}`}>
           <LayoutGrid size={16} />
-          {!pinned.length && <span className="ml-1.5 text-[13px] font-medium">工坊</span>}
+          {!pinned.length && <span className="ml-1.5 text-[13px] font-medium">{t('工坊')}</span>}
         </button>
       }>
         <div className="p-1">
-          <div className="eyebrow px-2 py-1">工坊</div>
+          <div className="eyebrow px-2 py-1">{t('工坊')}</div>
           {WORKSHOPS.map((w) => {
             const isPinned = pinnedIds.includes(w.id);
             const order = pinnedIds.indexOf(w.id);
@@ -281,19 +282,19 @@ function WorkshopRail({ onNavigate }: { onNavigate(): void }) {
                 </button>
                 {isPinned && (
                   <span className="flex shrink-0 items-center">
-                    <button title="前移" disabled={saving || order <= 0}
+                    <button title={t('前移')} disabled={saving || order <= 0}
                       className="cursor-pointer rounded-sm p-0.5 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
                       onClick={() => move(w.id, -1)}>
                       <ChevronRight size={11} className="-rotate-90" />
                     </button>
-                    <button title="后移" disabled={saving || order >= pinnedIds.length - 1}
+                    <button title={t('后移')} disabled={saving || order >= pinnedIds.length - 1}
                       className="cursor-pointer rounded-sm p-0.5 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
                       onClick={() => move(w.id, 1)}>
                       <ChevronRight size={11} className="rotate-90" />
                     </button>
                   </span>
                 )}
-                <button title={isPinned ? '从图标栏移除' : '钉到图标栏'} disabled={saving}
+                <button title={isPinned ? t('从图标栏移除') : t('钉到图标栏')} disabled={saving}
                   className={`shrink-0 cursor-pointer rounded-sm p-1 transition-colors hover:bg-bg2 ${isPinned ? 'text-acc' : 'text-tx3 hover:text-tx'}`}
                   onClick={() => togglePin(w.id)}>
                   {isPinned ? <Pin size={12} /> : <PinOff size={12} />}
@@ -302,7 +303,7 @@ function WorkshopRail({ onNavigate }: { onNavigate(): void }) {
             );
           })}
           <p className="px-2 pb-1 pt-1.5 text-[11px] leading-relaxed text-tx3">
-            钉选的工坊显示在侧栏图标栏,按这里的顺序排列。
+            {t('钉选的工坊显示在侧栏图标栏,按这里的顺序排列。')}
           </p>
         </div>
       </Popover>
@@ -327,7 +328,7 @@ export function Sidebar() {
   const [accountOpen, setAccountOpen] = useState(false);
   const menuItem = 'flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-tx2 transition-colors hover:bg-bg2 hover:text-tx';
 
-  useEffect(() => { if (user && !loaded) load().catch(() => toast('加载对话列表失败', 'err')); }, [user, loaded, load]);
+  useEffect(() => { if (user && !loaded) load().catch(() => toast(t('加载对话列表失败'), 'err')); }, [user, loaded, load]);
   useEffect(() => {
     if (user && !projectsStore.loaded) projectsStore.load().catch(() => { /* section just stays empty */ });
   }, [user, projectsStore]);
@@ -379,14 +380,14 @@ export function Sidebar() {
     const yesterdayStart = todayStart - 86_400_000;
     const weekStart = todayStart - 7 * 86_400_000;
     const bucketOf = (c: ChatSummary) => (
-      c.updatedAt >= todayStart ? '今天'
-        : c.updatedAt >= yesterdayStart ? '昨天'
-        : c.updatedAt >= weekStart ? '近一周' : '更早'
+      c.updatedAt >= todayStart ? t('今天')
+        : c.updatedAt >= yesterdayStart ? t('昨天')
+        : c.updatedAt >= weekStart ? t('近一周') : t('更早')
     );
     // Fixed bucket order (not contiguous runs): local patches — un-pinning,
     // renames — can leave the array slightly out of updatedAt order, and runs
     // would then print a duplicate label.
-    const buckets = new Map<string, ChatSummary[]>([['今天', []], ['昨天', []], ['近一周', []], ['更早', []]]);
+    const buckets = new Map<string, ChatSummary[]>([[t('今天'), []], [t('昨天'), []], [t('近一周'), []], [t('更早'), []]]);
     for (const c of recent) buckets.get(bucketOf(c))!.push(c);
     return {
       pinned: loose.filter((c) => c.pinned),
@@ -423,7 +424,7 @@ export function Sidebar() {
       {/* brand */}
       <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line px-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          <button type="button" className="cursor-pointer" onClick={() => nav('/')} title="返回首页">
+          <button type="button" className="cursor-pointer" onClick={() => nav('/')} title={t('返回首页')}>
             <CatMark size={30} />
           </button>
           <div className="min-w-0 leading-tight">
@@ -431,7 +432,7 @@ export function Sidebar() {
               type="button"
               className="block max-w-[156px] cursor-pointer truncate text-[13px] font-semibold tracking-tight text-tx"
               onClick={() => nav('/')}
-              title="返回首页"
+              title={t('返回首页')}
             >
               {bootstrap?.brand || 'Cat AgentUI'}
             </button>
@@ -440,7 +441,7 @@ export function Sidebar() {
             </div>
           </div>
         </div>
-        <Button variant="ghost" size="iconSm" title="收起侧栏" onClick={() => setSidebarOpen(false)}>
+        <Button variant="ghost" size="iconSm" title={t('收起侧栏')} onClick={() => setSidebarOpen(false)}>
           <PanelLeftClose size={15} />
         </Button>
       </div>
@@ -449,16 +450,16 @@ export function Sidebar() {
       <div className="space-y-2 px-3 pt-3">
         <div className="flex gap-2">
           <Button variant="primary" size="md" className="flex-1" onClick={newChat}>
-            <MessageSquarePlus size={15} />新建对话
+            <MessageSquarePlus size={15} />{t('新建对话')}
           </Button>
           <Button
-            variant="outline" size="icon" title="临时对话:不写入历史记录,闲置 24 小时后自动删除"
+            variant="outline" size="icon" title={t('临时对话:不写入历史记录,闲置 24 小时后自动删除')}
             onClick={() => { nav('/?temp=1'); if (window.innerWidth <= 900) setSidebarOpen(false); }}
           >
             <Ghost size={15} />
           </Button>
           <Button
-            variant="outline" size="icon" title="收藏的消息"
+            variant="outline" size="icon" title={t('收藏的消息')}
             className={pathname === '/bookmarks' ? 'border-acc/40 bg-acc/10 text-acc' : ''}
             onClick={() => { nav('/bookmarks'); if (window.innerWidth <= 900) setSidebarOpen(false); }}
           >
@@ -470,9 +471,9 @@ export function Sidebar() {
           {/* line2, not --color-field: this is rail navigation, not a form —
               a deliberately quieter edge than real inputs carry. */}
           <input
-            value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索对话与消息"
-            aria-label="搜索对话与消息"
-            title={'搜索标题与消息正文。\n支持过滤:project:项目名、pinned:true、archived:true(默认不搜归档)'}
+            value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('搜索对话与消息')}
+            aria-label={t('搜索对话与消息')}
+            title={t('搜索标题与消息正文。\n支持过滤:project:项目名、pinned:true、archived:true(默认不搜归档)')}
             className="h-8 w-full rounded-md border border-line2 bg-bg1 pl-8 pr-2 text-xs text-tx placeholder:text-tx3 transition-colors hover:border-field"
           />
         </div>
@@ -484,14 +485,14 @@ export function Sidebar() {
           <div className="space-y-0.5">
             <div className="flex items-center justify-between px-2 pb-1">
               <button
-                title="查看全部项目"
+                title={t('查看全部项目')}
                 className="eyebrow cursor-pointer rounded-sm transition-colors hover:text-tx"
                 onClick={() => { nav('/projects'); if (window.innerWidth <= 900) setSidebarOpen(false); }}
               >
-                项目
+                {t('项目')}
               </button>
               <button
-                title="新建项目"
+                title={t('新建项目')}
                 className="cursor-pointer rounded-sm p-0.5 text-tx3 transition-colors hover:bg-bg3 hover:text-tx"
                 onClick={() => setCreatingProject(true)}
               >
@@ -510,7 +511,7 @@ export function Sidebar() {
                   <div className={`group flex items-center rounded-md border transition-colors ${
                     p.id === activeProjectId ? 'border-line bg-bg1 shadow-xs' : 'border-transparent hover:bg-bg2'}`}>
                     <button
-                      title={open ? '收起' : '展开'}
+                      title={open ? t('收起') : t('展开')}
                       className="cursor-pointer self-stretch rounded-sm pl-1.5 pr-0.5 text-tx3 transition-colors hover:text-tx"
                       onClick={() => setExpanded((e) => ({ ...e, [p.id]: !open }))}
                     >
@@ -524,10 +525,10 @@ export function Sidebar() {
                         ? <Users size={13} className="shrink-0 text-tx3" />
                         : <FolderClosed size={13} className="shrink-0 text-tx3" />}
                       <span className={`min-w-0 flex-1 truncate text-[13px] ${p.id === activeProjectId ? 'font-medium text-tx' : 'text-tx'}`}
-                        title={p.role !== 'owner' ? `${p.owner.displayName || p.owner.username} 共享的项目` : undefined}>{p.name}</span>
+                        title={p.role !== 'owner' ? t('{owner} 共享的项目', { owner: p.owner.displayName || p.owner.username }) : undefined}>{p.name}</span>
                     </button>
                     <button
-                      title="在项目中新建对话"
+                      title={t('在项目中新建对话')}
                       className="mr-1 cursor-pointer rounded-sm p-1 text-tx3 opacity-0 transition-opacity hover:bg-bg3 hover:text-tx group-focus-within:opacity-100 group-hover:opacity-100"
                       onClick={() => { nav(`/?project=${p.id}`); if (window.innerWidth <= 900) setSidebarOpen(false); }}
                     >
@@ -538,7 +539,7 @@ export function Sidebar() {
                     <div className="ml-[13px] space-y-0.5 border-l border-line py-0.5 pl-1.5">
                       {chatsIn.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
                       {chatsIn.length === 0 && (
-                        <p className="px-2 py-1 text-[11px] text-tx3">项目内还没有对话</p>
+                        <p className="px-2 py-1 text-[11px] text-tx3">{t('项目内还没有对话')}</p>
                       )}
                     </div>
                   )}
@@ -546,30 +547,30 @@ export function Sidebar() {
               );
             })}
             {projectsStore.loaded && projectsStore.projects.length === 0 && (
-              <p className="px-2 pb-1 text-[11px] leading-relaxed text-tx3">把常用的要求和资料放进项目,项目里的对话会自动用上。</p>
+              <p className="px-2 pb-1 text-[11px] leading-relaxed text-tx3">{t('把常用的要求和资料放进项目,项目里的对话会自动用上。')}</p>
             )}
           </div>
         )}
 
         {searching && (
           <div className="space-y-0.5">
-            <div className="eyebrow px-2 pb-1">搜索结果</div>
+            <div className="eyebrow px-2 pb-1">{t('搜索结果')}</div>
             {(results ?? []).map((r) => (
               <SearchResultRow key={r.id} r={r} q={highlightQ} active={r.id === activeChatId}
                 // Carry the term along: the chat opens with 对话内查找 on the first hit.
                 onOpen={() => { nav(`/chat/${r.id}${highlightQ ? `?find=${encodeURIComponent(highlightQ)}` : ''}`); if (window.innerWidth <= 900) setSidebarOpen(false); }} />
             ))}
             {results === null && (
-              <p className="px-2 py-4 text-center text-[11px] text-tx3">搜索中…</p>
+              <p className="px-2 py-4 text-center text-[11px] text-tx3">{t('搜索中…')}</p>
             )}
             {results !== null && results.length === 0 && (
-              <p className="px-2 py-8 text-center text-xs leading-relaxed text-tx3">没有匹配的对话或消息</p>
+              <p className="px-2 py-8 text-center text-xs leading-relaxed text-tx3">{t('没有匹配的对话或消息')}</p>
             )}
           </div>
         )}
         {!searching && pinned.length > 0 && (
           <div className="space-y-0.5">
-            <div className="eyebrow px-2 pb-1">置顶</div>
+            <div className="eyebrow px-2 pb-1">{t('置顶')}</div>
             {pinned.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
           </div>
         )}
@@ -584,16 +585,16 @@ export function Sidebar() {
             <button
               className="eyebrow flex cursor-pointer items-center gap-1 rounded-sm px-2 pb-1 transition-colors hover:text-tx"
               onClick={() => setShowArchived((v) => !v)}
-              title={showArchived ? '收起归档对话' : '展开归档对话'}
+              title={showArchived ? t('收起归档对话') : t('展开归档对话')}
             >
               <ChevronRight size={10} className={`transition-transform ${showArchived ? 'rotate-90' : ''}`} />
-              已归档 <span className="tabular-nums opacity-70">{archived.length}</span>
+              {t('已归档')} <span className="tabular-nums opacity-70">{archived.length}</span>
             </button>
             {showArchived && archived.map((c) => <ChatRow key={c.id} chat={c} active={c.id === activeChatId} />)}
           </div>
         )}
         {!searching && loaded && empty && archived.length === 0 && (
-          <p className="px-2 py-8 text-center text-xs leading-relaxed text-tx3">还没有对话记录</p>
+          <p className="px-2 py-8 text-center text-xs leading-relaxed text-tx3">{t('还没有对话记录')}</p>
         )}
       </div>
 
@@ -604,7 +605,7 @@ export function Sidebar() {
         <Popover open={accountOpen} setOpen={setAccountOpen} align="left" width="w-[244px]" trigger={
           <button
             type="button"
-            title="账号菜单"
+            title={t('账号菜单')}
             className={`mt-3 flex w-full cursor-pointer items-center gap-2.5 rounded-md border px-2.5 py-2 text-left transition-colors ${
               accountOpen ? 'border-line bg-bg2' : 'border-line bg-bg1 shadow-xs hover:bg-bg2'}`}
           >
@@ -613,29 +614,29 @@ export function Sidebar() {
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-xs font-medium text-tx">{user?.displayName || user?.username}</span>
-              <span className="block text-[11px] text-tx3">{user?.role === 'admin' ? '管理员' : '用户'}</span>
+              <span className="block text-[11px] text-tx3">{user?.role === 'admin' ? t('管理员') : t('用户')}</span>
             </span>
             <ChevronsUpDown size={14} className="shrink-0 text-tx3" />
           </button>
         }>
           <div className="p-1">
             <button className={menuItem} onClick={() => { setAccountOpen(false); useUi.getState().openSettings(); }}>
-              <SettingsIcon size={13} />设置
+              <SettingsIcon size={13} />{t('设置')}
             </button>
             {user?.role === 'admin' && (
               <button className={menuItem} onClick={() => { setAccountOpen(false); adminReturn.path = window.location.pathname; nav('/admin'); if (window.innerWidth <= 900) setSidebarOpen(false); }}>
-                <ShieldCheck size={13} />管理后台
+                <ShieldCheck size={13} />{t('管理后台')}
               </button>
             )}
             {/* Quick flip pins the opposite theme; 跟随系统 lives in 设置 → 外观. */}
-            <button className={menuItem} title="固定为另一种主题;要跟随系统请到「设置 → 外观」"
+            <button className={menuItem} title={t('固定为另一种主题;要跟随系统请到「设置 → 外观」')}
               onClick={() => setThemeMode(theme === 'dark' ? 'light' : 'dark')}>
               {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
-              {theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'}
+              {theme === 'dark' ? t('切换到浅色主题') : t('切换到深色主题')}
             </button>
             <div className="my-1 border-t border-line" />
             <button className={menuItem} onClick={async () => { setAccountOpen(false); await logout(); nav('/login'); }}>
-              <LogOut size={13} />退出登录
+              <LogOut size={13} />{t('退出登录')}
             </button>
           </div>
         </Popover>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { MessageSquareQuote } from 'lucide-react';
+import { t } from '../i18n';
 
 /**
  * 划词引用 — a floating "引用追问" chip that follows a text selection inside
@@ -65,7 +66,7 @@ export function SelectionQuote({ containerRef, onQuote }: {
     <button
       ref={chipRef}
       type="button"
-      title="把选中的文字作为引用放进输入框,再接着追问"
+      title={t('把选中的文字作为引用放进输入框,再接着追问')}
       // Positioned in the scroll container's coordinate space — it moves with
       // the text rather than staying pinned to the viewport.
       style={{ left: hit.x, top: hit.y }}
@@ -77,7 +78,7 @@ export function SelectionQuote({ containerRef, onQuote }: {
         setHit(null);
       }}
     >
-      <MessageSquareQuote size={13} />引用追问
+      <MessageSquareQuote size={13} />{t('引用追问')}
     </button>
   );
 }

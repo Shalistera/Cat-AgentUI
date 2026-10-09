@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { withCanvasCsp } from '../sandboxedHtml';
 import { RotateCw, X } from 'lucide-react';
 import { useHtmlPreview } from '../store';
+import { t } from '../i18n';
 
 const headBtn = 'flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg3 hover:text-tx';
 
@@ -19,12 +20,12 @@ export function HtmlPreviewPanel() {
   return (
     <aside className="fixed inset-0 z-40 flex flex-col bg-bg1 md:static md:z-auto md:w-[clamp(22rem,42vw,45rem)] md:shrink-0 md:border-l md:border-line">
       <div className="flex items-center justify-between border-b border-line bg-bg2 py-1.5 pl-4 pr-2">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-tx3">HTML 预览</span>
+        <span className="text-[11px] font-medium uppercase tracking-wider text-tx3">{t('HTML 预览')}</span>
         <div className="flex items-center gap-1">
-          <button className={headBtn} title="重新加载" onClick={() => setReloadKey((k) => k + 1)}>
+          <button className={headBtn} title={t('重新加载')} onClick={() => setReloadKey((k) => k + 1)}>
             <RotateCw size={14} />
           </button>
-          <button className={headBtn} title="关闭预览" onClick={close}>
+          <button className={headBtn} title={t('关闭预览')} onClick={close}>
             <X size={15} />
           </button>
         </div>
@@ -34,7 +35,7 @@ export function HtmlPreviewPanel() {
         key={reloadKey}
         sandbox="allow-scripts allow-modals"
         srcDoc={withCanvasCsp(src)}
-        title="HTML 预览"
+        title={t('HTML 预览')}
         className="block w-full flex-1 border-0 bg-white"
       />
     </aside>

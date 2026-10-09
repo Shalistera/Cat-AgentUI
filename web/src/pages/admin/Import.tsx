@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { FileUp, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { ApiError, onUnauthorized } from '../../api';
 import { Button, Card, Field, Input, Spinner, Stat, ToggleRow, toast } from '../../components/ui';
+import { t, tServer } from '../../i18n';
 
 interface OwuiReport {
   sourceUsers: number;
@@ -43,11 +44,14 @@ export default function Import() {
       });
       if (res.status === 401) onUnauthorized.handler?.();
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new ApiError(res.status, json.error || `导入失败 (${res.status})`);
+      if (!res.ok) {
+        throw new ApiError(res.status,
+          json.error ? tServer(json.error) : t('导入失败 ({status})', { status: res.status }));
+      }
       setReport(json.report);
-      toast(dryRun ? '试运行完成,未写入数据' : '导入完成', 'ok');
+      toast(dryRun ? t('试运行完成,未写入数据') : t('导入完成'), 'ok');
     } catch (e) {
-      toast(e instanceof Error ? e.message : '导入失败', 'err');
+      toast(e instanceof Error ? e.message : t('导入失败'), 'err');
     } finally {
       setBusy(null);
     }
@@ -56,18 +60,18 @@ export default function Import() {
   return (
     <div className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
       <div>
-        <h1 className="text-base font-semibold tracking-tight text-tx">数据导入</h1>
-        <p className="mt-0.5 text-xs text-tx3">从 Open WebUI 迁入用户与聊天记录,可重复执行安全续传</p>
+        <h1 className="text-base font-semibold tracking-tight text-tx">{t('数据导入')}</h1>
+        <p className="mt-0.5 text-xs text-tx3">{t('从 Open WebUI 迁入用户与聊天记录,可重复执行安全续传')}</p>
       </div>
 
       <Card
-        title="从 Open WebUI 迁移"
-        desc="上传 webui.db 一键迁入用户与聊天记录。迁入的用户用原来的邮箱 + 原密码即可登录,首次登录后密码自动升级为本站格式。可放心重复执行:已迁过的用户、会话、附件会自动跳过。"
+        title={t('从 Open WebUI 迁移')}
+        desc={t('上传 webui.db 一键迁入用户与聊天记录。迁入的用户用原来的邮箱 + 原密码即可登录,首次登录后密码自动升级为本站格式。可放心重复执行:已迁过的用户、会话、附件会自动跳过。')}
       >
         <div className="space-y-5">
           <Field
-            label="webui.db 数据库文件"
-            hint="通常在 Open WebUI 的 data 目录(Docker 为卷 open-webui:/app/backend/data)。上传前请停止 Open WebUI;若拷贝出的库读不到数据,先在源机器执行 sqlite3 webui.db “PRAGMA wal_checkpoint(TRUNCATE)”。"
+            label={t('webui.db 数据库文件')}
+            hint={t('通常在 Open WebUI 的 data 目录(Docker 为卷 open-webui:/app/backend/data)。上传前请停止 Open WebUI;若拷贝出的库读不到数据,先在源机器执行 sqlite3 webui.db “PRAGMA wal_checkpoint(TRUNCATE)”。')}
           >
             <input
               ref={fileRef} type="file" className="hidden"
@@ -85,14 +89,14 @@ export default function Import() {
                   {file.name} <span className="text-tx3">({fmtSize(file.size)})</span>
                 </span>
               ) : (
-                <span className="text-[13px] text-tx3">点击选择 webui.db 文件…</span>
+                <span className="text-[13px] text-tx3">{t('点击选择 webui.db 文件…')}</span>
               )}
             </button>
           </Field>
 
           <Field
-            label="附件目录(可选,服务器路径)"
-            hint="本机上 Open WebUI 的 data 目录路径,如 /srv/open-webui/data。提供后会把聊天里的图片附件一并搬入;不提供则仅内嵌图片可迁移。"
+            label={t('附件目录(可选,服务器路径)')}
+            hint={t('本机上 Open WebUI 的 data 目录路径,如 /srv/open-webui/data。提供后会把聊天里的图片附件一并搬入;不提供则仅内嵌图片可迁移。')}
           >
             <Input
               value={dataDir} onChange={(e) => setDataDir(e.target.value)}
@@ -101,16 +105,16 @@ export default function Import() {
           </Field>
 
           <ToggleRow
-            label="跳过已归档会话" desc="默认全部迁入;之后想补迁归档,再跑一次即可"
+            label={t('跳过已归档会话')} desc={t('默认全部迁入;之后想补迁归档,再跑一次即可')}
             checked={skipArchived} onChange={setSkipArchived}
           />
 
           <div className="flex items-center justify-end gap-3 border-t border-line pt-4">
             <Button variant="outline" disabled={!file || !!busy} onClick={() => run(true)}>
-              {busy === 'dry' && <Spinner className="h-3.5 w-3.5" />}试运行(不写入)
+              {busy === 'dry' && <Spinner className="h-3.5 w-3.5" />}{t('试运行(不写入)')}
             </Button>
             <Button variant="primary" disabled={!file || !!busy} onClick={() => run(false)}>
-              {busy === 'run' && <Spinner className="h-3.5 w-3.5" />}开始导入
+              {busy === 'run' && <Spinner className="h-3.5 w-3.5" />}{t('开始导入')}
             </Button>
           </div>
         </div>
@@ -118,16 +122,30 @@ export default function Import() {
 
       {report && (
         <Card
-          title={report.dryRun ? '试运行报告(未写入任何数据)' : '导入完成'}
-          desc={`源库共 ${report.sourceUsers} 个用户、${report.sourceChats} 个会话。`}
+          title={report.dryRun ? t('试运行报告(未写入任何数据)') : t('导入完成')}
+          desc={t('源库共 {users} 个用户、{chats} 个会话。', {
+            users: report.sourceUsers, chats: report.sourceChats,
+          })}
         >
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {[
-                { label: '用户迁入', value: report.users.migrated, extra: report.users.merged ? `合并 ${report.users.merged}` : '' },
-                { label: '会话迁入', value: report.chats.migrated, extra: report.chats.existing ? `已存在 ${report.chats.existing}` : '' },
-                { label: '消息', value: report.messages.migrated, extra: '' },
-                { label: '附件', value: report.files.copied + report.files.inlined, extra: report.files.missing.length ? `缺失 ${report.files.missing.length}` : '' },
+                {
+                  label: t('用户迁入'),
+                  value: report.users.migrated,
+                  extra: report.users.merged ? t('合并 {n}', { n: report.users.merged }) : '',
+                },
+                {
+                  label: t('会话迁入'),
+                  value: report.chats.migrated,
+                  extra: report.chats.existing ? t('已存在 {n}', { n: report.chats.existing }) : '',
+                },
+                { label: t('消息'), value: report.messages.migrated, extra: '' },
+                {
+                  label: t('附件'),
+                  value: report.files.copied + report.files.inlined,
+                  extra: report.files.missing.length ? t('缺失 {n}', { n: report.files.missing.length }) : '',
+                },
               ].map((s) => (
                 <Stat key={s.label} label={s.label} value={String(s.value)} hint={s.extra || undefined} />
               ))}
@@ -136,7 +154,11 @@ export default function Import() {
             {!report.dryRun && (
               <div className="flex items-start gap-2.5 rounded-lg border border-line bg-bg0 px-3.5 py-3 text-[13px] text-tx2">
                 <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-ok" />
-                <div>迁入的用户用<span className="font-medium text-tx">原邮箱 + 原密码</span>登录即可,无需重置;首次登录后密码自动升级为本站格式。会话的模型指向为空,继续对话时使用默认模型。</div>
+                <div>
+                  {t('迁入的用户用')}
+                  <span className="font-medium text-tx">{t('原邮箱 + 原密码')}</span>
+                  {t('登录即可,无需重置;首次登录后密码自动升级为本站格式。会话的模型指向为空,继续对话时使用默认模型。')}
+                </div>
               </div>
             )}
 
@@ -144,7 +166,9 @@ export default function Import() {
               <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-3 text-[13px] text-tx2">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
                 <div>
-                  <div className="font-medium text-tx">以下账号无邮箱且用户名与他人冲突,已改名(不合并,避免聊天记录错归)</div>
+                  <div className="font-medium text-tx">
+                    {t('以下账号无邮箱且用户名与他人冲突,已改名(不合并,避免聊天记录错归)')}
+                  </div>
                   <ul className="mt-1 list-inside list-disc">
                     {report.users.renamed.map((n) => <li key={n} className="font-mono text-xs">{n}</li>)}
                   </ul>
@@ -156,7 +180,9 @@ export default function Import() {
               <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-3 text-[13px] text-tx2">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
                 <div>
-                  <div className="font-medium text-tx">以下账号在 Open WebUI 中使用 OAuth/LDAP 登录、无本地密码,已迁入但暂不可登录 — 请在「用户」页为其重置密码</div>
+                  <div className="font-medium text-tx">
+                    {t('以下账号在 Open WebUI 中使用 OAuth/LDAP 登录、无本地密码,已迁入但暂不可登录 — 请在「用户」页为其重置密码')}
+                  </div>
                   <ul className="mt-1 list-inside list-disc">
                     {report.users.noPassword.map((n) => <li key={n} className="font-mono text-xs">{n}</li>)}
                   </ul>
@@ -168,9 +194,11 @@ export default function Import() {
               <div className="flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-3 text-[13px] text-tx2">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
                 <div>
-                  <div className="font-medium text-tx">以下会话处理失败已跳过(修正后重新导入即可续传)</div>
+                  <div className="font-medium text-tx">
+                    {t('以下会话处理失败已跳过(修正后重新导入即可续传)')}
+                  </div>
                   <ul className="mt-1 list-inside list-disc">
-                    {report.errors.map((n) => <li key={n} className="text-xs">{n}</li>)}
+                    {report.errors.map((n) => <li key={n} className="text-xs">{tServer(n)}</li>)}
                   </ul>
                 </div>
               </div>
@@ -180,16 +208,16 @@ export default function Import() {
               <div className="space-y-1 text-xs text-tx3">
                 {report.files.missing.length > 0 && (
                   <p>
-                    有 {report.files.missing.length} 个附件文件在源数据里找不到
-                    {dataDir.trim() ? '(可能已在 Open WebUI 中被清理)' : ',填写上方「附件目录」后重新导入可搬运物理文件'}
-                    ;能从 Open WebUI 的文本提取里恢复的已作为文本附件迁入,其余在消息中以文字提示替代。
+                    {dataDir.trim()
+                      ? t('有 {n} 个附件文件在源数据里找不到(可能已在 Open WebUI 中被清理);能从 Open WebUI 的文本提取里恢复的已作为文本附件迁入,其余在消息中以文字提示替代。', { n: report.files.missing.length })
+                      : t('有 {n} 个附件文件在源数据里找不到,填写上方「附件目录」后重新导入可搬运物理文件;能从 Open WebUI 的文本提取里恢复的已作为文本附件迁入,其余在消息中以文字提示替代。', { n: report.files.missing.length })}
                   </p>
                 )}
                 {report.files.withText > 0 && (
-                  <p>{report.files.withText} 个 PDF / Office 文档带着 Open WebUI 的文本提取一起迁入,任何模型都能继续读它们。</p>
+                  <p>{t('{n} 个 PDF / Office 文档带着 Open WebUI 的文本提取一起迁入,任何模型都能继续读它们。', { n: report.files.withText })}</p>
                 )}
                 {report.files.unreadable.length > 0 && (
-                  <p>{report.files.unreadable.length} 个附件(旧版 .doc、视频等)没有模型可读的内容,原文件已迁入、仅供下载。</p>
+                  <p>{t('{n} 个附件(旧版 .doc、视频等)没有模型可读的内容,原文件已迁入、仅供下载。', { n: report.files.unreadable.length })}</p>
                 )}
               </div>
             )}

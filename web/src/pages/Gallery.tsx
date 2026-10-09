@@ -8,6 +8,7 @@ import { api } from '../api';
 import { Button, EmptyState, PageHeader, Spinner, btnClass, confirmDialog, toast } from '../components/ui';
 import { ImageLightbox, ImageTile } from '../components/ImageGallery';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
+import { t, locale } from '../i18n';
 import type { ImageRecord } from '../types';
 
 const PAGE_SIZE = 24;
@@ -53,7 +54,7 @@ function GalleryInner() {
       setPage(p);
       scrollRef.current?.scrollTo({ top: 0 });
     } catch (err) {
-      toast(err instanceof Error ? err.message : '加载图片失败', 'err');
+      toast(err instanceof Error ? err.message : t('加载图片失败'), 'err');
     } finally {
       setLoaded(true);
       setLoading(false);
@@ -80,15 +81,15 @@ function GalleryInner() {
 
   async function deleteSelected() {
     if (!sel.size || deleting) return;
-    if (!(await confirmDialog('批量删除', `确定删除选中的 ${sel.size} 张图片?此操作不可恢复。`))) return;
+    if (!(await confirmDialog(t('批量删除'), t('确定删除选中的 {n} 张图片?此操作不可恢复。', { n: sel.size })))) return;
     setDeleting(true);
     try {
       const r = await api.post<{ deleted: number }>('/api/images/batch-delete', { ids: [...sel] });
       setSel(new Set());
-      toast(`已删除 ${r.deleted} 张图片`, 'ok');
+      toast(t('已删除 {n} 张图片', { n: r.deleted }), 'ok');
       refreshAfterDelete(r.deleted);
     } catch (err) {
-      toast(err instanceof Error ? err.message : '删除失败', 'err');
+      toast(err instanceof Error ? err.message : t('删除失败'), 'err');
     } finally {
       setDeleting(false);
     }
@@ -99,10 +100,10 @@ function GalleryInner() {
   return (
     <div className="contents">
       <PageHeader
-        title="作品集"
-        subtitle={total > 0 ? `共 ${total.toLocaleString()} 张图片` : '所有生成过的图片'}
+        title={t('作品集')}
+        subtitle={total > 0 ? t('共 {total} 张图片', { total: total.toLocaleString(locale) }) : t('所有生成过的图片')}
         left={!sidebarOpen && (
-          <Button variant="ghost" size="icon" title="展开侧栏" onClick={() => setSidebarOpen(true)}>
+          <Button variant="ghost" size="icon" title={t('展开侧栏')} onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
@@ -111,7 +112,7 @@ function GalleryInner() {
           to="/images"
           className={btnClass('ghost', 'sm')}
         >
-          <ArrowLeft size={14} />返回工坊
+          <ArrowLeft size={14} />{t('返回工坊')}
         </Link>
       </PageHeader>
 
@@ -123,11 +124,11 @@ function GalleryInner() {
             <div className="rounded-xl border border-line bg-bg1">
               <EmptyState
                 icon={<ImageIcon size={22} />}
-                title="还没有生成过图片"
-                hint="回到绘图工坊,开始你的第一次创作。"
+                title={t('还没有生成过图片')}
+                hint={t('回到绘图工坊,开始你的第一次创作。')}
                 action={(
                   <Link to="/images" className={btnClass('outline', 'sm')}>
-                    <Sparkles size={14} />去绘图工坊
+                    <Sparkles size={14} />{t('去绘图工坊')}
                   </Link>
                 )}
               />
@@ -137,7 +138,7 @@ function GalleryInner() {
               <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
                 {manage ? (
                   <>
-                    <span className="text-[13px] tabular-nums text-tx2">已选 {sel.size} 张</span>
+                    <span className="text-[13px] tabular-nums text-tx2">{t('已选 {n} 张', { n: sel.size })}</span>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button
                         variant="outline" size="sm"
@@ -148,20 +149,20 @@ function GalleryInner() {
                           return next;
                         })}
                       >
-                        {pageAllSelected ? '取消本页全选' : '全选本页'}
+                        {pageAllSelected ? t('取消本页全选') : t('全选本页')}
                       </Button>
                       <Button variant="dangerSolid" size="sm" disabled={!sel.size || deleting} onClick={deleteSelected}>
                         {deleting ? <Spinner className="h-3.5 w-3.5" /> : <Trash2 size={14} />}
-                        删除所选{sel.size > 0 && ` (${sel.size})`}
+                        {t('删除所选')}{sel.size > 0 && ` (${sel.size})`}
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => { setManage(false); setSel(new Set()); }}>
-                        完成
+                        {t('完成')}
                       </Button>
                     </div>
                   </>
                 ) : (
                   <Button variant="outline" size="sm" className="ml-auto" onClick={() => setManage(true)}>
-                    <ListChecks size={14} />批量管理
+                    <ListChecks size={14} />{t('批量管理')}
                   </Button>
                 )}
               </div>
@@ -183,17 +184,17 @@ function GalleryInner() {
                     disabled={page === 0 || loading}
                     onClick={() => fetchPage(page - 1)}
                   >
-                    <ChevronLeft size={14} />上一页
+                    <ChevronLeft size={14} />{t('上一页')}
                   </Button>
                   <span className="text-[13px] tabular-nums text-tx2">
-                    第 {page + 1} / {pages} 页
+                    {t('第 {page} / {pages} 页', { page: page + 1, pages })}
                   </span>
                   <Button
                     variant="outline" size="sm"
                     disabled={page >= pages - 1 || loading}
                     onClick={() => fetchPage(page + 1)}
                   >
-                    下一页<ChevronRight size={14} />
+                    {t('下一页')}<ChevronRight size={14} />
                   </Button>
                 </div>
               )}

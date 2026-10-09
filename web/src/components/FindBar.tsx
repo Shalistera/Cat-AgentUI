@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react';
+import { t } from '../i18n';
 
 /**
  * 对话内查找 — Ctrl/Cmd+F inside a conversation. Searches the RENDERED text
@@ -135,22 +136,22 @@ export function FindBar({ containerRef, open, onClose, initialQuery = '', versio
           if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
           else if (e.key === 'Escape') { e.preventDefault(); onClose(); }
         }}
-        placeholder="在对话中查找"
-        aria-label="在对话中查找"
+        placeholder={t('在对话中查找')}
+        aria-label={t('在对话中查找')}
         className="h-7 w-40 bg-transparent text-[13px] text-tx outline-none placeholder:text-tx3 sm:w-52"
       />
       <span className="min-w-[3.2rem] text-center text-[11px] tabular-nums text-tx3">
         {query.trim() ? (total ? `${cur + 1}/${total}` : '0/0') : ''}
       </span>
-      <button title="上一个 (Shift+Enter)" disabled={!total} onClick={() => step(-1)}
+      <button title={t('上一个 (Shift+Enter)')} disabled={!total} onClick={() => step(-1)}
         className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-35">
         <ChevronUp size={14} />
       </button>
-      <button title="下一个 (Enter)" disabled={!total} onClick={() => step(1)}
+      <button title={t('下一个 (Enter)')} disabled={!total} onClick={() => step(1)}
         className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-35">
         <ChevronDown size={14} />
       </button>
-      <button title="关闭 (Esc)" onClick={onClose}
+      <button title={t('关闭 (Esc)')} onClick={onClose}
         className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg2 hover:text-tx">
         <X size={14} />
       </button>

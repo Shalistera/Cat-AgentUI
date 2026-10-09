@@ -6,6 +6,7 @@ import {
   Badge, Button, Card, EmptyState, Input, SegmentedControl, Spinner, Stat, toast,
 } from '../../components/ui';
 import { TokensBarChart } from '../../components/TokensBarChart';
+import { t } from '../../i18n';
 import type { AdminChatList, AdminChatSummary, AdminUser, AdminUserUsage } from '../../types';
 
 /* Per-user usage drill-down. Everything here is a GROUP BY over the existing
@@ -15,19 +16,19 @@ import type { AdminChatList, AdminChatSummary, AdminUser, AdminUserUsage } from 
 const DAY_OPTIONS = [7, 30, 90] as const;
 
 const KIND_LABELS: Record<string, string> = {
-  chat: '对话',
-  image: '绘图',
-  image_tool: '图片生成工具',
-  image_prompt: 'NAI 提示词助手',
-  title: '标题生成',
-  followup: '快速追问',
-  ocr: 'OCR 工坊',
-  translate: '翻译工坊',
-  ppt: 'PPT 工坊',
-  subagent: '子代理',
-  compaction: '上下文压缩',
-  web_search: '联网搜索',
-  web_fetch: '网页阅读',
+  chat: t('对话'),
+  image: t('绘图'),
+  image_tool: t('图片生成工具'),
+  image_prompt: t('NAI 提示词助手'),
+  title: t('标题生成'),
+  followup: t('快速追问'),
+  ocr: t('OCR 工坊'),
+  translate: t('翻译工坊'),
+  ppt: t('PPT 工坊'),
+  subagent: t('子代理'),
+  compaction: t('上下文压缩'),
+  web_search: t('联网搜索'),
+  web_fetch: t('网页阅读'),
 };
 
 /**
@@ -40,7 +41,7 @@ function DistRows({ rows, total }: {
   rows: { key: string; label: string; mono?: boolean; tokens: number; detail: string }[];
   total: number;
 }) {
-  if (!rows.length) return <p className="py-6 text-center text-xs text-tx3">暂无数据</p>;
+  if (!rows.length) return <p className="py-6 text-center text-xs text-tx3">{t('暂无数据')}</p>;
   const max = Math.max(...rows.map((r) => r.tokens), 1);
   return (
     <div className="space-y-3">
@@ -113,21 +114,21 @@ function UserChatsCard({ userId }: { userId: string }) {
 
   return (
     <Card
-      title="对话记录"
-      desc="该用户保存的全部对话(含归档;临时对话不在其中),点击以只读方式查看。查看记录会写入服务器日志。"
+      title={t('对话记录')}
+      desc={t('该用户保存的全部对话(含归档;临时对话不在其中),点击以只读方式查看。查看记录会写入服务器日志。')}
       actions={(
         <form className="flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); setApplied(query.trim()); }}>
           <div className="w-44 sm:w-56">
-            <Input uiSize="sm" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题或消息内容…" />
+            <Input uiSize="sm" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('搜索标题或消息内容…')} />
           </div>
-          <Button type="submit" variant="outline" size="sm" title="搜索"><Search size={13} /></Button>
+          <Button type="submit" variant="outline" size="sm" title={t('搜索')}><Search size={13} /></Button>
         </form>
       )}
     >
       {loading ? (
         <div className="flex justify-center py-8 text-tx3"><Spinner className="h-5 w-5" /></div>
       ) : chats.length === 0 ? (
-        <p className="py-6 text-center text-xs text-tx3">{applied ? '没有匹配的对话' : '该用户还没有任何对话'}</p>
+        <p className="py-6 text-center text-xs text-tx3">{applied ? t('没有匹配的对话') : t('该用户还没有任何对话')}</p>
       ) : (
         <div className="-mx-1 divide-y divide-line">
           {chats.map((c) => (
@@ -139,13 +140,13 @@ function UserChatsCard({ userId }: { userId: string }) {
               <MessageSquare size={15} className="shrink-0 text-tx3" />
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate text-[13px] font-medium text-tx">{c.title.trim() || '未命名对话'}</span>
-                  {c.pinned && <Pin size={11} className="shrink-0 text-tx3" aria-label="置顶" />}
-                  {c.archived && <Badge><Archive size={10} />归档</Badge>}
+                  <span className="truncate text-[13px] font-medium text-tx">{c.title.trim() || t('未命名对话')}</span>
+                  {c.pinned && <Pin size={11} className="shrink-0 text-tx3" aria-label={t('置顶')} />}
+                  {c.archived && <Badge><Archive size={10} />{t('归档')}</Badge>}
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-tx3">
                   <span className="tabular-nums">{fmtDate(c.updatedAt)}</span>
-                  <span className="tabular-nums">{c.messageCount} 条消息</span>
+                  <span className="tabular-nums">{t('{n} 条消息', { n: c.messageCount })}</span>
                   {c.modelName && <span className="font-mono">{c.modelName}</span>}
                   {c.projectName && (
                     <span className="inline-flex items-center gap-0.5"><FolderOpen size={10} />{c.projectName}</span>
@@ -157,9 +158,9 @@ function UserChatsCard({ userId }: { userId: string }) {
           ))}
           {chats.length < total && (
             <div className="flex items-center justify-between px-1 pt-3 text-xs text-tx3">
-              <span className="tabular-nums">已显示 {chats.length} / {total}</span>
+              <span className="tabular-nums">{t('已显示 {shown} / {total}', { shown: chats.length, total })}</span>
               <Button variant="outline" size="sm" disabled={more} onClick={loadMore}>
-                {more && <Spinner className="h-3.5 w-3.5" />}加载更多
+                {more && <Spinner className="h-3.5 w-3.5" />}{t('加载更多')}
               </Button>
             </div>
           )}
@@ -170,9 +171,9 @@ function UserChatsCard({ userId }: { userId: string }) {
 }
 
 function quotaLabel(u: AdminUser): string {
-  if (u.role === 'admin') return '豁免';
-  if (u.monthlyTokenQuota === null) return '默认';
-  if (u.monthlyTokenQuota === 0) return '不限';
+  if (u.role === 'admin') return t('豁免');
+  if (u.monthlyTokenQuota === null) return t('默认');
+  if (u.monthlyTokenQuota === 0) return t('不限');
   return fmtTokens(u.monthlyTokenQuota);
 }
 
@@ -208,9 +209,9 @@ export default function UserDetail() {
     return (
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
         <EmptyState
-          title="用户不存在"
-          hint="该账号可能已被删除。"
-          action={<Link to="/admin/users"><Button variant="outline" size="sm">返回用户列表</Button></Link>}
+          title={t('用户不存在')}
+          hint={t('该账号可能已被删除。')}
+          action={<Link to="/admin/users"><Button variant="outline" size="sm">{t('返回用户列表')}</Button></Link>}
         />
       </div>
     );
@@ -225,7 +226,7 @@ export default function UserDetail() {
       <div className="space-y-3">
         <Link to="/admin/users"
           className="inline-flex items-center gap-1 text-xs text-tx3 transition-colors hover:text-tx">
-          <ArrowLeft size={13} />返回用户列表
+          <ArrowLeft size={13} />{t('返回用户列表')}
         </Link>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="min-w-0">
@@ -234,19 +235,21 @@ export default function UserDetail() {
                 {user.displayName || user.username}
               </h1>
               {user.displayName && <span className="text-xs text-tx3">@{user.username}</span>}
-              <Badge tone={user.role === 'admin' ? 'acc' : 'default'}>{user.role === 'admin' ? '管理员' : '用户'}</Badge>
-              <Badge tone={user.disabled ? 'err' : 'ok'}>{user.disabled ? '已停用' : '正常'}</Badge>
+              <Badge tone={user.role === 'admin' ? 'acc' : 'default'}>{user.role === 'admin' ? t('管理员') : t('用户')}</Badge>
+              <Badge tone={user.disabled ? 'err' : 'ok'}>{user.disabled ? t('已停用') : t('正常')}</Badge>
             </div>
             <p className="mt-1 text-xs text-tx3">
-              注册于 {fmtDate(user.createdAt)}
-              {user.lastActiveAt ? ` · 最近活跃 ${fmtDate(user.lastActiveAt)}` : ''}
-              {` · 本月 ${fmtTokens(user.usage.monthTokens)} / 配额 ${quotaLabel(user)}`}
+              {t('注册于 {date}', { date: fmtDate(user.createdAt) })}
+              {user.lastActiveAt ? ` · ${t('最近活跃 {date}', { date: fmtDate(user.lastActiveAt) })}` : ''}
+              {` · ${t('本月 {used} / 配额 {quota}', {
+                used: fmtTokens(user.usage.monthTokens), quota: quotaLabel(user),
+              })}`}
             </p>
           </div>
           <SegmentedControl<number>
             value={days}
             onChange={setDays}
-            options={DAY_OPTIONS.map((d) => ({ value: d as number, label: `${d} 天` }))}
+            options={DAY_OPTIONS.map((d) => ({ value: d as number, label: t('{n} 天', { n: d }) }))}
           />
         </div>
       </div>
@@ -254,22 +257,24 @@ export default function UserDetail() {
       {/* hold previous render at reduced opacity while refetching */}
       <div className={`space-y-5 transition-opacity ${busy ? 'opacity-60' : ''}`}>
         <div className={`grid grid-cols-2 gap-3 ${showCost ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
-          <Stat label="总 Tokens" value={fmtTokens(totals.totalTokens)}
-            hint={`输入 ${fmtTokens(totals.promptTokens)} · 输出 ${fmtTokens(totals.completionTokens)}`} />
+          <Stat label={t('总 Tokens')} value={fmtTokens(totals.totalTokens)}
+            hint={t('输入 {prompt} · 输出 {completion}', {
+              prompt: fmtTokens(totals.promptTokens), completion: fmtTokens(totals.completionTokens),
+            })} />
           {showCost && (
-            <Stat label="折算成本" value={fmtCost(totals.cost, currency)} hint="按各模型当前单价估算" />
+            <Stat label={t('折算成本')} value={fmtCost(totals.cost, currency)} hint={t('按各模型当前单价估算')} />
           )}
-          <Stat label="请求次数" value={totals.requests.toLocaleString()} />
-          <Stat label="生成图片" value={totals.images.toLocaleString()} />
-          <Stat label="活跃天数" value={`${activeDays} / ${days}`} />
+          <Stat label={t('请求次数')} value={totals.requests.toLocaleString()} />
+          <Stat label={t('生成图片数')} value={totals.images.toLocaleString()} />
+          <Stat label={t('活跃天数')} value={`${activeDays} / ${days}`} />
         </div>
 
-        <Card title="每日用量" desc={`最近 ${days} 天,按日聚合`}>
+        <Card title={t('每日用量')} desc={t('最近 {n} 天,按日聚合', { n: days })}>
           <TokensBarChart byDay={byDay} days={days} />
         </Card>
 
         <div className="grid gap-5 lg:grid-cols-2">
-          <Card title="模型分布" desc="该用户在统计范围内用过的模型,按 tokens 排序">
+          <Card title={t('模型分布')} desc={t('该用户在统计范围内用过的模型,按 tokens 排序')}>
             <DistRows
               total={totals.totalTokens}
               rows={byModel.map((m) => ({
@@ -277,20 +282,21 @@ export default function UserDetail() {
                 label: fmtModelName(m.model) ?? m.model,
                 mono: true,
                 tokens: m.totalTokens,
-                detail: `${m.requests.toLocaleString()} 次请求${
+                detail: `${t('{n} 次请求', { n: m.requests.toLocaleString() })}${
                   showCost && m.cost != null ? ` · ${fmtCost(m.cost, currency)}` : ''}`,
               }))}
             />
           </Card>
 
-          <Card title="用途分布" desc="对话、绘图与后台生成各占多少">
+          <Card title={t('用途分布')} desc={t('对话、绘图与后台生成各占多少')}>
             <DistRows
               total={totals.totalTokens}
               rows={byKind.map((k) => ({
                 key: k.kind,
                 label: KIND_LABELS[k.kind] ?? k.kind,
                 tokens: k.totalTokens,
-                detail: `${k.requests.toLocaleString()} 次请求${k.images ? ` · ${k.images.toLocaleString()} 张图` : ''}`,
+                detail: `${t('{n} 次请求', { n: k.requests.toLocaleString() })}${
+                  k.images ? ` · ${t('{n} 张图', { n: k.images.toLocaleString() })}` : ''}`,
               }))}
             />
           </Card>

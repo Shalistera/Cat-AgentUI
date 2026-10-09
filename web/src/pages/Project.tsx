@@ -17,12 +17,13 @@ import type {
   ChatSummary, DirectoryUser, ModelInfo, Project, ProjectAccessMode, ProjectDoc, ProjectLimits, ProjectMember,
   ProjectMemberRole,
 } from '../types';
+import { locale, t } from '../i18n';
 
-const ACCESS_LABEL: Record<ProjectAccessMode, string> = { private: '仅自己', shared: '所有人', restricted: '指定成员' };
-const ROLE_LABEL = { owner: '所有者', editor: '可编辑', viewer: '可查看' } as const;
+const ACCESS_LABEL: Record<ProjectAccessMode, string> = { private: t('仅自己'), shared: t('所有人'), restricted: t('指定成员') };
+const ROLE_LABEL = { owner: t('所有者'), editor: t('可编辑'), viewer: t('可查看') } as const;
 
 function userLabel(u: { username: string; displayName: string | null }) {
-  return u.displayName ? `${u.displayName}(${u.username})` : u.username;
+  return u.displayName ? t('{name}({username})', { name: u.displayName, username: u.username }) : u.username;
 }
 
 /** Owner-only sharing dialog: who may use the project, and who may edit it. */
@@ -53,17 +54,17 @@ function SharingModal({ open, onClose, project, members, onSaved }: {
         accessMode: mode, members: list.map((m) => ({ userId: m.userId, role: m.role })),
       });
       onSaved(r.project, r.members);
-      toast('共享设置已保存', 'ok');
+      toast(t('共享设置已保存'), 'ok');
       onClose();
-    } catch (e) { toast(errText(e, '保存失败'), 'err'); }
+    } catch (e) { toast(errText(e, t('保存失败')), 'err'); }
     finally { setSaving(false); }
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="共享项目"
-      desc="共享的是项目指令和参考资料;每个人在项目里的对话仍然只有自己能看到。">
+    <Modal open={open} onClose={onClose} title={t('共享项目')}
+      desc={t('共享的是项目指令和参考资料;每个人在项目里的对话仍然只有自己能看到。')}>
       <div className="space-y-5">
-        <Field label="谁可以使用这个项目">
+        <Field label={t('谁可以使用这个项目')}>
           <div className="grid gap-2 sm:grid-cols-3">
             {(['private', 'restricted', 'shared'] as ProjectAccessMode[]).map((m) => (
               <button key={m} type="button" onClick={() => setMode(m)} aria-pressed={mode === m}
@@ -71,19 +72,19 @@ function SharingModal({ open, onClose, project, members, onSaved }: {
                   mode === m ? 'border-acc ring-1 ring-acc' : 'border-line hover:border-field'}`}>
                 <div className="text-[13px] font-medium text-tx">{ACCESS_LABEL[m]}</div>
                 <div className="mt-0.5 text-[11px] leading-relaxed text-tx3">
-                  {m === 'private' ? '只有你能看到' : m === 'restricted' ? '下方名单里的人可以用' : '所有登录用户都可以用'}
+                  {m === 'private' ? t('只有你能看到') : m === 'restricted' ? t('下方名单里的人可以用') : t('所有登录用户都可以用')}
                 </div>
               </button>
             ))}
           </div>
         </Field>
 
-        <Field label={mode === 'shared' ? '额外授予编辑权限' : '成员'}
+        <Field label={mode === 'shared' ? t('额外授予编辑权限') : t('成员')}
           hint={mode === 'shared'
-            ? '所有人默认只能查看和使用;在这里列出的人还可以修改项目指令、增删资料。'
+            ? t('所有人默认只能查看和使用;在这里列出的人还可以修改项目指令、增删资料。')
             : mode === 'restricted'
-              ? '「可编辑」的成员可以修改项目指令、增删资料;「可查看」只能使用。'
-              : '项目设为「仅自己」时,名单会保留但不生效。'}>
+              ? t('「可编辑」的成员可以修改项目指令、增删资料;「可查看」只能使用。')
+              : t('项目设为「仅自己」时,名单会保留但不生效。')}>
           <div className="space-y-2">
             {list.length > 0 && (
               <ul className="divide-y divide-line rounded-lg border border-line">
@@ -92,10 +93,10 @@ function SharingModal({ open, onClose, project, members, onSaved }: {
                     <span className="min-w-0 flex-1 truncate text-tx">{userLabel(m)}</span>
                     <Select value={m.role} className="w-28"
                       onChange={(e) => setList((l) => l.map((x) => x.userId === m.userId ? { ...x, role: e.target.value as ProjectMemberRole } : x))}>
-                      <option value="viewer">可查看</option>
-                      <option value="editor">可编辑</option>
+                      <option value="viewer">{t('可查看')}</option>
+                      <option value="editor">{t('可编辑')}</option>
                     </Select>
-                    <button type="button" title="移除" className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-err"
+                    <button type="button" title={t('移除')} className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-err"
                       onClick={() => setList((l) => l.filter((x) => x.userId !== m.userId))}><X size={13} /></button>
                   </li>
                 ))}
@@ -106,16 +107,16 @@ function SharingModal({ open, onClose, project, members, onSaved }: {
                 const u = remaining.find((x) => x.id === e.target.value);
                 if (u) setList((l) => [...l, { userId: u.id, username: u.username, displayName: u.displayName, role: 'viewer' }]);
               }}>
-              <option value="">{directory === null ? '加载用户…' : remaining.length ? '添加成员…' : '没有更多可添加的用户'}</option>
+              <option value="">{directory === null ? t('加载用户…') : remaining.length ? t('添加成员…') : t('没有更多可添加的用户')}</option>
               {remaining.map((u) => <option key={u.id} value={u.id}>{userLabel(u)}</option>)}
             </Select>
           </div>
         </Field>
 
         <ModalActions>
-          <Button variant="outline" onClick={onClose}>取消</Button>
+          <Button variant="outline" onClick={onClose}>{t('取消')}</Button>
           <Button variant="primary" disabled={saving} onClick={() => void save()}>
-            {saving && <Spinner className="h-3.5 w-3.5" />}保存
+            {saving && <Spinner className="h-3.5 w-3.5" />}{t('保存')}
           </Button>
         </ModalActions>
       </div>
@@ -231,8 +232,8 @@ export default function ProjectPage() {
       setProject(r.project);
       setInstrDraft(r.project.instructions ?? '');
       syncStore(r.project);
-      toast('项目指令已保存', 'ok');
-    } catch (e) { toast(errText(e, '保存失败'), 'err'); }
+      toast(t('项目指令已保存'), 'ok');
+    } catch (e) { toast(errText(e, t('保存失败')), 'err'); }
     finally { setSavingInstr(false); }
   }
 
@@ -247,15 +248,15 @@ export default function ProjectPage() {
       setProject(r.project);
       syncStore(r.project);
       setEditOpen(false);
-    } catch (e) { toast(errText(e, '保存失败'), 'err'); }
+    } catch (e) { toast(errText(e, t('保存失败')), 'err'); }
     finally { setSavingMeta(false); }
   }
 
   async function removeProject() {
     if (!project) return;
     const ok = await confirmDialog(
-      '删除项目',
-      `将删除项目「${project.name}」及其全部资料。项目里的对话会保留,只是以后不再自动带上项目的要求和资料。`,
+      t('删除项目'),
+      t('将删除项目「{name}」及其全部资料。项目里的对话会保留,只是以后不再自动带上项目的要求和资料。', { name: project.name }),
     );
     if (!ok) return;
     try {
@@ -263,9 +264,9 @@ export default function ProjectPage() {
       projectsStore.remove(project.id);
       // Their chats survive with projectId cleared server-side.
       chatsStore.load().catch(() => { /* stale summaries are harmless */ });
-      toast('项目已删除', 'ok');
+      toast(t('项目已删除'), 'ok');
       nav('/');
-    } catch (e) { toast(errText(e, '删除失败'), 'err'); }
+    } catch (e) { toast(errText(e, t('删除失败')), 'err'); }
   }
 
   async function uploadFiles(files: FileList | null) {
@@ -276,15 +277,15 @@ export default function ProjectPage() {
     try {
       for (const file of Array.from(files)) {
         try {
-          if (file.size > limits.maxDocChars * 4) throw new Error(`「${file.name}」过大`);
+          if (file.size > limits.maxDocChars * 4) throw new Error(t('「{name}」过大', { name: file.name }));
           const content = await file.text();
-          if (content.includes('\u0000')) throw new Error(`「${file.name}」不是文本文件`);
-          if (!content.trim()) throw new Error(`「${file.name}」是空文件`);
+          if (content.includes('\u0000')) throw new Error(t('「{name}」不是文本文件', { name: file.name }));
+          if (!content.trim()) throw new Error(t('「{name}」是空文件', { name: file.name }));
           if (content.length > limits.maxDocChars) {
-            throw new Error(`「${file.name}」超出单文档上限(${limits.maxDocChars.toLocaleString()} 字符)`);
+            throw new Error(t('「{name}」超出单文档上限({limit} 字符)', { name: file.name, limit: limits.maxDocChars.toLocaleString(locale) }));
           }
           if (running + content.length > limits.maxTotalChars) {
-            throw new Error(`资料总量将超出上限,「${file.name}」未上传`);
+            throw new Error(t('资料总量将超出上限,「{name}」未上传', { name: file.name }));
           }
           const r = await api.post<{ doc: ProjectDoc }>(`/api/projects/${project.id}/docs`, {
             name: file.name.slice(0, 200), content,
@@ -292,9 +293,9 @@ export default function ProjectPage() {
           setDocs((prev) => [...prev, r.doc]);
           running += r.doc.chars;
           added++;
-        } catch (e) { toast(errText(e, '上传失败'), 'err'); }
+        } catch (e) { toast(errText(e, t('上传失败')), 'err'); }
       }
-      if (added) toast(`已添加 ${added} 个文档`, 'ok');
+      if (added) toast(t('已添加 {n} 个文档', { n: added }), 'ok');
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -306,22 +307,22 @@ export default function ProjectPage() {
   }
 
   function newDoc() {
-    if (limits && docs.length >= limits.maxDocs) { toast(`每个项目最多 ${limits.maxDocs} 个文档`, 'err'); return; }
+    if (limits && docs.length >= limits.maxDocs) { toast(t('每个项目最多 {n} 个文档', { n: limits.maxDocs }), 'err'); return; }
     setDocDialog({ id: null });
   }
 
   async function removeDoc(doc: ProjectDoc) {
     if (!project) return;
-    const ok = await confirmDialog('删除文档', `将从项目资料中移除「${doc.name}」。`);
+    const ok = await confirmDialog(t('删除文档'), t('将从项目资料中移除「{name}」。', { name: doc.name }));
     if (!ok) return;
     try {
       await api.del(`/api/projects/${project.id}/docs/${doc.id}`);
       setDocs((prev) => prev.filter((d) => d.id !== doc.id));
-    } catch (e) { toast(errText(e, '删除失败'), 'err'); }
+    } catch (e) { toast(errText(e, t('删除失败')), 'err'); }
   }
 
   const headerLeft = !sidebarOpen && (
-    <Button variant="ghost" size="icon" title="打开侧栏" onClick={() => setSidebarOpen(true)}>
+    <Button variant="ghost" size="icon" title={t('打开侧栏')} onClick={() => setSidebarOpen(true)}>
       <PanelLeft size={16} />
     </Button>
   );
@@ -329,9 +330,9 @@ export default function ProjectPage() {
   if (failed) {
     return (
       <div className="flex h-full flex-col">
-        <PageHeader title="项目" left={headerLeft} />
-        <EmptyState icon={<FolderClosed size={22} />} title="项目不存在或已被删除"
-          action={<Button variant="outline" size="sm" onClick={() => nav('/')}>回到对话</Button>} />
+        <PageHeader title={t('项目')} left={headerLeft} />
+        <EmptyState icon={<FolderClosed size={22} />} title={t('项目不存在或已被删除')}
+          action={<Button variant="outline" size="sm" onClick={() => nav('/')}>{t('回到对话')}</Button>} />
       </div>
     );
   }
@@ -339,7 +340,7 @@ export default function ProjectPage() {
   if (!project) {
     return (
       <div className="flex h-full flex-col">
-        <PageHeader title="项目" left={headerLeft} />
+        <PageHeader title={t('项目')} left={headerLeft} />
         <div className="flex flex-1 items-center justify-center text-tx3"><Spinner className="h-6 w-6" /></div>
       </div>
     );
@@ -349,27 +350,27 @@ export default function ProjectPage() {
     <div className="flex h-full flex-col">
       <PageHeader left={headerLeft} title={
         <span className="flex items-center gap-1">
-          <Link to="/projects" className="shrink-0 font-normal text-tx3 transition-colors hover:text-tx hover:underline">项目</Link>
+          <Link to="/projects" className="shrink-0 font-normal text-tx3 transition-colors hover:text-tx hover:underline">{t('项目')}</Link>
           <ChevronRight size={13} className="shrink-0 text-tx3" />
           <span className="truncate">{project.name}</span>
         </span>
       }>
         {isOwner && (
           <>
-            <Button variant="ghost" size="iconSm" title="共享设置" onClick={() => setSharingOpen(true)}>
+            <Button variant="ghost" size="iconSm" title={t('共享设置')} onClick={() => setSharingOpen(true)}>
               <Users size={14} className={project.accessMode !== 'private' ? 'text-acc' : ''} />
             </Button>
-            <Button variant="ghost" size="iconSm" title="编辑名称与描述"
+            <Button variant="ghost" size="iconSm" title={t('编辑名称与描述')}
               onClick={() => { setNameDraft(project.name); setDescDraft(project.description ?? ''); setEditOpen(true); }}>
               <Pencil size={14} />
             </Button>
-            <Button variant="dangerGhost" size="iconSm" title="删除项目" onClick={removeProject}>
+            <Button variant="dangerGhost" size="iconSm" title={t('删除项目')} onClick={removeProject}>
               <Trash2 size={14} />
             </Button>
           </>
         )}
         <Button variant="primary" size="sm" onClick={() => nav(`/?project=${project.id}`)}>
-          <MessageSquarePlus size={14} />新对话
+          <MessageSquarePlus size={14} />{t('新对话')}
         </Button>
       </PageHeader>
 
@@ -390,8 +391,8 @@ export default function ProjectPage() {
                   <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-tx3">
                     <Users size={11} />
                     {isOwner
-                      ? <>共享给{ACCESS_LABEL[project.accessMode]}{project.accessMode !== 'shared' && memberCount > 0 ? ` · ${memberCount} 位成员` : ''}</>
-                      : <>由 {userLabel(project.owner)} 共享</>}
+                      ? <>{t('共享给{scope}', { scope: ACCESS_LABEL[project.accessMode] })}{project.accessMode !== 'shared' && memberCount > 0 ? t(' · {n} 位成员', { n: memberCount }) : ''}</>
+                      : <>{t('由 {owner} 共享', { owner: userLabel(project.owner) })}</>}
                     <Badge tone={canEdit ? 'acc' : 'default'}>{ROLE_LABEL[project.role]}</Badge>
                   </p>
                 )}
@@ -414,16 +415,16 @@ export default function ProjectPage() {
               draftKey={`project:${project.id}`}
             />
 
-            <Card title="项目内对话" flush>
+            <Card title={t('项目内对话')} flush>
               {chats.length === 0 ? (
-                <EmptyState icon={<MessageSquarePlus size={22} />} title="还没有对话"
-                  hint="在上方输入框说点什么,就会在这个项目里开启第一个对话。" />
+                <EmptyState icon={<MessageSquarePlus size={22} />} title={t('还没有对话')}
+                  hint={t('在上方输入框说点什么,就会在这个项目里开启第一个对话。')} />
               ) : (
                 <div className="divide-y divide-line">
                   {chats.map((c) => (
                     <Link key={c.id} to={`/chat/${c.id}`}
                       className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-bg2">
-                      <span className="min-w-0 flex-1 truncate text-sm text-tx">{c.title || '新对话'}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm text-tx">{c.title || t('新对话')}</span>
                       <span className="shrink-0 text-[11px] tabular-nums text-tx3">{fmtTime(c.updatedAt)}</span>
                     </Link>
                   ))}
@@ -433,39 +434,39 @@ export default function ProjectPage() {
           </div>
 
           <div className="space-y-5">
-            <Card title="项目指令" desc={canEdit
-              ? '写给 AI 的固定要求,项目里的每个对话都会自动遵守,不用每次重复说。'
-              : '写给 AI 的固定要求,项目里的每个对话都会自动遵守。你只有查看权限。'}>
+            <Card title={t('项目指令')} desc={canEdit
+              ? t('写给 AI 的固定要求,项目里的每个对话都会自动遵守,不用每次重复说。')
+              : t('写给 AI 的固定要求,项目里的每个对话都会自动遵守。你只有查看权限。')}>
               {canEdit ? (
                 <>
                   <Textarea rows={7} value={instrDraft} onChange={(e) => setInstrDraft(e.target.value)}
                     maxLength={limits?.maxInstructionsChars} className="text-[13px]"
-                    placeholder="例如:回答一律用中文,代码示例用 TypeScript,引用资料时注明文档名…" />
+                    placeholder={t('例如:回答一律用中文,代码示例用 TypeScript,引用资料时注明文档名…')} />
                   <div className="mt-2 flex items-center justify-between gap-2">
                     <span className="text-[11px] tabular-nums text-tx3">
-                      {instrDraft.length.toLocaleString()} / {limits?.maxInstructionsChars.toLocaleString()}
+                      {instrDraft.length.toLocaleString(locale)} / {limits?.maxInstructionsChars.toLocaleString(locale)}
                     </span>
                     <Button variant="primary" size="xs" disabled={!instrDirty || savingInstr} onClick={saveInstructions}>
-                      {savingInstr && <Spinner className="h-3 w-3" />}保存
+                      {savingInstr && <Spinner className="h-3 w-3" />}{t('保存')}
                     </Button>
                   </div>
                 </>
               ) : (
                 <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-tx2">
-                  {project.instructions?.trim() || <span className="text-tx3">所有者还没有写项目指令。</span>}
+                  {project.instructions?.trim() || <span className="text-tx3">{t('所有者还没有写项目指令。')}</span>}
                 </p>
               )}
             </Card>
 
-            <Card title="参考资料" desc="仅支持文本文件(txt / md / 代码等)。"
+            <Card title={t('参考资料')} desc={t('仅支持文本文件(txt / md / 代码等)。')}
               actions={canEdit && (
                 <>
-                  <Button variant="ghost" size="iconSm" title="新建文本" onClick={newDoc}>
+                  <Button variant="ghost" size="iconSm" title={t('新建文本')} onClick={newDoc}>
                     <FilePlus size={14} />
                   </Button>
                   <input ref={fileRef} type="file" multiple accept={ACCEPT} className="hidden"
                     onChange={(e) => void uploadFiles(e.target.files)} />
-                  <Button variant="ghost" size="iconSm" title="上传文档" disabled={uploading}
+                  <Button variant="ghost" size="iconSm" title={t('上传文档')} disabled={uploading}
                     onClick={() => fileRef.current?.click()}>
                     {uploading ? <Spinner className="h-3.5 w-3.5" /> : <Upload size={14} />}
                   </Button>
@@ -473,7 +474,7 @@ export default function ProjectPage() {
               )}>
               {docs.length === 0 ? (
                 <p className="py-2 text-xs leading-relaxed text-tx3">
-                  {canEdit ? '上传或新建项目相关的文档、规范或笔记,模型回答时会优先依据它们。' : '这个项目还没有参考资料。'}
+                  {canEdit ? t('上传或新建项目相关的文档、规范或笔记,模型回答时会优先依据它们。') : t('这个项目还没有参考资料。')}
                 </p>
               ) : (
                 <>
@@ -482,11 +483,13 @@ export default function ProjectPage() {
                       <div key={d.id} className="group flex items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-bg2">
                         <FileText size={13} className="shrink-0 text-tx3" />
                         <button className="min-w-0 flex-1 cursor-pointer truncate text-left text-xs text-tx hover:text-acc"
-                          title={`${d.name} · ${d.chars.toLocaleString()} 字符${canEdit ? ' · 点击编辑' : ''}`} onClick={() => openDoc(d)}>
+                          title={canEdit
+                            ? t('{name} · {chars} 字符 · 点击编辑', { name: d.name, chars: d.chars.toLocaleString(locale) })
+                            : t('{name} · {chars} 字符', { name: d.name, chars: d.chars.toLocaleString(locale) })} onClick={() => openDoc(d)}>
                           {d.name}
                         </button>
                         {canEdit && (
-                          <Button variant="dangerGhost" size="iconXs" title="删除文档"
+                          <Button variant="dangerGhost" size="iconXs" title={t('删除文档')}
                             className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
                             onClick={() => void removeDoc(d)}>
                             <Trash2 size={12} />
@@ -497,13 +500,13 @@ export default function ProjectPage() {
                   </div>
                   {limits && (
                     <p className="mt-2 border-t border-line pt-2 text-[11px] leading-relaxed text-tx3">
-                      {docs.length} 个文档 · {totalChars.toLocaleString()} 字符
+                      {t('{docs} 个文档 · {chars} 字符', { docs: docs.length, chars: totalChars.toLocaleString(locale) })}
                       <br />
                       {totalChars <= limits.injectChars
-                        ? '资料不多,每次对话都整篇提供给模型'
+                        ? t('资料不多,每次对话都整篇提供给模型')
                         : totalChars <= (limits.injectCharsMax ?? limits.injectChars)
-                          ? '长上下文模型(如 Claude、Gemini)整篇读取;其他模型放不下的部分按需检索'
-                          : '放得下的文档整篇提供,其余由模型按需检索'}
+                          ? t('长上下文模型(如 Claude、Gemini)整篇读取;其他模型放不下的部分按需检索')
+                          : t('放得下的文档整篇提供,其余由模型按需检索')}
                     </p>
                   )}
                 </>
@@ -513,18 +516,18 @@ export default function ProjectPage() {
         </div>
       </div>
 
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="编辑项目">
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={t('编辑项目')}>
         <form onSubmit={(e) => { e.preventDefault(); void saveMeta(); }} className="space-y-4">
-          <Field label="项目名称" required>
+          <Field label={t('项目名称')} required>
             <Input value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} maxLength={80} autoFocus />
           </Field>
-          <Field label="描述" hint="一句话说明这个项目是做什么的,显示在页头。">
+          <Field label={t('描述')} hint={t('一句话说明这个项目是做什么的,显示在页头。')}>
             <Input value={descDraft} onChange={(e) => setDescDraft(e.target.value)} maxLength={300} />
           </Field>
           <ModalActions>
-            <Button variant="outline" onClick={() => setEditOpen(false)}>取消</Button>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>{t('取消')}</Button>
             <Button type="submit" variant="primary" disabled={savingMeta || !nameDraft.trim()}>
-              {savingMeta && <Spinner className="h-3.5 w-3.5" />}保存
+              {savingMeta && <Spinner className="h-3.5 w-3.5" />}{t('保存')}
             </Button>
           </ModalActions>
         </form>

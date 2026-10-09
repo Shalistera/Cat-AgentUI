@@ -5,6 +5,7 @@ import {
 } from 'react';
 import { useUi } from '../store';
 import type { ReasoningLevel } from '../types';
+import { t } from '../i18n';
 
 // The rail reads as an energy ramp: cobalt at rest, violet in the middle,
 // fuchsia at full tilt. The stops live on the FULL rail and the fill merely
@@ -85,7 +86,7 @@ export function ReasoningSlider({ levels, index, onChange }: {
       ref={boxRef}
       role="slider"
       tabIndex={0}
-      aria-label="思考强度"
+      aria-label={t('思考强度')}
       aria-valuemin={0}
       aria-valuemax={last}
       aria-valuenow={index}

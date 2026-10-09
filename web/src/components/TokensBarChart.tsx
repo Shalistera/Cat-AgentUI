@@ -1,5 +1,6 @@
 import { fmtTokens } from '../api';
 import type { UsageByDay } from '../types';
+import { locale, t } from '../i18n';
 
 // The one daily-tokens bar chart, shared by the admin dashboard and the user's
 // settings page — same axis math, same gridlines, same hover feedback.
@@ -48,7 +49,7 @@ export function TokensBarChart({ byDay, days = 30 }: { byDay: UsageByDay[]; days
   const labelStep = Math.max(1, Math.round(days / 6)); // sparse x labels
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full" role="img" aria-label="每日 Token 用量柱状图">
+    <svg viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full" role="img" aria-label={t('每日 Token 用量柱状图')}>
       {/* recessive hairline gridlines + clean y ticks */}
       {ticks.map((t) => {
         const y = padT + plotH - (t / max) * plotH;
@@ -72,7 +73,7 @@ export function TokensBarChart({ byDay, days = 30 }: { byDay: UsageByDay[]; days
         const r = Math.min(4, barW / 2, h); // rounded data-end, square at baseline
         return (
           <g key={d.day} className="group/bar">
-            <title>{`${d.day} · ${d.totalTokens.toLocaleString()} tokens · ${d.requests} 次请求`}</title>
+            <title>{t('{day} · {tokens} tokens · {requests} 次请求', { day: d.day, tokens: d.totalTokens.toLocaleString(locale), requests: d.requests })}</title>
             {/* full-slot invisible hit target */}
             <rect x={padL + i * slot} y={padT} width={slot} height={plotH} fill="transparent" />
             {h > 0 && (

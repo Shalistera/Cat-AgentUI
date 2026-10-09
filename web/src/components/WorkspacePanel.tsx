@@ -9,6 +9,7 @@ import { useComposerInsert, useWorkspacePanel } from '../store';
 import { Markdown } from './Markdown';
 import { Spinner, confirmDialog, toast } from './ui';
 import type { WorkspaceFile, WorkspaceListing } from '../types';
+import { locale, t } from '../i18n';
 
 const headBtn = 'flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg3 hover:text-tx disabled:opacity-40 disabled:pointer-events-none';
 
@@ -37,8 +38,8 @@ function fmtWhen(ms: number): string {
   const today = new Date();
   const sameDay = d.toDateString() === today.toDateString();
   return sameDay
-    ? d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+    ? d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString(locale, { month: 'numeric', day: 'numeric' });
 }
 
 function FileGlyph({ path, size = 14 }: { path: string; size?: number }) {
@@ -94,18 +95,18 @@ function FileView({ chatId, file, onBack, onChanged }: {
       setText(draft);
       setEditing(false);
       onChanged();
-      toast('已保存', 'ok');
+      toast(t('已保存'), 'ok');
     } catch (e) { toast(errMsg(e), 'err'); } finally { setSaving(false); }
   }
 
-  const copyLabel = editing ? '复制草稿' : isMd || isHtml ? '复制源码' : ext === 'docx' ? '复制文本' : '复制内容';
+  const copyLabel = editing ? t('复制草稿') : isMd || isHtml ? t('复制源码') : ext === 'docx' ? t('复制文本') : t('复制内容');
   async function copy() {
     if (text === null || error) return;
     try {
       await navigator.clipboard.writeText(editing ? draft : text);
-      toast('已复制', 'ok');
+      toast(t('已复制'), 'ok');
     } catch {
-      toast('复制失败，请检查浏览器剪贴板权限，或手动选择内容复制。', 'err');
+      toast(t('复制失败，请检查浏览器剪贴板权限，或手动选择内容复制。'), 'err');
     }
   }
 
@@ -120,8 +121,8 @@ function FileView({ chatId, file, onBack, onChanged }: {
     body = (
       <div className="flex flex-col items-center gap-3 p-8 text-center text-sm text-tx3">
         <FileIcon size={28} />
-        <div>无法预览这种文件({fmtBytes(file.size)})</div>
-        <a href={fileUrl(chatId, file.path, true)} className="text-acc hover:underline">下载</a>
+        <div>{t('无法预览这种文件({size})', { size: fmtBytes(file.size) })}</div>
+        <a href={fileUrl(chatId, file.path, true)} className="text-acc hover:underline">{t('下载')}</a>
       </div>
     );
   } else if (text === null) {
@@ -145,13 +146,13 @@ function FileView({ chatId, file, onBack, onChanged }: {
   return (
     <>
       <div className="flex items-center gap-1 border-b border-line bg-bg2 py-1.5 pl-2 pr-2">
-        <button className={headBtn} title="返回文件列表" onClick={onBack}><ChevronLeft size={15} /></button>
+        <button className={headBtn} title={t('返回文件列表')} onClick={onBack}><ChevronLeft size={15} /></button>
         <FileGlyph path={file.path} />
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-tx" title={file.path}>{file.path}</span>
         <span className="mr-1 shrink-0 text-[11px] tabular-nums text-tx3">{fmtBytes(file.size)}</span>
         {(isMd || isHtml) && !editing && (
           <button className="h-7 cursor-pointer rounded-md px-2 text-[11px] text-tx2 hover:bg-bg3 hover:text-tx" onClick={() => setRendered((v) => !v)}>
-            {rendered ? '源码' : '预览'}
+            {rendered ? t('源码') : t('预览')}
           </button>
         )}
         {isText && (
@@ -161,18 +162,18 @@ function FileView({ chatId, file, onBack, onChanged }: {
           </button>
         )}
         {editable && !editing && (
-          <button className={headBtn} title="编辑" onClick={() => { setDraft(text ?? ''); setEditing(true); }} disabled={text === null}>
+          <button className={headBtn} title={t('编辑')} onClick={() => { setDraft(text ?? ''); setEditing(true); }} disabled={text === null}>
             <Pencil size={13} />
           </button>
         )}
         {editing && (
           <>
-            <button className={headBtn} title="保存" onClick={save} disabled={saving}>{saving ? <Spinner className="h-3.5 w-3.5" /> : <Save size={14} />}</button>
-            <button className={headBtn} title="放弃修改" onClick={() => setEditing(false)}><X size={14} /></button>
+            <button className={headBtn} title={t('保存')} onClick={save} disabled={saving}>{saving ? <Spinner className="h-3.5 w-3.5" /> : <Save size={14} />}</button>
+            <button className={headBtn} title={t('放弃修改')} onClick={() => setEditing(false)}><X size={14} /></button>
           </>
         )}
         {!editing && (
-          <a className={headBtn} title="下载" href={fileUrl(chatId, file.path, true)}><Download size={14} /></a>
+          <a className={headBtn} title={t('下载')} href={fileUrl(chatId, file.path, true)}><Download size={14} /></a>
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-auto">{body}</div>
@@ -183,22 +184,22 @@ function FileView({ chatId, file, onBack, onChanged }: {
 // ---- guidance: what the workspace is for, as tasks you can try ----
 // Clicking one drops the prompt into the composer; sending stays the person's call.
 const STARTERS: { label: string; prompt: string }[] = [
-  { label: '把一段内容整理成 Word 或 PDF', prompt: '帮我把下面这段内容整理成一份排版规范的报告,导出 PDF 和 Word 各一份:\n\n' },
-  { label: '写一篇长文,之后逐段修改', prompt: '帮我写一份 1500 字左右的方案初稿,保存到工作区;写完后我会逐段让你修改。主题是:' },
-  { label: '分析一份表格并出图', prompt: '我会上传一份 CSV / Excel,请按关键列做汇总统计、找出异常,画一张图表,结论写成 分析.md。' },
-  { label: '把上传的文档转换格式', prompt: '把我上传到工作区的文档转换成 PDF。' },
-  { label: '按大纲分章生成一份文档', prompt: '按下面的大纲写成完整文档,每章一个小节,保存为 文档.md:\n\n' },
+  { label: t('把一段内容整理成 Word 或 PDF'), prompt: t('帮我把下面这段内容整理成一份排版规范的报告,导出 PDF 和 Word 各一份:\n\n') },
+  { label: t('写一篇长文,之后逐段修改'), prompt: t('帮我写一份 1500 字左右的方案初稿,保存到工作区;写完后我会逐段让你修改。主题是:') },
+  { label: t('分析一份表格并出图'), prompt: t('我会上传一份 CSV / Excel,请按关键列做汇总统计、找出异常,画一张图表,结论写成 分析.md。') },
+  { label: t('把上传的文档转换格式'), prompt: t('把我上传到工作区的文档转换成 PDF。') },
+  { label: t('按大纲分章生成一份文档'), prompt: t('按下面的大纲写成完整文档,每章一个小节,保存为 文档.md:\n\n') },
 ];
 
 function Starters({ compact = false }: { compact?: boolean }) {
   const insert = useComposerInsert((s) => s.insert);
   return (
     <div className={compact ? 'mt-3 w-full' : 'mt-4 w-full'}>
-      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3">试试这些</div>
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3">{t('试试这些')}</div>
       <ul className="space-y-1">
         {STARTERS.map((s) => (
           <li key={s.label}>
-            <button type="button" onClick={() => insert(s.prompt)} title="放进输入框,由你决定何时发送"
+            <button type="button" onClick={() => insert(s.prompt)} title={t('放进输入框,由你决定何时发送')}
               className="w-full cursor-pointer rounded-md border border-line bg-bg1 px-2.5 py-1.5 text-left text-xs text-tx2 transition-colors hover:border-acc/50 hover:bg-acc/5 hover:text-tx">
               {s.label}
             </button>
@@ -256,12 +257,12 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
       catch (e) { toast(`${f.name}:${errMsg(e)}`, 'err'); }
     }
     setUploading(false);
-    if (ok) { toast(`已上传 ${ok} 个文件`, 'ok'); bump(); }
+    if (ok) { toast(t('已上传 {count} 个文件', { count: ok }), 'ok'); bump(); }
   }
 
   async function remove(f: WorkspaceFile) {
     if (!chatId) return;
-    if (!(await confirmDialog('删除文件', `确定删除「${f.path}」?此操作不可恢复。`))) return;
+    if (!(await confirmDialog(t('删除文件'), t('确定删除「{path}」?此操作不可恢复。', { path: f.path })))) return;
     try {
       await api.del(`${fileUrl(chatId, f.path)}`);
       bump();
@@ -274,14 +275,14 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
     return (
       <aside className="fixed inset-0 z-40 flex flex-col bg-bg1 md:static md:relative md:z-auto md:w-[clamp(22rem,38vw,40rem)] md:shrink-0 md:border-l md:border-line">
         <div className="flex items-center justify-between border-b border-line bg-bg2 py-1.5 pl-4 pr-2">
-          <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3"><FolderOpen size={13} /> 工作区</span>
-          <button className={headBtn} title="关闭面板" onClick={close}><X size={15} /></button>
+          <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3"><FolderOpen size={13} /> {t('工作区')}</span>
+          <button className={headBtn} title={t('关闭面板')} onClick={close}><X size={15} /></button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 py-10 text-center text-sm text-tx3">
           <FolderOpen size={26} className="text-tx3/70" />
-          <div className="mt-2 text-tx2">每段对话都有自己的工作区</div>
+          <div className="mt-2 text-tx2">{t('每段对话都有自己的工作区')}</div>
           <div className="mt-1 text-xs leading-relaxed">
-            助手会把长文、报告、代码、数据结果写成文件放在这里,并且可以在原文上反复修改;你也可以把文件拖进来交给它处理。发出第一条消息后这里就会接上这段对话。
+            {t('助手会把长文、报告、代码、数据结果写成文件放在这里,并且可以在原文上反复修改;你也可以把文件拖进来交给它处理。发出第一条消息后这里就会接上这段对话。')}
           </div>
           <Starters />
         </div>
@@ -303,16 +304,16 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
         <>
           <div className="flex items-center justify-between border-b border-line bg-bg2 py-1.5 pl-4 pr-2">
             <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3">
-              {selected && <button className={headBtn} title="返回文件列表" onClick={() => setSelected(null)}><ChevronLeft size={15} /></button>}
-              <FolderOpen size={13} /> 工作区
+              {selected && <button className={headBtn} title={t('返回文件列表')} onClick={() => setSelected(null)}><ChevronLeft size={15} /></button>}
+              <FolderOpen size={13} /> {t('工作区')}
             </span>
             <div className="flex items-center gap-1">
               <input ref={fileRef} type="file" multiple hidden onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
-              <button className={headBtn} title="上传文件到工作区" onClick={() => fileRef.current?.click()} disabled={uploading}>
+              <button className={headBtn} title={t('上传文件到工作区')} onClick={() => fileRef.current?.click()} disabled={uploading}>
                 {uploading ? <Spinner className="h-3.5 w-3.5" /> : <Upload size={14} />}
               </button>
-              <button className={headBtn} title="刷新" onClick={reload}><RefreshCw size={13} /></button>
-              <button className={headBtn} title="关闭面板" onClick={close}><X size={15} /></button>
+              <button className={headBtn} title={t('刷新')} onClick={reload}><RefreshCw size={13} /></button>
+              <button className={headBtn} title={t('关闭面板')} onClick={close}><X size={15} /></button>
             </div>
           </div>
 
@@ -323,15 +324,15 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
               <div className="flex justify-center py-10 text-tx3"><Spinner /></div>
             ) : selected ? (
               <div className="p-4 text-sm text-tx2" role="status">
-                <p className="break-words">无法打开「{selected}」：文件不存在或已被删除。</p>
-                <button className="mt-3 cursor-pointer text-acc hover:underline" onClick={() => setSelected(null)}>返回文件列表</button>
+                <p className="break-words">{t('无法打开「{path}」：文件不存在或已被删除。', { path: selected })}</p>
+                <button className="mt-3 cursor-pointer text-acc hover:underline" onClick={() => setSelected(null)}>{t('返回文件列表')}</button>
               </div>
             ) : data.files.length === 0 ? (
               <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-sm text-tx3">
                 <FolderOpen size={26} className="text-tx3/70" />
-                <div className="text-tx2">工作区还是空的</div>
+                <div className="text-tx2">{t('工作区还是空的')}</div>
                 <div className="text-xs leading-relaxed">
-                  助手写出的文件会出现在这里并可以反复修改;也可以拖入或上传文件交给它处理。
+                  {t('助手写出的文件会出现在这里并可以反复修改;也可以拖入或上传文件交给它处理。')}
                 </div>
                 <Starters compact />
               </div>
@@ -346,10 +347,10 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
                         <span className="block text-[11px] tabular-nums text-tx3">{fmtBytes(f.size)} · {fmtWhen(f.mtime)}</span>
                       </span>
                     </button>
-                    <a className={`${headBtn} opacity-0 group-hover:opacity-100 max-md:opacity-100`} title="下载" href={fileUrl(chatId, f.path, true)}>
+                    <a className={`${headBtn} opacity-0 group-hover:opacity-100 max-md:opacity-100`} title={t('下载')} href={fileUrl(chatId, f.path, true)}>
                       <Download size={13} />
                     </a>
-                    <button className={`${headBtn} opacity-0 hover:!text-err group-hover:opacity-100 max-md:opacity-100`} title="删除" onClick={() => remove(f)}>
+                    <button className={`${headBtn} opacity-0 hover:!text-err group-hover:opacity-100 max-md:opacity-100`} title={t('删除')} onClick={() => remove(f)}>
                       <Trash2 size={13} />
                     </button>
                   </li>
@@ -360,8 +361,8 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
 
           {data && (
             <div className="flex items-center justify-between gap-3 border-t border-line bg-bg2/60 px-4 py-2 text-[11px] text-tx3">
-              <span className="tabular-nums">{data.files.length} 个文件 · {fmtBytes(data.bytes)} / {fmtBytes(data.limits.bytes)}</span>
-              <span>{data.enabled ? '助手可读写' : '智能工具已关闭,助手不会改动这些文件'}</span>
+              <span className="tabular-nums">{t('{count} 个文件 · {used} / {total}', { count: data.files.length, used: fmtBytes(data.bytes), total: fmtBytes(data.limits.bytes) })}</span>
+              <span>{data.enabled ? t('助手可读写') : t('智能工具已关闭,助手不会改动这些文件')}</span>
             </div>
           )}
         </>
@@ -369,7 +370,7 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
 
       {dragging && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-acc bg-acc/10 text-sm font-medium text-acc">
-          松开以上传到工作区
+          {t('松开以上传到工作区')}
         </div>
       )}
     </aside>

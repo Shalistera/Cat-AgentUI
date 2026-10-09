@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Code, Copy, Download, Eye } from 'lucide-react';
 import { useUi } from '../store';
+import { t } from '../i18n';
 
 /**
  * ```mermaid fences render as a diagram. The library is ~2 MB, so it loads on
@@ -80,11 +81,11 @@ export function MermaidBlock({ code, streaming }: { code: string; streaming: boo
           {ready && (
             <button className={headBtn} onClick={() => setShowCode((v) => !v)}>
               {showCode ? <Eye size={12} /> : <Code size={12} />}
-              {showCode ? '图表' : '代码'}
+              {showCode ? t('图表') : t('代码')}
             </button>
           )}
           {ready && (
-            <button className={headBtn} title="下载 SVG" onClick={download}>
+            <button className={headBtn} title={t('下载 SVG')} onClick={download}>
               <Download size={12} />
             </button>
           )}
@@ -98,7 +99,7 @@ export function MermaidBlock({ code, streaming }: { code: string; streaming: boo
             }}
           >
             {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
-            {copied ? '已复制' : '复制'}
+            {copied ? t('已复制') : t('复制')}
           </button>
         </div>
       </div>
@@ -112,7 +113,7 @@ export function MermaidBlock({ code, streaming }: { code: string; streaming: boo
           <pre><code>{code}</code></pre>
           {error && !streaming && (
             <div className="border-t border-line bg-bg2/60 px-3 py-1.5 text-[11px] leading-relaxed text-tx3">
-              图表未能渲染:{error.split('\n')[0].slice(0, 200)}
+              {t('图表未能渲染:{message}', { message: error.split('\n')[0].slice(0, 200) })}
             </div>
           )}
         </>

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type PointerEvent } from 'react';
 import { ChartNoAxesCombined, Table2 } from 'lucide-react';
 import type { LineComparison } from '../types';
+import { t } from '../i18n';
 import { formatAxisValue, formatChartValue, lineDomain, linePath, nearestXIndex, validLineComparison } from '../chartGeometry';
 
 const COLORS = Array.from({ length: 6 }, (_, i) => `var(--comparison-${i + 1})`);
@@ -57,18 +58,18 @@ function ValidatedLineChart({ data }: { data: LineComparison }) {
       <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
         <div className="min-w-0">
           <h3 id={titleId} className="break-words text-sm font-semibold text-tx">{data.title}</h3>
-          <p className="mt-1 text-xs text-tx3">{data.series.length} 条曲线 · 单位：{data.unit}</p>
+          <p className="mt-1 text-xs text-tx3">{t('{count} 条曲线 · 单位：{unit}', { count: data.series.length, unit: data.unit })}</p>
         </div>
         <button type="button" onClick={() => setTable((v) => !v)} aria-pressed={table}
           className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-tx2 hover:bg-bg2"
-          aria-label={table ? '切换为折线图' : '切换为数据表'}>
-          {table ? <ChartNoAxesCombined size={13} /> : <Table2 size={13} />}{table ? '图表' : '数据'}
+          aria-label={table ? t('切换为折线图') : t('切换为数据表')}>
+          {table ? <ChartNoAxesCombined size={13} /> : <Table2 size={13} />}{table ? t('图表') : t('数据')}
         </button>
       </div>
       {table ? (
         <div className="max-h-96 overflow-auto px-4 py-3">
           <table className="w-full text-left text-xs">
-            <caption className="sr-only">{data.title}，单位：{data.unit}，缺失值显示为破折号</caption>
+            <caption className="sr-only">{t('{title}，单位：{unit}，缺失值显示为破折号', { title: data.title, unit: data.unit })}</caption>
             <thead className="sticky top-0 bg-bg1"><tr className="border-b border-line text-tx3">
               <th scope="col" className="whitespace-nowrap py-2 pr-3 font-medium">{data.xLabel}</th>
               {data.series.map((series, i) => <th key={i} scope="col" className="min-w-24 px-2 py-2 text-right font-medium">{series.label}</th>)}
@@ -84,7 +85,7 @@ function ValidatedLineChart({ data }: { data: LineComparison }) {
           <div ref={container}>
             <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" tabIndex={0}
               className="block rounded outline-offset-2 focus-visible:outline-2 focus-visible:outline-acc"
-              aria-label={`${data.title}折线图。横轴：${data.xLabel}，纵轴单位：${data.unit}。左右方向键选择数据点，Home 和 End 跳到首尾。`}
+              aria-label={t('{title}折线图。横轴：{xLabel}，纵轴单位：{unit}。左右方向键选择数据点，Home 和 End 跳到首尾。', { title: data.title, xLabel: data.xLabel, unit: data.unit })}
               aria-describedby={readoutId}
               onPointerMove={select} onPointerDown={select}
               onFocus={() => setActive((v) => v ?? 0)}
@@ -115,9 +116,9 @@ function ValidatedLineChart({ data }: { data: LineComparison }) {
               </g>}
             </svg>
           </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-2 py-3" aria-label="曲线图例">
+          <div className="flex flex-wrap gap-x-4 gap-y-2 py-3" aria-label={t('曲线图例')}>
             {data.series.map((series, i) => <button key={i} type="button" aria-pressed={!hidden.has(i)}
-              disabled={visible.length === 1 && !hidden.has(i)} title={`${hidden.has(i) ? '显示' : '隐藏'}${series.label}`}
+              disabled={visible.length === 1 && !hidden.has(i)} title={t(hidden.has(i) ? '显示{label}' : '隐藏{label}', { label: series.label })}
               onClick={() => setHidden((prev) => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; })}
               className={`flex min-w-0 cursor-pointer items-center gap-2 text-left text-xs text-tx2 disabled:cursor-default ${hidden.has(i) ? 'opacity-40 line-through' : ''}`}>
               <span className="h-0.5 w-4 shrink-0" style={{ background: COLORS[i] }} />
@@ -125,8 +126,8 @@ function ValidatedLineChart({ data }: { data: LineComparison }) {
             </button>)}
           </div>
           <div id={readoutId} className="mb-3 rounded-md bg-bg2 px-3 py-2.5 text-xs text-tx2" aria-live="polite">
-            {selected === null ? <span className="text-tx3">悬停或点按查看数值，也可用左右方向键选择数据点。</span> : <>
-              <p className="mb-2 font-medium">{data.xLabel}：{labelX(selected!)}</p>
+            {selected === null ? <span className="text-tx3">{t('悬停或点按查看数值，也可用左右方向键选择数据点。')}</span> : <>
+              <p className="mb-2 font-medium">{t('{xLabel}：{value}', { xLabel: data.xLabel, value: labelX(selected!) })}</p>
               <dl className="grid gap-x-5 gap-y-1.5 sm:grid-cols-2">{visible.map((series) => <div key={series.index} className="flex min-w-0 items-baseline justify-between gap-3">
                 <dt className="min-w-0 break-words"><span style={{ color: COLORS[series.index] }}>● </span>{series.label}</dt>
                 <dd className="shrink-0 tabular-nums">{formatChartValue(series.values[selected!])}</dd>
@@ -135,7 +136,7 @@ function ValidatedLineChart({ data }: { data: LineComparison }) {
           </div>
         </div>
       )}
-      <p className="break-words border-t border-line bg-bg0 px-4 py-2.5 text-[11px] leading-relaxed text-tx3">数据来源：{data.source}</p>
+      <p className="break-words border-t border-line bg-bg0 px-4 py-2.5 text-[11px] leading-relaxed text-tx3">{t('数据来源：{source}', { source: data.source })}</p>
     </section>
   );
 }

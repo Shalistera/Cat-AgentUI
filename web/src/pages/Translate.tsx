@@ -10,6 +10,7 @@ import {
   SegmentedControl, Textarea, toast,
 } from '../components/ui';
 import type { TranslateConfig, TranslateScene, User } from '../types';
+import { t, tServer, locale } from '../i18n';
 
 /* 翻译工坊 — a Google-Translate-shaped pair of boxes. The user picks languages,
    默认/快速/思考, a 3-rung intensity for 思考, and a 场景 (a style sentence that
@@ -35,11 +36,11 @@ function loadPrefs(): Prefs {
 
 /** Built-in 场景: the id is what we persist, the text is what the model sees. */
 const BUILTIN_SCENES: { id: string; name: string; text: string }[] = [
-  { id: 'general', name: '通用', text: '' },
-  { id: 'formal', name: '正式书面', text: '正式书面文件:使用规范、正式的书面语,术语准确统一,句式完整,避免口语和缩略。' },
-  { id: 'sns', name: '社交对话', text: '社交平台 / 聊天对话:口语化、轻松自然,像母语者在聊天软件或社交媒体上的表达,可保留语气词和常见网络用语,但不要额外添加表情符号。' },
-  { id: 'tech', name: '技术文档', text: '技术文档:面向开发者,术语按行业惯例翻译或保留英文原文,代码、命令、参数名一律不译,表述精确简洁。' },
-  { id: 'business', name: '商务邮件', text: '商务邮件:礼貌、专业、简洁,符合目标语言的商务书信惯例与敬语习惯。' },
+  { id: 'general', name: t('通用'), text: '' },
+  { id: 'formal', name: t('正式书面'), text: t('正式书面文件:使用规范、正式的书面语,术语准确统一,句式完整,避免口语和缩略。') },
+  { id: 'sns', name: t('社交对话'), text: t('社交平台 / 聊天对话:口语化、轻松自然,像母语者在聊天软件或社交媒体上的表达,可保留语气词和常见网络用语,但不要额外添加表情符号。') },
+  { id: 'tech', name: t('技术文档'), text: t('技术文档:面向开发者,术语按行业惯例翻译或保留英文原文,代码、命令、参数名一律不译,表述精确简洁。') },
+  { id: 'business', name: t('商务邮件'), text: t('商务邮件:礼貌、专业、简洁,符合目标语言的商务书信惯例与敬语习惯。') },
 ];
 
 /** Model-reported ISO code → a code in our language list, when it has one. */
@@ -84,7 +85,7 @@ export default function Translate() {
   useEffect(() => {
     api.get<TranslateConfig>('/api/translate/config')
       .then(setCfg)
-      .catch((e) => setCfgError(e instanceof Error ? e.message : '加载翻译配置失败'));
+      .catch((e) => setCfgError(e instanceof Error ? tServer(e.message) : t('加载翻译配置失败')));
   }, []);
 
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
@@ -126,7 +127,7 @@ export default function Translate() {
       if (selectIndex !== null) patchPrefs({ scene: `custom:${selectIndex}` });
       else if (prefs.scene.startsWith('custom:')) patchPrefs({ scene: 'general' });
     } catch (e) {
-      toast(e instanceof Error ? e.message : '保存场景失败', 'err');
+      toast(e instanceof Error ? tServer(e.message) : t('保存场景失败'), 'err');
     } finally {
       setSavingScene(false);
     }
@@ -136,8 +137,8 @@ export default function Translate() {
     if (!sceneEditor) return;
     const name = sceneEditor.name.trim();
     const text = sceneEditor.text.trim();
-    if (!name) { toast('请填写场景名称', 'err'); return; }
-    if (!text) { toast('请描述这个场景希望的语气或用词', 'err'); return; }
+    if (!name) { toast(t('请填写场景名称'), 'err'); return; }
+    if (!text) { toast(t('请描述这个场景希望的语气或用词'), 'err'); return; }
     const next = [...customScenes];
     const idx = sceneEditor.index ?? next.length;
     next[idx] = { name, text };
@@ -184,12 +185,12 @@ export default function Translate() {
         else if (event === 'detected') setDetected(String(data.lang ?? ''));
         else if (event === 'thinking') setThinking(true);
         else if (event === 'usage') setStats({ totalTokens: data.totalTokens ?? 0, durationMs: data.durationMs ?? 0 });
-        else if (event === 'error') setError(data.message ?? '翻译失败');
+        else if (event === 'error') setError(data.message ? tServer(String(data.message)) : t('翻译失败'));
         else if (event === 'done') status = data.status ?? 'done';
       }, ctrl.signal);
-      if (status === 'stopped' && !ctrl.signal.aborted) toast('输出已达上限,译文可能不完整', 'err');
+      if (status === 'stopped' && !ctrl.signal.aborted) toast(t('输出已达上限,译文可能不完整'), 'err');
     } catch (e) {
-      if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : '翻译失败');
+      if (!ctrl.signal.aborted) setError(e instanceof Error ? tServer(e.message) : t('翻译失败'));
     } finally {
       if (abortRef.current === ctrl) { setRunning(false); abortRef.current = null; }
     }
@@ -216,7 +217,7 @@ export default function Translate() {
   }
 
   const detectedLabel = detected
-    ? (languages[normalizeDetected(detected, languages, prefs.target)] ?? detected.toUpperCase())
+    ? (tServer(languages[normalizeDetected(detected, languages, prefs.target)] ?? '') || detected.toUpperCase())
     : null;
   const canRun = !!text.trim() && modeAvailable && !running;
   const maxChars = cfg?.maxChars ?? 20_000;
@@ -227,20 +228,20 @@ export default function Translate() {
   const showCompare = compare && !!result;
 
   const runControl = running ? (
-    <Button variant="outline" size="sm" onClick={stop}><Square size={11} fill="currentColor" />停止</Button>
+    <Button variant="outline" size="sm" onClick={stop}><Square size={11} fill="currentColor" />{t('停止')}</Button>
   ) : (
     <Button variant="primary" size="sm" disabled={!canRun} onClick={() => void run(text)}>
-      {prefs.mode === 'default' ? <Languages size={13} /> : prefs.mode === 'fast' ? <Zap size={13} /> : <Brain size={13} />}翻译
+      {prefs.mode === 'default' ? <Languages size={13} /> : prefs.mode === 'fast' ? <Zap size={13} /> : <Brain size={13} />}{t('翻译')}
     </Button>
   );
   const copyBtn = (
-    <Button variant="ghost" size="sm" title="复制译文" onClick={copy}>
+    <Button variant="ghost" size="sm" title={t('复制译文')} onClick={copy}>
       {copied ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
     </Button>
   );
   const statsLine = (
     <>
-      <span>{prefs.mode === 'default' ? '默认 · 管理员预设' : prefs.mode === 'fast' ? '快速模式' : `思考模式 · 强度${['', '低', '中', '高'][prefs.level]}`}{activeScene.id !== 'general' ? ` · ${activeScene.name}` : ''}</span>
+      <span>{prefs.mode === 'default' ? t('默认 · 管理员预设') : prefs.mode === 'fast' ? t('快速模式') : t('思考模式 · 强度{level}', { level: ['', t('低'), t('中'), t('高')][prefs.level] })}{activeScene.id !== 'general' ? ` · ${activeScene.name}` : ''}</span>
       {stats && <span className="tabular-nums">{fmtTokens(stats.totalTokens)} tokens · {fmtDuration(stats.durationMs)}</span>}
     </>
   );
@@ -252,10 +253,10 @@ export default function Translate() {
   return (
     <div className="contents">
       <PageHeader
-        title="翻译工坊"
-        subtitle="左边输入,点「翻译」,右边出译文"
+        title={t('翻译工坊')}
+        subtitle={t('左边输入,点「翻译」,右边出译文')}
         left={!sidebarOpen && (
-          <Button variant="ghost" size="icon" title="展开侧栏" onClick={() => setSidebarOpen(true)}>
+          <Button variant="ghost" size="icon" title={t('展开侧栏')} onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
@@ -268,15 +269,15 @@ export default function Translate() {
           )}
           {cfgError && (
             <Card flush>
-              <EmptyState icon={<Languages size={22} />} title="翻译工坊暂不可用" hint={cfgError} />
+              <EmptyState icon={<Languages size={22} />} title={t('翻译工坊暂不可用')} hint={cfgError} />
             </Card>
           )}
           {cfg && !cfg.default && !cfg.fast && !cfg.think && (
             <Card flush>
               <EmptyState
                 icon={<Languages size={22} />}
-                title="管理员尚未配置翻译模型"
-                hint="请管理员在「管理后台 → 应用设置 → 翻译工坊」中为默认、快速或思考模式指定至少一个模型。"
+                title={t('管理员尚未配置翻译模型')}
+                hint={t('请管理员在「管理后台 → 应用设置 → 翻译工坊」中为默认、快速或思考模式指定至少一个模型。')}
               />
             </Card>
           )}
@@ -288,14 +289,14 @@ export default function Translate() {
                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <div className="min-w-0 flex-1 sm:w-36 sm:flex-none"><Select value={prefs.source} onChange={(e) => patchPrefs({ source: e.target.value })}>
-                      <option value="auto">{detectedLabel && prefs.source === 'auto' ? `检测到:${detectedLabel}` : '自动检测'}</option>
-                      {langEntries.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                      <option value="auto">{detectedLabel && prefs.source === 'auto' ? t('检测到:{lang}', { lang: detectedLabel }) : t('自动检测')}</option>
+                      {langEntries.map(([code, name]) => <option key={code} value={code}>{tServer(name)}</option>)}
                     </Select></div>
-                    <Button variant="ghost" size="iconSm" title="交换语言(译文回填为原文)" onClick={swap}>
+                    <Button variant="ghost" size="iconSm" title={t('交换语言(译文回填为原文)')} onClick={swap}>
                       <ArrowRightLeft size={14} />
                     </Button>
                     <div className="min-w-0 flex-1 sm:w-36 sm:flex-none"><Select value={prefs.target} onChange={(e) => patchPrefs({ target: e.target.value })}>
-                      {langEntries.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                      {langEntries.map(([code, name]) => <option key={code} value={code}>{tServer(name)}</option>)}
                     </Select></div>
                   </div>
 
@@ -303,37 +304,37 @@ export default function Translate() {
                     <SegmentedControl<Mode>
                       value={prefs.mode}
                       onChange={(m) => {
-                        if (m === 'default' && !cfg.default) { toast('管理员尚未配置默认档的模型', 'err'); return; }
-                        if (m === 'fast' && !cfg.fast) { toast('管理员尚未配置快速模式的模型', 'err'); return; }
-                        if (m === 'think' && !cfg.think) { toast('管理员尚未配置思考模式的模型', 'err'); return; }
+                        if (m === 'default' && !cfg.default) { toast(t('管理员尚未配置默认档的模型'), 'err'); return; }
+                        if (m === 'fast' && !cfg.fast) { toast(t('管理员尚未配置快速模式的模型'), 'err'); return; }
+                        if (m === 'think' && !cfg.think) { toast(t('管理员尚未配置思考模式的模型'), 'err'); return; }
                         patchPrefs({ mode: m });
                       }}
                       options={[
-                        { value: 'default', label: '默认' },
-                        { value: 'fast', label: '快速' },
-                        { value: 'think', label: '思考' },
+                        { value: 'default', label: t('默认') },
+                        { value: 'fast', label: t('快速') },
+                        { value: 'think', label: t('思考') },
                       ]}
                     />
-                    {prefs.mode === 'default' && <span className="text-xs text-tx3">使用管理员预设</span>}
-                    {prefs.mode === 'think' && <div className="flex items-center gap-1.5" title="思考强度">
-                      <span className="text-xs text-tx3">强度</span>
+                    {prefs.mode === 'default' && <span className="text-xs text-tx3">{t('使用管理员预设')}</span>}
+                    {prefs.mode === 'think' && <div className="flex items-center gap-1.5" title={t('思考强度')}>
+                      <span className="text-xs text-tx3">{t('强度')}</span>
                       <SegmentedControl<Level>
                         value={prefs.level}
                         onChange={(l) => patchPrefs({ level: l })}
-                        options={[{ value: 1, label: '低' }, { value: 2, label: '中' }, { value: 3, label: '高' }]}
+                        options={[{ value: 1, label: t('低') }, { value: 2, label: t('中') }, { value: 3, label: t('高') }]}
                       />
                     </div>}
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="mr-1 text-xs text-tx3">场景</span>
+                  <span className="mr-1 text-xs text-tx3">{t('场景')}</span>
                   {scenes.map((s) => {
                     const active = s.id === activeScene.id;
                     const customIndex = s.id.startsWith('custom:') ? Number(s.id.slice(7)) : null;
                     return (
                       <button
-                        key={s.id} type="button" className={chip(active)} title={s.text || '不附加风格要求'}
+                        key={s.id} type="button" className={chip(active)} title={s.text || t('不附加风格要求')}
                         onClick={() => {
                           if (active && customIndex !== null) {
                             setSceneEditor({ index: customIndex, name: s.name, text: s.text });
@@ -348,10 +349,10 @@ export default function Translate() {
                   {customScenes.length < MAX_CUSTOM_SCENES && (
                     <button
                       type="button" className={`${chip(false)} border-dashed`}
-                      title={`自定义场景(最多 ${MAX_CUSTOM_SCENES} 个)`}
+                      title={t('自定义场景(最多 {max} 个)', { max: MAX_CUSTOM_SCENES })}
                       onClick={() => setSceneEditor({ index: null, name: '', text: '' })}
                     >
-                      <Plus size={12} />自定义
+                      <Plus size={12} />{t('自定义')}
                     </button>
                   )}
                 </div>
@@ -362,12 +363,12 @@ export default function Translate() {
                   Phones keep the stacked, auto-growing layout. */}
               <div className={`grid gap-4 md:grid-cols-2 ${showCompare ? 'md:hidden' : ''}`}>
                 <Card
-                  title="原文"
+                  title={t('原文')}
                   flush
                   actions={(
                     <>
                       {text && (
-                        <Button variant="ghost" size="sm" title="清空" onClick={() => { setText(''); stop(); setResult(''); setDetected(null); setError(null); setStats(null); }}>
+                        <Button variant="ghost" size="sm" title={t('清空')} onClick={() => { setText(''); stop(); setResult(''); setDetected(null); setError(null); setStats(null); }}>
                           <X size={14} />
                         </Button>
                       )}
@@ -381,25 +382,25 @@ export default function Translate() {
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); if (canRun) void run(text); }
                     }}
-                    placeholder="输入或粘贴文本,然后点上方「翻译」(Ctrl + Enter)…"
+                    placeholder={t('输入或粘贴文本,然后点上方「翻译」(Ctrl + Enter)…')}
                     rows={12}
                     className="block min-h-[16rem] w-full resize-y bg-transparent px-4 py-3 text-[15px] leading-relaxed text-tx outline-none placeholder:text-tx3 md:h-[calc(100dvh-26rem)] md:min-h-[18rem] md:resize-none"
                     autoFocus
                   />
                   <div className="flex h-10 items-center justify-end border-t border-line px-4">
-                    <span className="text-xs tabular-nums text-tx3">{text.length.toLocaleString()} / {maxChars.toLocaleString()}</span>
+                    <span className="text-xs tabular-nums text-tx3">{text.length.toLocaleString(locale)} / {maxChars.toLocaleString(locale)}</span>
                   </div>
                 </Card>
 
                 <Card
-                  title="译文"
+                  title={t('译文')}
                   flush
                   actions={result ? (
                     <>
                       {copyBtn}
                       <span className="max-md:hidden">
-                        <Button variant="ghost" size="sm" title="逐段对照阅读原文与译文" onClick={() => setCompare(true)}>
-                          <BookOpenText size={14} />对照
+                        <Button variant="ghost" size="sm" title={t('逐段对照阅读原文与译文')} onClick={() => setCompare(true)}>
+                          <BookOpenText size={14} />{t('对照')}
                         </Button>
                       </span>
                     </>
@@ -408,16 +409,16 @@ export default function Translate() {
                   <div className="min-h-[16rem] px-4 py-3 md:h-[calc(100dvh-26rem)] md:min-h-[18rem] md:overflow-y-auto">
                     {error && (
                       <div className="mb-3 whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
-                        翻译失败:{error}
+                        {t('翻译失败:{error}', { error })}
                       </div>
                     )}
                     {running && !result && !error && (
                       <div className="flex items-center gap-2 py-2 text-sm text-tx3">
-                        <Spinner className="h-4 w-4" />{thinking ? '思考中…' : '翻译中…'}
+                        <Spinner className="h-4 w-4" />{thinking ? t('思考中…') : t('翻译中…')}
                       </div>
                     )}
                     {!running && !result && !error && (
-                      <p className="py-2 text-sm text-tx3">译文会显示在这里</p>
+                      <p className="py-2 text-sm text-tx3">{t('译文会显示在这里')}</p>
                     )}
                     {result && (
                       <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-tx">{result}</div>
@@ -433,27 +434,27 @@ export default function Translate() {
                   paragraph i of the 译文, hover highlights the pair. */}
               {showCompare && (
                 <Card
-                  title="对照阅读"
-                  desc={detectedLabel && prefs.source === 'auto' ? `检测到源语言:${detectedLabel}` : undefined}
+                  title={t('对照阅读')}
+                  desc={detectedLabel && prefs.source === 'auto' ? t('检测到源语言:{lang}', { lang: detectedLabel }) : undefined}
                   flush
                   className="hidden md:block"
                   actions={(
                     <>
                       {copyBtn}
-                      <Button variant="ghost" size="sm" title="返回左右分栏,可继续编辑原文" onClick={() => setCompare(false)}>
-                        <Columns2 size={14} />分栏
+                      <Button variant="ghost" size="sm" title={t('返回左右分栏,可继续编辑原文')} onClick={() => setCompare(false)}>
+                        <Columns2 size={14} />{t('分栏')}
                       </Button>
                     </>
                   )}
                 >
                   {error && (
                     <div className="mx-4 mt-3 whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
-                      翻译失败:{error}
+                      {t('翻译失败:{error}', { error })}
                     </div>
                   )}
                   {!compareData.aligned && !running && (
                     <div className="border-b border-line px-4 py-1.5 text-xs text-tx3">
-                      原文与译文的段落数不一致,逐段对照可能错位;悬停高亮仅供参考。
+                      {t('原文与译文的段落数不一致,逐段对照可能错位;悬停高亮仅供参考。')}
                     </div>
                   )}
                   <div className="py-1">
@@ -471,7 +472,7 @@ export default function Translate() {
               )}
 
               <p className="text-xs leading-relaxed text-tx3">
-                场景只影响译文的语气和用词,不改变翻译规则。翻译用量计入你的 token 配额;思考模式更准确但更慢、更贵。
+                {t('场景只影响译文的语气和用词,不改变翻译规则。翻译用量计入你的 token 配额;思考模式更准确但更慢、更贵。')}
               </p>
             </>
           )}
@@ -481,28 +482,28 @@ export default function Translate() {
       <Modal
         open={!!sceneEditor}
         onClose={() => setSceneEditor(null)}
-        title={sceneEditor?.index === null ? '新建自定义场景' : '编辑自定义场景'}
-        desc="用一两句话描述译文应有的语气、用词或读者。这段话会作为风格偏好加入翻译指令。"
+        title={sceneEditor?.index === null ? t('新建自定义场景') : t('编辑自定义场景')}
+        desc={t('用一两句话描述译文应有的语气、用词或读者。这段话会作为风格偏好加入翻译指令。')}
       >
         {sceneEditor && (
           <form onSubmit={(e) => { e.preventDefault(); submitScene(); }} className="space-y-4">
-            <Field label="场景名称" hint="显示在场景标签上,20 字以内">
+            <Field label={t('场景名称')} hint={t('显示在场景标签上,20 字以内')}>
               <Input value={sceneEditor.name} maxLength={20} autoFocus
                 onChange={(e) => setSceneEditor({ ...sceneEditor, name: e.target.value })}
-                placeholder="例如:给客户的周报" />
+                placeholder={t('例如:给客户的周报')} />
             </Field>
-            <Field label="风格描述" hint={`${sceneEditor.text.length} / ${cfg?.maxSceneChars ?? 300}`}>
+            <Field label={t('风格描述')} hint={`${sceneEditor.text.length} / ${cfg?.maxSceneChars ?? 300}`}>
               <Textarea rows={4} value={sceneEditor.text} maxLength={cfg?.maxSceneChars ?? 300}
                 onChange={(e) => setSceneEditor({ ...sceneEditor, text: e.target.value })}
-                placeholder="例如:面向日本客户的周报,用敬体(です・ます),数据部分保留阿拉伯数字,语气稳重不夸张。" />
+                placeholder={t('例如:面向日本客户的周报,用敬体(です・ます),数据部分保留阿拉伯数字,语气稳重不夸张。')} />
             </Field>
             <ModalActions>
               {sceneEditor.index !== null && (
-                <Button variant="ghost" className="mr-auto text-err" disabled={savingScene} onClick={deleteScene}>删除</Button>
+                <Button variant="ghost" className="mr-auto text-err" disabled={savingScene} onClick={deleteScene}>{t('删除')}</Button>
               )}
-              <Button variant="outline" onClick={() => setSceneEditor(null)}>取消</Button>
+              <Button variant="outline" onClick={() => setSceneEditor(null)}>{t('取消')}</Button>
               <Button variant="primary" disabled={savingScene} onClick={submitScene}>
-                {savingScene && <Spinner className="h-3.5 w-3.5" />}保存
+                {savingScene && <Spinner className="h-3.5 w-3.5" />}{t('保存')}
               </Button>
             </ModalActions>
           </form>

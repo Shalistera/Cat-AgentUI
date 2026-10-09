@@ -11,6 +11,7 @@ import {
   HAS_WIDE, missingChunks, pieces, removeTag, replaceRanges, tagKey, tagSet, textStart, tidyPrompt, toHalfWidth, tokenAt, weightAt,
   type Analysis, type Edit, type TagGroup, type TagHistory, type TagStat,
 } from '../naiTags';
+import { t, tServer } from '../i18n';
 
 /* ---------------------------------------------------------------------------
    Tag 模式 editing. The prompt stays a plain textarea — what's typed is what
@@ -148,21 +149,21 @@ function Suggestions({ id, items, active, above, onPick }: {
           onMouseDown={(e) => e.preventDefault()} onClick={() => onPick(item)}
           className={`flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs ${i === active ? 'bg-acc/10 text-tx' : 'text-tx2 hover:bg-bg2'}`}>
           {item.kind === 'tag' ? <>
-            <span className="flex w-3 shrink-0 justify-center text-tx3">{item.mine && <History size={12} aria-label="用过" />}</span>
+            <span className="flex w-3 shrink-0 justify-center text-tx3">{item.mine && <History size={12} aria-label={t('用过')} />}</span>
             <span className="min-w-0 truncate font-mono">{item.tag}</span>
             {item.zh && <span className="shrink-0 text-tx3">{item.zh}</span>}
-            <span className="ml-auto shrink-0 pl-2 text-[11px] tabular-nums text-tx3">{item.have ? '已添加' : fmtCount(item.count)}</span>
+            <span className="ml-auto shrink-0 pl-2 text-[11px] tabular-nums text-tx3">{item.have ? t('已添加') : fmtCount(item.count)}</span>
           </> : item.kind === 'group' ? <>
             <BookMarked size={12} className="shrink-0 text-acc" />
             <span className="shrink-0 font-medium">{item.group.name}</span>
             <span className="min-w-0 truncate font-mono text-tx3">{item.group.tags}</span>
           </> : <>
             <Languages size={12} className="shrink-0 text-acc" />
-            <span className="min-w-0 truncate">用 AI 把「{item.text}」转成 tag</span>
+            <span className="min-w-0 truncate">{t('用 AI 把「{text}」转成 tag', { text: item.text })}</span>
           </>}
         </button>
       ))}
-      <div className="truncate border-t border-line px-3 pt-1 text-[11px] text-tx3">↑↓ 选择 · Enter 填入 · Esc 关闭</div>
+      <div className="truncate border-t border-line px-3 pt-1 text-[11px] text-tx3">{t('↑↓ 选择 · Enter 填入 · Esc 关闭')}</div>
     </div>
   );
 }
@@ -309,7 +310,7 @@ export function TagTextarea({ value, onChange, suggest, textareaRef, tools = 'no
     if (!el) return;
     const cur = el.value;
     const next = cur.slice(0, edit.start) + edit.insert + cur.slice(edit.end);
-    if (max !== undefined && next.length > max) { toast(`内容超出 ${max} 字的上限`, 'err'); return; }
+    if (max !== undefined && next.length > max) { toast(t('内容超出 {max} 字的上限', { max }), 'err'); return; }
     el.focus({ preventScroll: true });
     el.setSelectionRange(edit.start, edit.end);
     let done = false;
@@ -350,7 +351,7 @@ export function TagTextarea({ value, onChange, suggest, textareaRef, tools = 'no
     const atEnd = end >= v.length || v[end] === '\n';
     // A group brings only the tags the prompt doesn't have yet.
     const insert = item.kind === 'group' ? missingChunks(v.slice(0, start) + v.slice(end), item.group.tags).join(', ') : item.tag;
-    if (item.kind === 'group' && !insert) toast('这组 tag 都已经在了', 'info');
+    if (item.kind === 'group' && !insert) toast(t('这组 tag 都已经在了'), 'info');
     const text = insert && atEnd ? `${insert}, ` : insert;
     apply({ start, end, insert: text, selStart: start + text.length, selEnd: start + text.length });
   }
@@ -365,7 +366,7 @@ export function TagTextarea({ value, onChange, suggest, textareaRef, tools = 'no
     if (!el) return;
     const [a, b] = selection();
     const r = emphasize(el.value, a, b, dir);
-    if (typeof r === 'string') { toast(r, 'info'); return; }
+    if (typeof r === 'string') { toast(tServer(r), 'info'); return; }
     apply(r);
   }
 
@@ -373,16 +374,16 @@ export function TagTextarea({ value, onChange, suggest, textareaRef, tools = 'no
     const el = local.current;
     if (!el) return;
     const r = tidyPrompt(el.value);
-    if (r.text === el.value) { toast('格式已经很整齐了', 'info'); return; }
+    if (r.text === el.value) { toast(t('格式已经很整齐了'), 'info'); return; }
     apply(diffEdit(el.value, r.text));
-    toast(r.removed ? `已整理，去掉 ${r.removed} 个重复的 tag` : '已整理格式', 'ok');
+    toast(r.removed ? t('已整理，去掉 {n} 个重复的 tag', { n: r.removed }) : t('已整理格式'), 'ok');
   }
 
   async function convert(ranges: { start: number; end: number; text: string }[]) {
     const el = local.current;
     if (!el || !env.convert || converting || !ranges.length) return;
     const items = [...new Set(ranges.map((r) => r.text.trim()))];
-    if (items.length > 40) { toast('中文片段太多，一次最多转换 40 段', 'err'); return; }
+    if (items.length > 40) { toast(t('中文片段太多，一次最多转换 40 段'), 'err'); return; }
     const snapshot = el.value;
     const ctrl = new AbortController();
     convertAbort.current = ctrl;
@@ -395,11 +396,11 @@ export function TagTextarea({ value, onChange, suggest, textareaRef, tools = 'no
       flushSync(() => setConverting(false));
       if (local.current?.value !== snapshot) return;
       const r = replaceRanges(snapshot, ranges, new Map(items.map((t, i) => [t, out[i] ?? ''])));
-      if (!r.replaced) { toast('没有可以替换的内容', 'info'); return; }
+      if (!r.replaced) { toast(t('没有可以替换的内容'), 'info'); return; }
       apply(diffEdit(snapshot, r.text));
-      toast(`已转成 tag（${r.replaced} 处）`, 'ok');
+      toast(t('已转成 tag（{n} 处）', { n: r.replaced }), 'ok');
     } catch (e) {
-      if (!ctrl.signal.aborted) toast(e instanceof Error ? e.message : '转换失败', 'err');
+      if (!ctrl.signal.aborted) toast(e instanceof Error ? tServer(e.message) : t('转换失败'), 'err');
     } finally {
       if (convertAbort.current === ctrl) { convertAbort.current = null; setConverting(false); }
     }
@@ -491,17 +492,17 @@ export function TagTextarea({ value, onChange, suggest, textareaRef, tools = 'no
         <div role="status" className="flex items-center gap-2 rounded-md bg-warn/10 py-1 pl-2.5 pr-1 text-xs text-warn">
           <Languages size={13} className="shrink-0" />
           <span className="min-w-0 flex-1 leading-relaxed">
-            {converting ? 'AI 正在把中文换成 tag…' : tools === 'compact' ? `有 ${cjkElsewhere} 处中文` : `有 ${cjkElsewhere} 处中文，NovelAI 只认英文 tag`}
+            {converting ? t('AI 正在把中文换成 tag…') : tools === 'compact' ? t('有 {n} 处中文', { n: cjkElsewhere }) : t('有 {n} 处中文，NovelAI 只认英文 tag', { n: cjkElsewhere })}
           </span>
           {converting ? <>
             <Spinner className="h-3.5 w-3.5 shrink-0" />
-            <Button size="xs" variant="ghost" onClick={() => { convertAbort.current?.abort(); convertAbort.current = null; setConverting(false); }}>取消</Button>
+            <Button size="xs" variant="ghost" onClick={() => { convertAbort.current?.abort(); convertAbort.current = null; setConverting(false); }}>{t('取消')}</Button>
           </> : env.convert ? (
             <Button size="xs" variant="outline" onMouseDown={(e) => e.preventDefault()} onClick={() => void convert(cjkPieces(local.current?.value ?? value))}
-              title="用提示词助手把中文片段换成英文 tag，其余内容不变（消耗文字模型额度）">
-              转成 tag
+              title={t('用提示词助手把中文片段换成英文 tag，其余内容不变（消耗文字模型额度）')}>
+              {t('转成 tag')}
             </Button>
-          ) : <span className="shrink-0 pr-1.5 text-tx3">请改用英文</span>}
+          ) : <span className="shrink-0 pr-1.5 text-tx3">{t('请改用英文')}</span>}
         </div>
       )}
     </div>
@@ -524,23 +525,23 @@ function TagTools({ compact, value, analysis, caretWeight, busy, pool, onStep, o
   const size = compact ? 'iconSm' : 'xs';
   const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
   let status: ReactNode = null;
-  if (analysis.errors.length) status = <span className="text-err" title="多余或没闭合的括号已用红色标出">括号没配对</span>;
-  else if (stats.dupes) status = <span className="text-warn" title="点「整理」可以去掉">{stats.dupes} 个重复</span>;
-  else if (Math.abs(caretWeight - 1) > 1e-9) status = <span className="font-mono text-acc" title="光标处 tag 的实际权重：每层 { } ×1.05，每层 [ ] ÷1.05">×{fmtWeight(caretWeight)}</span>;
-  else if (!compact && stats.count) status = <span>{stats.count} 个 tag</span>;
+  if (analysis.errors.length) status = <span className="text-err" title={t('多余或没闭合的括号已用红色标出')}>{t('括号没配对')}</span>;
+  else if (stats.dupes) status = <span className="text-warn" title={t('点「整理」可以去掉')}>{t('{n} 个重复', { n: stats.dupes })}</span>;
+  else if (Math.abs(caretWeight - 1) > 1e-9) status = <span className="font-mono text-acc" title={t('光标处 tag 的实际权重：每层 { } ×1.05，每层 [ ] ÷1.05')}>×{fmtWeight(caretWeight)}</span>;
+  else if (!compact && stats.count) status = <span>{t('{n} 个 tag', { n: stats.count })}</span>;
   return (
-    <div role="toolbar" aria-label="Tag 工具" className={`flex items-center gap-0.5 ${compact ? '-ml-1.5' : '-ml-2'}`}>
+    <div role="toolbar" aria-label={t('Tag 工具')} className={`flex items-center gap-0.5 ${compact ? '-ml-1.5' : '-ml-2'}`}>
       <Button size={size} variant="ghost" onMouseDown={keep} onClick={() => onStep(1)} disabled={busy}
-        aria-label="加强" title={`加强：给光标所在或选中的 tag 加一层 { }（${mod} + ↑）`}>
-        <Braces size={14} />{!compact && '加强'}
+        aria-label={t('加强')} title={t('加强：给光标所在或选中的 tag 加一层 { }（{mod} + ↑）', { mod })}>
+        <Braces size={14} />{!compact && t('加强')}
       </Button>
       <Button size={size} variant="ghost" onMouseDown={keep} onClick={() => onStep(-1)} disabled={busy}
-        aria-label="减弱" title={`减弱：加一层 [ ]，或去掉一层 { }（${mod} + ↓）`}>
-        <Brackets size={14} />{!compact && '减弱'}
+        aria-label={t('减弱')} title={t('减弱：加一层 [ ]，或去掉一层 { }（{mod} + ↓）', { mod })}>
+        <Brackets size={14} />{!compact && t('减弱')}
       </Button>
       <Button size={size} variant="ghost" onMouseDown={keep} onClick={onTidy} disabled={busy || !value.trim()}
-        aria-label="整理" title="整理：统一成英文逗号和空格，下划线换成空格，去掉重复的 tag">
-        <WandSparkles size={14} />{!compact && '整理'}
+        aria-label={t('整理')} title={t('整理：统一成英文逗号和空格，下划线换成空格，去掉重复的 tag')}>
+        <WandSparkles size={14} />{!compact && t('整理')}
       </Button>
       <TagLibrary compact={compact} value={value} pool={pool} onReplace={onReplace} selectedText={selectedText} disabled={busy} />
       <span className="ml-auto min-w-0 truncate pl-2 text-[11px] tabular-nums text-tx3">{status}</span>
@@ -556,7 +557,7 @@ function Chip({ tag, zh, on, zhFirst, title, onClick }: {
   tag: string; zh?: string; on: boolean; zhFirst?: boolean; title?: string; onClick(): void;
 }) {
   return (
-    <button type="button" aria-pressed={on} title={title ?? (on ? '已在提示词中，点一下移除' : '点一下加入')} onClick={onClick}
+    <button type="button" aria-pressed={on} title={title ?? (on ? t('已在提示词中，点一下移除') : t('点一下加入'))} onClick={onClick}
       className={`inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors ${
         on ? 'border-acc bg-acc/10 text-tx' : 'border-line text-tx2 hover:border-line2 hover:text-tx'}`}>
       {on && <Check size={11} className="shrink-0 text-acc" />}
@@ -609,41 +610,41 @@ function TagLibrary({ compact, value, pool, onReplace, selectedText, disabled }:
   }
   function insertGroup(g: TagGroup) {
     const r = addMissing(value, g.tags);
-    if (!r.added) { toast('这组 tag 都已经在了', 'info'); return; }
+    if (!r.added) { toast(t('这组 tag 都已经在了'), 'info'); return; }
     onReplace(r.text);
-    toast(`已加入 ${r.added} 个 tag`, 'ok');
+    toast(t('已加入 {n} 个 tag', { n: r.added }), 'ok');
   }
   function save() {
     const n = name.trim();
     const text = (toSave || value.slice(0, textStart(value))).replace(/^[\s,]+|[\s,]+$/g, '').slice(0, 2000);
-    if (!text) { toast('先写一些 tag 再收藏', 'err'); return; }
-    if (!n) { toast('给这组 tag 起个名字', 'err'); return; }
-    if (!env.groups.some((g) => g.name === n) && env.groups.length >= 60) { toast('最多收藏 60 组', 'err'); return; }
+    if (!text) { toast(t('先写一些 tag 再收藏'), 'err'); return; }
+    if (!n) { toast(t('给这组 tag 起个名字'), 'err'); return; }
+    if (!env.groups.some((g) => g.name === n) && env.groups.length >= 60) { toast(t('最多收藏 60 组'), 'err'); return; }
     env.onGroups([...env.groups.filter((g) => g.name !== n), { name: n, tags: text }]);
     setName('');
-    toast(`已收藏「${n}」`, 'ok');
+    toast(t('已收藏「{name}」', { name: n }), 'ok');
   }
 
-  const mineShown = useMemo(() => mine.filter((t) => !key || t.tag.includes(key) || !!lib?.zhLabel(t.tag)?.includes(key)).slice(0, 80), [mine, key, lib]);
+  const mineShown = useMemo(() => mine.filter((s) => !key || s.tag.includes(key) || !!lib?.zhLabel(s.tag)?.includes(key)).slice(0, 80), [mine, key, lib]);
   const libShown = useMemo(() => (!lib ? [] : key ? lib.searchLibrary(key, 60) : lib.TAG_LIBRARY[cat]?.tags ?? []), [lib, key, cat]);
   const groupsShown = env.groups.filter((g) => !key || g.name.toLowerCase().includes(key) || g.tags.toLowerCase().includes(key));
 
   return (
     <Popover open={open} setOpen={show} width="w-[22rem]" trigger={
-      <Button size={compact ? 'iconSm' : 'xs'} variant="ghost" aria-label="tag 库" aria-expanded={open} disabled={disabled}
-        title="tag 库：用过的 tag、收藏的组合和常用词库，点一下加入">
-        <Library size={14} />{!compact && 'tag 库'}
+      <Button size={compact ? 'iconSm' : 'xs'} variant="ghost" aria-label={t('tag 库')} aria-expanded={open} disabled={disabled}
+        title={t('tag 库：用过的 tag、收藏的组合和常用词库，点一下加入')}>
+        <Library size={14} />{!compact && t('tag 库')}
       </Button>
     }>
       <div className="flex max-h-[inherit] flex-col" onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } }}>
         <div className="space-y-2 border-b border-line p-2.5">
           <div className="relative">
             <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tx3" />
-            <Input uiSize="sm" aria-label="搜索 tag" autoFocus={finePointer()} value={q} maxLength={60}
-              placeholder="搜索 tag 或中文，如 双马尾" className="pl-8" onChange={(e) => setQ(e.target.value)} />
+            <Input uiSize="sm" aria-label={t('搜索 tag')} autoFocus={finePointer()} value={q} maxLength={60}
+              placeholder={t('搜索 tag 或中文，如 双马尾')} className="pl-8" onChange={(e) => setQ(e.target.value)} />
           </div>
-          <SegmentedControl<Tab> value={tab} onChange={(t) => { tabChosen.current = true; setTab(t); }} options={[
-            { value: 'mine', label: '常用' }, { value: 'saved', label: `收藏${env.groups.length ? ` ${env.groups.length}` : ''}` }, { value: 'lib', label: '词库' },
+          <SegmentedControl<Tab> value={tab} onChange={(next) => { tabChosen.current = true; setTab(next); }} options={[
+            { value: 'mine', label: t('常用') }, { value: 'saved', label: `${t('收藏@@saved')}${env.groups.length ? ` ${env.groups.length}` : ''}` }, { value: 'lib', label: t('词库') },
           ]} />
         </div>
         {tab === 'lib' && !key && lib && (
@@ -659,34 +660,34 @@ function TagLibrary({ compact, value, pool, onReplace, selectedText, disabled }:
         <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
           {tab === 'mine' && (mineShown.length ? (
             <div className="flex flex-wrap gap-1.5">
-              {mineShown.map((t) => (
-                <Chip key={t.tag} tag={t.tag} zh={lib?.zhLabel(t.tag)} on={present.has(t.tag)}
-                  title={`用过 ${t.count} 次 · ${present.has(t.tag) ? '点一下移除' : '点一下加入'}`} onClick={() => toggle(t.tag)} />
+              {mineShown.map((stat) => (
+                <Chip key={stat.tag} tag={stat.tag} zh={lib?.zhLabel(stat.tag)} on={present.has(stat.tag)}
+                  title={`${t('用过 {n} 次', { n: stat.count })} · ${present.has(stat.tag) ? t('点一下移除') : t('点一下加入')}`} onClick={() => toggle(stat.tag)} />
               ))}
             </div>
           ) : (
             <p className="px-2 py-6 text-center text-xs leading-relaxed text-tx3">
-              {key ? '没有找到用过的 tag' : pool === 'negative' ? '生成过的图片里排除过的内容会记在这里。' : '生成过的图片里用到的 tag 会按常用程度记在这里，下次一点就能加入。'}
+              {key ? t('没有找到用过的 tag') : pool === 'negative' ? t('生成过的图片里排除过的内容会记在这里。') : t('生成过的图片里用到的 tag 会按常用程度记在这里，下次一点就能加入。')}
             </p>
           ))}
           {tab === 'lib' && (!lib ? (
             <div className="flex justify-center py-6 text-tx3"><Spinner /></div>
           ) : libShown.length ? (
             <div className="flex flex-wrap gap-1.5">
-              {libShown.map((t) => <Chip key={t.tag} tag={t.tag} zh={t.zh} zhFirst on={present.has(t.tag)} onClick={() => toggle(t.tag)} />)}
+              {libShown.map((item) => <Chip key={item.tag} tag={item.tag} zh={item.zh} zhFirst on={present.has(item.tag)} onClick={() => toggle(item.tag)} />)}
             </div>
-          ) : <p className="px-2 py-6 text-center text-xs text-tx3">词库里没有找到，可以直接在输入框里输入</p>)}
+          ) : <p className="px-2 py-6 text-center text-xs text-tx3">{t('词库里没有找到，可以直接在输入框里输入')}</p>)}
           {tab === 'saved' && (groupsShown.length ? (
             <div className="-mx-1 space-y-0.5">
               {groupsShown.map((g) => (
                 <div key={g.name} className="flex items-start gap-1 rounded-md px-1 hover:bg-bg2">
-                  <button type="button" onClick={() => insertGroup(g)} title="加入这组 tag（已经有的不会重复加入）"
+                  <button type="button" onClick={() => insertGroup(g)} title={t('加入这组 tag（已经有的不会重复加入）')}
                     className="min-w-0 flex-1 cursor-pointer px-1 py-1.5 text-left">
                     <span className="block truncate text-[13px] font-medium text-tx">{g.name}</span>
                     <span className="line-clamp-2 break-words font-mono text-[11px] leading-relaxed text-tx3">{g.tags}</span>
                   </button>
-                  <Button size="iconXs" variant="dangerGhost" className="mt-1.5" title={`删除「${g.name}」`}
-                    onClick={() => { env.onGroups(env.groups.filter((x) => x.name !== g.name)); toast('已删除', 'ok'); }}>
+                  <Button size="iconXs" variant="dangerGhost" className="mt-1.5" title={t('删除「{name}」', { name: g.name })}
+                    onClick={() => { env.onGroups(env.groups.filter((x) => x.name !== g.name)); toast(t('已删除'), 'ok'); }}>
                     <Trash2 size={12} />
                   </Button>
                 </div>
@@ -694,17 +695,17 @@ function TagLibrary({ compact, value, pool, onReplace, selectedText, disabled }:
             </div>
           ) : (
             <p className="px-2 py-6 text-center text-xs leading-relaxed text-tx3">
-              {key ? '没有找到收藏' : '把常用的一组 tag 存起来，比如角色的发型、发色和衣着，之后一键加入。'}
+              {key ? t('没有找到收藏') : t('把常用的一组 tag 存起来，比如角色的发型、发色和衣着，之后一键加入。')}
             </p>
           ))}
         </div>
         {tab === 'saved' && (
           <div className="space-y-1.5 border-t border-line p-2.5">
-            <p className="text-[11px] text-tx3">{toSave ? '收藏选中的内容' : '收藏当前全部 tag'}</p>
+            <p className="text-[11px] text-tx3">{toSave ? t('收藏选中的内容') : t('收藏当前全部 tag')}</p>
             <div className="flex gap-1.5">
-              <Input uiSize="sm" aria-label="收藏名称" value={name} maxLength={40} placeholder="起个名字，如「我的角色」"
+              <Input uiSize="sm" aria-label={t('收藏名称')} value={name} maxLength={40} placeholder={t('起个名字，如「我的角色」')}
                 onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) save(); }} />
-              <Button size="sm" variant="outline" onClick={save}><BookmarkPlus size={13} />收藏</Button>
+              <Button size="sm" variant="outline" onClick={save}><BookmarkPlus size={13} />{t('加入收藏')}</Button>
             </div>
           </div>
         )}

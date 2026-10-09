@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Bookmark, ChevronDown, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { Button, Input, Toggle, toast } from './ui';
 import { TagInput, TagTextarea } from './NaiTagEditor';
+import { t } from '../i18n';
 import { NAI_CHAR_COLORS, NAI_STYLES, newNaiCharacter, type NaiCharacter, type NaiOptions, type NaiStyle } from '../novelai';
 
 /* ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ function WeightInput({ label, value, onChange }: { label: string; value: number;
   return (
     // Sized by a wrapper: Input always carries w-full.
     <div className="w-16 shrink-0">
-      <Input uiSize="sm" type="number" aria-label={label} title="权重：1 为正常，越大影响越强"
+      <Input uiSize="sm" type="number" aria-label={label} title={t('权重：1 为正常，越大影响越强')}
         min={-3} max={3} step={0.1} value={text} className="text-center tabular-nums"
         onFocus={() => setFocused(true)}
         onBlur={() => { setFocused(false); setText(String(value)); }}
@@ -87,9 +88,9 @@ export function styleSummary(o: NaiOptions, saved: NaiStyle[]) {
   if (mine) return mine.name;
   const artists = o.artists.filter((a) => a.tag.trim()).length;
   const preset = NAI_STYLES.find((s) => s.tags === o.stylePrompt.trim());
-  const name = preset ? preset.name : '自定义风格词';
-  if (!artists) return preset && !preset.tags ? '自动（不加画风词）' : name;
-  return preset && !preset.tags ? `${artists} 位画师` : `${name} · ${artists} 位画师`;
+  const name = preset ? preset.name : t('自定义风格词');
+  if (!artists) return preset && !preset.tags ? t('自动（不加画风词）') : name;
+  return preset && !preset.tags ? t('{n} 位画师', { n: artists }) : t('{name} · {n} 位画师', { name, n: artists });
 }
 
 export function StylePicker({ options, onChange, saved, onSaved }: {
@@ -105,17 +106,17 @@ export function StylePicker({ options, onChange, saved, onSaved }: {
 
   function save() {
     const n = name.trim();
-    if (!n) { toast('先给这个画风起个名字', 'err'); return; }
-    if (!saved.some((s) => s.name === n) && saved.length >= 24) { toast('最多保存 24 个画风', 'err'); return; }
+    if (!n) { toast(t('先给这个画风起个名字'), 'err'); return; }
+    if (!saved.some((s) => s.name === n) && saved.length >= 24) { toast(t('最多保存 24 个画风'), 'err'); return; }
     onSaved([...saved.filter((s) => s.name !== n), { name: n, tags: options.stylePrompt, artists: options.artists.map((a) => ({ ...a })) }]);
-    toast(`已保存「${n}」`, 'ok');
+    toast(t('已保存「{name}」', { name: n }), 'ok');
   }
 
   return (
     <div className="space-y-3">
       {saved.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-tx3">我的画风</span>
+          <span className="text-xs text-tx3">{t('我的画风')}</span>
           {saved.map((s) => (
             <button key={s.name} type="button" aria-pressed={savedActive?.name === s.name}
               onClick={() => { onChange({ stylePrompt: s.tags, artists: s.artists.map((a) => ({ ...a })) }); setName(s.name); }}
@@ -141,16 +142,16 @@ export function StylePicker({ options, onChange, saved, onSaved }: {
         <button type="button" aria-expanded={editing} onClick={() => setEditing((v) => !v)}
           className={`flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed p-1 text-[11px] transition-colors ${
             editing || (!preset && !savedActive) ? 'border-acc text-acc' : 'border-line2 text-tx2 hover:border-tx3 hover:text-tx'}`}>
-          <Pencil size={14} />自定义
+          <Pencil size={14} />{t('自定义')}
         </button>
       </div>
       {!editing && (artists.length > 0 || (!preset && options.stylePrompt.trim())) && (
         <button type="button" onClick={() => setEditing(true)}
           className="flex w-full cursor-pointer items-start gap-2 rounded-md bg-bg0 px-2.5 py-2 text-left text-xs text-tx2 hover:text-tx">
           <span className="min-w-0 flex-1 break-words">
-            {artists.length > 0 && <>画师：<span className="font-mono">{artists.map((a) => a.weight === 1 ? a.tag : `${a.tag} ×${a.weight}`).join('、')}</span></>}
+            {artists.length > 0 && <>{t('画师：')}<span className="font-mono">{artists.map((a) => a.weight === 1 ? a.tag : `${a.tag} ×${a.weight}`).join(t('、'))}</span></>}
             {artists.length > 0 && !preset && options.stylePrompt.trim() && <br />}
-            {!preset && options.stylePrompt.trim() && <>风格词：<span className="font-mono">{options.stylePrompt}</span></>}
+            {!preset && options.stylePrompt.trim() && <>{t('风格词：')}<span className="font-mono">{options.stylePrompt}</span></>}
           </span>
           <Pencil size={12} className="mt-0.5 shrink-0" />
         </button>
@@ -158,39 +159,39 @@ export function StylePicker({ options, onChange, saved, onSaved }: {
       {editing && (
         <div className="space-y-3 rounded-lg border border-line bg-bg0 p-3">
           <div className="flex items-start justify-between gap-2">
-            <p className="text-xs leading-relaxed text-tx3">画师 tag 决定笔触和人物画法，权重越大影响越强。调好后可以保存，换个画面也能一键套用。</p>
-            <Button size="iconXs" variant="ghost" title="收起" onClick={() => setEditing(false)}><X size={13} /></Button>
+            <p className="text-xs leading-relaxed text-tx3">{t('画师 tag 决定笔触和人物画法，权重越大影响越强。调好后可以保存，换个画面也能一键套用。')}</p>
+            <Button size="iconXs" variant="ghost" title={t('收起')} onClick={() => setEditing(false)}><X size={13} /></Button>
           </div>
           <div className="space-y-2">
             {options.artists.map((a, i) => (
               <div key={i} className="flex items-center gap-1.5">
-                <TagInput label={`画师 ${i + 1}`} value={a.tag} placeholder="artist:名字"
+                <TagInput label={t('画师 {n}', { n: i + 1 })} value={a.tag} placeholder={t('artist:名字')}
                   onChange={(tag) => onChange({ artists: options.artists.map((x, n) => n === i ? { ...x, tag } : x) })} />
-                <WeightInput label={`画师 ${i + 1} 权重`} value={a.weight}
+                <WeightInput label={t('画师 {n} 权重', { n: i + 1 })} value={a.weight}
                   onChange={(weight) => onChange({ artists: options.artists.map((x, n) => n === i ? { ...x, weight } : x) })} />
-                <Button size="iconSm" variant="dangerGhost" title="移除" onClick={() => onChange({ artists: options.artists.filter((_, n) => n !== i) })}>
+                <Button size="iconSm" variant="dangerGhost" title={t('移除')} onClick={() => onChange({ artists: options.artists.filter((_, n) => n !== i) })}>
                   <X size={14} />
                 </Button>
               </div>
             ))}
             <Button size="xs" variant="outline" disabled={options.artists.length >= 12}
               onClick={() => onChange({ artists: [...options.artists, { tag: '', weight: 1 }] })}>
-              <Plus size={12} />添加画师
+              <Plus size={12} />{t('添加画师')}
             </Button>
           </div>
           <label className="block">
-            <span className="mb-1 block text-xs font-medium text-tx">风格词</span>
+            <span className="mb-1 block text-xs font-medium text-tx">{t('风格词')}</span>
             <TagTextarea rows={2} value={options.stylePrompt} maxLength={2000} suggest
-              placeholder="例如 watercolor, soft colors" onChange={(stylePrompt) => onChange({ stylePrompt })} />
+              placeholder={t('例如 watercolor, soft colors')} onChange={(stylePrompt) => onChange({ stylePrompt })} />
           </label>
           <div className="flex gap-2">
-            <Input uiSize="sm" aria-label="画风名称" maxLength={40} value={name} placeholder="给这个画风起个名字"
+            <Input uiSize="sm" aria-label={t('画风名称')} maxLength={40} value={name} placeholder={t('给这个画风起个名字')}
               onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) save(); }} />
-            <Button size="sm" variant="outline" onClick={save}><Bookmark size={13} />保存</Button>
+            <Button size="sm" variant="outline" onClick={save}><Bookmark size={13} />{t('保存')}</Button>
           </div>
           {saved.some((s) => s.name === name.trim()) && (
-            <Button size="xs" variant="dangerGhost" onClick={() => { onSaved(saved.filter((s) => s.name !== name.trim())); toast('已删除', 'ok'); }}>
-              <Trash2 size={12} />删除「{name.trim()}」
+            <Button size="xs" variant="dangerGhost" onClick={() => { onSaved(saved.filter((s) => s.name !== name.trim())); toast(t('已删除'), 'ok'); }}>
+              <Trash2 size={12} />{t('删除「{name}」', { name: name.trim() })}
             </Button>
           )}
         </div>
@@ -218,40 +219,40 @@ export function CharacterList({ characters, manual, useCoords, size, onChange, o
           <div key={i} className="space-y-2 rounded-lg border border-line p-2.5" style={{ borderLeft: `3px solid ${color}` }}>
             <div className="flex items-center gap-2">
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white" style={{ background: color }}>{i + 1}</span>
-              <Input uiSize="sm" aria-label={`人物 ${i + 1} 的称呼`} value={c.name} maxLength={60}
-                placeholder={`称呼（可选），如「白发女孩」`} onChange={(e) => set(i, { name: e.target.value })} />
-              <Button size="iconSm" variant="dangerGhost" title="删除这个人物"
+              <Input uiSize="sm" aria-label={t('人物 {n} 的称呼', { n: i + 1 })} value={c.name} maxLength={60}
+                placeholder={t('称呼（可选），如「白发女孩」')} onChange={(e) => set(i, { name: e.target.value })} />
+              <Button size="iconSm" variant="dangerGhost" title={t('删除这个人物')}
                 onClick={() => { onChange(characters.filter((_, n) => n !== i)); setOpenNeg(new Set()); }}>
                 <Trash2 size={14} />
               </Button>
             </div>
-            <TagTextarea rows={2} aria-label={`人物 ${i + 1} 的描述`} suggest={manual} tools="compact"
+            <TagTextarea rows={2} aria-label={t('人物 {n} 的描述', { n: i + 1 })} suggest={manual} tools="compact"
               value={manual ? c.prompt : c.description} maxLength={manual ? 2000 : 1500}
-              placeholder={manual ? 'girl, white hair, long hair, blue eyes, school uniform' : '长相、发型、衣着、动作，比如：白色长发，蓝眼睛，穿校服，正在挥手'}
+              placeholder={manual ? 'girl, white hair, long hair, blue eyes, school uniform' : t('长相、发型、衣着、动作，比如：白色长发，蓝眼睛，穿校服，正在挥手')}
               onChange={(v) => set(i, manual ? { prompt: v } : { description: v })} />
             {negOpen ? (
-              <Input uiSize="sm" aria-label={`人物 ${i + 1} 不想出现的内容`} value={neg} maxLength={1000}
-                placeholder={manual ? 'hat, glasses' : '只针对 TA 排除的内容，比如：眼镜、帽子'} onFocus={keepNeg}
+              <Input uiSize="sm" aria-label={t('人物 {n} 不想出现的内容', { n: i + 1 })} value={neg} maxLength={1000}
+                placeholder={manual ? 'hat, glasses' : t('只针对 TA 排除的内容，比如：眼镜、帽子')} onFocus={keepNeg}
                 onChange={(e) => { keepNeg(); set(i, manual ? { negativePrompt: e.target.value } : { negativeDescription: e.target.value }); }} />
             ) : (
               <button type="button" onClick={() => setOpenNeg((s) => new Set(s).add(i))}
-                className="cursor-pointer text-xs text-tx3 hover:text-tx">+ 不想出现在 TA 身上的内容</button>
+                className="cursor-pointer text-xs text-tx3 hover:text-tx">{t('+ 不想出现在 TA 身上的内容')}</button>
             )}
           </div>
         );
       })}
       <Button size="sm" variant="outline" className="w-full border-dashed" disabled={characters.length >= 22}
         onClick={() => onChange([...characters, newNaiCharacter(characters.length)])}>
-        <Plus size={14} />添加人物
+        <Plus size={14} />{t('添加人物')}
       </Button>
       {characters.length > 0 && (
         <div className="space-y-2.5 rounded-lg bg-bg0 p-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-[13px] font-medium text-tx">手动摆放位置</div>
-              <div className="mt-0.5 text-xs text-tx3">{useCoords ? '拖动圆点安排每个人在画面中的位置' : '关闭时由 AI 按顺序自动安排'}</div>
+              <div className="text-[13px] font-medium text-tx">{t('手动摆放位置')}</div>
+              <div className="mt-0.5 text-xs text-tx3">{useCoords ? t('拖动圆点安排每个人在画面中的位置') : t('关闭时由 AI 按顺序自动安排')}</div>
             </div>
-            <Toggle label="手动摆放位置" checked={useCoords} onChange={onUseCoords} />
+            <Toggle label={t('手动摆放位置')} checked={useCoords} onChange={onUseCoords} />
           </div>
           {useCoords && <PositionCanvas characters={characters} size={size} onMove={(i, x, y) => set(i, { x, y })} />}
         </div>
@@ -275,7 +276,7 @@ function PositionCanvas({ characters, size, onMove }: {
   }
   return (
     <div className="space-y-1.5">
-      <div ref={box} role="group" aria-label="人物位置"
+      <div ref={box} role="group" aria-label={t('人物位置')}
         className="relative mx-auto w-full max-w-[200px] touch-none select-none overflow-hidden rounded-md border border-line2 bg-bg1"
         style={{
           aspectRatio: `${w} / ${h}`,
@@ -292,7 +293,7 @@ function PositionCanvas({ characters, size, onMove }: {
         onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
         onLostPointerCapture={() => { drag.current = null; }}>
         {characters.map((c, i) => (
-          <button key={i} type="button" aria-label={`${c.name || `人物 ${i + 1}`}的位置，可用方向键微调`} aria-pressed={sel === i}
+          <button key={i} type="button" aria-label={t('{name}的位置，可用方向键微调', { name: c.name || t('人物 {n}', { n: i + 1 }) })} aria-pressed={sel === i}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
               e.preventDefault(); e.stopPropagation(); setSelected(i); drag.current = i; box.current?.setPointerCapture(e.pointerId);
@@ -310,7 +311,7 @@ function PositionCanvas({ characters, size, onMove }: {
           </button>
         ))}
       </div>
-      <p className="text-center text-[11px] text-tx3">选中圆点后点空白处也能移动 · 方向键微调</p>
+      <p className="text-center text-[11px] text-tx3">{t('选中圆点后点空白处也能移动 · 方向键微调')}</p>
     </div>
   );
 }

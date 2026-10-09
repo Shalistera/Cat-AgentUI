@@ -36,6 +36,7 @@ import { useLightbox } from './Lightbox';
 import { WorkspaceFileLink } from './WorkspaceFileLink';
 import { resolveWorkspaceLink } from '../workspaceLinks';
 import { ProjectDocLink } from './ProjectDocDialog';
+import { t } from '../i18n';
 
 for (const [name, lang] of Object.entries({
   javascript, typescript, python, java, c, cpp, csharp, go, rust, json, yaml,
@@ -142,10 +143,10 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
         {canCollapse && <button
           ref={bottom ? undefined : headToggleRef}
           type="button" className="absolute inset-0 cursor-pointer rounded-[inherit] hover:bg-bg3/40 focus-visible:outline-2 focus-visible:outline-acc focus-visible:-outline-offset-2"
-          aria-label={`${collapsed ? '展开' : '折叠'} ${lang || 'code'} 代码块`}
+          aria-label={t(collapsed ? '展开 {lang} 代码块' : '折叠 {lang} 代码块', { lang: lang || 'code' })}
           aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => toggle(bottom)}
         />}
-        <span className="pointer-events-none relative min-w-0 truncate">{lang || 'code'} · {lineCount} 行</span>
+        <span className="pointer-events-none relative min-w-0 truncate">{t('{lang} · {lines} 行', { lang: lang || 'code', lines: lineCount })}</span>
         <div className={`relative flex shrink-0 items-center ${bottom ? '' : 'flex-row-reverse'}`}>
           <div className="flex items-center">
           {canPreview && (
@@ -154,14 +155,14 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
               onClick={() => { setPreviewSrc(previewSrc === null ? code : null); setCollapsed(false); }}
             >
               {previewSrc === null ? <Eye size={12} /> : <Code size={12} />}
-              {previewSrc === null ? '预览' : '代码'}
+              {previewSrc === null ? t('预览') : t('代码')}
             </button>
           )}
           {canPreview && (
             <button
               type="button" className={headBtn}
-              title="在右侧面板预览"
-              aria-label="在右侧面板预览"
+              title={t('在右侧面板预览')}
+              aria-label={t('在右侧面板预览')}
               onClick={() => {
                 useHtmlPreview.getState().open(code);
                 setPreviewSrc(null); // 弹出后行内回到代码视图
@@ -181,14 +182,14 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
             }}
           >
             {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
-            {copied ? '已复制' : '复制'}
+            {copied ? t('已复制') : t('复制')}
           </button>
           {canCollapse && <button
             type="button" className={headBtn}
             aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => toggle(bottom)}
           >
             {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-            {collapsed ? '展开' : '折叠'}
+            {collapsed ? t('展开') : t('折叠')}
           </button>}
         </div>
       </div>
@@ -197,11 +198,11 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   return (
     <div className="codeblock">
       {toolbar()}
-      {collapsed && <div className="px-4 py-2 text-xs text-tx3">已折叠 {lineCount} 行代码</div>}
+      {collapsed && <div className="px-4 py-2 text-xs text-tx3">{t('已折叠 {lines} 行代码', { lines: lineCount })}</div>}
       <div id={bodyId} hidden={collapsed}>
       {previewSrc !== null
         // No allow-same-origin: previewed HTML must not reach our cookies/localStorage.
-        ? <iframe sandbox="allow-scripts allow-modals" srcDoc={previewSrc} title="HTML 预览" className="block h-[420px] w-full border-0 bg-white" />
+        ? <iframe sandbox="allow-scripts allow-modals" srcDoc={previewSrc} title={t('HTML 预览')} className="block h-[420px] w-full border-0 bg-white" />
         : (
           <div className="codeblock-body">
             <div className="codeblock-gutter" aria-hidden>
@@ -280,7 +281,7 @@ function CiteChip({ n, citations }: { n: number; citations: Citation[] }) {
       title={label}
       className="cite-chip"
       data-n={n}
-      aria-label={`来源 ${n}:${label}`}
+      aria-label={t('来源 {n}:{label}', { n, label })}
     />
   );
 }

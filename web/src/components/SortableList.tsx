@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { GripVertical } from 'lucide-react';
+import { t } from '../i18n';
 
 /* Hand-rolled pointer-based drag sort — a dependency for two flat lists would
    be overkill. The dragged row is reordered live (the array is re-spliced as
@@ -118,8 +119,8 @@ export function SortableList<T>(props: {
         const handle = props.disabled ? null : (
           <span
             role="button"
-            aria-label="拖动排序"
-            title="拖动排序"
+            aria-label={t('拖动排序')}
+            title={t('拖动排序')}
             className={`touch-none select-none px-0.5 py-1 text-tx3 hover:text-tx ${
               dragging ? 'cursor-grabbing' : 'cursor-grab'
             }`}

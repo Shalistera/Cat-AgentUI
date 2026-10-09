@@ -3,6 +3,7 @@ import { Loader2, LogOut, TriangleAlert } from 'lucide-react';
 import { api } from '../api';
 import { CatMark } from '../components/Logo';
 import { Button } from '../components/ui';
+import { t } from '../i18n';
 
 /**
  * Landing spot for browsers that carry stale state from a previous panel on
@@ -45,22 +46,22 @@ export default function ErrorReset() {
             <TriangleAlert size={18} />
           </span>
         </div>
-        <h1 className="text-lg font-semibold text-tx">页面遇到了问题</h1>
+        <h1 className="text-lg font-semibold text-tx">{t('页面遇到了问题')}</h1>
         <p className="mt-3 text-[13px] leading-relaxed text-tx2">
-          如果你是从旧面板(如 Open WebUI)迁移过来的用户,浏览器里残留的旧登录信息(Cookies)可能导致页面无法正常打开。
+          {t('如果你是从旧面板(如 Open WebUI)迁移过来的用户,浏览器里残留的旧登录信息(Cookies)可能导致页面无法正常打开。')}
         </p>
         <p className="mt-2 text-[13px] leading-relaxed text-tx2">
-          点击下面的按钮清除本站的登录状态与缓存,然后重新登录即可。
+          {t('点击下面的按钮清除本站的登录状态与缓存,然后重新登录即可。')}
         </p>
         <Button
           variant="primary" size="lg" className="mt-6 w-full"
           onClick={() => void reset()} disabled={busy}
         >
           {busy ? <Loader2 size={16} className="animate-spin" /> : <LogOut size={16} />}
-          清除登录信息,重新登录
+          {t('清除登录信息,重新登录')}
         </Button>
         <a href="/" className="mt-4 inline-block text-xs text-tx3 transition-colors hover:text-tx">
-          先试试直接返回首页
+          {t('先试试直接返回首页')}
         </a>
       </div>
     </div>

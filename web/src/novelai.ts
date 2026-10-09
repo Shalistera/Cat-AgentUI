@@ -1,43 +1,44 @@
 import type { ImageRecord } from './types';
+import { t } from './i18n';
 
 export const NAI_SIZES = ['832x1216', '1216x832', '1024x1024'] as const;
 /** Subscription mode only covers the three Normal sizes; each gets a plain-language use case. */
 export const NAI_SIZE_OPTIONS: { size: typeof NAI_SIZES[number]; label: string; hint: string }[] = [
-  { size: '832x1216', label: '竖图', hint: '人物、立绘' },
-  { size: '1216x832', label: '横图', hint: '风景、场景' },
-  { size: '1024x1024', label: '方图', hint: '头像、图标' },
+  { size: '832x1216', label: t('竖图'), hint: t('人物、立绘') },
+  { size: '1216x832', label: t('横图'), hint: t('风景、场景') },
+  { size: '1024x1024', label: t('方图'), hint: t('头像、图标') },
 ];
 // The first three tag strings are what older drafts and saved images carry;
 // keep them byte-identical so those still highlight the right card. `swatch`
 // is a CSS background that hints at the look without needing sample images.
 export const NAI_STYLES = [
-  { name: '自动', tags: '', hint: '不加画风词，交给模型发挥', swatch: 'conic-gradient(from 210deg at 50% 50%, #f9d5e5, #c9d8ff, #c6f0dc, #fde7b0, #f9d5e5)' },
-  { name: '清透动画', tags: 'anime coloring, soft lighting, delicate lines', hint: '干净明亮的日系动画上色', swatch: 'linear-gradient(135deg, #b8cee5, #e3ccbf 55%, #f7ead9)' },
-  { name: '赛璐璐', tags: 'anime screenshot, cel shading, flat color', hint: '动画截图般的硬边阴影', swatch: 'linear-gradient(135deg, #f6c7b6 0 42%, #e58f7c 42% 58%, #7fb3d5 58%)' },
-  { name: '柔和水彩', tags: 'watercolor, soft colors, traditional media', hint: '晕染、通透的手绘水彩', swatch: 'radial-gradient(circle at 30% 35%, #c1d2bfdd 0 22%, transparent 46%), radial-gradient(circle at 72% 62%, #e7cbd0dd 0 24%, transparent 50%), #f3eee4' },
-  { name: '厚涂', tags: 'painterly, oil painting (medium), dramatic lighting', hint: '笔触厚重、光影强烈', swatch: 'radial-gradient(circle at 70% 28%, #f3d29b, #b9734a 46%, #3b2a3a)' },
-  { name: '复古手绘', tags: 'pencil drawing, traditional media, muted colors', hint: '铅笔线条、低饱和', swatch: 'repeating-linear-gradient(-45deg, transparent 0 5px, #8a7f7238 5px 6px), #efe8db' },
-  { name: '90 年代', tags: 'retro artstyle, 1990s (style)', hint: '老动画的怀旧质感', swatch: 'linear-gradient(160deg, #e9b7a3, #a78bb5 52%, #4f6d8f)' },
-  { name: '梦幻光影', tags: 'light particles, bloom, pastel colors, soft focus', hint: '柔光、光斑、粉彩', swatch: 'radial-gradient(circle at 26% 30%, #fff 0 5%, transparent 6%), radial-gradient(circle at 70% 64%, #ffffffaa 0 8%, transparent 9%), linear-gradient(135deg, #f9d5e5, #c9d8ff)' },
-  { name: '黑白漫画', tags: 'monochrome, greyscale, comic', hint: '漫画分镜般的黑白', swatch: 'radial-gradient(#3a3a3a 1.2px, transparent 1.6px) 0 0 / 6px 6px, linear-gradient(135deg, #f4f4f4, #cfcfcf)' },
-  { name: 'Q 版', tags: 'chibi', hint: '大头小身、可爱', swatch: 'radial-gradient(circle at 50% 44%, #ffd9c2 0 26%, transparent 27%), radial-gradient(ellipse at 50% 92%, #ff9eb5 0 30%, transparent 31%), #ffe9a8' },
-  { name: '像素', tags: 'pixel art', hint: '复古游戏像素风', swatch: 'conic-gradient(#7ec4cf 25%, #ffd166 0 50%, #7ec4cf 0 75%, #ffd166 0) 0 0 / 12px 12px' },
+  { name: t('自动'), tags: '', hint: t('不加画风词，交给模型发挥'), swatch: 'conic-gradient(from 210deg at 50% 50%, #f9d5e5, #c9d8ff, #c6f0dc, #fde7b0, #f9d5e5)' },
+  { name: t('清透动画'), tags: 'anime coloring, soft lighting, delicate lines', hint: t('干净明亮的日系动画上色'), swatch: 'linear-gradient(135deg, #b8cee5, #e3ccbf 55%, #f7ead9)' },
+  { name: t('赛璐璐'), tags: 'anime screenshot, cel shading, flat color', hint: t('动画截图般的硬边阴影'), swatch: 'linear-gradient(135deg, #f6c7b6 0 42%, #e58f7c 42% 58%, #7fb3d5 58%)' },
+  { name: t('柔和水彩'), tags: 'watercolor, soft colors, traditional media', hint: t('晕染、通透的手绘水彩'), swatch: 'radial-gradient(circle at 30% 35%, #c1d2bfdd 0 22%, transparent 46%), radial-gradient(circle at 72% 62%, #e7cbd0dd 0 24%, transparent 50%), #f3eee4' },
+  { name: t('厚涂'), tags: 'painterly, oil painting (medium), dramatic lighting', hint: t('笔触厚重、光影强烈'), swatch: 'radial-gradient(circle at 70% 28%, #f3d29b, #b9734a 46%, #3b2a3a)' },
+  { name: t('复古手绘'), tags: 'pencil drawing, traditional media, muted colors', hint: t('铅笔线条、低饱和'), swatch: 'repeating-linear-gradient(-45deg, transparent 0 5px, #8a7f7238 5px 6px), #efe8db' },
+  { name: t('90 年代'), tags: 'retro artstyle, 1990s (style)', hint: t('老动画的怀旧质感'), swatch: 'linear-gradient(160deg, #e9b7a3, #a78bb5 52%, #4f6d8f)' },
+  { name: t('梦幻光影'), tags: 'light particles, bloom, pastel colors, soft focus', hint: t('柔光、光斑、粉彩'), swatch: 'radial-gradient(circle at 26% 30%, #fff 0 5%, transparent 6%), radial-gradient(circle at 70% 64%, #ffffffaa 0 8%, transparent 9%), linear-gradient(135deg, #f9d5e5, #c9d8ff)' },
+  { name: t('黑白漫画'), tags: 'monochrome, greyscale, comic', hint: t('漫画分镜般的黑白'), swatch: 'radial-gradient(#3a3a3a 1.2px, transparent 1.6px) 0 0 / 6px 6px, linear-gradient(135deg, #f4f4f4, #cfcfcf)' },
+  { name: t('Q 版'), tags: 'chibi', hint: t('大头小身、可爱'), swatch: 'radial-gradient(circle at 50% 44%, #ffd9c2 0 26%, transparent 27%), radial-gradient(ellipse at 50% 92%, #ff9eb5 0 30%, transparent 31%), #ffe9a8' },
+  { name: t('像素'), tags: 'pixel art', hint: t('复古游戏像素风'), swatch: 'conic-gradient(#7ec4cf 25%, #ffd166 0 50%, #7ec4cf 0 75%, #ffd166 0) 0 0 / 12px 12px' },
 ] as const;
 /** One click fills the description — a starting point, not a template. */
 export const NAI_EXAMPLES = [
-  { title: '雨夜街头', text: '雨夜的霓虹街头，撑着透明雨伞的白发少女回头看向镜头，地面倒映着彩色灯光' },
-  { title: '樱花教室', text: '春天午后的教室，窗外樱花飘落，黑长发女生托着下巴望向窗外，阳光洒在课桌上' },
-  { title: '雨天咖啡馆', text: '两位女孩坐在雨天的咖啡馆，白发女孩靠窗，黑发女孩坐在对面，一边喝热可可一边聊天，暖黄的灯光' },
-  { title: '魔女森林', text: '发光蘑菇点缀的奇幻森林，戴尖帽子的小魔女骑着扫帚飞过，萤火虫环绕在她身边' },
-  { title: '天台机甲', text: '未来都市的天台上，穿白色机甲的少女握着长枪，身后是巨大的满月和城市灯火' },
-  { title: '午睡橘猫', text: '洒满阳光的木地板上，一只橘猫蜷成一团午睡，旁边滚着一个毛线球' },
+  { title: t('雨夜街头'), text: t('雨夜的霓虹街头，撑着透明雨伞的白发少女回头看向镜头，地面倒映着彩色灯光') },
+  { title: t('樱花教室'), text: t('春天午后的教室，窗外樱花飘落，黑长发女生托着下巴望向窗外，阳光洒在课桌上') },
+  { title: t('雨天咖啡馆'), text: t('两位女孩坐在雨天的咖啡馆，白发女孩靠窗，黑发女孩坐在对面，一边喝热可可一边聊天，暖黄的灯光') },
+  { title: t('魔女森林'), text: t('发光蘑菇点缀的奇幻森林，戴尖帽子的小魔女骑着扫帚飞过，萤火虫环绕在她身边') },
+  { title: t('天台机甲'), text: t('未来都市的天台上，穿白色机甲的少女握着长枪，身后是巨大的满月和城市灯火') },
+  { title: t('午睡橘猫'), text: t('洒满阳光的木地板上，一只橘猫蜷成一团午睡，旁边滚着一个毛线球') },
 ];
 export const NAI_UC_OPTIONS = [
-  { value: 'heavy', label: '标准（推荐）' },
-  { value: 'light', label: '轻度' },
-  { value: 'human', label: '人物优化' },
-  { value: 'furry', label: '兽人优化' },
-  { value: 'off', label: '不使用' },
+  { value: 'heavy', label: t('标准（推荐）') },
+  { value: 'light', label: t('轻度') },
+  { value: 'human', label: t('人物优化') },
+  { value: 'furry', label: t('兽人优化') },
+  { value: 'off', label: t('不使用') },
 ] as const;
 /** Each character keeps the same colour on its card and its position dot. */
 export const NAI_CHAR_COLORS = ['#e5484d', '#3e63dd', '#30a46c', '#f76b15', '#8e4ec6', '#12a594', '#d6409f', '#ad7f58'];

@@ -11,6 +11,7 @@ import { SortableList } from './SortableList';
 import { Button, Field, Popover, confirmDialog, toast, Toggle } from './ui';
 import { sttSupported, startDictation, type SpeechRecognitionLike } from '../speech';
 import type { ModelInfo, ReasoningEffort, ReasoningLevel, User } from '../types';
+import { t } from '../i18n';
 
 // On touch-primary devices (phones, tablets) there is no Shift key to reach
 // for, so Enter must stay a plain newline and sending goes through the button,
@@ -26,16 +27,16 @@ const toolBtn = `${toolBtnShape} border-transparent text-tx2 hover:border-line h
 
 // `off` is explicit; models without a full thinking-off mode label it as
 // minimum effort below. Other levels come from the model's configured ladder.
-const OFF_LEVEL: ReasoningLevel = { value: 'off', label: '关闭' };
+const OFF_LEVEL: ReasoningLevel = { value: 'off', label: t('关闭@@off') };
 type ModelPanelView = 'models' | 'settings';
 type ModelKind = 'all' | 'chat' | 'image';
 
 // The ladder is admin-defined, so the only thing we can say about a rung is
 // where it sits on it — which is also the part a person actually wants to know.
 function effortHint(idx: number, total: number) {
-  if (idx === 0) return '不额外思考，回答最快';
-  if (idx === total - 1) return '思考最久，适合复杂推理';
-  return '边想边答，兼顾速度与深度';
+  if (idx === 0) return t('不额外思考，回答最快');
+  if (idx === total - 1) return t('思考最久，适合复杂推理');
+  return t('边想边答，兼顾速度与深度');
 }
 
 export interface PendingAttachment {
@@ -144,10 +145,10 @@ export function Composer(props: ComposerProps) {
     if (listening) { dictationRef.current?.stop(); return; }
     dictationBaseRef.current = text;
     const rec = startDictation(
-      (t) => setText(dictationBaseRef.current + t),
+      (txt) => setText(dictationBaseRef.current + txt),
       () => setListening(false),
     );
-    if (!rec) { toast('当前浏览器不支持语音输入,请使用 Chrome / Edge', 'err'); return; }
+    if (!rec) { toast(t('当前浏览器不支持语音输入,请使用 Chrome / Edge'), 'err'); return; }
     dictationRef.current = rec;
     setListening(true);
   }
@@ -259,11 +260,11 @@ export function Composer(props: ComposerProps) {
   }, [panelOpen]);
 
   async function send() {
-    const t = text.trim();
-    if ((!t && atts.length === 0) || props.disabled || submittingRef.current) return;
+    const trimmed = text.trim();
+    if ((!trimmed && atts.length === 0) || props.disabled || submittingRef.current) return;
     if (uploadingRef.current) return;
     if (atts.length > attachmentLimit) {
-      toast(`每条消息最多 ${attachmentLimit} 个附件,请移除多余附件`, 'err');
+      toast(t('每条消息最多 {limit} 个附件,请移除多余附件', { limit: attachmentLimit }), 'err');
       return;
     }
     const key = props.draftKey;
@@ -274,8 +275,8 @@ export function Composer(props: ComposerProps) {
     try {
       if (streaming) {
         if (!props.onEnqueue) return;
-        props.onEnqueue(t, atts);
-      } else if (await props.onSend(t, atts) === false) {
+        props.onEnqueue(trimmed, atts);
+      } else if (await props.onSend(trimmed, atts) === false) {
         return; // rejected before persistence: leave text and attachments here
       }
       const current = liveDraft.current;
@@ -322,15 +323,15 @@ export function Composer(props: ComposerProps) {
     try {
       let room = attachmentLimit - atts.length;
       for (const f of Array.from(files)) {
-        if (room <= 0) { toast(`每条消息最多 ${attachmentLimit} 个附件`, 'err'); break; }
+        if (room <= 0) { toast(t('每条消息最多 {limit} 个附件', { limit: attachmentLimit }), 'err'); break; }
         // Per-file capability gate, so one wrong file in a batch doesn't
         // block the rest — each rejection says which file and why.
         if (imageMode && !isImageFile(f)) {
-          toast(`「${f.name}」未添加:绘图模型只接受参考图片`, 'err');
+          toast(t('「{name}」未添加:绘图模型只接受参考图片', { name: f.name }), 'err');
           continue;
         }
         if ((isImageFile(f) || isPdfFile(f)) && !canAttachImages) {
-          toast(`「${f.name}」未添加:当前模型不支持读取图片/PDF`, 'err');
+          toast(t('「{name}」未添加:当前模型不支持读取图片/PDF', { name: f.name }), 'err');
           continue;
         }
         try {
@@ -339,7 +340,7 @@ export function Composer(props: ComposerProps) {
           setAtts((prev) => [...prev, {
             uploadId: up.id,
             kind,
-            name: f.name || (kind === 'image' ? '图片' : '文件'),
+            name: f.name || (kind === 'image' ? t('图片@@file') : t('文件')),
             mime: up.mime,
             previewUrl: kind === 'image' ? `/api/uploads/${up.id}/file` : undefined,
           }]);
@@ -347,12 +348,12 @@ export function Composer(props: ComposerProps) {
         } catch (e) {
           // Personal quota full: the message alone leaves people stuck (nothing
           // in the UI lists their files), so offer the storage page directly.
-          if (e instanceof ApiError && e.status === 413 && /附件存储配额/.test(e.message)) {
-            const go = await confirmDialog('附件存储配额已满', `「${f.name}」无法上传。到「设置 › 附件存储」查看占用并删除不再需要的附件?`, false);
+          if (e instanceof ApiError && e.status === 413 && /配额/.test(e.raw)) {
+            const go = await confirmDialog(t('附件存储配额已满'), t('「{name}」无法上传。到「设置 › 附件存储」查看占用并删除不再需要的附件?', { name: f.name }), false);
             if (go) useUi.getState().openSettings('storage');
             continue;
           }
-          toast(`「${f.name}」${e instanceof Error ? e.message : '上传失败'}`, 'err');
+          toast(t('「{name}」{message}', { name: f.name, message: e instanceof Error ? e.message : t('上传失败') }), 'err');
         }
       }
     } finally {
@@ -365,7 +366,7 @@ export function Composer(props: ComposerProps) {
   function removeAttachment(att: PendingAttachment) {
     setAtts((prev) => prev.filter((x) => x.uploadId !== att.uploadId));
     api.del(`/api/uploads/${att.uploadId}`).catch((e) => {
-      toast(e instanceof Error ? e.message : '清理附件失败', 'err');
+      toast(e instanceof Error ? e.message : t('清理附件失败'), 'err');
     });
   }
 
@@ -388,13 +389,13 @@ export function Composer(props: ComposerProps) {
   // Why the drop target can't take files right now — the overlay says it out
   // loud instead of silently swallowing the drop. Kind-specific limits are
   // enforced per file inside pickFiles.
-  const dropBlocked = props.disabled ? '管理员尚未配置模型'
-    : attachFull ? `最多添加 ${attachmentLimit} 个附件` : null;
+  const dropBlocked = props.disabled ? t('管理员尚未配置模型')
+    : attachFull ? t('最多添加 {limit} 个附件', { limit: attachmentLimit }) : null;
   const dropHint = imageMode
-    ? { title: '松开鼠标，添加参考图', sub: `支持 PNG / JPEG / WebP / GIF，最多 ${attachmentLimit} 张` }
+    ? { title: t('松开鼠标，添加参考图'), sub: t('支持 PNG / JPEG / WebP / GIF，最多 {limit} 张', { limit: attachmentLimit }) }
     : canAttachImages
-      ? { title: '松开鼠标，附件将随消息发送', sub: `支持图片、PDF、Word(docx)与各类文本文件，最多 ${attachmentLimit} 个` }
-      : { title: '松开鼠标，添加文档附件', sub: `当前模型不支持图片和 PDF；支持 txt / md / docx 等文本，最多 ${attachmentLimit} 个` };
+      ? { title: t('松开鼠标，附件将随消息发送'), sub: t('支持图片、PDF、Word(docx)与各类文本文件，最多 {limit} 个', { limit: attachmentLimit }) }
+      : { title: t('松开鼠标，添加文档附件'), sub: t('当前模型不支持图片和 PDF；支持 txt / md / docx 等文本，最多 {limit} 个', { limit: attachmentLimit }) };
 
   // The window listeners below are registered once, so they reach this
   // render's model, attachments and limits through a ref. A closure captured
@@ -514,14 +515,14 @@ export function Composer(props: ComposerProps) {
       const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { modelOrder: null } });
       useAuth.getState().setUser(r.user);
       await useModels.getState().load(true);
-      toast('已恢复默认排序', 'ok');
+      toast(t('已恢复默认排序'), 'ok');
     } catch (e) {
       toast(errMsg(e), 'err');
     }
   }
 
   const minimumThinking = model?.providerType === 'gemini' && /^gemini-3\.[78]-flash(?:-|$)/i.test(model.modelId.split('/').pop() ?? '');
-  const efforts: ReasoningLevel[] = [minimumThinking ? { ...OFF_LEVEL, label: '最低' } : OFF_LEVEL, ...(model?.reasoningLevels ?? [])];
+  const efforts: ReasoningLevel[] = [minimumThinking ? { ...OFF_LEVEL, label: t('最低') } : OFF_LEVEL, ...(model?.reasoningLevels ?? [])];
   // A level the current model does not offer falls back to the off stop instead
   // of leaving the slider pointing at nothing.
   const effortIdx = Math.max(0, efforts.findIndex((e) => e.value === (props.settings.reasoningEffort || OFF_LEVEL.value)));
@@ -539,14 +540,14 @@ export function Composer(props: ComposerProps) {
 
   function modelHint(m: ModelInfo) {
     const capabilities = [
-      m.imageGen ? '图像生成' : '对话',
-      m.vision ? '视觉理解' : '',
-      m.tools ? '工具调用' : '',
-      m.nativeSearch ? 'Vertex Google 搜索' : '',
-      m.reasoningLevels.length ? '可调推理强度' : '',
+      m.imageGen ? t('图像生成') : t('对话'),
+      m.vision ? t('视觉理解') : '',
+      m.tools ? t('工具调用') : '',
+      m.nativeSearch ? t('Vertex Google 搜索') : '',
+      m.reasoningLevels.length ? t('可调推理强度') : '',
     ].filter(Boolean).join(' · ');
-    const limit = m.usageLimit ? `\n用量：${fmtUsageLimit(m.usageLimit)}` : '';
-    return `${m.displayName}\n模型 ID：${m.modelId}\n服务商：${m.providerName}\n能力：${capabilities}${limit}`;
+    const limit = m.usageLimit ? `\n${t('用量：{usage}', { usage: fmtUsageLimit(m.usageLimit) })}` : '';
+    return `${m.displayName}\n${t('模型 ID：{id}', { id: m.modelId })}\n${t('服务商：{provider}', { provider: m.providerName })}\n${t('能力：{capabilities}', { capabilities })}${limit}`;
   }
 
   const modelRow = (m: ModelInfo, handle?: ReactNode) => (
@@ -573,15 +574,15 @@ export function Composer(props: ComposerProps) {
             {fmtUsageLimitShort(m.usageLimit)}
           </span>
         )}
-        {m.imageGen && <ImageIcon size={12} aria-label="图像生成" />}
-        {m.vision && !m.imageGen && <span className="rounded-sm bg-bg3 px-1 py-0.5 text-[9px] font-medium">视觉</span>}
-        {m.tools && !m.imageGen && <Wrench size={11} aria-label="工具调用" />}
+        {m.imageGen && <ImageIcon size={12} aria-label={t('图像生成')} />}
+        {m.vision && !m.imageGen && <span className="rounded-sm bg-bg3 px-1 py-0.5 text-[9px] font-medium">{t('视觉')}</span>}
+        {m.tools && !m.imageGen && <Wrench size={11} aria-label={t('工具调用')} />}
       </span>
       <span
         role="button"
-        aria-label={favSet.has(m.id) ? '取消收藏' : '收藏'}
+        aria-label={favSet.has(m.id) ? t('取消收藏@@model') : t('收藏@@model')}
         aria-pressed={favSet.has(m.id)}
-        title={favSet.has(m.id) ? '取消收藏' : '收藏:收藏的模型始终排在最前'}
+        title={favSet.has(m.id) ? t('取消收藏@@model') : t('收藏:收藏的模型始终排在最前')}
         className={`-m-1 shrink-0 cursor-pointer p-1 transition-colors ${
           favSet.has(m.id) ? 'text-amber-400' : 'text-tx3/60 hover:text-amber-400'
         }`}
@@ -621,7 +622,7 @@ export function Composer(props: ComposerProps) {
               {dropBlocked ?? dropHint.title}
             </p>
             <p className="text-xs text-tx3">
-              {dropBlocked ? '松开鼠标不会上传任何内容' : dropHint.sub}
+              {dropBlocked ? t('松开鼠标不会上传任何内容') : dropHint.sub}
             </p>
           </div>
         </div>
@@ -647,13 +648,13 @@ export function Composer(props: ComposerProps) {
                       <span className="block text-[10px] uppercase text-tx3">
                         {att.mime === 'application/pdf' ? 'PDF'
                           : att.mime.includes('wordprocessingml') ? 'DOCX'
-                          : att.mime === 'text/markdown' ? 'MD' : '文本'}
+                          : att.mime === 'text/markdown' ? 'MD' : t('文本')}
                       </span>
                     </span>
                   </div>
                 )}
                 <button
-                  title="移除附件"
+                  title={t('移除附件')}
                   className="absolute -right-1.5 -top-1.5 cursor-pointer rounded-full border border-line bg-bg1 p-0.5 text-tx2 opacity-0 shadow-sm transition-opacity hover:text-err group-focus-within:opacity-100 group-hover:opacity-100"
                   onClick={() => removeAttachment(att)}
                 >
@@ -677,11 +678,11 @@ export function Composer(props: ComposerProps) {
           ref={taRef}
           rows={1}
           value={text}
-          placeholder={props.disabled ? '管理员尚未配置模型'
-            : compact ? '输入消息…'
-            : imageMode ? '描述你想生成的画面…'
-            : touchKeyboard ? '输入消息…'
-            : '输入消息,Enter 发送,Shift + Enter 换行'}
+          placeholder={props.disabled ? t('管理员尚未配置模型')
+            : compact ? t('输入消息…')
+            : imageMode ? t('描述你想生成的画面…')
+            : touchKeyboard ? t('输入消息…')
+            : t('输入消息,Enter 发送,Shift + Enter 换行')}
           disabled={props.disabled}
           className={`max-h-[220px] w-full resize-none bg-transparent px-4 text-[15px] leading-relaxed text-tx outline-none focus-visible:outline-none placeholder:text-tx3 ${
             compact ? 'min-w-0 flex-1 py-2.5' : 'pb-2 pt-3.5'}`}
@@ -707,7 +708,7 @@ export function Composer(props: ComposerProps) {
           {compact && model && (
             <button
               className="flex shrink-0 cursor-pointer items-center gap-1 text-xs text-tx2"
-              title="展开输入区"
+              title={t('展开输入区')}
               onClick={() => {
                 props.onExpand?.();
                 // The picker's trigger lives in the toolbar that is about to
@@ -723,7 +724,7 @@ export function Composer(props: ComposerProps) {
               reply in flight must stay stoppable without unfolding first. */}
           {compact && streaming && (
             <button
-              title="停止生成"
+              title={t('停止生成')}
               className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx shadow-xs transition-colors hover:bg-bg2"
               onClick={props.onStop}
             >
@@ -742,9 +743,9 @@ export function Composer(props: ComposerProps) {
             onChange={(e) => pickFiles(e.target.files)} />
           <button
             className={toolBtn}
-            title={imageMode ? '添加参考图'
-              : canAttachImages ? '添加附件:图片、PDF、Word(docx)或文本文件'
-              : '添加文档附件(当前模型不支持图片/PDF)'}
+            title={imageMode ? t('添加参考图')
+              : canAttachImages ? t('添加附件:图片、PDF、Word(docx)或文本文件')
+              : t('添加文档附件(当前模型不支持图片/PDF)')}
             onClick={() => fileRef.current?.click()}
             disabled={!canAttach || attachFull}
           >
@@ -757,31 +758,31 @@ export function Composer(props: ComposerProps) {
               className={`${props.workspacePanelOpen
                 ? `${toolBtnShape} border-acc/40 bg-acc/10 text-acc`
                 : toolBtn} max-sm:hidden`}
-              title="工作区(Beta):助手会把长文、方案、代码、数据分析等成果写成文件放在这里,并可以反复修改;点开可以查看、下载,或把文件拖进来交给助手处理"
+              title={t('工作区(Beta):助手会把长文、方案、代码、数据分析等成果写成文件放在这里,并可以反复修改;点开可以查看、下载,或把文件拖进来交给助手处理')}
               onClick={props.onWorkspaceClick}
             >
               <FolderOpen size={13} />
-              <span>工作区</span>
+              <span>{t('工作区')}</span>
               <span className="rounded-sm bg-acc/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wider text-acc">Beta</span>
             </button>
           )}
 
           {toolServers.length > 0 && model?.tools && !imageMode && (
             <Popover open={mcpOpen} setOpen={setMcpOpen} trigger={
-              <button className={toolCount ? `${toolBtnShape} border-acc/40 bg-acc/10 text-acc` : toolBtn} title="MCP 工具">
+              <button className={toolCount ? `${toolBtnShape} border-acc/40 bg-acc/10 text-acc` : toolBtn} title={t('MCP 工具')}>
                 <Wrench size={13} />
-                <span className="max-sm:hidden">工具</span>
+                <span className="max-sm:hidden">{t('工具')}</span>
                 {toolCount > 0 && <span className="font-semibold tabular-nums">{toolCount}</span>}
               </button>
             }>
-              {groupHead('MCP 工具服务器')}
+              {groupHead(t('MCP 工具服务器'))}
               <div className="max-h-72 overflow-y-auto">
                 {toolServers.map((s) => (
                   <div key={s.id} className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-bg2">
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[13px] font-medium text-tx">{s.name}</div>
                       <div className="text-[11px] text-tx3">
-                        {s.toolCount} 个工具{s.lastStatus === 'error' ? ' · 上次连接失败' : ''}
+                        {t('{count} 个工具', { count: s.toolCount })}{s.lastStatus === 'error' ? t(' · 上次连接失败') : ''}
                       </div>
                     </div>
                     <Toggle
@@ -805,10 +806,10 @@ export function Composer(props: ComposerProps) {
           <Popover open={panelOpen} setOpen={setPanelOpen} align="right" width="w-[22rem]" trigger={
             <button
               className={`${toolBtnShape} border-line bg-bg1 pl-1.5 text-tx2 hover:bg-bg2 hover:text-tx`}
-              title="选择模型"
+              title={t('选择模型')}
             >
               {model && <ModelAvatar info={model} size={16} tile={false} />}
-              <span className="max-w-[150px] truncate text-tx max-sm:max-w-[110px]">{model ? model.displayName : '选择模型'}</span>
+              <span className="max-w-[150px] truncate text-tx max-sm:max-w-[110px]">{model ? model.displayName : t('选择模型')}</span>
               <ChevronDown size={12} className="text-tx3" />
             </button>
           }>
@@ -821,15 +822,15 @@ export function Composer(props: ComposerProps) {
                       <input
                         value={modelQuery}
                         onChange={(e) => setModelQuery(e.target.value)}
-                        aria-label="搜索模型"
-                        placeholder="搜索名称、ID 或服务商…"
+                        aria-label={t('搜索模型')}
+                        placeholder={t('搜索名称、ID 或服务商…')}
                         className={`${popField} pl-8`}
                       />
                     </label>
                     <button
                       type="button"
-                      title="其他设置"
-                      aria-label="打开其他设置"
+                      title={t('其他设置')}
+                      aria-label={t('打开其他设置')}
                       onClick={() => setPanelView('settings')}
                       className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 text-tx2 transition-colors hover:border-field hover:bg-bg2 hover:text-tx"
                     >
@@ -840,9 +841,9 @@ export function Composer(props: ComposerProps) {
 
                   <div className="flex shrink-0 items-center gap-1 border-b border-line bg-bg2/45 px-2 py-1.5">
                     {([
-                      ['all', '全部', searchedModels.length],
-                      ['chat', '对话', searchedModels.filter((m) => !m.imageGen).length],
-                      ['image', '绘图', searchedModels.filter((m) => m.imageGen).length],
+                      ['all', t('全部'), searchedModels.length],
+                      ['chat', t('对话'), searchedModels.filter((m) => !m.imageGen).length],
+                      ['image', t('绘图'), searchedModels.filter((m) => m.imageGen).length],
                     ] as const).map(([value, label, count]) => (
                       <button
                         key={value}
@@ -859,18 +860,18 @@ export function Composer(props: ComposerProps) {
                     {hasCustomOrder && (
                       <button
                         type="button"
-                        title="你拖动过模型顺序,点击恢复为管理员设置的默认排序"
+                        title={t('你拖动过模型顺序,点击恢复为管理员设置的默认排序')}
                         onClick={() => void resetUserOrder()}
                         className="ml-auto flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-tx3 transition-colors hover:text-tx"
                       >
                         <RotateCcw size={11} />
-                        恢复默认
+                        {t('恢复默认@@order')}
                       </button>
                     )}
                   </div>
 
                   <div className="min-h-0 flex-1 overflow-y-auto">
-                    {chatModels.length > 0 && imageModels.length > 0 && groupHead('对话模型')}
+                    {chatModels.length > 0 && imageModels.length > 0 && groupHead(t('对话模型'))}
                     {dragEnabled
                       ? (
                         <SortableList items={chatModels} keyOf={(m) => m.id}
@@ -880,7 +881,7 @@ export function Composer(props: ComposerProps) {
                       : chatModels.map((m) => modelRow(m))}
                     {imageModels.length > 0 && (
                       <>
-                        {chatModels.length > 0 && groupHead('绘图模型')}
+                        {chatModels.length > 0 && groupHead(t('绘图模型'))}
                         {dragEnabled
                           ? (
                             <SortableList items={imageModels} keyOf={(m) => m.id}
@@ -893,8 +894,8 @@ export function Composer(props: ComposerProps) {
                     {filteredModels.length === 0 && (
                       <div className="px-3 py-8 text-center">
                         <Search size={18} className="mx-auto mb-2 text-tx3" />
-                        <p className="text-xs font-medium text-tx2">没有匹配的模型</p>
-                        <p className="mt-1 text-[11px] text-tx3">换个名称、模型 ID 或服务商试试</p>
+                        <p className="text-xs font-medium text-tx2">{t('没有匹配的模型')}</p>
+                        <p className="mt-1 text-[11px] text-tx3">{t('换个名称、模型 ID 或服务商试试')}</p>
                       </div>
                     )}
                   </div>
@@ -905,20 +906,20 @@ export function Composer(props: ComposerProps) {
               {panelView === 'settings' && (
                 <>
                   <div className="flex shrink-0 items-center gap-2 border-b border-line px-2 py-2">
-                    <Button variant="ghost" size="iconSm" title="返回模型列表" aria-label="返回模型列表"
+                    <Button variant="ghost" size="iconSm" title={t('返回模型列表')} aria-label={t('返回模型列表')}
                       onClick={() => setPanelView('models')}>
                       <ArrowLeft size={15} />
                     </Button>
                     <Settings2 size={15} className="text-tx2" />
-                    <span className="text-xs font-semibold text-tx">其他设置</span>
+                    <span className="text-xs font-semibold text-tx">{t('其他设置')}</span>
                   </div>
                   <div className="overflow-y-auto p-3">
-                    <Field label="系统提示词">
+                    <Field label={t('系统提示词')}>
                       <textarea
                         rows={6}
                         value={props.settings.systemPrompt}
                         onChange={(e) => props.onSettingsChange({ ...props.settings, systemPrompt: e.target.value })}
-                        placeholder="设定 AI 的角色与行为…"
+                        placeholder={t('设定 AI 的角色与行为…')}
                         className={`${popField} min-h-28 resize-y leading-relaxed`}
                       />
                     </Field>
@@ -937,7 +938,7 @@ export function Composer(props: ComposerProps) {
             <Popover key={model?.id} open={effortOpen} setOpen={setEffortOpen} align="right" width="w-80" trigger={
               <button
                 className={`${toolBtnShape} fade-up border-line bg-bg1 text-tx2 hover:bg-bg2 hover:text-tx`}
-                title={`思考强度：${effort.label}`}
+                title={t('思考强度：{level}', { level: effort.label })}
                 style={thinking ? {
                   color: `rgb(${effortText})`,
                   borderColor: `rgb(${effortText} / 0.45)`,
@@ -945,12 +946,12 @@ export function Composer(props: ComposerProps) {
                 } : undefined}
               >
                 <Gauge size={14} className="shrink-0" />
-                <span className="max-w-[4.5rem] truncate max-sm:hidden">{thinking ? effort.label : '思考强度'}</span>
+                <span className="max-w-[4.5rem] truncate max-sm:hidden">{thinking ? effort.label : t('思考强度')}</span>
               </button>
             }>
               <div className="flex items-center gap-1.5 border-b border-line bg-bg2/45 px-3 py-2">
                 <Gauge size={14} className="shrink-0" style={{ color: `rgb(${effortText})` }} />
-                <span className="text-xs font-semibold text-tx">思考强度</span>
+                <span className="text-xs font-semibold text-tx">{t('思考强度')}</span>
                 <span className="flex-1" />
                 <span
                   className={`max-w-[8rem] truncate rounded-md px-2 py-0.5 text-[11px] font-semibold ${
@@ -967,14 +968,14 @@ export function Composer(props: ComposerProps) {
                   index={effortIdx}
                   onChange={(i) => setReasoningEffort(efforts[i])}
                 />
-                <p className="mt-1 text-[11px] leading-4 text-tx3">{minimumThinking && effortIdx === 0 ? '该模型无法完全关闭思考,使用最低强度并隐藏思考摘要' : effortHint(effortIdx, efforts.length)}</p>
+                <p className="mt-1 text-[11px] leading-4 text-tx3">{minimumThinking && effortIdx === 0 ? t('该模型无法完全关闭思考,使用最低强度并隐藏思考摘要') : effortHint(effortIdx, efforts.length)}</p>
               </div>
             </Popover>
           )}
 
           {sttSupported() && !props.disabled && (
             <button
-              title={listening ? '停止语音输入' : '语音输入(浏览器本地识别,无服务器开销)'}
+              title={listening ? t('停止语音输入') : t('语音输入(浏览器本地识别,无服务器开销)')}
               className={`flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border shadow-xs transition-colors max-sm:hidden ${
                 listening
                   ? 'animate-pulse border-err/40 bg-err/10 text-err'
@@ -988,7 +989,7 @@ export function Composer(props: ComposerProps) {
             <>
               {props.onEnqueue && (
                 <button
-                  title="加入队列:当前回复完成后自动发送"
+                  title={t('加入队列:当前回复完成后自动发送')}
                   disabled={submitting || (!text.trim() && atts.length === 0)}
                   className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx2 shadow-xs transition-colors hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none"
                   onClick={send}
@@ -997,7 +998,7 @@ export function Composer(props: ComposerProps) {
                 </button>
               )}
               <button
-                title="停止生成"
+                title={t('停止生成')}
                 className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx shadow-xs transition-colors hover:bg-bg2"
                 onClick={props.onStop}
               >
@@ -1006,7 +1007,7 @@ export function Composer(props: ComposerProps) {
             </>
           ) : (
             <button
-              title="发送消息"
+              title={t('发送消息')}
               disabled={submitting || (!text.trim() && atts.length === 0) || props.disabled}
               className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md bg-pri text-prifg shadow-xs transition-colors hover:bg-pri2 disabled:opacity-40 disabled:pointer-events-none"
               onClick={send}

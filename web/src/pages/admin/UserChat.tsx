@@ -5,6 +5,7 @@ import { api, errMsg, fmtDate } from '../../api';
 import { Badge, Button, EmptyState, Spinner, toast } from '../../components/ui';
 import { ChatMessage } from '../../components/ChatMessage';
 import { computePath, newestLeafUnder } from '../../tree';
+import { t } from '../../i18n';
 import type { AdminChatDetail, Message } from '../../types';
 
 /* Read-only view of another person's conversation. The same message
@@ -46,9 +47,13 @@ export default function UserChat() {
     return (
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
         <EmptyState
-          title="对话不存在"
-          hint="它可能已被用户删除;临时对话不对管理员开放。"
-          action={<Link to={`/admin/users/${userId}`}><Button variant="outline" size="sm">返回用户详情</Button></Link>}
+          title={t('对话不存在')}
+          hint={t('它可能已被用户删除;临时对话不对管理员开放。')}
+          action={(
+            <Link to={`/admin/users/${userId}`}>
+              <Button variant="outline" size="sm">{t('返回用户详情')}</Button>
+            </Link>
+          )}
         />
       </div>
     );
@@ -63,32 +68,32 @@ export default function UserChat() {
       <div className="space-y-3">
         <Link to={`/admin/users/${user.id}`}
           className="inline-flex items-center gap-1 text-xs text-tx3 transition-colors hover:text-tx">
-          <ArrowLeft size={13} />返回 {ownerLabel} 的详情
+          <ArrowLeft size={13} />{t('返回 {name} 的详情', { name: ownerLabel })}
         </Link>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="truncate text-base font-semibold tracking-tight text-tx">
-              {chat.title.trim() || '未命名对话'}
+              {chat.title.trim() || t('未命名对话')}
             </h1>
-            {chat.pinned && <Badge><Pin size={10} />置顶</Badge>}
-            {chat.archived && <Badge><Archive size={10} />归档</Badge>}
+            {chat.pinned && <Badge><Pin size={10} />{t('置顶')}</Badge>}
+            {chat.archived && <Badge><Archive size={10} />{t('归档')}</Badge>}
             {chat.projectName && <Badge><FolderOpen size={10} />{chat.projectName}</Badge>}
           </div>
           <p className="mt-1 flex flex-wrap gap-x-2 text-xs text-tx3">
             <span>{ownerLabel}{user.displayName ? ` (@${user.username})` : ''}</span>
             {chat.modelName && <span className="font-mono">{chat.modelName}</span>}
-            <span className="tabular-nums">创建于 {fmtDate(chat.createdAt)}</span>
-            <span className="tabular-nums">最后活动 {fmtDate(chat.updatedAt)}</span>
-            <span className="tabular-nums">{chat.messageCount} 条消息</span>
+            <span className="tabular-nums">{t('创建于 {date}', { date: fmtDate(chat.createdAt) })}</span>
+            <span className="tabular-nums">{t('最后活动 {date}', { date: fmtDate(chat.updatedAt) })}</span>
+            <span className="tabular-nums">{t('{n} 条消息', { n: chat.messageCount })}</span>
           </p>
         </div>
 
         <div className="flex items-start gap-2 rounded-lg border border-line bg-bg1 px-3 py-2 text-xs leading-relaxed text-tx2">
           <Eye size={14} className="mt-0.5 shrink-0 text-tx3" />
           <span>
-            只读视图:按对方当前所在的分支显示
-            {branchCount > 0 ? `,另有 ${branchCount} 条消息在其他版本分支里,可用消息下方的左右箭头查看` : ''}
-            。这里的任何切换都不会改动对方的对话。
+            {branchCount > 0
+              ? t('只读视图:按对方当前所在的分支显示,另有 {n} 条消息在其他版本分支里,可用消息下方的左右箭头查看。这里的任何切换都不会改动对方的对话。', { n: branchCount })
+              : t('只读视图:按对方当前所在的分支显示。这里的任何切换都不会改动对方的对话。')}
           </span>
         </div>
 
@@ -99,7 +104,7 @@ export default function UserChat() {
               className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-xs font-medium text-tx2 transition-colors hover:text-tx"
               onClick={() => setPromptOpen((v) => !v)}
             >
-              <span>对话系统提示</span>
+              <span>{t('对话系统提示')}</span>
               {promptOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
             {promptOpen && (
@@ -113,7 +118,7 @@ export default function UserChat() {
 
       {path.length === 0 ? (
         <p className="rounded-xl border border-dashed border-line2 px-3 py-8 text-center text-xs text-tx3">
-          这个对话还没有任何消息
+          {t('这个对话还没有任何消息')}
         </p>
       ) : (
         <div className="flex flex-col gap-7 pb-10">

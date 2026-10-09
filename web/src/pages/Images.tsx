@@ -16,6 +16,7 @@ import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGaller
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import { Markdown } from '../components/Markdown';
 import { retryStatusText } from '../components/ChatMessage';
+import { t, tServer, locale } from '../i18n';
 import type { NaiOptions } from '../novelai';
 import type { ImageModel, ImageRecord, ProviderRetry } from '../types';
 
@@ -27,7 +28,7 @@ const HISTORY_MAX = 10;
 // Quick prompts are titled templates: the chip shows the short title, clicking
 // inserts the (possibly very long) prompt body.
 type QuickPrompt = { title: string; prompt: string };
-const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: '去背景', prompt: '去背景' }];
+const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: t('去背景'), prompt: t('去背景') }];
 
 // A generation in flight. The server admits one job per model per user, so
 // several of these can run side by side — one per model.
@@ -145,7 +146,7 @@ function ImagesInner() {
   modelsRef.current = models;
   function modelLabel(id: string) {
     const m = modelsRef.current?.find((x) => x.id === id);
-    return m ? (m.displayName || m.modelId) : '图像模型';
+    return m ? (m.displayName || m.modelId) : t('图像模型');
   }
 
   const busyModels = useMemo(
@@ -199,13 +200,13 @@ function ImagesInner() {
       })
       .catch((err) => {
         setModels([]);
-        toast(err instanceof Error ? err.message : '加载模型失败', 'err');
+        toast(err instanceof Error ? err.message : t('加载模型失败'), 'err');
       });
     api.get<{ images: ImageRecord[]; total: number }>(`/api/images?limit=${PAGE_SIZE}&offset=0`)
       .then((r) => { setList(r.images ?? []); setTotal(r.total ?? 0); setGalleryLoaded(true); })
       .catch((err) => {
         setGalleryLoaded(true);
-        toast(err instanceof Error ? err.message : '加载图片失败', 'err');
+        toast(err instanceof Error ? err.message : t('加载图片失败'), 'err');
       });
   }, []);
 
@@ -216,8 +217,8 @@ function ImagesInner() {
     if (!imgs.length) return;
     const limit = Math.min(MAX_REFS, useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20);
     const room = limit - refSlots.filter(Boolean).length;
-    if (room <= 0) { toast(`参考图最多 ${limit} 张`, 'err'); return; }
-    if (imgs.length > room) toast(`参考图最多 ${limit} 张`, 'err');
+    if (room <= 0) { toast(t('参考图最多 {limit} 张', { limit }), 'err'); return; }
+    if (imgs.length > room) toast(t('参考图最多 {limit} 张', { limit }), 'err');
     setUploading(true);
     try {
       for (const f of imgs.slice(0, room)) {
@@ -231,7 +232,7 @@ function ImagesInner() {
         });
       }
     } catch (err) {
-      toast(err instanceof Error ? err.message : '上传失败', 'err');
+      toast(err instanceof Error ? err.message : t('上传失败'), 'err');
     } finally {
       setUploading(false);
     }
@@ -251,14 +252,14 @@ function ImagesInner() {
     if (!f || !f.type.startsWith('image/')) return;
     const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
     if (!refSlots[idx] && refSlots.filter(Boolean).length >= limit) {
-      toast(`参考图最多 ${limit} 张`, 'err'); return;
+      toast(t('参考图最多 {limit} 张', { limit }), 'err'); return;
     }
     setUploading(true);
     try {
       const r = await uploadFile(f);
       setRefSlots((prev) => prev.map((x, i) => (i === idx ? r.id : x)));
     } catch (err) {
-      toast(err instanceof Error ? err.message : '上传失败', 'err');
+      toast(err instanceof Error ? err.message : t('上传失败'), 'err');
     } finally {
       setUploading(false);
     }
@@ -317,12 +318,12 @@ function ImagesInner() {
         try {
           st = await api.get<JobStatus>(`/api/images/jobs/${jobId}`);
         } catch (err) {
-          if (err instanceof ApiError && err.status === 404) throw new Error('任务状态已丢失(服务器可能重启过)');
-          if (Date.now() - startedAt > 12 * 60_000) throw new Error('等待超时,已放弃');
+          if (err instanceof ApiError && err.status === 404) throw new Error(t('任务状态已丢失(服务器可能重启过)'));
+          if (Date.now() - startedAt > 12 * 60_000) throw new Error(t('等待超时,已放弃'));
           continue;
         }
-        if (st.status === 'stopped') { toast('已取消生成', 'info'); return; }
-        if (st.status === 'error') { providerBusy = st.errorCode === 'provider_busy'; throw new Error(st.error || '生成失败'); }
+        if (st.status === 'stopped') { toast(t('已取消生成'), 'info'); return; }
+        if (st.status === 'error') { providerBusy = st.errorCode === 'provider_busy'; throw new Error(st.error ? tServer(st.error) : t('生成失败')); }
         setRunning((prev) => prev.map((j) => j.id === jobId ? { ...j, retry: st.retry } : j));
         if (st.status === 'done') {
           const imgs = st.images ?? [];
@@ -333,9 +334,10 @@ function ImagesInner() {
               setConvo({ modelId: job.modelId, turns: st.turns ?? [{ role: 'user', text: job.prompt }, { role: 'assistant', text: st.reply ?? '' }] });
               setReplyText('');
             }
-            toast(`${modelLabel(job.modelId)}:模型回复了文字,请选择方案或继续对话`, 'ok');
+            const said = t('{model}:模型回复了文字,请选择方案或继续对话', { model: modelLabel(job.modelId) });
+            toast(said, 'ok');
             tabAlert();
-            notifyDone('绘图工坊', `${modelLabel(job.modelId)}:模型回复了文字,请选择方案或继续对话`, '/images');
+            notifyDone(t('绘图工坊'), said, '/images');
             return;
           }
           if (aliveRef.current) setConvo((c) => (c?.modelId === job.modelId ? null : c));
@@ -346,24 +348,25 @@ function ImagesInner() {
           setTotal((t) => t + imgs.length);
           // Prompt and reference images stay put on purpose — iterating on
           // the same inputs is the common case.
-          toast(`${modelLabel(job.modelId)}:已生成 ${imgs.length} 张图片`, 'ok');
+          const made = t('{model}:已生成 {n} 张图片', { model: modelLabel(job.modelId), n: imgs.length });
+          toast(made, 'ok');
           tabAlert();
-          notifyDone('绘图完成', `${modelLabel(job.modelId)}:已生成 ${imgs.length} 张图片`, '/images');
+          notifyDone(t('绘图完成'), made, '/images');
           return;
         }
       }
     } catch (err) {
       const recovered = await recoverFromGallery(startedAt);
       if (recovered > 0) {
-        toast(`已生成 ${recovered} 张图片(已从作品库找回)`, 'ok');
+        toast(t('已生成 {n} 张图片(已从作品库找回)', { n: recovered }), 'ok');
         tabAlert();
         return;
       }
-      const msg = err instanceof Error ? err.message : '生成失败';
+      const msg = err instanceof Error ? err.message : t('生成失败');
       if (aliveRef.current) setGenError({ label: modelLabel(job.modelId), message: msg, request: job.request, busy: providerBusy });
       if (!providerBusy) toast(msg, 'err');
       tabAlert();
-      notifyDone('绘图失败', `${modelLabel(job.modelId)}:${msg}`, '/images');
+      notifyDone(t('绘图失败'), `${modelLabel(job.modelId)}:${msg}`, '/images');
     } finally {
       trackedRef.current.delete(jobId);
       if (aliveRef.current) setRunning((prev) => prev.filter((j) => j.id !== jobId));
@@ -403,7 +406,7 @@ function ImagesInner() {
     if (uploading || busyModels.has(mid)) return false;
     const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
     if ((retryRequest ? retryRequest.inputUploadIds ?? [] : refSlots.filter(Boolean)).length > limit) {
-      toast(`参考图最多 ${limit} 张,请移除多余附件`, 'err'); return false;
+      toast(t('参考图最多 {limit} 张,请移除多余附件', { limit }), 'err'); return false;
     }
     setGenError(null);
     setSubmitting((prev) => [...prev, mid]);
@@ -429,7 +432,7 @@ function ImagesInner() {
       // so report it. Anything else is a lost response (e.g. a proxy cutting
       // the connection) and one of the jobs above is probably ours.
       if (!(err instanceof ApiError) && untracked.some((j) => j.modelId === mid)) return true;
-      const msg = err instanceof Error ? err.message : '生成失败';
+      const msg = err instanceof Error ? err.message : t('生成失败');
       setGenError({ label: modelLabel(mid), message: msg });
       toast(msg, 'err');
       tabAlert();
@@ -443,7 +446,7 @@ function ImagesInner() {
     setRunning((prev) => prev.map((j) => j.id === id ? { ...j, cancelling: true } : j));
     try { await api.post(`/api/images/jobs/${id}/cancel`); }
     catch (err) {
-      toast(err instanceof Error ? err.message : '取消失败', 'err');
+      toast(err instanceof Error ? err.message : t('取消失败'), 'err');
       setRunning((prev) => prev.map((j) => j.id === id ? { ...j, cancelling: false } : j));
     }
   }
@@ -463,17 +466,17 @@ function ImagesInner() {
     // The +1px type bump this page pioneered is now app-wide (see index.css).
     <div className="contents">
       <PageHeader
-        title="绘图工坊"
-        subtitle={total > 0 ? `已生成 ${total.toLocaleString()} 张图片` : '文生图与参考图编辑'}
+        title={t('绘图工坊')}
+        subtitle={total > 0 ? t('已生成 {total} 张图片', { total: total.toLocaleString(locale) }) : t('文生图与参考图编辑')}
         left={!sidebarOpen && (
-          <Button variant="ghost" size="icon" title="展开侧栏" onClick={() => setSidebarOpen(true)}>
+          <Button variant="ghost" size="icon" title={t('展开侧栏')} onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
       >
         {hasNai && (
-          <Link to="/images/nai" className={btnClass('outline', 'sm')} title="NovelAI V5 专属创作室">
-            <Palette size={14} />NAI 创作室
+          <Link to="/images/nai" className={btnClass('outline', 'sm')} title={t('NovelAI V5 专属创作室')}>
+            <Palette size={14} />{t('NAI 创作室')}
           </Link>
         )}
       </PageHeader>
@@ -481,7 +484,7 @@ function ImagesInner() {
       <div className="flex-1 overflow-y-auto bg-bg0">
         <div className="mx-auto max-w-5xl p-6">
           {/* ---- generation form ---- */}
-          <Card title="新建生成" desc="描述目标画面,可附参考图作为编辑输入。" className="fade-up"
+          <Card title={t('新建生成')} desc={t('描述目标画面,可附参考图作为编辑输入。')} className="fade-up"
             flush={genericModels === null || genericModels.length === 0}>
             {genericModels === null ? (
               <div className="flex justify-center py-10 text-tx3"><Spinner className="h-5 w-5" /></div>
@@ -489,21 +492,21 @@ function ImagesInner() {
               user && !user.allowImageModels ? (
                 <EmptyState
                   icon={<ImageIcon size={22} />}
-                  title="没有图像模型使用权限"
-                  hint="请联系管理员为你的账号开启图像模型使用权限后再来创作。"
+                  title={t('没有图像模型使用权限')}
+                  hint={t('请联系管理员为你的账号开启图像模型使用权限后再来创作。')}
                 />
               ) : (
                 <EmptyState
                   icon={<ImageIcon size={22} />}
-                  title="管理员尚未配置图像模型"
-                  hint="请联系管理员在后台添加支持图像生成的模型后再来创作。"
+                  title={t('管理员尚未配置图像模型')}
+                  hint={t('请联系管理员在后台添加支持图像生成的模型后再来创作。')}
                 />
               )
             ) : (
               <div className="space-y-4">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-2">
-                    <Field label="模型">
+                    <Field label={t('模型')}>
                       <Select value={modelId} onChange={(e) => { setModelId(e.target.value); setGenError(null); }}>
                         {genericModels.map((m) => (
                           <option key={m.id} value={m.id}>
@@ -513,30 +516,30 @@ function ImagesInner() {
                       </Select>
                     </Field>
                   </div>
-                  <Field label="生成数量">
+                  <Field label={t('生成数量')}>
                     <Select value={String(n)} onChange={(e) => setN(Number(e.target.value))}>
-                      {[1, 2, 3, 4].map((i) => <option key={i} value={i}>{i} 张</option>)}
+                      {[1, 2, 3, 4].map((i) => <option key={i} value={i}>{t('{n} 张', { n: i })}</option>)}
                     </Select>
                   </Field>
                 </div>
 
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
-                    <span className="text-[13px] font-medium text-tx">提示词</span>
+                    <span className="text-[13px] font-medium text-tx">{t('提示词')}</span>
                     <div className="relative">
                       <button
                         type="button"
                         onClick={() => setHistOpen((v) => !v)}
                         className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-tx2 transition-colors hover:bg-bg2 hover:text-tx"
                       >
-                        <History size={13} />历史提示词
+                        <History size={13} />{t('历史提示词')}
                       </button>
                       {histOpen && (
                         <>
                           <div className="fixed inset-0 z-10" onClick={() => setHistOpen(false)} />
                           <div className="absolute right-0 top-full z-20 mt-1 max-h-72 w-80 max-w-[80vw] overflow-y-auto rounded-lg border border-line bg-bg1 py-1 shadow-lg">
                             {history.length === 0 ? (
-                              <div className="px-3 py-2.5 text-xs text-tx3">还没有历史提示词</div>
+                              <div className="px-3 py-2.5 text-xs text-tx3">{t('还没有历史提示词')}</div>
                             ) : history.map((h) => (
                               <button
                                 key={h}
@@ -556,7 +559,7 @@ function ImagesInner() {
                     rows={3}
                     value={prompt}
                     maxLength={4000}
-                    placeholder="描述你想生成的图像,例如:一只黑猫坐在雨后的屋顶上,水彩风格…"
+                    placeholder={t('描述你想生成的图像,例如:一只黑猫坐在雨后的屋顶上,水彩风格…')}
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); generate(); }
@@ -576,20 +579,20 @@ function ImagesInner() {
                     ))}
                     <button
                       type="button"
-                      title="管理快捷提示词"
+                      title={t('管理快捷提示词')}
                       onClick={() => {
                         setQuickDraft(quick.length ? quick.map((q) => ({ ...q })) : [{ title: '', prompt: '' }]);
                         setQuickOpen(true);
                       }}
                       className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-line px-2.5 py-1 text-xs text-tx3 transition-colors hover:border-line2 hover:text-tx"
                     >
-                      <Settings2 size={12} />管理
+                      <Settings2 size={12} />{t('管理')}
                     </button>
                   </div>
                 </div>
 
                 <div>
-                  <div className="mb-1.5 text-[13px] font-medium text-tx">参考图</div>
+                  <div className="mb-1.5 text-[13px] font-medium text-tx">{t('参考图')}</div>
                   <div
                     onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                     onDragLeave={(e) => {
@@ -607,25 +610,25 @@ function ImagesInner() {
                         <div key={i} className="group/ref relative h-24 overflow-hidden rounded-lg border border-line sm:h-28">
                           <button
                             type="button"
-                            title={`放大查看图${i + 1}`}
+                            title={t('放大查看图{n}', { n: i + 1 })}
                             onClick={() => setRefPreview(i)}
                             className="block h-full w-full cursor-pointer"
                           >
                             <img
                               src={`/api/uploads/${id}/file`}
-                              alt={`图${i + 1}`}
+                              alt={t('图{n}', { n: i + 1 })}
                               className="h-full w-full object-cover"
                             />
                             <span className="absolute inset-0 flex items-center justify-center gap-1 bg-black/45 text-[11px] text-white opacity-0 transition-opacity group-hover/ref:opacity-100">
-                              <ZoomIn size={13} />查看
+                              <ZoomIn size={13} />{t('查看')}
                             </span>
                           </button>
                           <span className="pointer-events-none absolute left-1.5 top-1.5 rounded-sm bg-black/55 px-1.5 py-0.5 text-[10px] leading-none text-white">
-                            图{i + 1}
+                            {t('图{n}', { n: i + 1 })}
                           </span>
                           <button
                             type="button"
-                            title="移除"
+                            title={t('移除')}
                             onClick={() => setRefSlots((prev) => prev.map((x, j) => (j === i ? null : x)))}
                             className="absolute right-1 top-1 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-full bg-black/70 text-white ring-1 ring-white/70 transition-colors hover:bg-errs"
                           >
@@ -636,7 +639,7 @@ function ImagesInner() {
                         <button
                           key={i}
                           type="button"
-                          title={`上传图${i + 1}`}
+                          title={t('上传图{n}', { n: i + 1 })}
                           disabled={uploading}
                           onClick={() => openSlotPicker(i)}
                           className={`flex h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed transition-colors sm:h-28 disabled:cursor-default disabled:opacity-60 ${
@@ -644,7 +647,7 @@ function ImagesInner() {
                           }`}
                         >
                           {uploading ? <Spinner className="h-4 w-4" /> : <ImagePlus size={17} />}
-                          <span className="text-[11px] tabular-nums">图{i + 1}</span>
+                          <span className="text-[11px] tabular-nums">{t('图{n}', { n: i + 1 })}</span>
                         </button>
                       )
                     ))}
@@ -654,7 +657,7 @@ function ImagesInner() {
                     onChange={onSlotFile}
                   />
                   <div className="mt-1.5 text-xs text-tx3">
-                    可选;支持拖拽或 Ctrl+V 粘贴,点击已上传的图片可放大查看。
+                    {t('可选;支持拖拽或 Ctrl+V 粘贴,点击已上传的图片可放大查看。')}
                   </div>
                 </div>
 
@@ -662,9 +665,9 @@ function ImagesInner() {
                   <div className={`rounded-md border px-3 py-2 text-[13px] leading-relaxed ${genError.busy ? 'border-line bg-bg2 text-tx2' : 'border-err/30 bg-err/5 text-err'}`}>
                     <p className="whitespace-pre-wrap">{genError.label}: {genError.message}</p>
                     {genError.request && <div className="mt-1.5 flex items-center justify-between gap-2">
-                      <span className="text-xs text-tx3">{genError.busy ? '这是模型提供方的限流；' : ''}本次提示词和参考图已保留。</span>
+                      <span className="text-xs text-tx3">{genError.busy ? t('这是模型提供方的限流；') : ''}{t('本次提示词和参考图已保留。')}</span>
                       <Button size="xs" variant="outline" disabled={busyModels.has(genError.request.modelId) || uploading}
-                        onClick={() => { const r = genError.request!; void submit(r.modelId, r.prompt, r.history, r); }}>重试</Button>
+                        onClick={() => { const r = genError.request!; void submit(r.modelId, r.prompt, r.history, r); }}>{t('重试')}</Button>
                     </div>}
                   </div>
                 )}
@@ -674,37 +677,37 @@ function ImagesInner() {
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex items-center gap-1.5 text-[13px] font-medium text-tx">
                         <MessageSquare size={14} className="shrink-0 text-acc" />
-                        {modelLabel(convo.modelId)} 回复了文字,还没有生成图片
+                        {t('{model} 回复了文字,还没有生成图片', { model: modelLabel(convo.modelId) })}
                       </span>
                       <button
                         type="button"
-                        title="结束这段对话"
+                        title={t('结束这段对话')}
                         onClick={() => setConvo(null)}
                         className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-tx3 transition-colors hover:bg-bg2 hover:text-tx"
                       >
                         <X size={14} />
                       </button>
                     </div>
-                    {convo.turns.map((t, i) => (
-                      t.role === 'user' ? (
-                        <div key={i} className="line-clamp-2 text-xs text-tx3">你:{t.text}</div>
+                    {convo.turns.map((turn, i) => (
+                      turn.role === 'user' ? (
+                        <div key={i} className="line-clamp-2 text-xs text-tx3">{t('你:{text}', { text: turn.text })}</div>
                       ) : i === convo.turns.length - 1 ? (
                         <div key={i} className="max-h-80 overflow-y-auto rounded-md border border-line bg-bg1 px-3 py-2 text-[13px]">
-                          <Markdown text={t.text} />
+                          <Markdown text={turn.text} />
                         </div>
                       ) : (
-                        <div key={i} className="line-clamp-2 text-xs text-tx3">{modelLabel(convo.modelId)}:{t.text}</div>
+                        <div key={i} className="line-clamp-2 text-xs text-tx3">{modelLabel(convo.modelId)}:{turn.text}</div>
                       )
                     ))}
                     {convoOptions.length > 0 && (
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-xs text-tx3">按这个方案生成:</span>
+                        <span className="text-xs text-tx3">{t('按这个方案生成:')}</span>
                         {convoOptions.map((o) => (
                           <button
                             key={o}
                             type="button"
                             disabled={convoBusy}
-                            onClick={() => replyToModel(`请按「${o}」生成图片`)}
+                            onClick={() => replyToModel(t('请按「{option}」生成图片', { option: o }))}
                             className="cursor-pointer rounded-full border border-acc/40 bg-bg1 px-2.5 py-1 text-xs text-tx transition-colors hover:border-acc hover:bg-acc/10 disabled:cursor-default disabled:opacity-60"
                           >
                             {o}
@@ -717,7 +720,7 @@ function ImagesInner() {
                         value={replyText}
                         disabled={convoBusy}
                         maxLength={4000}
-                        placeholder="回复模型继续,例如:方案一,背景换成雨夜"
+                        placeholder={t('回复模型继续,例如:方案一,背景换成雨夜')}
                         onChange={(e) => setReplyText(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); replyToModel(replyText); }
@@ -729,7 +732,7 @@ function ImagesInner() {
                         onClick={() => replyToModel(replyText)}
                         className="shrink-0"
                       >
-                        {convoBusy ? <Spinner className="h-4 w-4" /> : <Send size={14} />}继续生成
+                        {convoBusy ? <Spinner className="h-4 w-4" /> : <Send size={14} />}{t('继续生成')}
                       </Button>
                     </div>
                   </div>
@@ -750,10 +753,10 @@ function ImagesInner() {
                         <span className="ml-auto shrink-0 tabular-nums text-tx3">
                           {((Date.now() - j.startedAt) / 1000).toFixed(1)}s
                         </span>
-                        <Button size="xs" variant="ghost" disabled={j.cancelling} onClick={() => void cancelJob(j.id)}>取消</Button>
+                        <Button size="xs" variant="ghost" disabled={j.cancelling} onClick={() => void cancelJob(j.id)}>{t('取消')}</Button>
                         <span className="basis-full truncate text-xs text-tx3 sm:hidden">{j.prompt}</span>
                         {(j.retry || j.cancelling) && <span role="status" className="basis-full text-xs leading-relaxed text-tx2">
-                          {j.cancelling ? '正在取消…' : retryStatusText(j.retry!)}
+                          {j.cancelling ? t('正在取消…') : retryStatusText(j.retry!)}
                           {!j.cancelling && j.retry!.attempt > 0 && ` (${j.retry!.attempt}/${j.retry!.maxAttempts})`}
                         </span>}
                       </div>
@@ -763,15 +766,14 @@ function ImagesInner() {
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
                   <p className="text-xs leading-relaxed text-tx3">
-                    部分模型生成需要几分钟,请耐心等待;期间可切到其他标签页,完成后标签会有提示。
-                    换一个模型即可同时发起下一张,同一模型需等当前任务完成。Cmd / Ctrl + Enter 快速提交。
+                    {t('部分模型生成需要几分钟,请耐心等待;期间可切到其他标签页,完成后标签会有提示。换一个模型即可同时发起下一张,同一模型需等当前任务完成。Cmd / Ctrl + Enter 快速提交。')}
                   </p>
                   <Button variant="primary" disabled={!canGenerate} onClick={generate} className="shrink-0">
                     {currentJob
-                      ? <><Spinner className="h-4 w-4" />生成中 {((Date.now() - currentJob.startedAt) / 1000).toFixed(1)}s</>
+                      ? <><Spinner className="h-4 w-4" />{t('生成中 {s}s', { s: ((Date.now() - currentJob.startedAt) / 1000).toFixed(1) })}</>
                       : model && submitting.includes(model.id)
-                        ? <><Spinner className="h-4 w-4" />提交中</>
-                        : <><Sparkles size={15} />生成图片</>}
+                        ? <><Spinner className="h-4 w-4" />{t('提交中')}</>
+                        : <><Sparkles size={15} />{t('生成图片')}</>}
                   </Button>
                 </div>
               </div>
@@ -781,13 +783,13 @@ function ImagesInner() {
           {/* ---- gallery ---- */}
           <section className="mt-5">
             <div className="mb-2.5 flex items-baseline justify-between">
-              <h2 className="eyebrow">作品库</h2>
+              <h2 className="eyebrow">{t('作品库')}</h2>
               {total > 0 && (
                 <Link
                   to="/images/gallery"
                   className="inline-flex cursor-pointer items-center gap-1 text-xs tabular-nums text-tx2 transition-colors hover:text-tx"
                 >
-                  作品集 · 共 {total.toLocaleString()} 张<ArrowRight size={12} />
+                  {t('作品集 · 共 {total} 张', { total: total.toLocaleString(locale) })}<ArrowRight size={12} />
                 </Link>
               )}
             </div>
@@ -797,8 +799,8 @@ function ImagesInner() {
               <div className="rounded-xl border border-line bg-bg1">
                 <EmptyState
                   icon={<ImageIcon size={22} />}
-                  title="还没有生成过图片"
-                  hint="在上方输入提示词,开始你的第一次创作。"
+                  title={t('还没有生成过图片')}
+                  hint={t('在上方输入提示词,开始你的第一次创作。')}
                 />
               </div>
             ) : (
@@ -823,7 +825,7 @@ function ImagesInner() {
                       <a
                         href={`/api/images/${list[0].id}/file`}
                         download
-                        title="下载图片"
+                        title={t('下载图片')}
                         className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white ring-1 ring-white/70 transition-colors hover:bg-black/85"
                       >
                         <Download size={16} />
@@ -834,7 +836,7 @@ function ImagesInner() {
                       download
                       className={btnClass('outline', 'lg', 'mt-3 w-full')}
                     >
-                      <Download size={16} />下载图片
+                      <Download size={16} />{t('下载图片')}
                     </a>
                   </div>
                   {/* Older images: a capped preview grid — the full archive
@@ -853,7 +855,7 @@ function ImagesInner() {
                       to="/images/gallery"
                       className={btnClass('outline', 'sm')}
                     >
-                      查看全部 {total.toLocaleString()} 张作品<ArrowRight size={14} />
+                      {t('查看全部 {total} 张作品', { total: total.toLocaleString(locale) })}<ArrowRight size={14} />
                     </Link>
                   </div>
                 )}
@@ -866,13 +868,13 @@ function ImagesInner() {
       {/* ---- reference image preview ---- */}
       <Modal
         open={refPreview !== null} onClose={() => setRefPreview(null)}
-        title={`参考图${(refPreview ?? 0) + 1}`} wide
+        title={t('参考图{n}', { n: (refPreview ?? 0) + 1 })} wide
       >
         {refPreview !== null && refSlots[refPreview] && (
           <div className="space-y-4">
             <img
               src={`/api/uploads/${refSlots[refPreview]}/file`}
-              alt={`图${refPreview + 1}`}
+              alt={t('图{n}', { n: refPreview + 1 })}
               className="mx-auto max-h-[62vh] rounded-lg border border-line bg-bg0 object-contain"
             />
             <ModalActions>
@@ -881,7 +883,7 @@ function ImagesInner() {
                 disabled={uploading}
                 onClick={() => { const i = refPreview; setRefPreview(null); openSlotPicker(i); }}
               >
-                <ImagePlus size={14} />更换
+                <ImagePlus size={14} />{t('更换')}
               </Button>
               <Button
                 variant="danger"
@@ -890,7 +892,7 @@ function ImagesInner() {
                   setRefPreview(null);
                 }}
               >
-                <Trash2 size={14} />移除
+                <Trash2 size={14} />{t('移除')}
               </Button>
             </ModalActions>
           </div>
@@ -898,8 +900,8 @@ function ImagesInner() {
       </Modal>
 
       {/* ---- quick prompt manager ---- */}
-      <Modal open={quickOpen} onClose={() => setQuickOpen(false)} title="管理快捷提示词"
-        desc="常用的提示词模板,页面上显示标题,点击填入完整提示词。">
+      <Modal open={quickOpen} onClose={() => setQuickOpen(false)} title={t('管理快捷提示词')}
+        desc={t('常用的提示词模板,页面上显示标题,点击填入完整提示词。')}>
         <div className="space-y-2.5">
           {quickDraft.map((q, i) => (
             <div key={i} className="space-y-1.5 rounded-lg border border-line p-2.5">
@@ -907,11 +909,11 @@ function ImagesInner() {
                 <Input
                   value={q.title}
                   maxLength={30}
-                  placeholder="标题,例如:去背景"
+                  placeholder={t('标题,例如:去背景')}
                   onChange={(e) => setQuickDraft((prev) => prev.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))}
                 />
                 <Button
-                  variant="ghost" size="icon" title="删除"
+                  variant="ghost" size="icon" title={t('删除')}
                   onClick={() => setQuickDraft((prev) => prev.filter((_, j) => j !== i))}
                 >
                   <Trash2 size={14} />
@@ -921,20 +923,20 @@ function ImagesInner() {
                 rows={2}
                 value={q.prompt}
                 maxLength={2000}
-                placeholder="提示词内容,可以很长…"
+                placeholder={t('提示词内容,可以很长…')}
                 onChange={(e) => setQuickDraft((prev) => prev.map((x, j) => (j === i ? { ...x, prompt: e.target.value } : x)))}
               />
             </div>
           ))}
           {quickDraft.length === 0 && (
-            <p className="py-1 text-xs text-tx3">暂无快捷提示词,点击下方按钮添加。</p>
+            <p className="py-1 text-xs text-tx3">{t('暂无快捷提示词,点击下方按钮添加。')}</p>
           )}
           <Button variant="outline" size="sm" onClick={() => setQuickDraft((prev) => [...prev, { title: '', prompt: '' }])}>
-            <Plus size={14} />添加一条
+            <Plus size={14} />{t('添加一条')}
           </Button>
         </div>
         <ModalActions>
-          <Button variant="outline" onClick={() => setQuickOpen(false)}>取消</Button>
+          <Button variant="outline" onClick={() => setQuickOpen(false)}>{t('取消')}</Button>
           <Button
             variant="primary"
             onClick={() => {
@@ -947,7 +949,7 @@ function ImagesInner() {
               setQuickOpen(false);
             }}
           >
-            保存
+            {t('保存')}
           </Button>
         </ModalActions>
       </Modal>

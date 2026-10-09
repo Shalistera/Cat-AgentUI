@@ -9,6 +9,7 @@ import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
 import { useAuth, useChats, useUi, type SettingsTab } from '../store';
 import { Badge, Button, Field, Input, Spinner, Stat, Textarea, ToggleRow, confirmDialog, toast } from './ui';
 import { TokensBarChart } from './TokensBarChart';
+import { langPref, locale, resolveLang, storeLangPref, t, type LangPref } from '../i18n';
 import type { MyUploadChat, MyUploadFile, MyUploads, MyUsage, SessionInfo, User } from '../types';
 
 /* claude.ai-style settings: one dialog, sections down the left, content on the
@@ -16,12 +17,12 @@ import type { MyUploadChat, MyUploadFile, MyUploads, MyUsage, SessionInfo, User 
    section is its own component so it loads (and fails) independently. */
 
 const TABS: { id: SettingsTab; label: string; icon: typeof UserRound }[] = [
-  { id: 'account', label: '账号', icon: UserRound },
-  { id: 'chat', label: '对话偏好', icon: MessageSquareText },
-  { id: 'appearance', label: '外观', icon: Palette },
-  { id: 'devices', label: '登录设备', icon: Monitor },
-  { id: 'usage', label: '我的用量', icon: BarChart3 },
-  { id: 'storage', label: '附件存储', icon: HardDrive },
+  { id: 'account', label: t('账号'), icon: UserRound },
+  { id: 'chat', label: t('对话偏好'), icon: MessageSquareText },
+  { id: 'appearance', label: t('外观'), icon: Palette },
+  { id: 'devices', label: t('登录设备'), icon: Monitor },
+  { id: 'usage', label: t('我的用量'), icon: BarChart3 },
+  { id: 'storage', label: t('附件存储'), icon: HardDrive },
 ];
 /** Section = heading + one-line description + body. Stacked sections are
     separated by a rule instead of nested cards, so the dialog stays flat. */
@@ -58,23 +59,23 @@ function AccountSection() {
     try {
       const r = await api.patch<{ user: User }>('/api/auth/profile', { displayName: displayName.trim() });
       useAuth.setState({ user: r.user });
-      toast('资料已保存', 'ok');
+      toast(t('资料已保存'), 'ok');
     } catch (err) {
-      toast(err instanceof Error ? err.message : '保存失败', 'err');
+      toast(err instanceof Error ? err.message : t('保存失败'), 'err');
     } finally { setSavingProfile(false); }
   }
 
   async function changePassword() {
     if (savingPassword) return;
-    if (newPassword !== confirmPassword) { toast('两次输入的新密码不一致', 'err'); return; }
-    if (newPassword.length < 8) { toast('新密码至少 8 位', 'err'); return; }
+    if (newPassword !== confirmPassword) { toast(t('两次输入的新密码不一致'), 'err'); return; }
+    if (newPassword.length < 8) { toast(t('新密码至少 8 位'), 'err'); return; }
     setSavingPassword(true);
     try {
       await api.post('/api/auth/password', { oldPassword, newPassword });
-      toast('密码已修改', 'ok');
+      toast(t('密码已修改'), 'ok');
       setOldPassword(''); setNewPassword(''); setConfirmPassword('');
     } catch (err) {
-      toast(err instanceof Error ? err.message : '修改失败', 'err');
+      toast(err instanceof Error ? err.message : t('修改失败'), 'err');
     } finally { setSavingPassword(false); }
   }
 
@@ -82,35 +83,35 @@ function AccountSection() {
 
   return (
     <>
-      <Section title="个人资料" desc="用户名不可修改;昵称会显示在界面各处。">
+      <Section title={t('个人资料')} desc={t('用户名不可修改;昵称会显示在界面各处。')}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="用户名">
+          <Field label={t('用户名')}>
             <Input value={user?.username ?? ''} disabled readOnly />
           </Field>
-          <Field label="昵称">
+          <Field label={t('昵称')}>
             <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="未设置" maxLength={64} />
+              placeholder={t('未设置')} maxLength={64} />
           </Field>
         </div>
         <div className="mt-4 flex justify-end">
           <Button variant="primary" size="sm" disabled={savingProfile || !profileDirty} onClick={saveProfile}>
-            {savingProfile && <Spinner className="h-3.5 w-3.5" />}保存资料
+            {savingProfile && <Spinner className="h-3.5 w-3.5" />}{t('保存资料')}
           </Button>
         </div>
       </Section>
 
-      <Section title="修改密码" desc="新密码至少 8 位;修改后其他设备会被登出,当前设备保持登录。">
+      <Section title={t('修改密码')} desc={t('新密码至少 8 位;修改后其他设备会被登出,当前设备保持登录。')}>
         <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void changePassword(); }}>
-          <Field label="原密码">
+          <Field label={t('原密码')}>
             <Input type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)}
               autoComplete="current-password" maxLength={128} />
           </Field>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="新密码" hint="至少 8 位字符">
+            <Field label={t('新密码')} hint={t('至少 8 位字符')}>
               <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
                 autoComplete="new-password" maxLength={128} />
             </Field>
-            <Field label="确认新密码">
+            <Field label={t('确认新密码')}>
               <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
                 autoComplete="new-password" maxLength={128} />
             </Field>
@@ -118,7 +119,7 @@ function AccountSection() {
           <div className="flex justify-end">
             <Button type="submit" variant="primary" size="sm"
               disabled={savingPassword || !oldPassword || !newPassword || !confirmPassword}>
-              {savingPassword && <Spinner className="h-3.5 w-3.5" />}修改密码
+              {savingPassword && <Spinner className="h-3.5 w-3.5" />}{t('修改密码')}
             </Button>
           </div>
         </form>
@@ -148,9 +149,9 @@ function ChatSection() {
       const r = await api.patch<{ user: User }>('/api/auth/profile', { settings: { customInstructions: value || null } });
       useAuth.setState({ user: r.user });
       setInstructions(value);
-      toast('已保存,之后的每次对话都会带上', 'ok');
+      toast(t('已保存,之后的每次对话都会带上'), 'ok');
     } catch (err) {
-      toast(err instanceof Error ? err.message : '保存失败', 'err');
+      toast(err instanceof Error ? err.message : t('保存失败'), 'err');
     } finally {
       setSavingInstructions(false);
     }
@@ -162,7 +163,7 @@ function ChatSection() {
       useAuth.setState({ user: r.user });
     } catch (err) {
       revert(!v);
-      toast(err instanceof Error ? err.message : '保存失败', 'err');
+      toast(err instanceof Error ? err.message : t('保存失败'), 'err');
     }
   }
 
@@ -171,19 +172,19 @@ function ChatSection() {
     setNotify(on);
     if (v && !on) {
       toast(Notification.permission === 'denied'
-        ? '浏览器已拒绝本站的通知权限,请在地址栏的站点设置里重新允许'
-        : '未获得通知权限', 'err');
+        ? t('浏览器已拒绝本站的通知权限,请在地址栏的站点设置里重新允许')
+        : t('未获得通知权限'), 'err');
     }
   }
 
   return (
     <>
       <Section
-        title="全局自定义指令"
-        desc="告诉模型关于你的情况和你希望它怎么回复,会自动加在每次对话的系统提示前面;单个对话的系统提示可以覆盖它。"
+        title={t('全局自定义指令')}
+        desc={t('告诉模型关于你的情况和你希望它怎么回复,会自动加在每次对话的系统提示前面;单个对话的系统提示可以覆盖它。')}
         actions={(
           <Button variant="primary" size="sm" disabled={!instructionsDirty || savingInstructions} onClick={() => void saveInstructions()}>
-            {savingInstructions && <Spinner className="h-3.5 w-3.5" />}保存
+            {savingInstructions && <Spinner className="h-3.5 w-3.5" />}{t('保存')}
           </Button>
         )}
       >
@@ -192,48 +193,48 @@ function ChatSection() {
           maxLength={1500}
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
-          placeholder={'例如:\n我是后端工程师,主要用 Go 和 PostgreSQL。\n回答请用中文,先给结论再解释;代码示例不要省略错误处理;不确定的地方明确说不确定。'}
+          placeholder={t('例如:\n我是后端工程师,主要用 Go 和 PostgreSQL。\n回答请用中文,先给结论再解释;代码示例不要省略错误处理;不确定的地方明确说不确定。')}
         />
         <div className="mt-1.5 flex items-center justify-between text-[11px] text-tx3">
-          <span>不影响绘图、OCR、翻译等工坊。</span>
+          <span>{t('不影响绘图、OCR、翻译等工坊。')}</span>
           <span className="tabular-nums">{instructions.length}/1500</span>
         </div>
       </Section>
-      <Section title="对话偏好" desc="跟随账号保存,在任何设备上都生效。">
+      <Section title={t('对话偏好')} desc={t('跟随账号保存,在任何设备上都生效。')}>
         <ToggleRow
-          label="智能工具"
-          desc="允许助手使用管理员开放的能力:联网搜索、把长内容写成文件、在沙盒里运行代码、生成图片、调用技能或子代理。文件显示在「文件」标签里,生成的图片直接显示在对话中。"
+          label={t('智能工具')}
+          desc={t('允许助手使用管理员开放的能力:联网搜索、把长内容写成文件、在沙盒里运行代码、生成图片、调用技能或子代理。文件显示在「文件」标签里,生成的图片直接显示在对话中。')}
           checked={agentTools}
           onChange={(v) => { setAgentTools(v); void saveSetting('agentTools', v, setAgentTools); }}
         />
         <div className="mt-3">
         <ToggleRow
-          label="标题自动加 emoji"
-          desc="开启后,自动生成的对话标题会以一个匹配主题的 emoji 开头"
+          label={t('标题自动加 emoji')}
+          desc={t('开启后,自动生成的对话标题会以一个匹配主题的 emoji 开头')}
           checked={titleEmoji}
           onChange={(v) => { setTitleEmoji(v); void saveSetting('titleEmoji', v, setTitleEmoji); }}
         />
         </div>
         <div className="mt-3">
           <ToggleRow
-            label="每次调用 MCP 工具前都询问我"
-            desc="开启后,模型每次想调用任何 MCP 工具都会先暂停,由你点「允许」或「拒绝」。关闭时只有管理员标记为需确认的服务器才会询问"
+            label={t('每次调用 MCP 工具前都询问我')}
+            desc={t('开启后,模型每次想调用任何 MCP 工具都会先暂停,由你点「允许」或「拒绝」。关闭时只有管理员标记为需确认的服务器才会询问')}
             checked={confirmTools}
             onChange={(v) => { setConfirmTools(v); void saveSetting('confirmTools', v, setConfirmTools); }}
           />
         </div>
         <p className="mt-4 text-xs leading-relaxed text-tx3">
-          快捷指令在新对话页直接编辑;模型收藏与排序在输入框的模型选择器里调整;翻译场景在翻译工坊页面管理。
+          {t('快捷指令在新对话页直接编辑;模型收藏与排序在输入框的模型选择器里调整;翻译场景在翻译工坊页面管理。')}
         </p>
       </Section>
-      <Section title="后台完成通知" desc="只在这台设备的这个浏览器上生效;通知权限由浏览器管理。">
+      <Section title={t('后台完成通知')} desc={t('只在这台设备的这个浏览器上生效;通知权限由浏览器管理。')}>
         <ToggleRow
-          label="切到别的标签页或窗口时,完成后弹系统通知"
+          label={t('切到别的标签页或窗口时,完成后弹系统通知')}
           desc={perm === 'unsupported'
-            ? '当前浏览器不支持系统通知'
+            ? t('当前浏览器不支持系统通知')
             : perm === 'denied'
-              ? '浏览器已拒绝本站的通知权限,需要在站点设置中重新允许'
-              : '回复生成、批量绘图、PPT 生成完成时通知;点击通知直接回到对应页面。标签页标题上的 ● 提示不受影响'}
+              ? t('浏览器已拒绝本站的通知权限,需要在站点设置中重新允许')
+              : t('回复生成、批量绘图、PPT 生成完成时通知;点击通知直接回到对应页面。标签页标题上的 ● 提示不受影响')}
           checked={notify}
           disabled={perm === 'unsupported' || perm === 'denied'}
           onChange={(v) => void toggleNotify(v)}
@@ -307,12 +308,52 @@ function AppearanceSection() {
   const theme = useUi((s) => s.theme);
   const setThemeMode = useUi((s) => s.setThemeMode);
   return (
-    <Section title="主题" desc="保存在本机浏览器,立即生效。「跟随系统」会随 iOS / Android / macOS / Windows 的深浅色设置实时切换。">
+    <Section title={t('主题')} desc={t('保存在本机浏览器,立即生效。「跟随系统」会随 iOS / Android / macOS / Windows 的深浅色设置实时切换。')}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <ThemeCard active={mode === 'system'} label="跟随系统" preview="system"
-          hint={`当前系统为${theme === 'dark' ? '深色' : '浅色'}`} onClick={() => setThemeMode('system')} />
-        <ThemeCard active={mode === 'light'} label="浅色" preview="light" onClick={() => setThemeMode('light')} />
-        <ThemeCard active={mode === 'dark'} label="深色" preview="dark" onClick={() => setThemeMode('dark')} />
+        <ThemeCard active={mode === 'system'} label={t('跟随系统')} preview="system"
+          hint={theme === 'dark' ? t('当前系统为深色') : t('当前系统为浅色')} onClick={() => setThemeMode('system')} />
+        <ThemeCard active={mode === 'light'} label={t('浅色')} preview="light" onClick={() => setThemeMode('light')} />
+        <ThemeCard active={mode === 'dark'} label={t('深色')} preview="dark" onClick={() => setThemeMode('dark')} />
+      </div>
+    </Section>
+  );
+}
+
+function LanguageSection() {
+  const [busy, setBusy] = useState(false);
+  const browser = resolveLang('auto');
+  async function choose(pref: LangPref) {
+    if (busy || pref === langPref) return;
+    setBusy(true);
+    try {
+      // Saved on the account so other devices follow; 'auto' clears it.
+      await api.patch<{ user: User }>('/api/auth/profile', { settings: { lang: pref === 'auto' ? null : pref } });
+      if (storeLangPref(pref)) location.reload();
+      else setBusy(false);
+    } catch (err) {
+      setBusy(false);
+      toast(err instanceof Error ? err.message : t('保存失败'), 'err');
+    }
+  }
+  const options: { value: LangPref; label: string; hint?: string }[] = [
+    { value: 'auto', label: t('跟随浏览器'), hint: t('当前浏览器为{lang}', { lang: browser === 'zh' ? t('中文') : t('英文') }) },
+    { value: 'zh', label: '中文' },
+    { value: 'en', label: 'English' },
+  ];
+  return (
+    <Section title={t('语言')} desc={t('界面语言保存在账号里,在其他设备登录时也会沿用。「跟随浏览器」时,浏览器语言为中文显示中文,其余一律显示英文。')}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {options.map((o) => (
+          <button key={o.value} type="button" disabled={busy} onClick={() => void choose(o.value)} aria-pressed={langPref === o.value}
+            className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg border p-2.5 text-left transition-colors disabled:cursor-wait ${
+              langPref === o.value ? 'border-acc ring-1 ring-acc' : 'border-line hover:border-field'}`}>
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-tx">{o.label}</span>
+              {o.hint && <span className="block truncate text-[11px] text-tx3">{o.hint}</span>}
+            </span>
+            {langPref === o.value && <Check size={14} className="shrink-0 text-acc" />}
+          </button>
+        ))}
       </div>
     </Section>
   );
@@ -322,7 +363,7 @@ function AppearanceSection() {
 /** "Chrome · Windows" from a UA string — enough to recognise a device; the
     full string stays in the tooltip. */
 function describeUa(ua: string | null): { label: string; kind: 'phone' | 'tablet' | 'desktop' } {
-  if (!ua) return { label: '未知设备', kind: 'desktop' };
+  if (!ua) return { label: t('未知设备'), kind: 'desktop' };
   const os = /iPhone/.test(ua) ? 'iPhone'
     : /iPad/.test(ua) ? 'iPad'
     : /Android/.test(ua) ? 'Android'
@@ -335,8 +376,8 @@ function describeUa(ua: string | null): { label: string; kind: 'phone' | 'tablet
     : /Chrome\//.test(ua) && !/Chromium/.test(ua) ? 'Chrome'
     : /Firefox\//.test(ua) ? 'Firefox'
     : /Safari\//.test(ua) && /Version\//.test(ua) ? 'Safari'
-    : /MicroMessenger/.test(ua) ? '微信'
-    : '浏览器';
+    : /MicroMessenger/.test(ua) ? t('微信')
+    : t('浏览器');
   const kind = /iPad|Tablet/.test(ua) ? 'tablet' : /iPhone|Android.*Mobile/.test(ua) ? 'phone' : 'desktop';
   return { label: [browser, os].filter(Boolean).join(' · '), kind };
 }
@@ -360,39 +401,39 @@ function DevicesSection() {
     setBusy(s.id);
     try {
       await api.del(`/api/auth/sessions/${s.id}`);
-      toast('该设备已退出登录', 'ok');
+      toast(t('该设备已退出登录'), 'ok');
       await load();
     } catch (err) {
-      toast(err instanceof Error ? err.message : '操作失败', 'err');
+      toast(err instanceof Error ? err.message : t('操作失败'), 'err');
     } finally { setBusy(null); }
   }
 
   async function revokeOthers() {
     if (busy) return;
-    const ok = await confirmDialog('退出其他设备', '除当前浏览器外,所有已登录的设备都需要重新登录。', false);
+    const ok = await confirmDialog(t('退出其他设备'), t('除当前浏览器外,所有已登录的设备都需要重新登录。'), false);
     if (!ok) return;
     setBusy('others');
     try {
       const r = await api.post<{ removed: number }>('/api/auth/sessions/revoke-others');
-      toast(r.removed ? `已退出 ${r.removed} 台其他设备` : '没有其他已登录的设备', 'ok');
+      toast(r.removed ? t('已退出 {n} 台其他设备', { n: r.removed }) : t('没有其他已登录的设备'), 'ok');
       await load();
     } catch (err) {
-      toast(err instanceof Error ? err.message : '操作失败', 'err');
+      toast(err instanceof Error ? err.message : t('操作失败'), 'err');
     } finally { setBusy(null); }
   }
 
   const others = sessions?.filter((s) => !s.current).length ?? 0;
 
   return (
-    <Section title="登录设备" desc="当前账号在哪些浏览器上保持着登录。发现不认识的设备,先退出它,再修改密码。"
+    <Section title={t('登录设备')} desc={t('当前账号在哪些浏览器上保持着登录。发现不认识的设备,先退出它,再修改密码。')}
       actions={others > 0 && (
         <Button variant="outline" size="xs" disabled={busy !== null} onClick={() => void revokeOthers()}>
-          <LogOut size={12} />退出其他设备
+          <LogOut size={12} />{t('退出其他设备')}
         </Button>
       )}>
       {sessions === null ? (
         <div className="flex justify-center py-6 text-tx3">
-          {failed ? <p className="text-xs">加载失败(服务端可能还是旧版本)</p> : <Spinner />}
+          {failed ? <p className="text-xs">{t('加载失败(服务端可能还是旧版本)')}</p> : <Spinner />}
         </div>
       ) : (
         <ul className="divide-y divide-line rounded-lg border border-line">
@@ -407,15 +448,15 @@ function DevicesSection() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2 text-sm text-tx">
                     <span className="truncate">{d.label}</span>
-                    {s.current && <Badge tone="acc">当前设备</Badge>}
+                    {s.current && <Badge tone="acc">{t('当前设备')}</Badge>}
                   </div>
                   <p className="mt-0.5 text-[11px] tabular-nums text-tx3">
-                    {s.ip ? `${s.ip} · ` : ''}最近活动 {fmtTime(s.lastSeenAt)} · 登录于 {fmtTime(s.createdAt)}
+                    {s.ip ? `${s.ip} · ` : ''}{t('最近活动 {last} · 登录于 {created}', { last: fmtTime(s.lastSeenAt), created: fmtTime(s.createdAt) })}
                   </p>
                 </div>
                 {!s.current && (
                   <Button variant="ghost" size="xs" disabled={busy !== null} onClick={() => void revoke(s)}>
-                    {busy === s.id ? <Spinner className="h-3 w-3" /> : '退出'}
+                    {busy === s.id ? <Spinner className="h-3 w-3" /> : t('退出')}
                   </Button>
                 )}
               </li>
@@ -435,29 +476,29 @@ function UsageSection() {
   useEffect(() => {
     api.get<MyUsage>('/api/usage/me')
       .then(setUsage)
-      .catch(() => { setFailed(true); toast('加载用量数据失败', 'err'); });
+      .catch(() => { setFailed(true); toast(t('加载用量数据失败'), 'err'); });
   }, []);
 
   return (
-    <Section title="我的用量" desc="最近 30 天的 Token 消耗与请求统计。">
+    <Section title={t('我的用量')} desc={t('最近 30 天的 Token 消耗与请求统计。')}>
       {!usage ? (
         <div className="flex justify-center py-10 text-tx3">
-          {failed ? <p className="text-xs">用量数据加载失败</p> : <Spinner />}
+          {failed ? <p className="text-xs">{t('用量数据加载失败')}</p> : <Spinner />}
         </div>
       ) : (
         <div className="space-y-6">
           <div className={`grid grid-cols-2 gap-3 ${usage.totals.cost != null ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
-            <Stat label="总 Tokens" value={fmtTokens(usage.totals.totalTokens)} />
+            <Stat label={t('总 Tokens')} value={fmtTokens(usage.totals.totalTokens)} />
             {usage.totals.cost != null && (
-              <Stat label="折算成本" value={fmtCost(usage.totals.cost, usage.currency)} hint="按各模型当前单价估算" />
+              <Stat label={t('折算成本')} value={fmtCost(usage.totals.cost, usage.currency)} hint={t('按各模型当前单价估算')} />
             )}
-            <Stat label="请求次数" value={usage.totals.requests.toLocaleString()} />
-            <Stat label="生成图片" value={usage.totals.images.toLocaleString()} />
+            <Stat label={t('请求次数')} value={usage.totals.requests.toLocaleString(locale)} />
+            <Stat label={t('生成图片@@stat')} value={usage.totals.images.toLocaleString(locale)} />
           </div>
 
           {usage.quota?.limit != null && (
             <div>
-              <div className="eyebrow mb-2">本月配额</div>
+              <div className="eyebrow mb-2">{t('本月配额')}</div>
               <div className="space-y-1.5">
                 <div className="h-1.5 overflow-hidden rounded-full bg-bg3">
                   <div
@@ -466,30 +507,32 @@ function UsageSection() {
                   />
                 </div>
                 <p className="text-xs text-tx3">
-                  已用 <span className="tabular-nums text-tx2">{fmtTokens(usage.quota.used)}</span>
-                  {' / '}<span className="tabular-nums text-tx2">{fmtTokens(usage.quota.limit)}</span> tokens,
-                  每月 1 日重新计算{usage.quota.used >= usage.quota.limit ? ';本月配额已用完' : ''}
+                  {t('已用')} <span className="tabular-nums text-tx2">{fmtTokens(usage.quota.used)}</span>
+                  {' / '}<span className="tabular-nums text-tx2">{fmtTokens(usage.quota.limit)}</span>
+                  {usage.quota.used >= usage.quota.limit
+                    ? t(' tokens,每月 1 日重新计算;本月配额已用完')
+                    : t(' tokens,每月 1 日重新计算')}
                 </p>
               </div>
             </div>
           )}
 
           <div>
-            <div className="eyebrow mb-2">近 30 天每日 Tokens</div>
+            <div className="eyebrow mb-2">{t('近 30 天每日 Tokens')}</div>
             <TokensBarChart byDay={usage.byDay} />
           </div>
 
           <div>
-            <div className="eyebrow mb-1.5">按模型统计</div>
+            <div className="eyebrow mb-1.5">{t('按模型统计')}</div>
             {usage.byModel.length === 0 ? (
-              <p className="py-4 text-center text-xs text-tx3">暂无数据</p>
+              <p className="py-4 text-center text-xs text-tx3">{t('暂无数据')}</p>
             ) : (
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-line">
-                    <th className="py-2 pr-2 text-left font-medium text-tx3">模型</th>
+                    <th className="py-2 pr-2 text-left font-medium text-tx3">{t('模型')}</th>
                     <th className="py-2 pr-2 text-right font-medium text-tx3">Tokens</th>
-                    <th className="py-2 text-right font-medium text-tx3">次数</th>
+                    <th className="py-2 text-right font-medium text-tx3">{t('次数')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -497,7 +540,7 @@ function UsageSection() {
                     <tr key={m.model} className="border-b border-line last:border-0">
                       <td className="py-2 pr-2 text-tx2">{fmtModelName(m.model)}</td>
                       <td className="py-2 pr-2 text-right tabular-nums text-tx">{fmtTokens(m.totalTokens)}</td>
-                      <td className="py-2 text-right tabular-nums text-tx2">{m.requests.toLocaleString()}</td>
+                      <td className="py-2 text-right tabular-nums text-tx2">{m.requests.toLocaleString(locale)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -530,21 +573,21 @@ function StorageSection() {
   function load() {
     return api.get<MyUploads>('/api/uploads/me')
       .then(setData)
-      .catch(() => { setFailed(true); toast('加载附件列表失败', 'err'); });
+      .catch(() => { setFailed(true); toast(t('加载附件列表失败'), 'err'); });
   }
   useEffect(() => { void load(); }, []);
 
   async function removeFile(f: MyUploadFile) {
     if (busy) return;
-    const ok = await confirmDialog('删除附件', `删除「${f.name || '未命名文件'}」(${fmtBytes(f.size)})?此操作不可撤销。`);
+    const ok = await confirmDialog(t('删除附件'), t('删除「{name}」({size})?此操作不可撤销。', { name: f.name || t('未命名文件'), size: fmtBytes(f.size) }));
     if (!ok) return;
     setBusy(f.id);
     try {
       await api.del(`/api/uploads/${f.id}`);
       setData((d) => d && { ...d, used: d.used - f.size, files: d.files.filter((x) => x.id !== f.id) });
-      toast('附件已删除', 'ok');
+      toast(t('附件已删除'), 'ok');
     } catch (err) {
-      toast(err instanceof Error ? err.message : '删除失败', 'err');
+      toast(err instanceof Error ? err.message : t('删除失败'), 'err');
     } finally { setBusy(null); }
   }
 
@@ -552,18 +595,18 @@ function StorageSection() {
   // here that also takes text with it, hence the second confirmation.
   async function removeChat(c: MyUploadChat) {
     if (busy) return;
-    const name = c.title || '未命名对话';
-    if (!(await confirmDialog('删除这段对话', `确定要删掉这段对话吗?「${name}」及其中 ${c.count} 个附件(${fmtBytes(c.bytes)})会一起删除。`))) return;
-    if (!(await confirmDialog('再确认一次', `真的要删掉「${name}」吗?对话内容和附件删除后无法恢复。`))) return;
+    const name = c.title || t('未命名对话');
+    if (!(await confirmDialog(t('删除这段对话'), t('确定要删掉这段对话吗?「{name}」及其中 {count} 个附件({size})会一起删除。', { name, count: c.count, size: fmtBytes(c.bytes) })))) return;
+    if (!(await confirmDialog(t('再确认一次'), t('真的要删掉「{name}」吗?对话内容和附件删除后无法恢复。', { name })))) return;
     setBusy(c.id);
     try {
       await api.del(`/api/chats/${c.id}`);
       removeChatFromList(c.id);
       if (location.pathname === `/chat/${c.id}`) navigate('/');
       await load();
-      toast(`已删除对话,释放 ${fmtBytes(c.bytes)}`, 'ok');
+      toast(t('已删除对话,释放 {size}', { size: fmtBytes(c.bytes) }), 'ok');
     } catch (err) {
-      toast(err instanceof Error ? err.message : '删除失败', 'err');
+      toast(err instanceof Error ? err.message : t('删除失败'), 'err');
     } finally { setBusy(null); }
   }
 
@@ -579,10 +622,10 @@ function StorageSection() {
     active ? 'bg-bg2 font-medium text-tx shadow-xs' : 'text-tx3 hover:text-tx'}`;
 
   return (
-    <Section title="附件存储" desc="上传到对话里的文件都计入这个配额。">
+    <Section title={t('附件存储')} desc={t('上传到对话里的文件都计入这个配额。')}>
       {!data ? (
         <div className="flex justify-center py-10 text-tx3">
-          {failed ? <p className="text-xs">附件列表加载失败</p> : <Spinner />}
+          {failed ? <p className="text-xs">{t('附件列表加载失败')}</p> : <Spinner />}
         </div>
       ) : (
         <div className="space-y-6">
@@ -594,44 +637,44 @@ function StorageSection() {
               />
             </div>
             <p className="text-xs text-tx3">
-              已用 <span className="tabular-nums text-tx2">{fmtBytes(data.used)}</span>
+              {t('已用')} <span className="tabular-nums text-tx2">{fmtBytes(data.used)}</span>
               {' / '}<span className="tabular-nums text-tx2">{fmtBytes(data.limit)}</span>
-              ,共 {data.files.length} 个文件
-              {data.chats.length > 0 && <>,其中 <span className="tabular-nums text-tx2">{fmtBytes(inChats)}</span> 在 {data.chats.length} 段对话里</>}
-              {full && <span className="text-err">;配额已满,新附件无法上传</span>}
+              {t(',共 {n} 个文件', { n: data.files.length })}
+              {data.chats.length > 0 && <>{t(',其中 ')}<span className="tabular-nums text-tx2">{fmtBytes(inChats)}</span>{t(' 在 {n} 段对话里', { n: data.chats.length })}</>}
+              {full && <span className="text-err">{t(';配额已满,新附件无法上传')}</span>}
             </p>
           </div>
 
           {data.files.length === 0 ? (
-            <p className="py-6 text-center text-xs text-tx3">还没有上传过附件</p>
+            <p className="py-6 text-center text-xs text-tx3">{t('还没有上传过附件')}</p>
           ) : (
             <div>
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="flex gap-0.5 rounded-lg bg-bg0 p-0.5">
-                  <button type="button" className={segBtn(view === 'chats')} onClick={() => setView('chats')}>按对话</button>
-                  <button type="button" className={segBtn(view === 'files')} onClick={() => setView('files')}>按文件</button>
+                  <button type="button" className={segBtn(view === 'chats')} onClick={() => setView('chats')}>{t('按对话')}</button>
+                  <button type="button" className={segBtn(view === 'files')} onClick={() => setView('files')}>{t('按文件')}</button>
                 </div>
                 {view === 'chats' ? (
                   <button
                     type="button"
                     onClick={() => setChatSort((v) => (v === 'size' ? 'age' : 'size'))}
                     className="flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-tx3 transition-colors hover:bg-bg2 hover:text-tx"
-                    title="切换排序"
+                    title={t('切换排序')}
                   >
                     <ArrowUpDown size={12} />
-                    {chatSort === 'size' ? '占用最多在前' : '最久没用在前'}
+                    {chatSort === 'size' ? t('占用最多在前') : t('最久没用在前')}
                   </button>
                 ) : (
-                  <span className="text-[11px] text-tx3">大文件排在前面</span>
+                  <span className="text-[11px] text-tx3">{t('大文件排在前面')}</span>
                 )}
               </div>
 
               {view === 'chats' && (
                 data.chats.length === 0 ? (
-                  <p className="py-6 text-center text-xs text-tx3">附件都还没发进对话</p>
+                  <p className="py-6 text-center text-xs text-tx3">{t('附件都还没发进对话')}</p>
                 ) : (
                   <>
-                    <p className="mb-2 text-xs leading-relaxed text-tx3">不再需要的对话可以整段删除,附件会一起释放;很久不用的老对话也还占着空间。</p>
+                    <p className="mb-2 text-xs leading-relaxed text-tx3">{t('不再需要的对话可以整段删除,附件会一起释放;很久不用的老对话也还占着空间。')}</p>
                     <ul className="divide-y divide-line rounded-lg border border-line">
                       {[...data.chats].sort((a, b) => (chatSort === 'size' ? b.bytes - a.bytes : a.updatedAt - b.updatedAt)).map((c) => (
                         <li key={c.id} className="flex items-center gap-3 px-3 py-2.5">
@@ -639,15 +682,15 @@ function StorageSection() {
                             <button
                               type="button" onClick={() => goToChat(c.id)}
                               className="block max-w-full cursor-pointer truncate text-left text-[13px] text-tx hover:text-acc hover:underline"
-                              title="打开这段对话"
+                              title={t('打开这段对话')}
                             >
-                              {c.title || '未命名对话'}
+                              {c.title || t('未命名对话')}
                             </button>
                             <div className="mt-0.5 text-[11px] text-tx3">
-                              <span className="tabular-nums">{fmtBytes(c.bytes)}</span> · {c.count} 个附件 · 最后活跃 {fmtDate(c.updatedAt)}
+                              <span className="tabular-nums">{fmtBytes(c.bytes)}</span>{t(' · {count} 个附件 · 最后活跃 {date}', { count: c.count, date: fmtDate(c.updatedAt) })}
                             </div>
                           </div>
-                          <Button variant="dangerGhost" size="xs" disabled={busy === c.id} onClick={() => removeChat(c)}>删除这段对话</Button>
+                          <Button variant="dangerGhost" size="xs" disabled={busy === c.id} onClick={() => removeChat(c)}>{t('删除这段对话')}</Button>
                         </li>
                       ))}
                     </ul>
@@ -660,7 +703,7 @@ function StorageSection() {
                   {data.files.map((f) => (
                     <li key={f.id} className="flex items-center gap-3 px-3 py-2.5">
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-[13px] text-tx">{f.name || '未命名文件'}</div>
+                        <div className="truncate text-[13px] text-tx">{f.name || t('未命名文件')}</div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-tx3">
                           <span className="tabular-nums">{fmtBytes(f.size)}</span>
                           <span>·</span>
@@ -671,19 +714,19 @@ function StorageSection() {
                               <button
                                 type="button" onClick={() => goToChat(f.chat!.id)}
                                 className="max-w-[16rem] cursor-pointer truncate text-acc hover:underline"
-                                title="打开这段对话"
+                                title={t('打开这段对话')}
                               >
-                                在对话「{f.chat.title || '未命名对话'}」中
+                                {t('在对话「{title}」中', { title: f.chat.title || t('未命名对话') })}
                               </button>
                             </>
                           )}
                         </div>
                       </div>
                       {f.chat ? (
-                        <Button variant="ghost" size="xs" onClick={() => goToChat(f.chat!.id)}>去对话删除</Button>
+                        <Button variant="ghost" size="xs" onClick={() => goToChat(f.chat!.id)}>{t('去对话删除')}</Button>
                       ) : (
                         <Button
-                          variant="dangerGhost" size="iconSm" title="删除附件"
+                          variant="dangerGhost" size="iconSm" title={t('删除附件')}
                           disabled={busy === f.id} onClick={() => removeFile(f)}
                         >
                           <Trash2 size={14} />
@@ -717,11 +760,11 @@ export function SettingsDialog() {
   }, [open, close]);
 
   if (!open || !user) return null;
-  const active = TABS.find((t) => t.id === tab) ?? TABS[0];
+  const active = TABS.find((x) => x.id === tab) ?? TABS[0];
   const initial = (user.displayName || user.username).slice(0, 1).toUpperCase();
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center sm:p-4" role="dialog" aria-modal="true" aria-label="设置">
+    <div className="fixed inset-0 z-50 flex items-center justify-center sm:p-4" role="dialog" aria-modal="true" aria-label={t('设置')}>
       <div className="absolute inset-0 bg-scrim" onClick={close} />
       {/* Full-screen sheet on phones; a fixed-height two-pane dialog on desktop
           so switching sections never makes the window jump. */}
@@ -734,23 +777,23 @@ export function SettingsDialog() {
             </span>
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold tracking-tight text-tx">{user.displayName || user.username}</div>
-              <div className="truncate text-[11px] text-tx3">@{user.username} · {user.role === 'admin' ? '管理员' : '用户'}</div>
+              <div className="truncate text-[11px] text-tx3">@{user.username} · {user.role === 'admin' ? t('管理员') : t('用户')}</div>
             </div>
-            <Button variant="ghost" size="iconSm" onClick={close} title="关闭" className="sm:hidden"><X size={15} /></Button>
+            <Button variant="ghost" size="iconSm" onClick={close} title={t('关闭')} className="sm:hidden"><X size={15} /></Button>
           </div>
-          <nav className="flex gap-1 overflow-x-auto px-3 pb-3 sm:flex-1 sm:flex-col sm:px-3 sm:pb-4" aria-label="设置分区">
-            {TABS.map((t) => {
-              const Icon = t.icon;
-              const isActive = t.id === active.id;
+          <nav className="flex gap-1 overflow-x-auto px-3 pb-3 sm:flex-1 sm:flex-col sm:px-3 sm:pb-4" aria-label={t('设置分区')}>
+            {TABS.map((item) => {
+              const Icon = item.icon;
+              const isActive = item.id === active.id;
               return (
                 <button
-                  key={t.id} type="button" aria-current={isActive ? 'page' : undefined}
-                  onClick={() => setTab(t.id)}
+                  key={item.id} type="button" aria-current={isActive ? 'page' : undefined}
+                  onClick={() => setTab(item.id)}
                   className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors ${
                     isActive ? 'bg-bg2 font-medium text-tx shadow-xs' : 'text-tx2 hover:bg-bg2/70 hover:text-tx'}`}
                 >
                   <Icon size={14} className={isActive ? 'text-acc' : 'text-tx3'} />
-                  {t.label}
+                  {item.label}
                 </button>
               );
             })}
@@ -761,14 +804,14 @@ export function SettingsDialog() {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="hidden items-center justify-between border-b border-line px-6 py-3.5 sm:flex">
             <h2 className="text-sm font-semibold tracking-tight text-tx">{active.label}</h2>
-            <Button variant="ghost" size="iconSm" onClick={close} title="关闭"><X size={15} /></Button>
+            <Button variant="ghost" size="iconSm" onClick={close} title={t('关闭')}><X size={15} /></Button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
             {/* key remounts the section so each visit refetches (devices, usage) */}
             <div key={active.id} className="fade-up mx-auto max-w-2xl">
               {active.id === 'account' && <AccountSection />}
               {active.id === 'chat' && <ChatSection />}
-              {active.id === 'appearance' && <AppearanceSection />}
+              {active.id === 'appearance' && <><AppearanceSection /><LanguageSection /></>}
               {active.id === 'devices' && <DevicesSection />}
               {active.id === 'usage' && <UsageSection />}
               {active.id === 'storage' && <StorageSection />}

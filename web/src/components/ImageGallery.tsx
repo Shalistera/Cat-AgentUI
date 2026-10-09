@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { naiImageDraft } from '../novelai';
 import { api, fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { Badge, Button, Modal, ModalActions, btnClass, confirmDialog, toast } from './ui';
+import { t } from '../i18n';
 import type { ImageRecord } from '../types';
 
 // Hover gradient with the prompt and model chip — shared by ImageTile and the
@@ -68,18 +69,18 @@ export function ImageLightbox({ image, onClose, onDeleted }: {
 }) {
   async function del() {
     if (!image) return;
-    if (!(await confirmDialog('删除图片', '确定删除这张图片?此操作不可恢复。'))) return;
+    if (!(await confirmDialog(t('删除图片'), t('确定删除这张图片?此操作不可恢复。')))) return;
     try {
       await api.del(`/api/images/${image.id}`);
-      toast('已删除', 'ok');
+      toast(t('已删除'), 'ok');
       onDeleted(image);
     } catch (err) {
-      toast(err instanceof Error ? err.message : '删除失败', 'err');
+      toast(err instanceof Error ? err.message : t('删除失败'), 'err');
     }
   }
 
   return (
-    <Modal open={!!image} onClose={onClose} title="图片详情" wide>
+    <Modal open={!!image} onClose={onClose} title={t('图片详情')} wide>
       {image && (
         <div className="space-y-4">
           <img
@@ -90,22 +91,22 @@ export function ImageLightbox({ image, onClose, onDeleted }: {
           <p className="select-text whitespace-pre-wrap text-[13px] leading-relaxed text-tx2">{image.prompt}</p>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-tx3">
             {image.model && <Badge mono>{fmtModelName(image.model)}</Badge>}
-            {image.size && <span>尺寸 {image.size}</span>}
-            <span>耗时 {fmtDuration(image.durationMs)}</span>
+            {image.size && <span>{t('尺寸 {size}', { size: image.size })}</span>}
+            <span>{t('耗时 {duration}', { duration: fmtDuration(image.durationMs) })}</span>
             <span>{fmtTime(image.createdAt)}</span>
             {image.tokens != null && image.tokens > 0 && <span>Tokens {fmtTokens(image.tokens)}</span>}
           </div>
           <ModalActions>
-            {naiImageDraft(image) && <Link to={`/images/nai?from=${encodeURIComponent(image.id)}`} onClick={onClose} className={btnClass('outline', 'md')}>在 NAI 创作室打开</Link>}
+            {naiImageDraft(image) && <Link to={`/images/nai?from=${encodeURIComponent(image.id)}`} onClick={onClose} className={btnClass('outline', 'md')}>{t('在 NAI 创作室打开')}</Link>}
             <a
               href={`/api/images/${image.id}/file`}
               download
               className={btnClass('outline', 'md')}
             >
-              <Download size={14} />下载
+              <Download size={14} />{t('下载')}
             </a>
             <Button variant="danger" onClick={del}>
-              <Trash2 size={14} />删除
+              <Trash2 size={14} />{t('删除')}
             </Button>
           </ModalActions>
         </div>

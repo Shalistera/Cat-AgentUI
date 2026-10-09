@@ -19,6 +19,7 @@ import { notifyDone } from '../notify';
 import { FindBar } from '../components/FindBar';
 import { normalizeWorkspacePath } from '../workspaceLinks';
 import type { ActiveChatTurn, ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, ToolConfirmRequest, User } from '../types';
+import { t } from '../i18n';
 
 /** First line-ish of a reply's text, for the notification body. */
 function partsPreview(parts: MessagePart[]): string {
@@ -75,7 +76,7 @@ function CompareView({ original, challenger, challengerModel, streaming, onKeep,
     <div className="grid gap-3 md:grid-cols-2">
       <div className={`${card} border-line`}>
         <div className={head}>
-          <span className="rounded-sm bg-bg3 px-1.5 py-0.5 text-[10px] text-tx2">当前回复</span>
+          <span className="rounded-sm bg-bg3 px-1.5 py-0.5 text-[10px] text-tx2">{t('当前回复')}</span>
           {original.model && <span className="truncate font-mono text-[11px] text-tx3">{fmtModelName(original.model)}</span>}
         </div>
         <div className={body}>
@@ -83,27 +84,27 @@ function CompareView({ original, challenger, challengerModel, streaming, onKeep,
         </div>
         <button className={`${keepBtn} border-line2 text-tx2 hover:bg-bg2 hover:text-tx`}
           disabled={streaming} onClick={() => onKeep('original')}>
-          <Check size={13} />保留这个回复
+          <Check size={13} />{t('保留这个回复')}
         </button>
       </div>
       <div className={`${card} border-acc/50`}>
         <div className={head}>
           <ModelAvatar info={challengerModel} size={16} tile={false} />
           <span className="truncate">{challengerModel.displayName}</span>
-          {streaming && <span className="animate-pulse text-[11px] font-normal text-acc">生成中…</span>}
+          {streaming && <span className="animate-pulse text-[11px] font-normal text-acc">{t('生成中…')}</span>}
         </div>
         <div className={body}>
           {challenger
             ? <ChatMessage msg={challenger} isStreaming={streaming} onCancel={onStop} workspaceChatId={chatId} />
-            : <p className="py-2 text-[13px] text-tx3">正在准备…</p>}
+            : <p className="py-2 text-[13px] text-tx3">{t('正在准备…')}</p>}
         </div>
         <button className={`${keepBtn} border-acc/50 text-acc hover:bg-acc/10`}
           disabled={streaming} onClick={() => onKeep('challenger')}>
-          <Check size={13} />保留这个回复
+          <Check size={13} />{t('保留这个回复')}
         </button>
       </div>
       <p className="text-[11px] leading-relaxed text-tx3 md:col-span-2">
-        选择保留后,另一个回复仍会作为历史版本保留,可随时用消息下方的左右箭头切换。
+        {t('选择保留后,另一个回复仍会作为历史版本保留,可随时用消息下方的左右箭头切换。')}
       </p>
     </div>
   );
@@ -126,7 +127,7 @@ function QueueBar({ items, streaming, onSendNow, onRemove, onUpdate }: {
     <div className="mx-auto mb-2 w-full max-w-[54rem] overflow-hidden rounded-lg border border-line bg-bg1 shadow-xs">
       <div className="flex items-center gap-1.5 border-b border-line bg-bg2/45 px-3 py-1.5 text-[11px] font-medium text-tx2">
         <ListOrdered size={12} className="text-tx3" />
-        已排队 {items.length} 条消息{streaming ? '，将在当前回复完成后依次发送' : ''}
+        {t('已排队 {count} 条消息', { count: items.length })}{streaming ? t('，将在当前回复完成后依次发送') : ''}
       </div>
       <div className="max-h-40 divide-y divide-line/70 overflow-y-auto">
         {items.map((item) => (
@@ -139,29 +140,29 @@ function QueueBar({ items, streaming, onSendNow, onRemove, onUpdate }: {
                   value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus
                 />
                 <div className="mt-1.5 flex justify-end gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setEditingId(null)}>取消</Button>
+                  <Button variant="outline" size="sm" onClick={() => setEditingId(null)}>{t('取消')}</Button>
                   <Button variant="primary" size="sm" onClick={() => {
                     if (draft.trim()) onUpdate(item, draft.trim());
                     setEditingId(null);
-                  }}>保存</Button>
+                  }}>{t('保存')}</Button>
                 </div>
               </div>
             ) : (
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-[13px] text-tx2" title={item.text}>
-                  {item.text || '(仅附件)'}
+                  {item.text || t('(仅附件)')}
                   {item.attachments.length > 0 && (
                     <span className="ml-1.5 text-[11px] text-tx3">📎{item.attachments.length}</span>
                   )}
                 </span>
-                <button title="立即发送：打断当前生成并发送这条" className={iconBtn} onClick={() => onSendNow(item)}>
+                <button title={t('立即发送：打断当前生成并发送这条')} className={iconBtn} onClick={() => onSendNow(item)}>
                   <Send size={12} />
                 </button>
-                <button title="编辑" className={iconBtn}
+                <button title={t('编辑')} className={iconBtn}
                   onClick={() => { setDraft(item.text); setEditingId(item.id); }}>
                   <Pencil size={12} />
                 </button>
-                <button title="移出队列" className={`${iconBtn} hover:text-err`} onClick={() => onRemove(item)}>
+                <button title={t('移出队列')} className={`${iconBtn} hover:text-err`} onClick={() => onRemove(item)}>
                   <Trash2 size={12} />
                 </button>
               </div>
@@ -178,7 +179,7 @@ function QueueBar({ items, streaming, onSendNow, onRemove, onUpdate }: {
 // falls back to the single built-in example; an emptied list stays empty —
 // deleting the default is a choice, not a reset.
 
-const DEFAULT_QUICK_PROMPTS = ['用通俗的比喻解释一下大语言模型是怎么工作的'];
+const DEFAULT_QUICK_PROMPTS = [t('用通俗的比喻解释一下大语言模型是怎么工作的')];
 const MAX_QUICK_PROMPTS = 6;
 const QUICK_PROMPT_MAX_CHARS = 300;
 
@@ -205,18 +206,18 @@ function QuickPrompts({ onSend }: { onSend(q: string): void }) {
         <div key={`${i}-${q}`} className="group/qp relative">
           <button
             type="button"
-            title="点击直接发送"
+            title={t('点击直接发送')}
             onClick={() => onSend(q)}
             className="h-full w-full cursor-pointer rounded-lg border border-line bg-bg1 px-3.5 py-2.5 text-left text-[13px] leading-relaxed text-tx2 shadow-xs transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
           >
             {q}
           </button>
           <div className="absolute right-1.5 top-1.5 flex rounded-md bg-bg1 opacity-0 shadow-xs transition-opacity group-hover/qp:opacity-100 group-focus-within/qp:opacity-100">
-            <Button variant="ghost" size="iconXs" title="编辑快捷指令"
+            <Button variant="ghost" size="iconXs" title={t('编辑快捷指令')}
               onClick={() => setEditor({ index: i, text: q })}>
               <Pencil size={12} />
             </Button>
-            <Button variant="dangerGhost" size="iconXs" title="删除快捷指令" disabled={busy}
+            <Button variant="dangerGhost" size="iconXs" title={t('删除快捷指令')} disabled={busy}
               onClick={() => void save(prompts.filter((_, j) => j !== i))}>
               <Trash2 size={12} />
             </Button>
@@ -227,18 +228,18 @@ function QuickPrompts({ onSend }: { onSend(q: string): void }) {
       {prompts.length < MAX_QUICK_PROMPTS && (
         <button
           type="button"
-          title={`自定义快捷指令,最多 ${MAX_QUICK_PROMPTS} 条`}
+          title={t('自定义快捷指令,最多 {max} 条', { max: MAX_QUICK_PROMPTS })}
           onClick={() => setEditor({ index: null, text: '' })}
           className="flex min-h-[2.75rem] cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-dashed border-line px-3.5 py-2.5 text-[13px] text-tx3 transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
         >
-          <Plus size={14} />添加快捷指令
+          <Plus size={14} />{t('添加快捷指令')}
         </button>
       )}
 
       {editor && (
         <Modal open onClose={() => setEditor(null)}
-          title={editor.index === null ? '添加快捷指令' : '编辑快捷指令'}
-          desc="显示在新对话首页,点击卡片即直接发送这段内容。">
+          title={editor.index === null ? t('添加快捷指令') : t('编辑快捷指令')}
+          desc={t('显示在新对话首页,点击卡片即直接发送这段内容。')}>
           <div className="space-y-3">
             <Textarea
               rows={3}
@@ -246,13 +247,13 @@ function QuickPrompts({ onSend }: { onSend(q: string): void }) {
               autoFocus
               value={editor.text}
               onChange={(e) => setEditor({ ...editor, text: e.target.value })}
-              placeholder="例如:把下面的内容翻译成英文"
+              placeholder={t('例如:把下面的内容翻译成英文')}
             />
             <div className="text-right text-[11px] tabular-nums text-tx3">
               {editor.text.length}/{QUICK_PROMPT_MAX_CHARS}
             </div>
             <ModalActions>
-              <Button variant="outline" onClick={() => setEditor(null)}>取消</Button>
+              <Button variant="outline" onClick={() => setEditor(null)}>{t('取消')}</Button>
               <Button variant="primary" disabled={busy || !editor.text.trim()}
                 onClick={async () => {
                   const text = editor.text.trim();
@@ -261,7 +262,7 @@ function QuickPrompts({ onSend }: { onSend(q: string): void }) {
                     : prompts.map((p, j) => (j === editor.index ? text : p));
                   if (await save(next)) setEditor(null);
                 }}>
-                保存
+                {t('保存')}
               </Button>
             </ModalActions>
           </div>
@@ -297,7 +298,7 @@ export default function Chat() {
     if (!chat || chat.id !== routeId || workspaceFileParam === null) return;
     const path = normalizeWorkspacePath(workspaceFileParam);
     if (path) useWorkspacePanel.getState().openFile(chat.id, path);
-    else toast('工作区文件链接无效', 'err');
+    else toast(t('工作区文件链接无效'), 'err');
   }, [chat?.id, routeId, workspaceFileParam]); // eslint-disable-line react-hooks/exhaustive-deps
   // ALL messages of the chat — every branch. The rendered conversation is the
   // chain ending at leafId (computed below as `path`).
@@ -429,7 +430,7 @@ export default function Chat() {
       })
       .catch((e) => {
         if (cancelled) return;
-        toast(e instanceof Error ? e.message : '加载对话失败', 'err');
+        toast(e instanceof Error ? e.message : t('加载对话失败'), 'err');
         nav('/', { replace: true });
       });
     return () => { cancelled = true; };
@@ -506,7 +507,7 @@ export default function Chat() {
     if (settingsTimer.current) clearTimeout(settingsTimer.current);
     settingsTimer.current = setTimeout(() => {
       api.patch(`/api/chats/${target.id}`, { ...draftToPatch(next), ...(mcp ? { mcpServerIds: mcp } : {}) })
-        .catch(() => toast('保存对话设置失败', 'err'));
+        .catch(() => toast(t('保存对话设置失败'), 'err'));
     }, 600);
   }
 
@@ -522,7 +523,7 @@ export default function Chat() {
     const target = chatRef.current;
     if (!target) return;
     api.patch(`/api/chats/${target.id}`, { mcpServerIds: ids })
-      .catch(() => toast('保存 MCP 设置失败', 'err'));
+      .catch(() => toast(t('保存 MCP 设置失败'), 'err'));
   }
 
   function selectModel(m: ModelInfo) {
@@ -580,7 +581,7 @@ export default function Chat() {
       totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now(),
     }]);
     setLeafId('tmp-a');
-    toast(`正在使用兜底模型「${target.displayName}」恢复回复`, 'info');
+    toast(t('正在使用兜底模型「{model}」恢复回复', { model: target.displayName }), 'info');
     void runStream(chatId, { regenerateMessageId: failed.id, modelId: target.id, automaticFallback: true }, { allowAutoFallback: false });
   }
 
@@ -632,7 +633,7 @@ export default function Chat() {
       if (!result.message) {
         setMessages((prev) => prev.filter((m) => !placeholders || (m.id !== 'tmp-a' && m.id !== 'tmp-u')));
         setLeafId((id) => id?.startsWith('tmp-') ? null : id);
-        toast('未找到已接收的回复,输入已保留,请重试', 'err');
+        toast(t('未找到已接收的回复,输入已保留,请重试'), 'err');
       }
       setStreaming(false);
       sendingRef.current = false;
@@ -729,8 +730,8 @@ export default function Chat() {
         const reply = messagesRef.current.find((m) => m.id === streamMsgIdRef.current);
         const preview = reply ? partsPreview(reply.parts) : '';
         notifyDone(
-          status === 'error' ? '回复出错' : `回复完成 · ${target?.title || '新对话'}`,
-          status === 'error' ? (reply?.error || '生成失败') : (preview || '点击查看回复'),
+          status === 'error' ? t('回复出错') : t('回复完成 · {title}', { title: target?.title || t('新对话') }),
+          status === 'error' ? (reply?.error || t('生成失败')) : (preview || t('点击查看回复')),
           target ? `/chat/${target.id}` : undefined,
         );
       }
@@ -796,7 +797,7 @@ export default function Chat() {
         // flag the tab if they are elsewhere.
         setStick(true);
         tabAlert();
-        notifyDone('需要你确认工具调用', `${d.calls.map((c) => c.name.split('__').pop()).join('、')}`, `/chat/${chatId}`);
+        notifyDone(t('需要你确认工具调用'), d.calls.map((c) => c.name.split('__').pop()).join(t('、')), `/chat/${chatId}`);
       },
       onGrounding(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },
       // One marker per reply: the 'running' one is replaced when compaction ends.
@@ -879,7 +880,7 @@ export default function Chat() {
           if (e.code === 'request_exists') { recover(); return; }
           // A model switch right after stopping a turn can beat the server to
           // releasing this chat; wait a moment and send again.
-          if (e.status === 429 && /对话并发/.test(e.message) && (opts?.busyRetries ?? 0) > 0) {
+          if (e.status === 429 && /对话并发/.test(e.raw) && (opts?.busyRetries ?? 0) > 0) {
             await new Promise((resolve) => setTimeout(resolve, 400));
             if (controller.signal.aborted || abortRef.current !== controller) {
               finalize('stopped'); acknowledge(false); return;
@@ -947,7 +948,7 @@ export default function Chat() {
     } catch (e) {
       sendingRef.current = false;
       setRecoveredDraft({ chatId: targetId, text, attachments });
-      toast(e instanceof Error ? e.message : '发送失败', 'err');
+      toast(e instanceof Error ? e.message : t('发送失败'), 'err');
       return false;
     }
   }
@@ -987,7 +988,7 @@ export default function Chat() {
     try {
       if (next) await api.put(`/api/chats/${target.id}/messages/${msg.id}/bookmark`);
       else await api.del(`/api/chats/${target.id}/messages/${msg.id}/bookmark`);
-      toast(next ? '已收藏,可在侧栏「收藏」中查看' : '已取消收藏', 'ok');
+      toast(next ? t('已收藏,可在侧栏「收藏」中查看') : t('已取消收藏'), 'ok');
     } catch (e) {
       setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, bookmarked: !next } : m)));
       toast(errMsg(e), 'err');
@@ -1080,7 +1081,7 @@ export default function Chat() {
       setChat((c) => c ? { ...c, modelId } : c);
       setModelSel(original);
       chatsStore.patch(target.id, { modelId });
-      toast(`已切回「${original.displayName}」`, 'ok');
+      toast(t('已切回「{model}」', { model: original.displayName }), 'ok');
     } catch (err) { toast(errMsg(err), 'err'); }
   }
 
@@ -1118,7 +1119,7 @@ export default function Chat() {
       setLeafId(leaf);
       setChat((cc) => (cc ? { ...cc, modelId: c.prevModelId } : cc));
       api.patch(`/api/chats/${chatRef.current.id}`, { currentLeafId: leaf, modelId: c.prevModelId })
-        .catch(() => toast('保存分支选择失败', 'err'));
+        .catch(() => toast(t('保存分支选择失败'), 'err'));
     } else {
       // Challenger wins: its branch is already the server-side leaf; its model
       // becomes the conversation default.
@@ -1165,13 +1166,13 @@ export default function Chat() {
       const r = await api.patch<{ message: Message }>(`/api/chats/${chatRef.current.id}/messages/${msgId}`, { text: newText });
       setMessages((prev) => prev.map((m) => (m.id === msgId ? r.message : m)));
     } catch (e) {
-      toast(e instanceof Error ? e.message : '保存修改失败', 'err');
+      toast(e instanceof Error ? e.message : t('保存修改失败'), 'err');
     }
   }
 
   async function deleteMessage(msgId: string) {
     if (streaming || !chatRef.current) return;
-    const ok = await confirmDialog('删除这条消息?', '删除后这条消息将不再作为上下文参与后续回复,且无法恢复。');
+    const ok = await confirmDialog(t('删除这条消息?'), t('删除后这条消息将不再作为上下文参与后续回复,且无法恢复。'));
     if (!ok) return;
     try {
       await api.del(`/api/chats/${chatRef.current.id}/messages/${msgId}`);
@@ -1183,7 +1184,7 @@ export default function Chat() {
         .map((m) => (m.parentId === msgId ? { ...m, parentId: target?.parentId ?? null } : m)));
       setLeafId((l) => (l === msgId ? (target?.parentId ?? null) : l));
     } catch (e) {
-      toast(e instanceof Error ? e.message : '删除消息失败', 'err');
+      toast(e instanceof Error ? e.message : t('删除消息失败'), 'err');
     }
   }
 
@@ -1208,9 +1209,9 @@ export default function Chat() {
       const r = await api.post<{ chat: ChatSummary }>(`/api/chats/${chatRef.current.id}/branch`, { uptoMessageId });
       chatsStore.upsert(r.chat);
       nav(`/chat/${r.chat.id}`);
-      toast('已创建分支对话', 'ok');
+      toast(t('已创建分支对话'), 'ok');
     } catch (e) {
-      toast(e instanceof Error ? e.message : '创建分支失败', 'err');
+      toast(e instanceof Error ? e.message : t('创建分支失败'), 'err');
     } finally {
       setBranching(false);
     }
@@ -1234,9 +1235,9 @@ export default function Chat() {
         temporary: r.chat.temporary, workspace: r.chat.workspace, modelId: r.chat.modelId, projectId: r.chat.projectId,
         createdAt: r.chat.createdAt, updatedAt: r.chat.updatedAt,
       });
-      toast('已保存为正式对话', 'ok');
+      toast(t('已保存为正式对话'), 'ok');
     } catch (e) {
-      toast(e instanceof Error ? e.message : '保存失败', 'err');
+      toast(e instanceof Error ? e.message : t('保存失败'), 'err');
     }
   }
 
@@ -1269,10 +1270,10 @@ export default function Chat() {
   return (
     <div className="flex h-full flex-col">
       <PageHeader
-        title={chat?.title || (routeId ? '对话' : tempMode ? '临时对话' : '新建对话')}
-        subtitle={modelSel?.displayName ? `当前模型 · ${modelSel.displayName}` : undefined}
+        title={chat?.title || (routeId ? t('对话') : tempMode ? t('临时对话') : t('新建对话'))}
+        subtitle={modelSel?.displayName ? t('当前模型 · {model}', { model: modelSel.displayName }) : undefined}
         left={!sidebarOpen && (
-          <Button variant="ghost" size="icon" title="打开侧栏" onClick={() => setSidebarOpen(true)}>
+          <Button variant="ghost" size="icon" title={t('打开侧栏')} onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
@@ -1281,7 +1282,7 @@ export default function Chat() {
           const pid = chat?.projectId ?? projectParam;
           const project = pid ? projects.find((p) => p.id === pid) : null;
           return project ? (
-            <Link to={`/projects/${project.id}`} title="打开项目"
+            <Link to={`/projects/${project.id}`} title={t('打开项目')}
               className="flex max-w-[14rem] items-center gap-1.5 rounded-md border border-line bg-bg2 px-2.5 py-1 text-xs font-medium text-tx2 transition-colors hover:border-line2 hover:text-tx">
               <FolderClosed size={12} className="shrink-0 text-tx3" />
               <span className="truncate">{project.name}</span>
@@ -1291,7 +1292,7 @@ export default function Chat() {
         {chat && !!workspaceFileCount && (
           <button
             type="button"
-            title={workspacePanelChat === chat.id ? '收起文件面板' : '这段对话的文件:查看、下载、上传给助手处理'}
+            title={workspacePanelChat === chat.id ? t('收起文件面板') : t('这段对话的文件:查看、下载、上传给助手处理')}
             aria-pressed={workspacePanelChat === chat.id}
             onClick={toggleWorkspacePanel}
             className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
@@ -1300,40 +1301,40 @@ export default function Chat() {
                 : 'border-line bg-bg2 text-tx2 hover:border-line2 hover:text-tx'}`}
           >
             <FolderOpen size={12} className="shrink-0" />
-            文件 <span className="tabular-nums">{workspaceFileCount}</span>
+            {t('文件')} <span className="tabular-nums">{workspaceFileCount}</span>
           </button>
         )}
         {chat?.temporary && (
           <div className="flex items-center gap-1.5">
-            <span title={'临时对话:不会出现在历史记录和搜索中,\n闲置 24 小时后自动删除(用量仍正常统计)'}
+            <span title={t('临时对话:不会出现在历史记录和搜索中,\n闲置 24 小时后自动删除(用量仍正常统计)')}
               className="flex items-center gap-1.5 rounded-md border border-dashed border-line2 bg-bg2 px-2.5 py-1 text-xs font-medium text-tx2">
-              <Ghost size={12} className="shrink-0 text-tx3" />临时对话
+              <Ghost size={12} className="shrink-0 text-tx3" />{t('临时对话')}
             </span>
-            <Button variant="outline" size="sm" title="将这段对话保存进历史记录" onClick={() => void saveTemporary()}>
-              保存为正式对话
+            <Button variant="outline" size="sm" title={t('将这段对话保存进历史记录')} onClick={() => void saveTemporary()}>
+              {t('保存为正式对话')}
             </Button>
           </div>
         )}
         {chat?.archived && (
           <button
-            title="此对话已归档,点击取消归档"
+            title={t('此对话已归档,点击取消归档')}
             onClick={() => {
               const target = chatRef.current;
               if (!target) return;
               api.patch(`/api/chats/${target.id}`, { archived: false })
                 .then(() => { setChat((c) => (c ? { ...c, archived: false } : c)); chatsStore.patch(target.id, { archived: false }); })
-                .catch(() => toast('取消归档失败', 'err'));
+                .catch(() => toast(t('取消归档失败'), 'err'));
             }}
             className="flex cursor-pointer items-center gap-1.5 rounded-md border border-line bg-bg2 px-2.5 py-1 text-xs font-medium text-tx2 transition-colors hover:border-line2 hover:text-tx"
           >
-            <Archive size={12} className="shrink-0 text-tx3" />已归档
+            <Archive size={12} className="shrink-0 text-tx3" />{t('已归档')}
           </button>
         )}
         {user?.role === 'admin' && models.length === 0 && modelsLoaded && (
-          <Button variant="primary" size="sm" onClick={() => nav('/admin/providers')}>配置模型服务</Button>
+          <Button variant="primary" size="sm" onClick={() => nav('/admin/providers')}>{t('配置模型服务')}</Button>
         )}
         {path.length > 0 && (
-          <Button variant="ghost" size="icon" title="在对话中查找 (Ctrl+F)"
+          <Button variant="ghost" size="icon" title={t('在对话中查找 (Ctrl+F)')}
             className={findOpen ? 'bg-bg2 text-tx' : ''}
             onClick={() => { setFindSeed(''); setFindOpen((v) => !v); }}>
             <Search size={16} />
@@ -1359,7 +1360,7 @@ export default function Chat() {
                 : <CatMark size={56} />}
               <h2 className="mt-4 text-xl font-semibold tracking-tight text-tx">
                 {tempMode
-                  ? '临时对话'
+                  ? t('临时对话')
                   : modelSel?.displayName || bootstrap?.brand || 'Cat AgentUI'}
               </h2>
               {!tempMode && modelSel?.description && (
@@ -1368,19 +1369,19 @@ export default function Chat() {
               {!tempMode && modelSel?.usageLimit && (
                 <p className={`mt-1.5 text-[12px] tabular-nums ${usageLimitExhausted(modelSel.usageLimit) ? 'text-err' : 'text-tx3'}`}>
                   {fmtUsageLimit(modelSel.usageLimit)}
-                  {usageLimitExhausted(modelSel.usageLimit) ? ',已达上限,请换用其他模型' : ''}
+                  {usageLimitExhausted(modelSel.usageLimit) ? t(',已达上限,请换用其他模型') : ''}
                 </p>
               )}
               <p className="mt-1.5 text-[13px] text-tx3">
                 {tempMode
-                  ? '这段对话不会写入历史记录,闲置 24 小时后自动删除;之后也可以随时保存为正式对话。'
-                  : '开始一段新对话,或从左侧继续此前的记录。'}
+                  ? t('这段对话不会写入历史记录,闲置 24 小时后自动删除;之后也可以随时保存为正式对话。')
+                  : t('开始一段新对话,或从左侧继续此前的记录。')}
               </p>
               {!projectParam && (
                 <button
                   type="button"
                   aria-pressed={tempMode}
-                  title={tempMode ? '切回普通对话' : '开启临时对话:不写入历史记录'}
+                  title={tempMode ? t('切回普通对话') : t('开启临时对话:不写入历史记录')}
                   onClick={() => nav(tempMode ? '/' : '/?temp=1', { replace: true })}
                   className={`mt-3 flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                     tempMode
@@ -1389,7 +1390,7 @@ export default function Chat() {
                   }`}
                 >
                   <Ghost size={13} />
-                  {tempMode ? '临时对话已开启' : '临时对话'}
+                  {tempMode ? t('临时对话已开启') : t('临时对话')}
                 </button>
               )}
             </div>
@@ -1413,7 +1414,7 @@ export default function Chat() {
             version={findVersion}
           />
           <div ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
-            <SelectionQuote containerRef={scrollRef} onQuote={(t) => useComposerInsert.getState().insert(asQuote(t))} />
+            <SelectionQuote containerRef={scrollRef} onQuote={(quoted) => useComposerInsert.getState().insert(asQuote(quoted))} />
             {/* 62rem message column over a 54rem composer (chatgpt-style: content
                 slightly wider than the input). Both widths are deliberate user
                 picks — change them in tandem with the composer wrappers below
@@ -1449,7 +1450,7 @@ export default function Chat() {
                     msg={m}
                     workspaceChatId={chat?.id}
                     isStreaming={streaming && m.id === streamMsgIdRef.current}
-                    pendingLabel={modelSel?.imageGen ? '正在生成图片,可能需要 1–3 分钟…' : undefined}
+                    pendingLabel={modelSel?.imageGen ? t('正在生成图片,可能需要 1–3 分钟…') : undefined}
                     onCancel={stop}
                     siblingInfo={sibs.length > 1 ? { index: sibIdx, total: sibs.length } : undefined}
                     onSiblingPrev={!streaming && sibIdx > 0 ? () => switchSibling(m, -1) : undefined}
@@ -1460,9 +1461,9 @@ export default function Chat() {
                     onSwitchModel={suggestion ? (pick) => switchModel(m.id, pick) : undefined}
                     onRestoreModel={!streaming ? (id) => void restoreModel(id) : undefined}
                     currentModelId={modelSel?.id}
-                    onEdit={m.role === 'user' && !streaming ? (t) => editUser(m.id, t) : undefined}
+                    onEdit={m.role === 'user' && !streaming ? (next) => editUser(m.id, next) : undefined}
                     onEditAssistant={m.role === 'assistant' && m.status !== 'streaming' && !streaming && !!chat
-                      ? (t) => void editAssistant(m.id, t)
+                      ? (next) => void editAssistant(m.id, next)
                       : undefined}
                     onDelete={!streaming && !!chat ? () => void deleteMessage(m.id) : undefined}
                     onBranch={!streaming && !!chat ? () => void branchChat(m.id) : undefined}
@@ -1482,7 +1483,7 @@ export default function Chat() {
           <div className="relative shrink-0 border-t border-line bg-bg1 px-4 pb-3 pt-3 sm:px-6">
             {!stick && (
               <button
-                title="回到底部"
+                title={t('回到底部')}
                 className="absolute -top-11 left-1/2 flex h-8 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-full border border-line2 bg-bg1 text-tx2 shadow-md transition-colors hover:bg-bg2 hover:text-tx"
                 onClick={() => { setStick(true); if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }}
               >
@@ -1494,10 +1495,10 @@ export default function Chat() {
               streaming={streaming}
               onSendNow={queueSendNow}
               onRemove={(item) => chat && queueStore.remove(chat.id, item.id)}
-              onUpdate={(item, t) => chat && queueStore.update(chat.id, item.id, t)}
+              onUpdate={(item, next) => chat && queueStore.update(chat.id, item.id, next)}
             />
             <div className="mx-auto max-w-[54rem]">{composer}</div>
-            {!composerCompact && <p className="mt-2 text-center text-[11px] text-tx3">内容由 AI 生成,请自行核实关键信息。</p>}
+            {!composerCompact && <p className="mt-2 text-center text-[11px] text-tx3">{t('内容由 AI 生成,请自行核实关键信息。')}</p>}
           </div>
         </>
       )}

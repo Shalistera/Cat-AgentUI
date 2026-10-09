@@ -2,10 +2,11 @@ import { useId, useState } from 'react';
 import { BarChart3, Table2 } from 'lucide-react';
 import { LineComparisonChart } from './LineComparisonChart';
 import type { BarComparison, DataComparison } from '../types';
+import { locale, t } from '../i18n';
 
 function formatValue(value: number): string {
   if (value !== 0 && (Math.abs(value) < 0.001 || Math.abs(value) >= 1e9)) return String(value);
-  return value.toLocaleString('zh-CN', { maximumSignificantDigits: 15 });
+  return value.toLocaleString(locale, { maximumSignificantDigits: 15 });
 }
 
 /** Fixed, zero-based scale shared by all categories, including negative values. */
@@ -38,19 +39,19 @@ function BarComparisonChart({ data }: { data: BarComparison }) {
       <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
         <div className="min-w-0">
           <h3 id={titleId} className="break-words text-sm font-semibold text-tx">{data.title}</h3>
-          <p className="mt-1 break-words text-xs text-tx3">{data.items.length} 项对比 · 单位：{data.unit}</p>
+          <p className="mt-1 break-words text-xs text-tx3">{t('{count} 项对比 · 单位：{unit}', { count: data.items.length, unit: data.unit })}</p>
         </div>
         <button type="button" onClick={() => setTable((v) => !v)} aria-pressed={table}
           className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-line px-2 py-1 text-xs text-tx2 hover:bg-bg2"
-          aria-label={table ? '切换为柱状图' : '切换为数据表'}>
-          {table ? <BarChart3 size={13} /> : <Table2 size={13} />}{table ? '图表' : '数据'}
+          aria-label={table ? t('切换为柱状图') : t('切换为数据表')}>
+          {table ? <BarChart3 size={13} /> : <Table2 size={13} />}{table ? t('图表') : t('数据')}
         </button>
       </div>
       {table ? (
         <div className="overflow-x-auto px-4 py-3">
           <table className="w-full text-left text-xs">
-            <caption className="sr-only">{data.title}，单位：{data.unit}</caption>
-            <thead><tr className="border-b border-line text-tx3"><th scope="col" className="py-2 font-medium">类别</th><th scope="col" className="py-2 text-right font-medium">数值</th></tr></thead>
+            <caption className="sr-only">{t('{title}，单位：{unit}', { title: data.title, unit: data.unit })}</caption>
+            <thead><tr className="border-b border-line text-tx3"><th scope="col" className="py-2 font-medium">{t('类别')}</th><th scope="col" className="py-2 text-right font-medium">{t('数值')}</th></tr></thead>
             <tbody>{data.items.map((item, i) => (
               <tr key={i} className="border-b border-line last:border-0">
                 <th scope="row" className="break-words py-2 pr-3 font-normal text-tx2">{item.label}</th>
@@ -61,11 +62,11 @@ function BarComparisonChart({ data }: { data: BarComparison }) {
         </div>
       ) : (
         <div className="px-4 py-4">
-          <ul className="space-y-3" aria-label={`${data.title}柱状图`}>
+          <ul className="space-y-3" aria-label={t('{title}柱状图', { title: data.title })}>
             {data.items.map((item, i) => {
               const end = scale.position(item.value);
               return (
-                <li key={i} title={`${item.label}：${formatValue(item.value)} ${data.unit}`}>
+                <li key={i} title={t('{label}：{value} {unit}', { label: item.label, value: formatValue(item.value), unit: data.unit })}>
                   <div className="mb-1.5 flex items-baseline justify-between gap-3 text-xs">
                     <span className="min-w-0 break-words text-tx2">{item.label}</span>
                     <span className="shrink-0 tabular-nums text-tx">{formatValue(item.value)}</span>
@@ -88,7 +89,7 @@ function BarComparisonChart({ data }: { data: BarComparison }) {
           </div>
         </div>
       )}
-      <p className="break-words border-t border-line bg-bg0 px-4 py-2.5 text-[11px] leading-relaxed text-tx3">数据来源：{data.source}</p>
+      <p className="break-words border-t border-line bg-bg0 px-4 py-2.5 text-[11px] leading-relaxed text-tx3">{t('数据来源：{source}', { source: data.source })}</p>
     </section>
   );
 }

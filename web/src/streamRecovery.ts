@@ -1,5 +1,6 @@
 import { ApiError, onUnauthorized } from './api';
 import type { ChatStreamState, Message } from './types';
+import { t } from './i18n';
 
 export interface StreamIdentity { requestId?: string; messageId?: string }
 
@@ -30,10 +31,10 @@ export async function recoverChatStream(
         credentials: 'same-origin', signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
       });
       if (res.status === 401) onUnauthorized.handler?.();
-      if ([401, 403, 404].includes(res.status)) throw new ApiError(res.status, '无法恢复这条回复,请重新打开对话');
-      if (!res.ok) throw new Error('生成状态暂时不可用');
+      if ([401, 403, 404].includes(res.status)) throw new ApiError(res.status, t('无法恢复这条回复,请重新打开对话'));
+      if (!res.ok) throw new Error(t('生成状态暂时不可用'));
       const state = await res.json() as ChatStreamState;
-      if (typeof state.active !== 'boolean') throw new Error('无效的生成状态');
+      if (typeof state.active !== 'boolean') throw new Error(t('无效的生成状态'));
       if (!query.has('requestId') && state.activeTurn?.requestId) query.set('requestId', state.activeTurn.requestId);
       if (!query.has('messageId') && state.message?.id) query.set('messageId', state.message.id);
       signal.throwIfAborted();

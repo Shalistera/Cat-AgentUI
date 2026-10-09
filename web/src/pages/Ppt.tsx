@@ -10,6 +10,7 @@ import {
   Button, btnClass, Input, Textarea, Select, Field, Modal, ModalActions, Badge, Spinner, Card, PageHeader,
   toast, confirmDialog, EmptyState,
 } from '../components/ui';
+import { locale, t } from '../i18n';
 import type { DeckDetail, DeckSlide, DeckSummary, PptModel } from '../types';
 
 const PAGE_SIZE = 30;
@@ -250,13 +251,13 @@ export default function Ppt() {
       })
       .catch((err) => {
         setModels([]);
-        toast(err instanceof Error ? err.message : '加载模型失败', 'err');
+        toast(err instanceof Error ? err.message : t('加载模型失败'), 'err');
       });
     api.get<{ decks: DeckSummary[]; total: number }>(`/api/ppt?limit=${PAGE_SIZE}&offset=0`)
       .then((r) => { setList(r.decks ?? []); setTotal(r.total ?? 0); setListLoaded(true); })
       .catch((err) => {
         setListLoaded(true);
-        toast(err instanceof Error ? err.message : '加载列表失败', 'err');
+        toast(err instanceof Error ? err.message : t('加载列表失败'), 'err');
       });
   }, []);
 
@@ -298,34 +299,34 @@ export default function Ppt() {
         try {
           st = await api.get<typeof st>(`/api/ppt/jobs/${jobId}`);
         } catch (err) {
-          if (err instanceof ApiError && err.status === 404) throw new Error('任务状态已丢失(服务器可能重启过)');
-          if (Date.now() - startedAt > 8 * 60_000) throw new Error('等待超时,已放弃');
+          if (err instanceof ApiError && err.status === 404) throw new Error(t('任务状态已丢失(服务器可能重启过)'));
+          if (Date.now() - startedAt > 8 * 60_000) throw new Error(t('等待超时,已放弃'));
           continue;
         }
-        if (st.status === 'error') throw new Error(st.error || '生成失败');
+        if (st.status === 'error') throw new Error(st.error || t('生成失败'));
         if (st.status === 'done' && st.deck) {
           const deck = st.deck;
           setList((prev) => (prev.some((x) => x.id === deck.id) ? prev : [deck, ...prev]));
           setTotal((t) => t + 1);
           setPreview(deck);
-          toast(`已生成「${deck.title}」,共 ${deck.slideCount} 页`, 'ok');
+          toast(t('已生成「{title}」,共 {n} 页', { title: deck.title, n: deck.slideCount }), 'ok');
           tabAlert();
-          notifyDone('PPT 生成完成', `「${deck.title}」共 ${deck.slideCount} 页`, '/ppt');
+          notifyDone(t('PPT 生成完成'), t('「{title}」共 {n} 页', { title: deck.title, n: deck.slideCount }), '/ppt');
           return;
         }
       }
     } catch (err) {
       const recovered = await recoverFromLibrary(startedAt);
       if (recovered > 0) {
-        toast('生成完成(已从列表找回)', 'ok');
+        toast(t('生成完成(已从列表找回)'), 'ok');
         tabAlert();
         return;
       }
-      const msg = err instanceof Error ? err.message : '生成失败';
+      const msg = err instanceof Error ? err.message : t('生成失败');
       if (aliveRef.current) setGenError(msg);
       toast(msg, 'err');
       tabAlert();
-      notifyDone('PPT 生成失败', msg, '/ppt');
+      notifyDone(t('PPT 生成失败'), msg, '/ppt');
     } finally {
       jobRef.current = null;
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -342,8 +343,8 @@ export default function Ppt() {
   }, []);
 
   async function generate() {
-    const t = topic.trim();
-    if (!t || !model || generating) return;
+    const topicText = topic.trim();
+    if (!topicText || !model || generating) return;
     setGenerating(true);
     setGenError(null);
     const start = Date.now();
@@ -351,7 +352,7 @@ export default function Ppt() {
     let jobId: string;
     try {
       ({ jobId } = await api.post<{ jobId: string }>('/api/ppt/generate', {
-        modelId: model.id, topic: t,
+        modelId: model.id, topic: topicText,
         slideCount: Math.min(30, Math.max(2, Math.round(Number(slideCount)) || 10)),
       }));
     } catch (err) {
@@ -363,7 +364,7 @@ export default function Ppt() {
       }
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
       setGenerating(false);
-      const msg = err instanceof Error ? err.message : '生成失败';
+      const msg = err instanceof Error ? err.message : t('生成失败');
       setGenError(msg);
       toast(msg, 'err');
       return;
@@ -377,7 +378,7 @@ export default function Ppt() {
     try {
       setPreview(await api.get<DeckDetail>(`/api/ppt/${d.id}`));
     } catch (err) {
-      toast(err instanceof Error ? err.message : '加载失败', 'err');
+      toast(err instanceof Error ? err.message : t('加载失败'), 'err');
     } finally {
       setPreviewLoading(null);
     }
@@ -393,22 +394,22 @@ export default function Ppt() {
       setList((prev) => [...prev, ...(r.decks ?? [])]);
       setTotal(r.total ?? total);
     } catch (err) {
-      toast(err instanceof Error ? err.message : '加载失败', 'err');
+      toast(err instanceof Error ? err.message : t('加载失败'), 'err');
     } finally {
       setLoadingMore(false);
     }
   }
 
   async function deleteDeck(d: DeckSummary) {
-    if (!(await confirmDialog('删除演示文稿', `确定删除「${d.title}」?此操作不可恢复。`))) return;
+    if (!(await confirmDialog(t('删除演示文稿'), t('确定删除「{title}」?此操作不可恢复。', { title: d.title })))) return;
     try {
       await api.del(`/api/ppt/${d.id}`);
       setList((prev) => prev.filter((x) => x.id !== d.id));
       setTotal((t) => Math.max(0, t - 1));
       setPreview((p) => (p?.id === d.id ? null : p));
-      toast('已删除', 'ok');
+      toast(t('已删除'), 'ok');
     } catch (err) {
-      toast(err instanceof Error ? err.message : '删除失败', 'err');
+      toast(err instanceof Error ? err.message : t('删除失败'), 'err');
     }
   }
 
@@ -418,10 +419,12 @@ export default function Ppt() {
   return (
     <div className="contents">
       <PageHeader
-        title="PPT 工坊"
-        subtitle={total > 0 ? `已生成 ${total.toLocaleString()} 份演示文稿` : '一句话生成演示文稿(演示功能)'}
+        title={t('PPT 工坊')}
+        subtitle={total > 0
+          ? t('已生成 {n} 份演示文稿', { n: total.toLocaleString(locale) })
+          : t('一句话生成演示文稿(演示功能)')}
         left={!sidebarOpen && (
-          <Button variant="ghost" size="icon" title="展开侧栏" onClick={() => setSidebarOpen(true)}>
+          <Button variant="ghost" size="icon" title={t('展开侧栏')} onClick={() => setSidebarOpen(true)}>
             <PanelLeft size={16} />
           </Button>
         )}
@@ -430,21 +433,21 @@ export default function Ppt() {
       <div className="flex-1 overflow-y-auto bg-bg0">
         <div className="mx-auto max-w-5xl p-6">
           {/* ---- generation form ---- */}
-          <Card title="新建演示文稿" desc="描述主题与要求,AI 负责大纲、内容与版式,生成后可下载 .pptx。" className="fade-up"
+          <Card title={t('新建演示文稿')} desc={t('描述主题与要求,AI 负责大纲、内容与版式,生成后可下载 .pptx。')} className="fade-up"
             flush={models === null || models.length === 0}>
             {models === null ? (
               <div className="flex justify-center py-10 text-tx3"><Spinner className="h-5 w-5" /></div>
             ) : models.length === 0 ? (
               <EmptyState
                 icon={<Presentation size={22} />}
-                title="管理员尚未配置对话模型"
-                hint="生成演示文稿需要一个文本对话模型,请联系管理员在后台添加。"
+                title={t('管理员尚未配置对话模型')}
+                hint={t('生成演示文稿需要一个文本对话模型,请联系管理员在后台添加。')}
               />
             ) : (
               <div className="space-y-4">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-2">
-                    <Field label="模型">
+                    <Field label={t('模型')}>
                       <Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
                         {models.map((m) => (
                           <option key={m.id} value={m.id}>
@@ -454,7 +457,7 @@ export default function Ppt() {
                       </Select>
                     </Field>
                   </div>
-                  <Field label="目标页数(2-30)">
+                  <Field label={t('目标页数(2-30)')}>
                     <Input
                       type="number" min={2} max={30} step={1} inputMode="numeric"
                       value={slideCount}
@@ -464,12 +467,12 @@ export default function Ppt() {
                   </Field>
                 </div>
 
-                <Field label="主题与要求">
+                <Field label={t('主题与要求')}>
                   <Textarea
                     rows={3}
                     value={topic}
                     maxLength={4000}
-                    placeholder="例如:面向新员工的信息安全培训,风格轻松,包含常见钓鱼案例和应对清单…"
+                    placeholder={t('例如:面向新员工的信息安全培训,风格轻松,包含常见钓鱼案例和应对清单…')}
                     onChange={(e) => setTopic(e.target.value)}
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void generate(); }
@@ -479,18 +482,18 @@ export default function Ppt() {
 
                 {genError && (
                   <div className="whitespace-pre-wrap rounded-md border border-err/30 bg-err/5 px-3 py-2 text-[13px] leading-relaxed text-err">
-                    生成失败:{genError}
+                    {t('生成失败:{msg}', { msg: genError })}
                   </div>
                 )}
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
                   <p className="text-xs leading-relaxed text-tx3">
-                    生成通常需要半分钟到两分钟;完成后自动打开预览,可下载 .pptx 到 PowerPoint / WPS / Keynote 继续编辑。Cmd / Ctrl + Enter 快速提交。
+                    {t('生成通常需要半分钟到两分钟;完成后自动打开预览,可下载 .pptx 到 PowerPoint / WPS / Keynote 继续编辑。Cmd / Ctrl + Enter 快速提交。')}
                   </p>
                   <Button variant="primary" disabled={!canGenerate} onClick={generate} className="shrink-0">
                     {generating
-                      ? <><Spinner className="h-4 w-4" />生成中 {elapsed.toFixed(1)}s</>
-                      : <><Sparkles size={15} />生成 PPT</>}
+                      ? <><Spinner className="h-4 w-4" />{t('生成中 {s}s', { s: elapsed.toFixed(1) })}</>
+                      : <><Sparkles size={15} />{t('生成 PPT')}</>}
                   </Button>
                 </div>
               </div>
@@ -500,9 +503,9 @@ export default function Ppt() {
           {/* ---- deck library ---- */}
           <section className="mt-5">
             <div className="mb-2.5 flex items-baseline justify-between">
-              <h2 className="eyebrow">文稿库</h2>
+              <h2 className="eyebrow">{t('文稿库')}</h2>
               {list.length > 0 && (
-                <span className="text-xs tabular-nums text-tx3">显示 {list.length} / {total}</span>
+                <span className="text-xs tabular-nums text-tx3">{t('显示 {shown} / {total}', { shown: list.length, total })}</span>
               )}
             </div>
             {!listLoaded ? (
@@ -511,8 +514,8 @@ export default function Ppt() {
               <Card flush>
                 <EmptyState
                   icon={<Presentation size={22} />}
-                  title="还没有生成过演示文稿"
-                  hint="在上方输入主题,生成你的第一份 PPT。"
+                  title={t('还没有生成过演示文稿')}
+                  hint={t('在上方输入主题,生成你的第一份 PPT。')}
                 />
               </Card>
             ) : (
@@ -530,12 +533,12 @@ export default function Ppt() {
                           {previewLoading === d.id ? <Spinner className="h-4 w-4" /> : <Presentation size={16} />}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] font-semibold text-tx">{d.title || '未命名'}</span>
+                          <span className="block truncate text-[13px] font-semibold text-tx">{d.title || t('未命名')}</span>
                           <span className="mt-0.5 line-clamp-2 block text-[11px] leading-snug text-tx3">{d.topic}</span>
                         </span>
                       </div>
                       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] tabular-nums text-tx3">
-                        <span>{d.slideCount} 页</span>
+                        <span>{t('{n} 页', { n: d.slideCount })}</span>
                         {d.model && <span className="max-w-[10rem] truncate font-mono">{fmtModelName(d.model)}</span>}
                         <span>{fmtTime(d.createdAt)}</span>
                       </div>
@@ -546,7 +549,7 @@ export default function Ppt() {
                   <div className="mt-5 flex justify-center">
                     <Button variant="outline" disabled={loadingMore} onClick={loadMore}>
                       {loadingMore && <Spinner className="h-3.5 w-3.5" />}
-                      {loadingMore ? '加载中…' : '加载更多'}
+                      {loadingMore ? t('加载中…') : t('加载更多')}
                     </Button>
                   </div>
                 )}
@@ -557,13 +560,13 @@ export default function Ppt() {
       </div>
 
       {/* ---- preview ---- */}
-      <Modal open={!!preview} onClose={() => setPreview(null)} title={preview?.title || '演示文稿'} wide>
+      <Modal open={!!preview} onClose={() => setPreview(null)} title={preview?.title || t('演示文稿')} wide>
         {preview && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs tabular-nums text-tx3">
               {preview.model && <Badge mono>{fmtModelName(preview.model)}</Badge>}
-              <span>{preview.slideCount} 页</span>
-              <span>耗时 {fmtDuration(preview.durationMs)}</span>
+              <span>{t('{n} 页', { n: preview.slideCount })}</span>
+              <span>{t('耗时 {d}', { d: fmtDuration(preview.durationMs) })}</span>
               {preview.totalTokens != null && preview.totalTokens > 0 && (
                 <span>Tokens {fmtTokens(preview.totalTokens)}</span>
               )}
@@ -581,7 +584,7 @@ export default function Ppt() {
                   {s.notes && (
                     <p className="mt-1 flex items-start gap-1 px-0.5 text-[11px] leading-relaxed text-tx3">
                       <FileText size={11} className="mt-0.5 shrink-0" />
-                      <span className="min-w-0">备注:{s.notes}</span>
+                      <span className="min-w-0">{t('备注:{text}', { text: s.notes })}</span>
                     </p>
                   )}
                 </div>
@@ -594,10 +597,10 @@ export default function Ppt() {
                 download
                 className={btnClass('primary', 'md')}
               >
-                <Download size={14} />下载 .pptx
+                <Download size={14} />{t('下载 .pptx')}
               </a>
               <Button variant="danger" onClick={() => deleteDeck(preview)}>
-                <Trash2 size={14} />删除
+                <Trash2 size={14} />{t('删除')}
               </Button>
             </ModalActions>
           </div>

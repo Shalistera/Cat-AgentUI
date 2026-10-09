@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Megaphone, X } from 'lucide-react';
 import { useAnnouncement, useAuth, useHtmlPreview, useUi, useWorkspacePanel } from './store';
+import { t } from './i18n';
 import { onUnauthorized } from './api';
 import { startRealtime, stopRealtime } from './realtime';
 import { Toaster, ConfirmHost, Spinner } from './components/ui';
@@ -36,7 +37,7 @@ function AnnouncementBanner() {
       <Megaphone size={15} className="mt-0.5 shrink-0 text-acc" />
       <p className="min-w-0 flex-1 whitespace-pre-wrap leading-relaxed">{text}</p>
       <button
-        title="关闭公告(内容更新后会再次显示)"
+        title={t('关闭公告(内容更新后会再次显示)')}
         className="shrink-0 cursor-pointer rounded-sm p-0.5 text-tx3 transition-colors hover:bg-bg2 hover:text-tx"
         onClick={dismiss}
       >

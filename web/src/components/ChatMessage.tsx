@@ -15,6 +15,7 @@ import { normalizeWorkspacePath } from '../workspaceLinks';
 import { injectCitations } from '../citations';
 import { ModelAvatar } from './ModelAvatar';
 import { Button, Popover, Spinner } from './ui';
+import { locale, t } from '../i18n';
 
 const iconBtn = 'flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm text-tx3 transition-colors hover:bg-bg2 hover:text-tx';
 
@@ -22,7 +23,7 @@ function CopyBtn({ text, size = 12 }: { text: string; size?: number }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
-      title="复制"
+      title={t('复制')}
       className={iconBtn}
       onClick={() => navigator.clipboard.writeText(text).then(() => {
         setCopied(true); setTimeout(() => setCopied(false), 1500);
@@ -43,7 +44,7 @@ function SpeakBtn({ text }: { text: string }) {
   if (!ttsSupported() || !text) return null;
   return (
     <button
-      title={speaking ? '停止朗读' : '朗读回复(使用浏览器语音)'}
+      title={speaking ? t('停止朗读') : t('朗读回复(使用浏览器语音)')}
       className={`${iconBtn} ${speaking ? 'text-acc' : ''}`}
       onClick={() => {
         if (speaking) { stopSpeaking(); setSpeaking(false); }
@@ -79,22 +80,22 @@ function RegenerateMenu({ lastModel, onSame, onWith }: {
 
   return (
     <Popover open={open} setOpen={setOpen} width="w-72" trigger={
-      <button title="重新生成" className={iconBtn}><RefreshCw size={12} /></button>
+      <button title={t('重新生成')} className={iconBtn}><RefreshCw size={12} /></button>
     }>
       {!picking ? (
         <div className="py-1">
           <button className={menuRow} onClick={() => { setOpen(false); onSame(); }}>
             <RefreshCw size={14} className="mt-0.5 shrink-0 text-tx3" />
             <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-medium text-tx">用上次的模型重新生成</span>
+              <span className="block text-[13px] font-medium text-tx">{t('用上次的模型重新生成')}</span>
               {lastModel && <span className="mt-0.5 block truncate font-mono text-[11px] text-tx3">{lastModel}</span>}
             </span>
           </button>
           <button className={menuRow} onClick={() => setPicking(true)}>
             <Shuffle size={14} className="mt-0.5 shrink-0 text-tx3" />
             <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-medium text-tx">用其他模型对比生成</span>
-              <span className="mt-0.5 block text-[11px] text-tx3">保留当前回复,并排生成新回复后选择保留哪个</span>
+              <span className="block text-[13px] font-medium text-tx">{t('用其他模型对比生成')}</span>
+              <span className="mt-0.5 block text-[11px] text-tx3">{t('保留当前回复,并排生成新回复后选择保留哪个')}</span>
             </span>
             <ChevronRight size={13} className="mt-1 shrink-0 text-tx3" />
           </button>
@@ -106,7 +107,7 @@ function RegenerateMenu({ lastModel, onSame, onWith }: {
               <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tx3" />
               <input
                 autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
-                aria-label="搜索模型" placeholder="搜索名称、ID 或服务商…"
+                aria-label={t('搜索模型')} placeholder={t('搜索名称、ID 或服务商…')}
                 className="w-full rounded-md border border-field bg-bg1 py-1.5 pl-8 pr-2.5 text-xs text-tx transition-colors placeholder:text-tx3 hover:border-tx3"
               />
             </label>
@@ -124,7 +125,7 @@ function RegenerateMenu({ lastModel, onSame, onWith }: {
                 </span>
               </button>
             ))}
-            {filtered.length === 0 && <p className="px-3 py-6 text-center text-xs text-tx3">没有匹配的模型</p>}
+            {filtered.length === 0 && <p className="px-3 py-6 text-center text-xs text-tx3">{t('没有匹配的模型')}</p>}
           </div>
         </>
       )}
@@ -136,7 +137,7 @@ function RegenerateMenu({ lastModel, onSame, onWith }: {
 function BookmarkBtn({ on, onToggle }: { on: boolean; onToggle(): void }) {
   return (
     <button
-      title={on ? '取消收藏' : '收藏这条消息'}
+      title={on ? t('取消收藏') : t('收藏这条消息')}
       className={`${iconBtn} ${on ? 'text-acc hover:text-acc' : ''}`}
       onClick={onToggle}
     >
@@ -172,21 +173,21 @@ function ToolConfirmCard({ req, onDecide }: {
       <div className="flex items-center gap-2 px-3.5 py-2.5 text-[13px] font-medium text-tx">
         <ShieldQuestion size={15} className="shrink-0 text-warn" />
         {req.calls.every((c) => c.name === 'run_command')
-          ? `模型想在沙盒里执行${req.calls.length === 1 ? '一条命令' : `${req.calls.length} 条命令`},是否允许?`
-          : `模型想调用 ${req.calls.length === 1 ? '一个工具' : `${req.calls.length} 个工具`},是否允许?`}
+          ? t(req.calls.length === 1 ? '模型想在沙盒里执行一条命令,是否允许?' : '模型想在沙盒里执行 {count} 条命令,是否允许?', { count: req.calls.length })
+          : t(req.calls.length === 1 ? '模型想调用一个工具,是否允许?' : '模型想调用 {count} 个工具,是否允许?', { count: req.calls.length })}
       </div>
       <div className="divide-y divide-line/70 border-t border-warn/25 bg-bg1">
         {req.calls.map((c) => (
           <div key={c.id} className="px-3.5 py-2.5">
             <div className="flex items-center gap-2">
               {c.name === 'run_command' ? <Terminal size={13} className="shrink-0 text-tx3" /> : <Wrench size={13} className="shrink-0 text-tx3" />}
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-tx">{c.name === 'run_command' ? '执行命令' : toolShortName(c.name)}</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-tx">{c.name === 'run_command' ? t('执行命令') : toolShortName(c.name)}</span>
               {req.calls.length > 1 && !sent && (
                 <span className="flex shrink-0 gap-1">
                   <Button size="xs" variant={picked[c.id] === 'deny' ? 'danger' : 'ghost'}
-                    onClick={() => setPicked((p) => ({ ...p, [c.id]: 'deny' }))}>拒绝</Button>
+                    onClick={() => setPicked((p) => ({ ...p, [c.id]: 'deny' }))}>{t('拒绝')}</Button>
                   <Button size="xs" variant={picked[c.id] === 'allow' ? 'primary' : 'ghost'}
-                    onClick={() => setPicked((p) => ({ ...p, [c.id]: 'allow' }))}>允许</Button>
+                    onClick={() => setPicked((p) => ({ ...p, [c.id]: 'allow' }))}>{t('允许')}</Button>
                 </span>
               )}
             </div>
@@ -200,23 +201,23 @@ function ToolConfirmCard({ req, onDecide }: {
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 border-t border-warn/25 bg-bg1 px-3.5 py-2">
         {!sent && (
-          <label className="mr-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-tx3" title="之后这段对话里的工具调用不再逐条询问(重启服务后重置)">
+          <label className="mr-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-tx3" title={t('之后这段对话里的工具调用不再逐条询问(重启服务后重置)')}>
             <input type="checkbox" className="accent-acc" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-            本对话内不再询问
+            {t('本对话内不再询问')}
           </label>
         )}
         {sent ? (
-          <span className="flex items-center gap-1.5 text-xs text-tx3"><Spinner className="h-3 w-3" />已提交,继续生成…</span>
+          <span className="flex items-center gap-1.5 text-xs text-tx3"><Spinner className="h-3 w-3" />{t('已提交,继续生成…')}</span>
         ) : req.calls.length === 1 ? (
           <>
-            <Button size="sm" variant="danger" onClick={() => submit(all('deny'))}>拒绝</Button>
-            <Button size="sm" variant="primary" onClick={() => submit(all('allow'))}>允许</Button>
+            <Button size="sm" variant="danger" onClick={() => submit(all('deny'))}>{t('拒绝')}</Button>
+            <Button size="sm" variant="primary" onClick={() => submit(all('allow'))}>{t('允许')}</Button>
           </>
         ) : (
           <>
-            <Button size="sm" variant="danger" onClick={() => submit(all('deny'))}>全部拒绝</Button>
-            <Button size="sm" variant="outline" disabled={!decided} onClick={() => submit(picked)}>按上面的选择提交</Button>
-            <Button size="sm" variant="primary" onClick={() => submit(all('allow'))}>全部允许</Button>
+            <Button size="sm" variant="danger" onClick={() => submit(all('deny'))}>{t('全部拒绝')}</Button>
+            <Button size="sm" variant="outline" disabled={!decided} onClick={() => submit(picked)}>{t('按上面的选择提交')}</Button>
+            <Button size="sm" variant="primary" onClick={() => submit(all('allow'))}>{t('全部允许')}</Button>
           </>
         )}
       </div>
@@ -233,11 +234,11 @@ function SiblingSwitch({ info, onPrev, onNext }: {
   const arrow = 'flex h-5 w-5 cursor-pointer items-center justify-center rounded-sm text-tx3 transition-colors hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-35';
   return (
     <span className="flex items-center gap-0 text-[11px] tabular-nums text-tx3">
-      <button title="上一个版本" className={arrow} disabled={!onPrev} onClick={onPrev}>
+      <button title={t('上一个版本')} className={arrow} disabled={!onPrev} onClick={onPrev}>
         <ChevronLeft size={13} />
       </button>
       <span className="px-0.5">{info.index + 1}/{info.total}</span>
-      <button title="下一个版本" className={arrow} disabled={!onNext} onClick={onNext}>
+      <button title={t('下一个版本')} className={arrow} disabled={!onNext} onClick={onNext}>
         <ChevronRight size={13} />
       </button>
     </span>
@@ -259,7 +260,7 @@ function Disclosure({ open, onToggle, icon, label, meta, children }: {
         {label}
         {meta}
         <button type="button" className="ml-auto flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-tx3 hover:text-tx"
-          aria-label={open ? '收起详情' : '展开详情'} aria-expanded={open}
+          aria-label={open ? t('收起详情') : t('展开详情')} aria-expanded={open}
           onClick={(e) => { e.stopPropagation(); onToggle(); }}>
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
@@ -277,7 +278,7 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean 
       open={show}
       onToggle={() => setOpen(!show)}
       icon={<BrainCircuit size={13} className={streaming ? 'animate-pulse text-acc' : 'text-tx3'} />}
-      label={<span className="font-medium text-tx2">{streaming ? '正在推理…' : '推理过程'}</span>}
+      label={<span className="font-medium text-tx2">{streaming ? t('正在推理…') : t('推理过程')}</span>}
     >
       <div className="max-h-64 overflow-y-auto whitespace-pre-wrap wrap-anywhere border-t border-line bg-bg1 px-3.5 py-2.5 text-[13px] leading-relaxed text-tx2">
         {text}
@@ -303,14 +304,14 @@ function isSearchTool(name: string): boolean {
 // 工作区 tools get verbs + the file name instead of the raw tool id, so the
 // status line reads "正在写入「方案.md」…" rather than "workspace_write".
 const WORKSPACE_VERBS: Record<string, { doing: string; done: string }> = {
-  load_skill: { doing: '正在加载技能', done: '加载了技能' },
-  read_skill_file: { doing: '正在读取技能文件', done: '读取了技能文件' },
-  workspace_list: { doing: '正在查看工作区', done: '查看了工作区' },
-  workspace_read: { doing: '正在读取', done: '读取了' },
-  workspace_write: { doing: '正在写入', done: '写入了' },
-  workspace_edit: { doing: '正在修改', done: '修改了' },
-  convert_file: { doing: '正在转换', done: '转换了' },
-  workspace_delete: { doing: '正在删除', done: '删除了' },
+  load_skill: { doing: t('正在加载技能'), done: t('加载了技能') },
+  read_skill_file: { doing: t('正在读取技能文件'), done: t('读取了技能文件') },
+  workspace_list: { doing: t('正在查看工作区'), done: t('查看了工作区') },
+  workspace_read: { doing: t('正在读取'), done: t('读取了') },
+  workspace_write: { doing: t('正在写入'), done: t('写入了') },
+  workspace_edit: { doing: t('正在修改'), done: t('修改了') },
+  convert_file: { doing: t('正在转换'), done: t('转换了') },
+  workspace_delete: { doing: t('正在删除'), done: t('删除了') },
 };
 
 function isWorkspaceTool(name: string): boolean {
@@ -337,7 +338,7 @@ function subagentTitle(call: ToolCallPart): string {
     if (typeof a.title === 'string' && a.title.trim()) return a.title.trim();
     if (typeof a.task === 'string') return a.task.trim().split('\n')[0].slice(0, 60);
   } catch { /* ignore */ }
-  return '子任务';
+  return t('子任务');
 }
 function subagentTask(call: ToolCallPart): string {
   try { const a = JSON.parse(call.args || '{}') as Record<string, unknown>; return typeof a.task === 'string' ? a.task : ''; } catch { return ''; }
@@ -382,15 +383,15 @@ function workspaceFileName(call: ToolCallPart, chatId?: string, result?: ToolRes
   const path = normalizeWorkspacePath(p);
   const canOpen = ['workspace_read', 'workspace_write', 'workspace_edit', 'convert_file'].includes(call.name);
   return chatId && path && canOpen && result && !result.isError
-    ? <WorkspaceFileLink chatId={chatId} path={path} className="pointer-events-auto text-acc underline decoration-acc/40 underline-offset-2 hover:decoration-acc">「{p}」</WorkspaceFileLink>
-    : <>「{p}」</>;
+    ? <WorkspaceFileLink chatId={chatId} path={path} className="pointer-events-auto text-acc underline decoration-acc/40 underline-offset-2 hover:decoration-acc">{t('「{text}」', { text: p })}</WorkspaceFileLink>
+    : <>{t('「{text}」', { text: p })}</>;
 }
 
 function workspaceLabel(call: ToolCallPart, done: boolean, chatId?: string, result?: ToolResultPart): ReactNode {
   const v = WORKSPACE_VERBS[call.name];
   const p = pathOf(call);
   const verb = done ? v.done : v.doing;
-  return p ? <>{verb}{workspaceFileName(call, chatId, result)}</> : verb;
+  return p ? <>{verb} {workspaceFileName(call, chatId, result)}</> : verb;
 }
 
 function queryOf(call: ToolCallPart): string {
@@ -428,46 +429,52 @@ function ToolRun({ calls, results, organizing, chatId }: {
   const hasImageGeneration = calls.some((c) => c.name === GENERATE_IMAGE);
   const active = pending.length > 0;
   const busy = active || organizing;
-  const noun = searching ? '搜索' : fetchOnly ? '阅读' : '调用工具';
+  const kind = searching ? 'search' : fetchOnly ? 'fetch' : 'tool';
 
   let label: ReactNode;
   const lastPending = pending[pending.length - 1];
   if (active && lastPending.name === WEB_FETCH) {
     const host = fetchHost(lastPending);
-    label = host ? `正在阅读「${host}」…` : '正在阅读网页…';
+    label = host ? t('正在阅读「{host}」…', { host }) : t('正在阅读网页…');
   } else if ((fetchOnly || (searching && fetches.length)) && !active && !organizing) {
     const failedFetches = fetches.filter((c) => results.get(c.id)?.isError).length;
     const searches = calls.length - fetches.length;
     label = fetchOnly
-      ? fetches.length === 1 && fetchHost(fetches[0]) ? `阅读了「${fetchHost(fetches[0])}」` : `阅读了 ${fetches.length} 个网页`
-      : `已搜索 ${searches} 次,阅读了 ${fetches.length} 个网页`;
-    if (failed.length) label += failedFetches === failed.length ? `,${failedFetches} 个打不开` : `,${failed.length} 次失败`;
+      ? fetches.length === 1 && fetchHost(fetches[0])
+        ? t('阅读了「{host}」', { host: fetchHost(fetches[0]) })
+        : t('阅读了 {count} 个网页', { count: fetches.length })
+      : t('已搜索 {searches} 次,阅读了 {count} 个网页', { searches, count: fetches.length });
+    if (failed.length) label += failedFetches === failed.length
+      ? t(',{count} 个打不开', { count: failedFetches })
+      : t(',{count} 次失败', { count: failed.length });
   } else if (active && lastPending.name === COMPARE_DATA) {
-    label = '正在对比数据…';
+    label = t('正在对比数据…');
   } else if (comparisonOnly) {
-    label = !comparisonDone && failed.length ? '数据对比未完成' : organizing ? '数据对比完成,正在整理结论…' : '数据对比完成';
+    label = !comparisonDone && failed.length ? t('数据对比未完成') : organizing ? t('数据对比完成,正在整理结论…') : t('数据对比完成');
   } else if (workspaceOnly && active && lastPending.name === GENERATE_IMAGE) {
-    label = '正在生成图片…';
+    label = t('正在生成图片…');
   } else if (hasImageGeneration && !active && !organizing) {
-    label = failed.length ? '图片生成结束,部分调用未成功' : '图片生成完成';
+    label = failed.length ? t('图片生成结束,部分调用未成功') : t('图片生成完成');
   } else if (workspaceOnly && active && lastPending.name === SPAWN_SUBAGENT) {
-    label = `子代理正在处理「${subagentTitle(lastPending)}」…`;
+    label = t('子代理正在处理「{title}」…', { title: subagentTitle(lastPending) });
   } else if (workspaceOnly && active && lastPending.name === RUN_COMMAND) {
-    label = `正在执行「${commandSummary(commandOf(lastPending))}」…`;
+    label = t('正在执行「{command}」…', { command: commandSummary(commandOf(lastPending)) });
   } else if (hasSubagent && !active && !organizing) {
     const subs = calls.filter((c) => c.name === SPAWN_SUBAGENT);
     const failedSubs = subs.filter((c) => results.get(c.id)?.isError).length;
-    label = subs.length === 1 ? `子代理完成了「${subagentTitle(subs[0])}」` : `${subs.length} 个子任务已完成`;
-    if (failedSubs) label += `,${failedSubs} 个失败`;
+    label = subs.length === 1
+      ? t('子代理完成了「{title}」', { title: subagentTitle(subs[0]) })
+      : t('{count} 个子任务已完成', { count: subs.length });
+    if (failedSubs) label += t(',{count} 个失败', { count: failedSubs });
   } else if (workspaceOnly && active) {
     label = <>{workspaceLabel(lastPending, false)}…</>;
   } else if (hasCommand && !organizing) {
     const cmds = calls.filter((c) => c.name === RUN_COMMAND);
     const failedCmds = cmds.filter((c) => results.get(c.id)?.isError).length;
     label = cmds.length === 1
-      ? `执行了「${commandSummary(commandOf(cmds[0]))}」`
-      : `执行了 ${cmds.length} 条命令`;
-    if (failedCmds) label += `,${failedCmds} 条失败`;
+      ? t('执行了「{command}」', { command: commandSummary(commandOf(cmds[0])) })
+      : t('执行了 {count} 条命令', { count: cmds.length });
+    if (failedCmds) label += t(',{count} 条失败', { count: failedCmds });
   } else if (workspaceOnly && !organizing) {
     // Files written/changed are what the person cares about; reads fold away.
     const writes = calls.filter((c) => c.name !== 'workspace_read' && c.name !== 'workspace_list');
@@ -479,18 +486,24 @@ function ToolRun({ calls, results, organizing, chatId }: {
         ? <>{WORKSPACE_VERBS[shown[shown.length - 1].name].done}{names.slice(0, 3).map((name) => {
           const call = shown.filter((c) => pathOf(c) === name).at(-1)!;
           return <Fragment key={name}>{workspaceFileName(call, chatId, results.get(call.id))}</Fragment>;
-        })}{names.length > 3 ? ` 等 ${names.length} 个文件` : ''}</>
-        : `操作了工作区 ${calls.length} 次`;
-    if (failed.length) label = <>{label},{failed.length} 次失败</>;
+        })}{names.length > 3 ? t(' 等 {count} 个文件', { count: names.length }) : ''}</>
+        : t('操作了工作区 {count} 次', { count: calls.length });
+    if (failed.length) label = <>{label}{t(',{count} 次失败', { count: failed.length })}</>;
   } else if (active) {
     const q = queryOf(pending[pending.length - 1]);
-    label = q ? `正在${noun}「${q}」…` : `正在${noun}…`;
+    label = q
+      ? t(kind === 'search' ? '正在搜索「{query}」…' : kind === 'fetch' ? '正在阅读「{query}」…' : '正在调用工具「{query}」…', { query: q })
+      : t(kind === 'search' ? '正在搜索…' : kind === 'fetch' ? '正在阅读…' : '正在调用工具…');
   } else if (organizing) {
-    label = `${noun}完成,正在整理结果…`;
+    label = t(kind === 'search' ? '搜索完成,正在整理结果…'
+      : kind === 'fetch' ? '阅读完成,正在整理结果…' : '调用工具完成,正在整理结果…');
   } else if (failed.length) {
-    label = `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次,${failed.length} 次失败`;
+    label = t(searching ? '已搜索 {total} 次,{failed} 次失败' : '已调用工具 {total} 次,{failed} 次失败',
+      { total: calls.length, failed: failed.length });
   } else {
-    label = calls.length === 1 ? `${noun}完成` : `${searching ? '已搜索' : '已调用工具'} ${calls.length} 次`;
+    label = calls.length === 1
+      ? t(kind === 'search' ? '搜索完成' : kind === 'fetch' ? '阅读完成' : '调用工具完成')
+      : t(searching ? '已搜索 {total} 次' : '已调用工具 {total} 次', { total: calls.length });
   }
 
   const Icon = calls.every((c) => c.name === COMPARE_DATA) ? BarChart3 : searching || fetches.length ? Globe : hasImageGeneration ? ImagePlus : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
@@ -520,16 +533,16 @@ function ToolRun({ calls, results, organizing, chatId }: {
                 {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
                   : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
                   : <Check size={13} className="shrink-0 text-ok" />}
-                <span className="shrink-0 text-tx2">{c.name === WEB_FETCH ? '阅读' : isSearchTool(c.name) ? '搜索' : c.name === COMPARE_DATA ? '数据对比' : c.name === GENERATE_IMAGE ? '生成图片' : c.name === RUN_COMMAND ? '执行' : c.name === SPAWN_SUBAGENT ? '子代理' : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
-                {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">「{subagentTitle(c)}」</span>}
-                {q && <span className="truncate text-tx3">「{q}」</span>}
-                {c.name === WEB_FETCH && fetchHost(c) && <span className="truncate text-tx3">「{fetchHost(c)}」</span>}
+                <span className="shrink-0 text-tx2">{c.name === WEB_FETCH ? t('阅读') : isSearchTool(c.name) ? t('搜索') : c.name === COMPARE_DATA ? t('数据对比') : c.name === GENERATE_IMAGE ? t('生成图片') : c.name === RUN_COMMAND ? t('执行') : c.name === SPAWN_SUBAGENT ? t('子代理') : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
+                {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">{t('「{text}」', { text: subagentTitle(c) })}</span>}
+                {q && <span className="truncate text-tx3">{t('「{text}」', { text: q })}</span>}
+                {c.name === WEB_FETCH && fetchHost(c) && <span className="truncate text-tx3">{t('「{text}」', { text: fetchHost(c) })}</span>}
                 {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">{workspaceFileName(c, chatId, r)}</span>}
               </div>
               {c.name === SPAWN_SUBAGENT && (
                 <>
                   <details className="mt-1.5 text-[11px] text-tx3">
-                    <summary className="cursor-pointer select-none hover:text-tx">任务说明</summary>
+                    <summary className="cursor-pointer select-none hover:text-tx">{t('任务说明')}</summary>
                     <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg2 px-2 py-1.5 font-mono leading-relaxed text-tx2">{subagentTask(c)}</pre>
                   </details>
                   <SubagentProgress callId={c.id} done={!!r} />
@@ -583,12 +596,12 @@ function GroundingBlock({ part }: { part: GroundingPart }) {
       open={open}
       onToggle={() => setOpen(!open)}
       icon={<Globe size={13} className="shrink-0 text-tx3" />}
-      label={<span className="font-medium text-tx2">{part.label || 'Google 搜索'}{count ? ` · ${count} 个来源` : ''}</span>}
+      label={<span className="font-medium text-tx2">{part.label || t('Google 搜索')}{count ? t(' · {count} 个来源', { count }) : ''}</span>}
     >
       <div className="border-t border-line bg-bg1 px-3.5 py-2.5">
         {part.queries.length > 0 && (
           <p className="mb-2 break-words text-[11px] leading-relaxed text-tx3">
-            搜索：{part.queries.join(' · ')}
+            {t('搜索：{queries}', { queries: part.queries.join(' · ') })}
           </p>
         )}
         {count > 0 && (
@@ -616,7 +629,7 @@ function GroundingBlock({ part }: { part: GroundingPart }) {
 function Timestamp({ ts }: { ts: number }) {
   if (!ts) return null;
   return (
-    <span className="text-[11px] font-semibold tabular-nums text-tx3" title={new Date(ts).toLocaleString()}>
+    <span className="text-[11px] font-semibold tabular-nums text-tx3" title={new Date(ts).toLocaleString(locale)}>
       {fmtTime(ts)}
     </span>
   );
@@ -686,17 +699,17 @@ function useElapsed(since: number | undefined, ms: number): boolean {
 /** Upstream backoff status line. Retries are numbered; waiting behind a
  * limit another request already hit is not (attempt 0). */
 export function retryStatusText(r: ProviderRetry): string {
-  if (r.recovery === 'empty') return r.priority ? '正在使用优先通道恢复回复…' : '正在自动恢复回复,请稍候…';
-  if (r.recovery === 'continuation') return '正在自动补全回复,请稍候…';
+  if (r.recovery === 'empty') return r.priority ? t('正在使用优先通道恢复回复…') : t('正在自动恢复回复,请稍候…');
+  if (r.recovery === 'continuation') return t('正在自动补全回复,请稍候…');
   if (r.priority) {
-    if (r.delayMs === 0) return '正在通过优先通道重新请求模型…';
+    if (r.delayMs === 0) return t('正在通过优先通道重新请求模型…');
     const secs = Math.max(1, Math.round(r.delayMs / 1000));
-    return `优先通道也在限流，约 ${secs} 秒后自动重试…`;
+    return t('优先通道也在限流，约 {secs} 秒后自动重试…', { secs });
   }
-  if (r.delayMs === 0) return '正在重新请求模型…';
+  if (r.delayMs === 0) return t('正在重新请求模型…');
   const secs = Math.max(1, Math.round(r.delayMs / 1000));
-  if (r.queued) return `模型提供方正在限流，排队等待约 ${secs} 秒后再发送…`;
-  return `模型提供方当前繁忙（限流），约 ${secs} 秒后自动重试…`;
+  if (r.queued) return t('模型提供方正在限流，排队等待约 {secs} 秒后再发送…', { secs });
+  return t('模型提供方当前繁忙（限流），约 {secs} 秒后自动重试…', { secs });
 }
 
 export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, switchSuggestion, onSwitchModel, onRestoreModel, currentModelId, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
@@ -714,7 +727,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
         {images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-2">
             {images.map((p, i) => p.type === 'image' && partSrc(p) && (
-              <img key={i} src={partSrc(p)!} alt="" title="点击放大"
+              <img key={i} src={partSrc(p)!} alt="" title={t('点击放大')}
                 className="max-h-40 cursor-zoom-in rounded-lg border border-line object-cover"
                 onClick={() => useLightbox.getState().open(partSrc(p)!)} />
             ))}
@@ -724,10 +737,10 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
           <div className="flex flex-wrap justify-end gap-2">
             {files.map((p, i) => (
               <a key={i} href={`/api/uploads/${p.uploadId}/file`} target="_blank" rel="noreferrer"
-                title="查看附件"
+                title={t('查看附件')}
                 className="flex max-w-64 items-center gap-2 rounded-lg border border-line bg-bg1 px-3 py-2 text-xs text-tx transition-colors hover:bg-bg2">
                 <FileText size={15} className="shrink-0 text-tx2" />
-                <span className="truncate font-medium">{p.name || '附件文档'}</span>
+                <span className="truncate font-medium">{p.name || t('附件文档')}</span>
                 {p.mime === 'application/pdf' && <span className="shrink-0 text-[10px] text-tx3">PDF</span>}
               </a>
             ))}
@@ -741,10 +754,10 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
               value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus
             />
             <div className="mt-2 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>取消</Button>
+              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>{t('取消')}</Button>
               <Button variant="primary" size="sm"
                 onClick={() => { setEditing(false); if (draft.trim()) onEdit?.(draft.trim()); }}>
-                重新发送
+                {t('重新发送')}
               </Button>
             </div>
           </div>
@@ -762,17 +775,17 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             <CopyBtn text={text} />
             {onBookmark && <BookmarkBtn on={!!msg.bookmarked} onToggle={onBookmark} />}
             {onEdit && (
-              <button title="编辑并重新发送" className={iconBtn} onClick={() => { setDraft(text); setEditing(true); }}>
+              <button title={t('编辑并重新发送')} className={iconBtn} onClick={() => { setDraft(text); setEditing(true); }}>
                 <Pencil size={12} />
               </button>
             )}
             {onBranch && (
-              <button title="从这里创建分支:复制到此为止的对话到一个新对话" className={iconBtn} onClick={onBranch}>
+              <button title={t('从这里创建分支:复制到此为止的对话到一个新对话')} className={iconBtn} onClick={onBranch}>
                 <GitBranch size={12} />
               </button>
             )}
             {onDelete && (
-              <button title="删除这条消息(之后的回复不再引用它)" className={`${iconBtn} hover:text-err`} onClick={onDelete}>
+              <button title={t('删除这条消息(之后的回复不再引用它)')} className={`${iconBtn} hover:text-err`} onClick={onDelete}>
                 <Trash2 size={12} />
               </button>
             )}
@@ -838,10 +851,10 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
       const src = partSrc(p);
       if (src) {
         rendered.push(
-          <button key={i} type="button" title="点击放大"
+          <button key={i} type="button" title={t('点击放大')}
             className="my-2.5 block w-fit max-w-full cursor-zoom-in"
-            onClick={() => useLightbox.getState().open(src, '模型生成的图片')}>
-            <img src={src} alt="模型生成的图片"
+            onClick={() => useLightbox.getState().open(src, t('模型生成的图片'))}>
+            <img src={src} alt={t('模型生成的图片')}
               className="max-h-[28rem] max-w-full rounded-lg border border-line" />
           </button>,
         );
@@ -856,13 +869,15 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
     : null;
   // Debug-grade stats fold into one hover tooltip behind an info icon.
   const statsTip = [
-    msg.durationMs != null ? `总耗时 ${fmtDuration(msg.durationMs)}` : null,
-    msg.ttftMs != null ? `首字延迟 ${fmtDuration(msg.ttftMs)}` : null,
+    msg.durationMs != null ? t('总耗时 {duration}', { duration: fmtDuration(msg.durationMs) }) : null,
+    msg.ttftMs != null ? t('首字延迟 {duration}', { duration: fmtDuration(msg.ttftMs) }) : null,
     msg.totalTokens != null && msg.totalTokens > 0
-      ? `输入 ${fmtTokens(msg.promptTokens)} · 输出 ${fmtTokens(msg.completionTokens)} · 共 ${fmtTokens(msg.totalTokens)} tokens`
+      ? t('输入 {prompt} · 输出 {completion} · 共 {total} tokens', {
+        prompt: fmtTokens(msg.promptTokens), completion: fmtTokens(msg.completionTokens), total: fmtTokens(msg.totalTokens),
+      })
       : null,
-    msg.completionTokens != null ? '输出 tokens 按服务商用量统计,可包含思考和多轮工具调用。' : null,
-    tps != null && tps > 0 ? `整轮平均生成速度 ${tps.toFixed(1)} tok/s` : null,
+    msg.completionTokens != null ? t('输出 tokens 按服务商用量统计,可包含思考和多轮工具调用。') : null,
+    tps != null && tps > 0 ? t('整轮平均生成速度 {tps} tok/s', { tps: tps.toFixed(1) }) : null,
   ].filter(Boolean).join('\n');
 
   // A finished reply that the provider cut short (max output tokens, safety
@@ -879,22 +894,23 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
   const cutShort = !isStreaming && msg.status === 'done'
     && (msg.finishReason === 'length' || msg.finishReason === 'content_filter' || msg.finishReason === 'incomplete'
       || (msg.finishReason == null && !hasBody && !msg.parts.some((p) => p.type === 'tool_call')));
-  const cutShortWhy = msg.finishReason === 'length' ? '已达到本次请求或服务商设置的输出上限(可能包含思考),不一定是模型的最大容量。'
-    : msg.finishReason === 'content_filter' ? '模型或服务商的内容策略中止了输出。'
-    : !hasBody ? '模型没有返回可显示的正文,可以重新生成。'
-    : '未收到正常的结束确认,可以继续对话或重新生成。';
+  const cutShortWhy = msg.finishReason === 'length' ? t('已达到本次请求或服务商设置的输出上限(可能包含思考),不一定是模型的最大容量。')
+    : msg.finishReason === 'content_filter' ? t('模型或服务商的内容策略中止了输出。')
+    : !hasBody ? t('模型没有返回可显示的正文,可以重新生成。')
+    : t('未收到正常的结束确认,可以继续对话或重新生成。');
   const regenerateCta = onRegenerate && !isStreaming ? (
     <button
       type="button"
       onClick={onRegenerate}
       className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-current/30 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-bg1/60"
     >
-      <RefreshCw size={11} />{providerBusy || (msg.status === 'stopped' && !hasBody) ? '重试' : '重新生成'}
+      <RefreshCw size={11} />{providerBusy || (msg.status === 'stopped' && !hasBody) ? t('重试') : t('重新生成')}
     </button>
   ) : null;
   const switchTo = switchSuggestion && onSwitchModel ? switchSuggestion : null;
   const switchTitle = switchTo
-    ? `用 ${switchTo.providerName} 的 ${switchTo.displayName} 重新生成这条回复,之后的对话也改用它` : undefined;
+    ? t('用 {provider} 的 {model} 重新生成这条回复,之后的对话也改用它', { provider: switchTo.providerName, model: switchTo.displayName })
+    : undefined;
   return (
     // sm:pr mirrors the avatar column (30px + gap-3) so the text block sits
     // centered in the column and the composer overhangs it equally per side.
@@ -903,18 +919,18 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
       <div className="min-w-0 flex-1">
         {recovery && recovery.state !== 'failed' && (
           <div role="status" className="mb-2 flex items-center gap-2 text-xs text-tx3">
-            {isStreaming ? <><Spinner className="h-3.5 w-3.5" />正在自动补全回复…</> : recovery.state === 'done' ? '已自动续写恢复 · 原文已保留' : null}
+            {isStreaming ? <><Spinner className="h-3.5 w-3.5" />{t('正在自动补全回复…')}</> : recovery.state === 'done' ? t('已自动续写恢复 · 原文已保留') : null}
           </div>
         )}
         {compacted && compacted.state === 'running' && (
           <div role="status" className="mb-2 flex items-center gap-2 text-xs text-tx3">
-            {isStreaming && <Spinner className="h-3.5 w-3.5" />}对话较长,正在把较早的 {compacted.covered} 条消息压缩成摘要…
+            {isStreaming && <Spinner className="h-3.5 w-3.5" />}{t('对话较长,正在把较早的 {count} 条消息压缩成摘要…', { count: compacted.covered })}
           </div>
         )}
         {compacted && compacted.state === 'done' && (
           <details className="group/sum mb-2 rounded-lg border border-line bg-bg2 px-3 py-2 text-xs text-tx2">
             <summary className="cursor-pointer list-none">
-              较早的 {compacted.covered} 条消息已压缩成摘要,模型从这里起参考摘要继续 · <span className="text-acc group-open/sum:hidden">查看摘要</span><span className="hidden text-acc group-open/sum:inline">收起</span>
+              {t('较早的 {count} 条消息已压缩成摘要,模型从这里起参考摘要继续', { count: compacted.covered })} · <span className="text-acc group-open/sum:hidden">{t('查看摘要')}</span><span className="hidden text-acc group-open/sum:inline">{t('收起')}</span>
             </summary>
             {compacted.text && <p className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap leading-relaxed text-tx">{compacted.text}</p>}
           </details>
@@ -923,21 +939,23 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
           <div role="status" className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg2 px-3 py-2 text-xs text-tx2">
             {isStreaming && <Spinner className="h-3.5 w-3.5" />}
             <span className="min-w-0 flex-1">{isStreaming
-              ? fallback.reason === 'empty' ? `正在使用「${fallback.toName}」恢复回复…` : `「${fallback.fromName}」繁忙,正在尝试兜底模型「${fallback.toName}」…`
+              ? fallback.reason === 'empty'
+                ? t('正在使用「{to}」恢复回复…', { to: fallback.toName })
+                : t('「{from}」繁忙,正在尝试兜底模型「{to}」…', { from: fallback.fromName, to: fallback.toName })
               : fallback.adopted ? currentModelId === fallback.toModelId
-                ? `已自动切换至「${fallback.toName}」,当前对话将继续使用它`
-                : `本轮由兜底模型「${fallback.toName}」回复`
-              : `本轮尝试了兜底模型「${fallback.toName}」`}</span>
+                ? t('已自动切换至「{to}」,当前对话将继续使用它', { to: fallback.toName })
+                : t('本轮由兜底模型「{to}」回复', { to: fallback.toName })
+              : t('本轮尝试了兜底模型「{to}」', { to: fallback.toName })}</span>
             {fallback.adopted && currentModelId !== fallback.fromModelId && onRestoreModel && !isStreaming && (
               <button type="button" className="shrink-0 cursor-pointer rounded-md border border-line px-2 py-1 hover:bg-bg3"
-                onClick={() => onRestoreModel(fallback.fromModelId)}>切回原模型</button>
+                onClick={() => onRestoreModel(fallback.fromModelId)}>{t('切回原模型')}</button>
             )}
           </div>
         )}
         {(msg.priority || msg.parts.some((p) => p.type === 'service_tier')) && (
           <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-accfg" role="status">
-            <span className="rounded-full border border-acc/30 bg-accs px-2 py-0.5 font-semibold">Priority · 优先通道</span>
-            <span>{isStreaming && msg.priority ? '正在使用优先通道请求' : '已启用付费优先通道'}</span>
+            <span className="rounded-full border border-acc/30 bg-accs px-2 py-0.5 font-semibold">{t('Priority · 优先通道')}</span>
+            <span>{isStreaming && msg.priority ? t('正在使用优先通道请求') : t('已启用付费优先通道')}</span>
           </div>
         )}
         {editing ? (
@@ -950,14 +968,14 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
               value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus
             />
             <div className="mt-2 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>取消</Button>
+              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>{t('取消')}</Button>
               <Button variant="primary" size="sm"
                 onClick={() => {
                   setEditing(false);
-                  const t = draft.trim();
-                  if (t && t !== plain) onEditAssistant?.(t);
+                  const next = draft.trim();
+                  if (next && next !== plain) onEditAssistant?.(next);
                 }}>
-                保存修改
+                {t('保存修改')}
               </Button>
             </div>
           </div>
@@ -975,20 +993,20 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             {switchTo && retriedLong && (
               <button type="button" title={switchTitle} onClick={() => onSwitchModel!(switchTo)}
                 className="inline-flex max-w-[16rem] cursor-pointer items-center gap-1 rounded-md border border-line px-2 py-1 text-xs hover:bg-bg3">
-                <Shuffle size={11} className="shrink-0" /><span className="truncate">改用 {switchTo.displayName}</span>
+                <Shuffle size={11} className="shrink-0" /><span className="truncate">{t('改用 {model}', { model: switchTo.displayName })}</span>
               </button>
             )}
-            {onCancel && <button type="button" className="cursor-pointer rounded-md border border-line px-2 py-1 text-xs hover:bg-bg3" onClick={onCancel}>取消</button>}
+            {onCancel && <button type="button" className="cursor-pointer rounded-md border border-line px-2 py-1 text-xs hover:bg-bg3" onClick={onCancel}>{t('取消')}</button>}
           </div>
         )}
         {isStreaming && msg.recovering && (
           <div className="my-2 flex items-center gap-2 text-[13px] text-tx3" role="status">
-            <Spinner className="h-3.5 w-3.5" />正在同步后台生成状态…
+            <Spinner className="h-3.5 w-3.5" />{t('正在同步后台生成状态…')}
           </div>
         )}
         {isStreaming && !msg.recovering && !msg.parts.some((p) => p.type === 'text' || p.type === 'reasoning' || p.type === 'tool_call' || p.type === 'image') && !msg.retry && (
           <div className="flex items-center gap-2 py-1 text-[13px] text-tx3">
-            <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? '正在思考…'}
+            <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? t('正在思考…')}
           </div>
         )}
         {msg.status === 'error' && msg.error && (
@@ -997,17 +1015,17 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             <span className="min-w-0 flex-1 break-words">
               {msg.error}
               {providerBusy && <span className="mt-0.5 block text-xs text-tx3">
-                {ranTools ? '重试会从头重新生成，已执行过的工具操作会再次运行。' : '这是模型提供方的限流，不是你的问题；问题和附件已保留，可直接重试。'}
-                {switchTo && `也可以换用 ${switchTo.providerName} 的模型继续。`}
+                {ranTools ? t('重试会从头重新生成，已执行过的工具操作会再次运行。') : t('这是模型提供方的限流，不是你的问题；问题和附件已保留，可直接重试。')}
+                {switchTo && t('也可以换用 {provider} 的模型继续。', { provider: switchTo.providerName })}
               </span>}
-              {hasBody && <span className="mt-0.5 block text-xs opacity-80">上面的内容可能不完整。</span>}
+              {hasBody && <span className="mt-0.5 block text-xs opacity-80">{t('上面的内容可能不完整。')}</span>}
             </span>
             {/* Two actions stack on phones so the message keeps its width. */}
             <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-1.5">
               {providerBusy && switchTo && !isStreaming && (
                 <button type="button" title={switchTitle} onClick={() => onSwitchModel!(switchTo)}
                   className="inline-flex max-w-[14rem] cursor-pointer items-center gap-1 rounded-md border border-current/30 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-bg1/60">
-                  <Shuffle size={11} className="shrink-0" /><span className="truncate">改用 {switchTo.displayName}</span>
+                  <Shuffle size={11} className="shrink-0" /><span className="truncate">{t('改用 {model}', { model: switchTo.displayName })}</span>
                 </button>
               )}
               {regenerateCta}
@@ -1018,13 +1036,13 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
           <div className="my-2 flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 px-3.5 py-2.5 text-[13px] leading-relaxed text-warn">
             <TriangleAlert size={15} className="mt-0.5 shrink-0" />
             <span className="min-w-0 flex-1 break-words">
-              {hasBody ? '输出可能不完整:' : '没有收到回复:'}{cutShortWhy}
+              {hasBody ? t('输出可能不完整:') : t('没有收到回复:')}{cutShortWhy}
             </span>
             {regenerateCta}
           </div>
         )}
         {msg.status === 'stopped' && (
-          <div className="my-1.5 flex items-center gap-1.5 text-xs text-tx3"><Ban size={12} />已停止生成{regenerateCta}</div>
+          <div className="my-1.5 flex items-center gap-1.5 text-xs text-tx3"><Ban size={12} />{t('已停止生成')}{regenerateCta}</div>
         )}
         {!isStreaming && !editing && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tx3">
@@ -1034,7 +1052,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
               <SpeakBtn text={plain} />
               {onBookmark && <BookmarkBtn on={!!msg.bookmarked} onToggle={onBookmark} />}
               {onEditAssistant && !!plain && (
-                <button title="编辑回复内容(直接修改文字,不重新生成)" className={iconBtn}
+                <button title={t('编辑回复内容(直接修改文字,不重新生成)')} className={iconBtn}
                   onClick={() => { setDraft(plain); setEditing(true); }}>
                   <Pencil size={12} />
                 </button>
@@ -1043,18 +1061,18 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
                 onRegenerateWith
                   ? <RegenerateMenu lastModel={fmtModelName(msg.model)} onSame={onRegenerate} onWith={onRegenerateWith} />
                   : (
-                    <button title="重新生成" className={iconBtn} onClick={onRegenerate}>
+                    <button title={t('重新生成')} className={iconBtn} onClick={onRegenerate}>
                       <RefreshCw size={12} />
                     </button>
                   )
               )}
               {onBranch && (
-                <button title="从这里创建分支:复制到此为止的对话到一个新对话" className={iconBtn} onClick={onBranch}>
+                <button title={t('从这里创建分支:复制到此为止的对话到一个新对话')} className={iconBtn} onClick={onBranch}>
                   <GitBranch size={12} />
                 </button>
               )}
               {onDelete && (
-                <button title="删除这条消息(之后的回复不再引用它)" className={`${iconBtn} hover:text-err`} onClick={onDelete}>
+                <button title={t('删除这条消息(之后的回复不再引用它)')} className={`${iconBtn} hover:text-err`} onClick={onDelete}>
                   <Trash2 size={12} />
                 </button>
               )}
@@ -1062,7 +1080,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             {msg.model && <span className="font-mono text-tx2">{fmtModelName(msg.model)}</span>}
             {statsTip && (
               <Popover open={statsOpen} setOpen={setStatsOpen} width="w-60" trigger={
-                <button title="查看生成信息" className={iconBtn}><Info size={12} /></button>
+                <button title={t('查看生成信息')} className={iconBtn}><Info size={12} /></button>
               }>
                 <div className="whitespace-pre-line px-3.5 py-2.5 text-xs leading-relaxed tabular-nums text-tx2">
                   {statsTip}
@@ -1080,7 +1098,7 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
           <div className="mt-3 flex flex-wrap gap-2">
             {followups.map((q) => (
               <button
-                key={q} type="button" title="点击发送这个追问"
+                key={q} type="button" title={t('点击发送这个追问')}
                 onClick={() => onFollowup(q)}
                 className="cursor-pointer rounded-full border border-line bg-bg1 px-3.5 py-1.5 text-left text-[13px] leading-relaxed text-tx2 shadow-xs transition-colors hover:border-line2 hover:bg-bg2 hover:text-tx"
               >

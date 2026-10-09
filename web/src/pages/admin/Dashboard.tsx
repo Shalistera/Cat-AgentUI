@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, fmtCost, fmtModelName, fmtTokens } from '../../api';
+import { t } from '../../i18n';
 import { Spinner, Card, Stat, SegmentedControl, Td, Th, toast } from '../../components/ui';
 import { TokensBarChart } from '../../components/TokensBarChart';
 import type { AdminUsage } from '../../types';
@@ -7,23 +8,23 @@ import type { AdminUsage } from '../../types';
 const DAY_OPTIONS = [7, 30, 90] as const;
 
 const KIND_LABELS: Record<string, string> = {
-  chat: '对话',
-  image: '绘图',
-  image_tool: '图片生成工具',
-  image_prompt: 'NAI 提示词助手',
-  title: '标题生成',
-  followup: '快速追问',
-  ocr: 'OCR 工坊',
-  translate: '翻译工坊',
-  subagent: '子代理',
-  compaction: '上下文压缩',
-  web_search: '联网搜索',
-  web_fetch: '网页阅读',
+  chat: t('对话'),
+  image: t('绘图'),
+  image_tool: t('图片生成工具'),
+  image_prompt: t('NAI 提示词助手'),
+  title: t('标题生成'),
+  followup: t('快速追问'),
+  ocr: t('OCR 工坊'),
+  translate: t('翻译工坊'),
+  subagent: t('子代理'),
+  compaction: t('上下文压缩'),
+  web_search: t('联网搜索'),
+  web_fetch: t('网页阅读'),
 };
 
 /** One empty-table placeholder, one voice — every card says it the same way. */
 function TableEmpty() {
-  return <p className="py-6 text-center text-xs text-tx3">暂无数据</p>;
+  return <p className="py-6 text-center text-xs text-tx3">{t('暂无数据')}</p>;
 }
 
 export default function Dashboard() {
@@ -36,7 +37,7 @@ export default function Dashboard() {
     setBusy(true);
     api.get<AdminUsage>(`/api/admin/usage?days=${days}`)
       .then((r) => { if (alive) setUsage(r); })
-      .catch((e) => toast(e instanceof Error ? e.message : '加载用量数据失败', 'err'))
+      .catch((e) => toast(e instanceof Error ? e.message : t('加载用量数据失败'), 'err'))
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
   }, [days]);
@@ -54,33 +55,33 @@ export default function Dashboard() {
       {/* filter row above everything it scopes */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-base font-semibold tracking-tight text-tx">用量总览</h1>
-          <p className="mt-0.5 text-xs text-tx3">统计范围内的 Token 消耗、请求与账号活跃度</p>
+          <h1 className="text-base font-semibold tracking-tight text-tx">{t('用量总览')}</h1>
+          <p className="mt-0.5 text-xs text-tx3">{t('统计范围内的 Token 消耗、请求与账号活跃度')}</p>
         </div>
         <SegmentedControl<number>
           value={days}
           onChange={setDays}
-          options={DAY_OPTIONS.map((d) => ({ value: d as number, label: `${d} 天` }))}
+          options={DAY_OPTIONS.map((d) => ({ value: d as number, label: t('{d} 天', { d }) }))}
         />
       </div>
 
       {/* hold previous render at reduced opacity while refetching */}
       <div className={`space-y-5 transition-opacity ${busy ? 'opacity-60' : ''}`}>
         <div className={`grid grid-cols-2 gap-3 ${showCost ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
-          <Stat label="总 Tokens" value={fmtTokens(totals.totalTokens)} />
+          <Stat label={t('总 Tokens')} value={fmtTokens(totals.totalTokens)} />
           {showCost && (
-            <Stat label="折算成本" value={fmtCost(totals.cost, currency)} hint="按各模型当前单价估算" />
+            <Stat label={t('折算成本')} value={fmtCost(totals.cost, currency)} hint={t('按各模型当前单价估算')} />
           )}
-          <Stat label="请求次数" value={totals.requests.toLocaleString()} />
-          <Stat label="生成图片" value={totals.images.toLocaleString()} />
-          <Stat label="活跃用户" value={(totals.activeUsers ?? 0).toLocaleString()} />
+          <Stat label={t('请求次数')} value={totals.requests.toLocaleString()} />
+          <Stat label={t('生成图片@@stat')} value={totals.images.toLocaleString()} />
+          <Stat label={t('活跃用户')} value={(totals.activeUsers ?? 0).toLocaleString()} />
         </div>
 
-        <Card title="每日用量" desc={`最近 ${days} 天,按日聚合`}>
+        <Card title={t('每日用量')} desc={t('最近 {days} 天,按日聚合', { days })}>
           <TokensBarChart byDay={byDay} days={days} />
         </Card>
 
-        <Card title="用户用量排行">
+        <Card title={t('用户用量排行')}>
           {byUser.length === 0 ? (
             <TableEmpty />
           ) : (
@@ -88,11 +89,11 @@ export default function Dashboard() {
               <table className="w-full text-xs">
                 <thead>
                   <tr>
-                    <Th>用户</Th>
+                    <Th>{t('用户')}</Th>
                     <Th className="text-right">Tokens</Th>
-                    {showCost && <Th className="text-right">成本</Th>}
-                    <Th className="text-right">请求</Th>
-                    <Th className="text-right">图片</Th>
+                    {showCost && <Th className="text-right">{t('成本')}</Th>}
+                    <Th className="text-right">{t('请求')}</Th>
+                    <Th className="text-right">{t('图片')}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -112,17 +113,17 @@ export default function Dashboard() {
         </Card>
 
         <div className="grid gap-5 lg:grid-cols-2">
-          <Card title="模型分布">
+          <Card title={t('模型分布')}>
             {byModel.length === 0 ? (
               <TableEmpty />
             ) : (
               <table className="w-full text-xs">
                 <thead>
                   <tr>
-                    <Th>模型</Th>
+                    <Th>{t('模型')}</Th>
                     <Th className="text-right">Tokens</Th>
-                    {showCost && <Th className="text-right">成本</Th>}
-                    <Th className="text-right">次数</Th>
+                    {showCost && <Th className="text-right">{t('成本')}</Th>}
+                    <Th className="text-right">{t('次数')}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -141,17 +142,17 @@ export default function Dashboard() {
             )}
           </Card>
 
-          <Card title="类型分布">
+          <Card title={t('类型分布')}>
             {byKind.length === 0 ? (
               <TableEmpty />
             ) : (
               <table className="w-full text-xs">
                 <thead>
                   <tr>
-                    <Th>类型</Th>
+                    <Th>{t('类型')}</Th>
                     <Th className="text-right">Tokens</Th>
-                    <Th className="text-right">次数</Th>
-                    <Th className="text-right">图片</Th>
+                    <Th className="text-right">{t('次数')}</Th>
+                    <Th className="text-right">{t('图片')}</Th>
                   </tr>
                 </thead>
                 <tbody>

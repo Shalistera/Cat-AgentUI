@@ -6,6 +6,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { X, CircleCheck, CircleAlert, Info } from 'lucide-react';
+import { t } from '../i18n';
 
 /* ---------------------------------------------------------------------------
    Primitives for the Ink & Cobalt system.
@@ -362,7 +363,7 @@ export function Modal({ open, onClose, title, desc, children, wide, className = 
             <h2 className="text-sm font-semibold tracking-tight text-tx">{title}</h2>
             {desc && <p className="mt-0.5 text-xs leading-relaxed text-tx3">{desc}</p>}
           </div>
-          <Button variant="ghost" size="iconSm" onClick={onClose} title="关闭"><X size={15} /></Button>
+          <Button variant="ghost" size="iconSm" onClick={onClose} title={t('关闭')}><X size={15} /></Button>
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
       </div>
@@ -438,8 +439,8 @@ export function ConfirmHost() {
     <Modal open={open} onClose={() => close(false)} title={title}>
       <p className="text-[13px] leading-relaxed text-tx2">{body}</p>
       <ModalActions>
-        <Button variant="outline" onClick={() => close(false)}>取消</Button>
-        <Button variant={danger ? 'dangerSolid' : 'primary'} onClick={() => close(true)}>确认</Button>
+        <Button variant="outline" onClick={() => close(false)}>{t('取消')}</Button>
+        <Button variant={danger ? 'dangerSolid' : 'primary'} onClick={() => close(true)}>{t('确认')}</Button>
       </ModalActions>
     </Modal>
   );

@@ -1,10 +1,14 @@
+import { t, tServer } from './i18n';
 import type { ModelInfo, StreamHandlers, UsageLimit } from './types';
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string, readonly code?: string) {
+  /** The server's untranslated message — match on this, not on `message`. */
+  readonly raw: string;
+  constructor(status: number, message: string, readonly code?: string, raw?: string) {
     super(message);
     this.status = status;
+    this.raw = raw ?? message;
   }
 }
 
@@ -24,7 +28,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   if (res.status === 401) onUnauthorized.handler?.();
   let json: { error?: string } & Record<string, unknown> = {};
   try { json = await res.json(); } catch { /* non-json */ }
-  if (!res.ok) throw new ApiError(res.status, (json.error as string) || `请求失败 (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, json.error ? tServer(json.error as string) : t('请求失败 ({status})', { status: res.status }), undefined, json.error as string | undefined);
   return json as T;
 }
 
@@ -44,7 +48,7 @@ export async function uploadFile(file: File): Promise<{ id: string; mime: string
   });
   if (res.status === 401) onUnauthorized.handler?.();
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, json.error || '上传失败');
+  if (!res.ok) throw new ApiError(res.status, json.error ? tServer(json.error) : t('上传失败'), undefined, json.error);
   return json;
 }
 
@@ -58,7 +62,7 @@ export async function uploadWorkspaceFile(chatId: string, file: File, dir?: stri
   });
   if (res.status === 401) onUnauthorized.handler?.();
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, json.error || '上传失败');
+  if (!res.ok) throw new ApiError(res.status, json.error ? tServer(json.error) : t('上传失败'), undefined, json.error);
   return json;
 }
 
@@ -90,12 +94,12 @@ export async function streamChat(
   if (res.status === 401) onUnauthorized.handler?.();
   if (!res.ok || !res.body) {
     const json = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, json.error || `请求失败 (${res.status})`, json.code);
+    throw new ApiError(res.status, json.error ? tServer(json.error) : t('请求失败 ({status})', { status: res.status }), json.code, json.error);
   }
 
   if (!res.headers.get('content-type')?.includes('text/event-stream')) {
     await res.body.cancel();
-    throw new Error('生成连接返回了非流式响应');
+    throw new Error(t('生成连接返回了非流式响应'));
   }
 
   const reader = res.body.getReader();
@@ -131,7 +135,7 @@ export async function streamChat(
         break;
       case 'title': handlers.onTitle?.(data.title ?? ''); break;
       case 'followups': handlers.onFollowups?.(data); break;
-      case 'error': handlers.onError?.(data.message ?? '发生错误', data.code); break;
+      case 'error': handlers.onError?.(data.message ? tServer(data.message) : t('发生错误'), data.code); break;
       case 'done':
         if (data?.status === 'done' || data?.status === 'error' || data?.status === 'stopped') {
           handlers.onDone?.(data.status, data.finishReason ?? null, data.messageId);
@@ -181,7 +185,7 @@ export async function streamSse(
   if (res.status === 401) onUnauthorized.handler?.();
   if (!res.ok || !res.body) {
     const json = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, json.error || `请求失败 (${res.status})`);
+    throw new ApiError(res.status, json.error ? tServer(json.error) : t('请求失败 ({status})', { status: res.status }), undefined, json.error);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -273,9 +277,9 @@ export function configuredFallbackModel(models: ModelInfo[], source: ModelInfo |
 export function fmtUsageLimit(l: UsageLimit): string {
   const tok = (n: number) => (n === 0 ? '0' : fmtTokens(n));
   const parts: string[] = [];
-  if (l.requests) parts.push(`${l.requests.used} / ${l.requests.limit} 次`);
+  if (l.requests) parts.push(t('{used} / {limit} 次', { used: l.requests.used, limit: l.requests.limit }));
   if (l.tokens) parts.push(`${tok(l.tokens.used)} / ${tok(l.tokens.limit)} tokens`);
-  return `${l.period === 'week' ? '本周' : '今日'}已用 ${parts.join(' · ')}`;
+  return t(l.period === 'week' ? '本周已用 {parts}' : '今日已用 {parts}', { parts: parts.join(' · ') });
 }
 
 /** The shortest honest reading: the exhausted axis if any, else the first one. */
@@ -283,7 +287,7 @@ export function fmtUsageLimitShort(l: UsageLimit): string {
   const tok = (n: number) => (n === 0 ? '0' : fmtTokens(n));
   const reqOut = !!l.requests && l.requests.used >= l.requests.limit;
   const tokOut = !!l.tokens && l.tokens.used >= l.tokens.limit;
-  if (l.requests && (reqOut || !tokOut)) return `${l.requests.used}/${l.requests.limit} 次`;
+  if (l.requests && (reqOut || !tokOut)) return t('{used}/{limit} 次', { used: l.requests.used, limit: l.requests.limit });
   if (l.tokens) return `${tok(l.tokens.used)}/${tok(l.tokens.limit)}`;
   return '';
 }
@@ -318,5 +322,5 @@ export function fmtDate(ts: number): string {
 
 /** Human message from a thrown value — the admin pages' toast helper. */
 export function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : '操作失败';
+  return e instanceof Error ? e.message : t('操作失败');
 }

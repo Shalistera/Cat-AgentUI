@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, ExternalLink, Maximize2, Minimize2, X } from 'lucide-react';
 import { create } from 'zustand';
+import { t } from '../i18n';
 
 /**
  * Image lightbox for pictures inside a conversation — model output, uploaded
@@ -43,20 +44,20 @@ export function LightboxHost() {
   if (!src) return null;
   const isBlob = src.startsWith('blob:') || src.startsWith('data:');
   return createPortal(
-    <div className="fixed inset-0 z-[70] flex flex-col bg-black/90" role="dialog" aria-modal="true" aria-label="查看图片">
+    <div className="fixed inset-0 z-[70] flex flex-col bg-black/90" role="dialog" aria-modal="true" aria-label={t('查看图片')}>
       <div className="flex shrink-0 items-center justify-end gap-1 px-3 py-2">
-        <button className={btn} title={full ? '适应窗口' : '原始大小'} onClick={() => setFull((v) => !v)}>
+        <button className={btn} title={full ? t('适应窗口') : t('原始大小')} onClick={() => setFull((v) => !v)}>
           {full ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
         </button>
         {!isBlob && (
-          <a className={btn} title="在新标签页打开" href={src} target="_blank" rel="noreferrer">
+          <a className={btn} title={t('在新标签页打开')} href={src} target="_blank" rel="noreferrer">
             <ExternalLink size={17} />
           </a>
         )}
-        <a className={btn} title="下载" href={src} download>
+        <a className={btn} title={t('下载')} href={src} download>
           <Download size={17} />
         </a>
-        <button className={btn} title="关闭 (Esc)" onClick={close}><X size={19} /></button>
+        <button className={btn} title={t('关闭 (Esc)')} onClick={close}><X size={19} /></button>
       </div>
       {/* Clicking the backdrop (not the picture) closes; the picture itself
           toggles fit/full like every desktop image viewer. */}

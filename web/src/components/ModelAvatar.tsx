@@ -1,5 +1,6 @@
 import { useModels } from '../store';
 import type { ModelInfo } from '../types';
+import { t } from '../i18n';
 
 /* ---------------------------------------------------------------------------
    Model avatars.
@@ -140,7 +141,7 @@ export function ModelAvatar({ model, info, size = 30, tile = true }: {
     <Avatar
       size={size}
       tile={tile}
-      title={resolved?.displayName ?? name ?? '模型'}
+      title={resolved?.displayName ?? name ?? t('模型')}
       brand={brandOf(name, resolved?.providerType)}
       custom={resolved?.avatarUrl ?? resolved?.providerAvatarUrl ?? null}
       fallback={initialOf(resolved?.providerName ?? name)}
