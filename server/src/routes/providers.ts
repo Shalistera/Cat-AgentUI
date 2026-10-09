@@ -715,7 +715,7 @@ export async function providerRoutes(app: FastifyInstance) {
   });
 
   app.delete('/api/admin/providers/:id', async (req, reply) => {
-    requireAdmin(req, reply);
+    requireAuth(req, reply);
     const { id } = req.params as { id: string };
     const row = getProvider(id);
     if (!row) return reply.code(404).send({ error: 'Provider 不存在' });

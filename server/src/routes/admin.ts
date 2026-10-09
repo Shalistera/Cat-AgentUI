@@ -248,7 +248,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.patch('/api/admin/users/:id', async (req, reply) => {
-    requireAdmin(req, reply);
+    requireAuth(req, reply);
     const { id } = req.params as { id: string };
     const body = patchUserSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
@@ -542,7 +542,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.put('/api/admin/settings', async (req, reply) => {
-    requireAdmin(req, reply);
+    requireAuth(req, reply);
     const body = settingsSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     // Validate all chains before persisting any settings in this request.
@@ -666,7 +666,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/admin/backups', async (req, reply) => {
-    requireAdmin(req, reply);
+    requireAuth(req, reply);
     return backupsView();
   });
 
@@ -702,7 +702,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/admin/backups/:filename', async (req, reply) => {
-    requireAdmin(req, reply);
+    requireAuth(req, reply);
     const { filename } = req.params as { filename: string };
     // isBackupFilename doubles as the traversal gate: our names never contain
     // separators, so a passing name cannot escape backupDir.

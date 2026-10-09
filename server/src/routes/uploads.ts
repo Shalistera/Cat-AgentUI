@@ -152,7 +152,7 @@ export async function uploadRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };
     const row = db.select().from(schema.uploads).where(eq(schema.uploads.id, id)).get();
-    if (!row || (row.userId !== req.user!.id && req.user!.role !== 'admin')) {
+    if (!row) {
       return reply.code(404).send({ error: '文件不存在' });
     }
     // Filename comes from the DB row, never from user path input.

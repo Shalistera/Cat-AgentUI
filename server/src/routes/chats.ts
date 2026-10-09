@@ -1164,7 +1164,7 @@ export async function chatRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };
     const c = db.select().from(schema.chats)
-      .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+      .where(eq(schema.chats.id, id)).get();
     if (!c) return reply.code(404).send({ error: '对话不存在' });
     const uploadIds = db.select({ parts: schema.messages.parts }).from(schema.messages)
       .where(eq(schema.messages.chatId, id)).all()

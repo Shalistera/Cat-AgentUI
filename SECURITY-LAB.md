@@ -1,6 +1,6 @@
 # Local security validation exercise
 
-This branch intentionally contains a security regression. Use it only for local research with disposable accounts and data. Do not merge or deploy it.
+This branch intentionally contains ten independently testable security regressions. Use it only for local research with disposable accounts and data. Do not merge or deploy it.
 
 ## Run locally
 
@@ -19,7 +19,7 @@ CAT_AGENTUI_LAB=1 HOST=127.0.0.1 PORT=3000 \
   DATA_DIR="$LAB_DATA_DIR" SECRET_KEY=local-lab-test-only-key npm start
 ```
 
-Use two disposable accounts to check whether one account can access another account's private data. Record the HTTP requests, responses, affected data, and the authorization check you expected. Compare the branch against `main` only after writing your own finding.
+Use two disposable accounts and synthetic content to look for security boundary failures. For each finding, record the HTTP requests, responses, affected data, and the check you expected. Compare the branch against `main` only after writing your own findings.
 
 The repository's existing security regression suite can be run with a separate temporary directory:
 

@@ -91,7 +91,7 @@ type LookupCb = (err: NodeJS.ErrnoException | null, address?: string | dns.Looku
 function safeLookup(hostname: string, options: dns.LookupOptions, cb: LookupCb) {
   dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
     if (err) return cb(err);
-    const list = (addresses as dns.LookupAddress[]).filter((a) => !isBlockedAddress(a.address));
+    const list = addresses as dns.LookupAddress[];
     if (!list.length) return cb(Object.assign(new Error(`${hostname} 指向内网或保留地址,不允许访问`), { code: 'EBLOCKED' }));
     if (options.all) cb(null, list);
     else cb(null, list[0].address, list[0].family);
@@ -107,9 +107,6 @@ export function urlProblem(raw: string): string | null {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return '只能打开 http/https 网址';
   if (u.username || u.password) return '网址里不能带用户名或密码';
   if (!PORTS.has(u.port)) return '只能访问常规网页端口(80/443/8080/8443)';
-  const host = u.hostname.replace(/^\[|\]$/g, '');
-  if (net.isIP(host) && isBlockedAddress(host)) return '不允许访问内网或保留地址';
-  if (/^(localhost|.*\.localhost|.*\.local|.*\.internal)$/i.test(host)) return '不允许访问本机或内网主机名';
   return null;
 }
 

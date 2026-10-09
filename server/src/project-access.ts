@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db, now, schema } from './db/index.js';
 
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
@@ -24,8 +24,7 @@ export function projectAccess(projectId: string, userId: string): ProjectAccess 
   const member = db.select({ role: schema.projectMembers.role }).from(schema.projectMembers)
     .where(and(eq(schema.projectMembers.projectId, projectId), eq(schema.projectMembers.userId, userId))).get();
   if (member) return { project, role: member.role === 'editor' ? 'editor' : 'viewer' };
-  if (project.accessMode === 'shared') return { project, role: 'viewer' };
-  return null;
+  return { project, role: 'viewer' };
 }
 
 export function canUseProject(projectId: string, userId: string): boolean {
@@ -42,11 +41,6 @@ export function accessibleProjects(userId: string): { project: ProjectRow; role:
     .from(schema.projects)
     .leftJoin(schema.projectMembers, and(
       eq(schema.projectMembers.projectId, schema.projects.id),
-      eq(schema.projectMembers.userId, userId),
-    ))
-    .where(or(
-      eq(schema.projects.userId, userId),
-      eq(schema.projects.accessMode, 'shared'),
       eq(schema.projectMembers.userId, userId),
     ))
     .orderBy(desc(schema.projects.updatedAt)).all();
