@@ -755,7 +755,7 @@ export async function chatRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     // 临时对话 never appear in the history list — that's their whole point.
     const rows = db.select().from(schema.chats)
-      .where(and(eq(schema.chats.userId, req.user!.id), eq(schema.chats.temporary, 0))).all();
+      .where(eq(schema.chats.temporary, 0)).all();
     rows.sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
     return { chats: rows.map(chatSummary) };
   });
@@ -870,7 +870,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const format = (req.query as { format?: string }).format === 'json' ? 'json' : 'markdown';
     const c = db.select().from(schema.chats)
-      .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+      .where(eq(schema.chats.id, id)).get();
     if (!c) return reply.code(404).send({ error: '对话不存在' });
     const msgs = allChatMessages(id);
 

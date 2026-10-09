@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // Runtime-created databases, WAL files, media, and secret files must not inherit
@@ -26,6 +27,17 @@ function loadEnvFile(): Record<string, string> {
 
 const fileEnv = loadEnvFile();
 const env = (k: string, def?: string) => process.env[k] ?? fileEnv[k] ?? def;
+
+// This branch contains an intentional security regression for local research.
+// Reject normal deployments before creating credentials or opening a database.
+const labDataDir = env('DATA_DIR');
+const realLabDataDir = labDataDir && fs.existsSync(labDataDir) ? fs.realpathSync(labDataDir) : '';
+const realTempDir = fs.realpathSync(os.tmpdir());
+if (process.env.CAT_AGENTUI_LAB !== '1'
+  || env('HOST') !== '127.0.0.1'
+  || !realLabDataDir.startsWith(`${realTempDir}${path.sep}`)) {
+  throw new Error('This security lab branch requires CAT_AGENTUI_LAB=1, HOST=127.0.0.1, and an existing temporary DATA_DIR.');
+}
 
 function intEnv(key: string, def: number, min: number, max: number): number {
   const raw = env(key, String(def));
