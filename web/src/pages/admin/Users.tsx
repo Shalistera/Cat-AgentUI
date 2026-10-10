@@ -328,7 +328,7 @@ export default function Users() {
               {t('管理员不受配额限制,此处的设置仅在该账号转为普通用户后生效。')}
             </p>
           )}
-          <Field label={t('每月 token 上限')} hint={t('留空 = 跟随应用设置里的默认配额;0 = 不限;超额行为在「应用设置 → 成本治理」里配置')}>
+          <Field label={t('每月 token 上限')} hint={t('留空 = 跟随「站点 → 通用」里的默认配额;0 = 不限;超额后的处理也在那里配置')}>
             <Input
               type="number" min={0} step={1} inputMode="numeric"
               value={quotaValue} onChange={(e) => setQuotaValue(e.target.value)}

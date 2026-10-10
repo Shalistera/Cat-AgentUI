@@ -46,7 +46,7 @@ function AccessModal({ model, reload, onClose }: {
   return (
     <Modal open onClose={onClose} title={t('模型可见性')} desc={model.modelId}>
       <div className="space-y-4">
-        <Field label={t('访问范围')} hint={t('贵模型建议仅指定用户,与配额同属成本治理')}>
+        <Field label={t('访问范围')} hint={t('贵模型建议仅指定用户,配合用量配额控制成本')}>
           <Select value={mode} onChange={(e) => setMode(e.target.value as ModelAccessMode)}>
             <option value="shared">{t('所有登录用户')}</option>
             <option value="restricted">{t('仅指定普通用户')}</option>

@@ -19,7 +19,7 @@ import type { MyUploadChat, MyUploadFile, MyUploads, MyUsage, SessionInfo, User 
 const TABS: { id: SettingsTab; label: string; icon: typeof UserRound }[] = [
   { id: 'account', label: t('账号'), icon: UserRound },
   { id: 'chat', label: t('对话偏好'), icon: MessageSquareText },
-  { id: 'appearance', label: t('外观'), icon: Palette },
+  { id: 'appearance', label: t('通用'), icon: Palette },
   { id: 'devices', label: t('登录设备'), icon: Monitor },
   { id: 'usage', label: t('我的用量'), icon: BarChart3 },
   { id: 'storage', label: t('附件存储'), icon: HardDrive },
@@ -244,7 +244,7 @@ function ChatSection() {
   );
 }
 
-// ---------- 外观 ----------
+// ---------- 通用(主题与界面语言) ----------
 /* Swatches for the theme previews. Each entry mirrors the @theme token block in
    index.css (bg0 / bg1 / line / tx / acc for the respective theme) — a preview
    can't read the other theme's CSS variables, so a token change there must be

@@ -64,8 +64,8 @@ export default {
   '管理员不受配额限制,此处的设置仅在该账号转为普通用户后生效。':
     'Admins are exempt from quotas; this only takes effect if the account becomes a regular user.',
   '每月 token 上限': 'Monthly token cap',
-  '留空 = 跟随应用设置里的默认配额;0 = 不限;超额行为在「应用设置 → 成本治理」里配置':
-    'Blank = use the default quota from App settings; 0 = unlimited. What happens over quota is configured under App settings → Cost controls',
+  '留空 = 跟随「站点 → 通用」里的默认配额;0 = 不限;超额后的处理也在那里配置':
+    'Blank = use the default quota from Site → General; 0 = unlimited. What happens over quota is configured there too',
   '留空跟随默认': 'Blank = default',
   '本月已用 {n} tokens,每月 1 日重新计算。': '{n} tokens used this month; the counter resets on the 1st.',
   '管理员始终拥有全部权限,此处的设置仅在该账号转为普通用户后生效。':
@@ -158,7 +158,7 @@ export default {
   '模型可见性': 'Model visibility',
   '已更新模型可见性': 'Model visibility updated',
   '访问范围': 'Access',
-  '贵模型建议仅指定用户,与配额同属成本治理': 'Limit expensive models to selected users — part of cost control, like quotas',
+  '贵模型建议仅指定用户,配合用量配额控制成本': 'Limit expensive models to selected users — together with usage quotas, this keeps costs in check',
   '所有登录用户': 'All signed-in users',
   '仅指定普通用户': 'Only selected regular users',
   '指定普通用户': 'Selected users',
@@ -214,8 +214,8 @@ export default {
   '保存描述': 'Save description',
   '已更新模型描述': 'Model description updated',
   '模型单价': 'Model pricing',
-  '每 100 万 tokens 的价格,用于用量看板的成本折算(按当前单价估算历史用量)。货币符号在「应用设置 → 成本治理」配置。两项都留空 = 不参与成本统计。':
-    'Price per 1M tokens, used for the cost figures on the usage dashboard (historical usage is estimated at the current price). The currency symbol is set under App settings → Cost controls. Leave both blank to keep this model out of cost reporting.',
+  '每 100 万 tokens 的价格,用于用量看板的成本折算(按当前单价估算历史用量)。货币符号在「站点 → 通用」配置。两项都留空 = 不参与成本统计。':
+    'Price per 1M tokens, used for the cost figures on the usage dashboard (historical usage is estimated at the current price). The currency symbol is set under Site → General. Leave both blank to keep this model out of cost reporting.',
   '输入单价 / 1M tokens': 'Input price / 1M tokens',
   '输出单价 / 1M tokens': 'Output price / 1M tokens',
   '未配置': 'Not set',
@@ -236,8 +236,8 @@ export default {
   '{period} token 上限(每人)': '{period} token cap (per person)',
   '该模型在周期内的全部 token 消耗(输入 + 输出,含自动标题与追问)。':
     'All tokens this model uses in the period (input + output, including auto titles and follow-ups).',
-  '达到上限后按「应用设置 → 成本治理 → 超额后的处理」执行:拒绝请求,或(仅文字对话)降级到指定模型。用户在模型选择器和新对话首页能看到自己在该模型上的已用额度。':
-    'Over the cap, the action from App settings → Cost controls → When over quota applies: reject the request, or (text chat only) fall back to a chosen model. Users can see their own allowance for a model in the model picker and on the new-chat screen.',
+  '达到上限后按「站点 → 通用 → 超额后的处理」执行:拒绝请求,或(仅文字对话)降级到指定模型。用户在模型选择器和新对话首页能看到自己在该模型上的已用额度。':
+    'Over the cap, the action from Site → General → When over quota applies: reject the request, or (text chat only) fall back to a chosen model. Users can see their own allowance for a model in the model picker and on the new-chat screen.',
   '保存使用限制': 'Save usage limits',
   '上限必须是不小于 0 的整数,留空或 0 表示不限': 'Caps must be integers of 0 or more; blank or 0 means no limit',
   '已更新使用限制': 'Usage limits updated',

@@ -27,10 +27,10 @@ A self-hosted AI panel that deliberately stays "light": no RAG, no plugin market
 - **Usage dashboard**: administrators can see tokens, request counts and image counts per user / per model / per day; users can see their own usage
 - **Model usage limits**: for a single model you can set a per-person daily/weekly cap on requests or tokens, and either reject or downgrade to a designated model once it is hit; users see their own remaining quota in the model picker
 - **Projects**: shared project instructions and reference text files. Tool-capable models start with instructions and a compact document directory; document bodies are retrieved on demand, even on models with large context windows. `project_search` searches Chinese/English keywords and filenames, returning up to 4 passages by default (8 maximum), with source refs and character offsets; overlapping chunks cover boundaries, and results make room for multiple documents. Search can be restricted to a document ref or name. `project_read_doc` reads by ref or name from any offset, with `max_chars` controlling the length (4,000 characters by default, 15,000 maximum). Duplicate results within one turn are replaced with a short reminder. Subagents independently retrieve their evidence and return conclusions, without preloading the main chat's documents. Operators can opt the main chat back into whole-document loading with `PROJECT_INJECT_MAX_CHARS`; models without tool calls retain bounded full-document loading. With the sandbox enabled, files are also mounted read-only at `/project/`. Answers cite sources as `[document name](doc:ref)` (ref is the first 8 hex characters of the document id); clickable source tags open the document, and editors can modify it directly
-- **Automatic compaction of long chats**: history is budgeted at about half the model's estimated context window, using characters as a conservative token estimate. Compaction runs before a reply when history exceeds 90% of that budget or the message-count limit. Admin → App settings → Cost controls provides a dedicated **Conversation compaction model**; unset follows the chat model. A summarizer with a smaller context processes the selected history in ordered batches, carrying a rolling summary and using minimum/no reasoning. Each batch checks model access and quotas, and usage is attributed to the actual provider/model, including reported usage from failed attempts. Falling back to the chat model is a separate switch, off by default to avoid unexpected costs; cancellation or the overall timeout stops all attempts. Recent messages remain verbatim, and completed summaries are stored per branch and reused until compaction is needed again. Editing/deleting messages invalidates their summaries. The summary request reformats the history and uses a different system prompt, so choosing the same model does not guarantee reuse of the normal chat's cache
+- **Automatic compaction of long chats**: history is budgeted at about half the model's estimated context window, using characters as a conservative token estimate. Compaction runs before a reply when history exceeds 90% of that budget or the message-count limit. Admin → Task models provides a dedicated **Conversation compaction model**; unset follows the chat model. A summarizer with a smaller context processes the selected history in ordered batches, carrying a rolling summary and using minimum/no reasoning. Each batch checks model access and quotas, and usage is attributed to the actual provider/model, including reported usage from failed attempts. Falling back to the chat model is a separate switch, off by default to avoid unexpected costs; cancellation or the overall timeout stops all attempts. Recent messages remain verbatim, and completed summaries are stored per branch and reused until compaction is needed again. Editing/deleting messages invalidates their summaries. The summary request reformats the history and uses a different system prompt, so choosing the same model does not guarantee reuse of the normal chat's cache
 - **Document attachments that persist through the whole chat**: txt / Markdown / CSV / docx are injected as text, PDFs are handed natively to vision models; documents uploaded earlier are still passed to the model when you continue the chat, even once they fall outside the replay window of recent messages
 - **Advanced chat experience**: Markdown, syntax highlighting with one-click copy, KaTeX formulas, GFM tables, image understanding (vision models), edit and resend, regenerate, automatic titles
-- **UI language**: the interface is available in Simplified Chinese and English, switchable under Settings → Appearance; non-Chinese browsers default to English
+- **UI language**: the interface is available in Simplified Chinese and English, switchable under Settings → General; non-Chinese browsers default to English
 - **OCR Studio**: PDF/image to text, with Gemini vision models reading PDFs directly without preprocessing; the output is continuous full text (no pagination, no page numbers) as plain text or Markdown
 - **Chat export**: one click in the sidebar menu exports to Markdown (the current branch) or JSON (the full message tree)
 - **Global custom instructions**: each user can set "about me / how I want replies", which is prepended to the system prompt of every chat; a single chat's own system prompt still overrides it
@@ -104,7 +104,7 @@ npx pm2 save
 | `TRUST_PROXY` | Set to `true` behind a reverse proxy (nginx etc.) | `false` |
 | `SESSION_TTL_DAYS` | Session lifetime | `30` |
 | `MAX_UPLOAD_MB` | Image upload limit | `20` |
-| `MAX_ATTACHMENTS_PER_MESSAGE` | Default maximum attachments per message (1–100); administrators can override it under "App settings → Storage", it takes effect immediately on save, and the OCR/image attachment checks share it | `20` |
+| `MAX_ATTACHMENTS_PER_MESSAGE` | Default maximum attachments per message (1–100); administrators can override it under "Admin → Storage", it takes effect immediately on save, and the OCR/image attachment checks share it | `20` |
 | `MAX_MESSAGE_ATTACHMENT_MB` | Total raw bytes of attachments per message | `20` |
 | `MAX_MESSAGE_TEXT_CHARS` | Character limit of the text of one message | `64000` |
 | `MAX_CONTEXT_MESSAGES` | Maximum number of messages replayed verbatim (beyond that they are compacted into a summary) | `400` |
@@ -123,7 +123,7 @@ npx pm2 save
 | `FAILOVER_RETRY_WAIT_SECONDS` | With backup routes configured, how long a rate-limited earlier route is waited on before moving to the next one | `10` |
 | `VERTEX_REGION_RETRY_WAIT_SECONDS` | How long a rate-limited Vertex region is waited on before switching to the next region (or retrying on Priority) | `3` |
 | `VERTEX_PRIORITY_AFTER_RETRIES` | With Priority PayGo set to "on when rate-limited", how many times standard requests must be rate-limited within one request before moving to Priority | `5` |
-| `MAX_USER_UPLOAD_MB` | Default per-user attachment storage quota; administrators can override it under "Site settings → Storage" and it takes effect immediately on save; users can see their own usage and delete attachments under "Settings → Attachment storage" | `512` |
+| `MAX_USER_UPLOAD_MB` | Default per-user attachment storage quota; administrators can override it under "Admin → Storage" and it takes effect immediately on save; users can see their own usage and delete attachments under "Settings → Attachment storage" | `512` |
 | `MAX_USER_IMAGE_MB` | Per-user storage quota for generated images | `1024` |
 | `MAX_TOTAL_STORAGE_MB` | Site-wide quota for attachments plus generated images | `10240` |
 | `MAX_GENERATED_IMAGE_MB` | Size limit for a single generated image | `20` |
@@ -139,7 +139,7 @@ npx pm2 save
 | `MAX_WORKSPACE_FILES` | File count limit of one chat's workspace | `500` |
 | `MAX_SANDBOX_CONCURRENCY` | Sandbox commands running at once site-wide (1 per person) | `3` |
 | `MAX_SANDBOX_TIMEOUT_SECONDS` | Upper bound an administrator can set for a single command's timeout | `600` |
-| `BACKUP_INTERVAL_HOURS` | Initial default for the automatic database snapshot interval (0 = off by default); the actual policy is set under "App settings → Database backup" in the backend and stored in the database | `24` |
+| `BACKUP_INTERVAL_HOURS` | Initial default for the automatic database snapshot interval (0 = off by default); the actual policy is set under "Admin → Backup & migration" and stored in the database | `24` |
 | `BACKUP_KEEP` | Initial default for the number of snapshots kept; changeable in the backend | `14` |
 
 ### Chart tool parameters and recovery
@@ -276,7 +276,7 @@ The failure/incomplete notice is only shown once automatic recovery is exhausted
 
 ### Migrating from Open WebUI
 
-**Option 1 (recommended): Admin → Data migration.** Just upload webui.db. It supports a dry-run preview, and you can optionally fill in the
+**Option 1 (recommended): Admin → Backup & migration.** Just upload webui.db. It supports a dry-run preview, and you can optionally fill in the
 Open WebUI data directory on the server to bring the attachments over (images and documents; PDFs, legacy Office files and so on are migrated along with the text Open WebUI already extracted, and citations in replies are preserved as "reference sources").
 
 **Option 2: the command line**

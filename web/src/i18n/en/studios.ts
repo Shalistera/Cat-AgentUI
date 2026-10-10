@@ -385,8 +385,8 @@ export default {
   '左边输入,点「翻译」,右边出译文': 'Type on the left, press Translate, read the result on the right',
   '翻译工坊暂不可用': 'Translation Studio is unavailable',
   '管理员尚未配置翻译模型': 'No translation model configured yet',
-  '请管理员在「管理后台 → 应用设置 → 翻译工坊」中为默认、快速或思考模式指定至少一个模型。':
-    'Ask an admin to pick at least one model for the default, fast or thinking mode under Admin → App settings → Translation Studio.',
+  '请管理员在「管理后台 → 任务模型 → 翻译工坊」中为默认、快速或思考模式指定至少一个模型。':
+    'Ask an admin to pick at least one model for the default, fast or thinking mode under Admin → Task models → Translation Studio.',
   '加载翻译配置失败': 'Failed to load the translation settings',
   '翻译失败': 'Translation failed',
   '翻译失败:{error}': 'Translation failed: {error}',

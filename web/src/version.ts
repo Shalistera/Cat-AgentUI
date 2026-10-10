@@ -30,8 +30,8 @@ export const recentChanges = [
     date: '2026-10-09',
     items: [
       {
-        zh: '界面新增英文版：在「设置 → 外观」里切换语言；非中文浏览器默认显示英文。',
-        en: 'The interface now comes in English: switch languages under Settings → Appearance. Browsers not set to Chinese get English by default.',
+        zh: '界面新增英文版：在「设置 → 通用」里切换语言；非中文浏览器默认显示英文。',
+        en: 'The interface now comes in English: switch languages under Settings → General. Browsers not set to Chinese get English by default.',
       },
     ],
   },

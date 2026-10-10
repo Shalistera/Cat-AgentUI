@@ -2,9 +2,10 @@
 // that still carry untranslated Chinese outside comments and t() calls.
 //   node scripts/check-i18n.mjs            # whole src/
 //   node scripts/check-i18n.mjs src/pages  # only report leftovers under a path
-// Exit code 1 when any t() string lacks an English entry.
+// Exit code 1 when any t() string lacks an English entry, or a dictionary
+// file under src/i18n/en is not imported by src/i18n/index.ts.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const webRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -25,6 +26,17 @@ const dict = new Set();
 for (const f of files.filter((f) => f.includes(`${join('src', 'i18n', 'en')}`))) {
   const src = readFileSync(f, 'utf8');
   for (const m of src.matchAll(/^\s*(['"])((?:\\.|(?!\1).)*)\1\s*:/gm)) dict.add(unescape(m[2]));
+}
+
+// A dictionary only reaches the UI once i18n/index.ts imports it.
+const indexSrc = readFileSync(join(srcRoot, 'i18n', 'index.ts'), 'utf8');
+let unloaded = 0;
+for (const f of files.filter((f) => f.includes(`${join('src', 'i18n', 'en')}`))) {
+  const name = basename(f).replace(/\.tsx?$/, '');
+  if (!indexSrc.includes(`from './en/${name}'`)) {
+    unloaded++;
+    console.log(`not loaded  ${relative(webRoot, f)}  (import it in src/i18n/index.ts)`);
+  }
 }
 
 function unescape(s) {
@@ -63,4 +75,4 @@ if (leftovers.length) {
   for (const l of leftovers) console.log(`  ${l}`);
 }
 console.log(`\n${dict.size} English entries, ${missing} missing.`);
-process.exit(missing ? 1 : 0);
+process.exit(missing || unloaded ? 1 : 0);

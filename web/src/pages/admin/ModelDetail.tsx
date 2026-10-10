@@ -214,7 +214,7 @@ function PricingCard({ model, reload }: { model: AdminModel; reload(): Promise<v
   return (
     <Card
       title={t('模型单价')}
-      desc={t('每 100 万 tokens 的价格,用于用量看板的成本折算(按当前单价估算历史用量)。货币符号在「应用设置 → 成本治理」配置。两项都留空 = 不参与成本统计。')}
+      desc={t('每 100 万 tokens 的价格,用于用量看板的成本折算(按当前单价估算历史用量)。货币符号在「站点 → 通用」配置。两项都留空 = 不参与成本统计。')}
     >
       <div className="space-y-3">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -317,7 +317,7 @@ function UsageLimitCard({ model, reload }: { model: AdminModel; reload(): Promis
           </Field>
         </div>
         <p className="text-xs leading-relaxed text-tx3">
-          {t('达到上限后按「应用设置 → 成本治理 → 超额后的处理」执行:拒绝请求,或(仅文字对话)降级到指定模型。用户在模型选择器和新对话首页能看到自己在该模型上的已用额度。')}
+          {t('达到上限后按「站点 → 通用 → 超额后的处理」执行:拒绝请求,或(仅文字对话)降级到指定模型。用户在模型选择器和新对话首页能看到自己在该模型上的已用额度。')}
         </p>
         <div className="flex justify-end">
           <Button variant="primary" size="sm" disabled={busy || !dirty} onClick={save}>

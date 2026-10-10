@@ -11,6 +11,13 @@
 // `npm run check:i18n -w web` lists t() strings without an English entry.
 
 import serverPatterns from './server-patterns';
+import adminA from './en/adminA';
+import adminB from './en/adminB';
+import chat from './en/chat';
+import common from './en/common';
+import server from './en/server';
+import shell from './en/shell';
+import studios from './en/studios';
 
 export type Lang = 'zh' | 'en';
 /** What the user picked; 'auto' follows the browser (zh-* → 中文, else English). */
@@ -18,15 +25,15 @@ export type LangPref = Lang | 'auto';
 
 const LANG_KEY = 'cat-lang';
 
-// Guarded so Node regression scripts that import api.ts (no Vite, no DOM)
-// still load this module; they run in Chinese with no dictionaries.
-const dictModules = typeof import.meta.glob === 'function'
-  ? import.meta.glob<{ default: Record<string, string> }>('./en/*.ts', { eager: true })
-  : {};
-const en: Record<string, string> = Object.assign({}, ...Object.values(dictModules).map((m) => m.default));
+// Plain imports rather than import.meta.glob: they load the same way under
+// Vite and under the Node regression scripts that import api.ts. A new
+// dictionary file must be added here — check-i18n fails until it is.
+const en: Record<string, string> = Object.assign({}, adminA, adminB, chat, common, server, shell, studios);
 
 function browserLang(): Lang {
-  if (typeof navigator === 'undefined') return 'zh';
+  // Node ≥ 21 has a global navigator (en-US) but no window: keep the Node
+  // regression scripts on the Chinese source strings they assert against.
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return 'zh';
   const list = navigator.languages?.length ? navigator.languages : [navigator.language];
   return (list[0] || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }

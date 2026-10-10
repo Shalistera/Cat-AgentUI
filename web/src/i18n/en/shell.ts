@@ -104,8 +104,8 @@ export default {
   '用户': 'User',
   '设置': 'Settings',
   '管理后台': 'Admin',
-  '固定为另一种主题;要跟随系统请到「设置 → 外观」':
-    'Pin the other theme. To match the system, go to Settings → Appearance',
+  '固定为另一种主题;要跟随系统请到「设置 → 通用」':
+    'Pin the other theme. To match the system, go to Settings → General',
   '切换到浅色主题': 'Switch to light theme',
   '切换到深色主题': 'Switch to dark theme',
   '退出登录': 'Sign out',
@@ -119,7 +119,7 @@ export default {
   '设置分区': 'Settings sections',
   '账号': 'Account',
   '对话偏好': 'Chat preferences',
-  '外观': 'Appearance',
+  '通用': 'General',
   '登录设备': 'Signed-in devices',
   '我的用量': 'My usage',
   '附件存储': 'Attachment storage',

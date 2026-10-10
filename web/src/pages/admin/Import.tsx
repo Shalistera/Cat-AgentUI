@@ -20,7 +20,8 @@ function fmtSize(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function Import() {
+/** The Open WebUI importer, shown on the 备份与迁移 page. */
+export function OpenWebUIImport() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [dataDir, setDataDir] = useState('');
@@ -58,12 +59,7 @@ export default function Import() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
-      <div>
-        <h1 className="text-base font-semibold tracking-tight text-tx">{t('数据导入')}</h1>
-        <p className="mt-0.5 text-xs text-tx3">{t('从 Open WebUI 迁入用户与聊天记录,可重复执行安全续传')}</p>
-      </div>
-
+    <>
       <Card
         title={t('从 Open WebUI 迁移')}
         desc={t('上传 webui.db 一键迁入用户与聊天记录。迁入的用户用原来的邮箱 + 原密码即可登录,首次登录后密码自动升级为本站格式。可放心重复执行:已迁过的用户、会话、附件会自动跳过。')}
@@ -224,6 +220,6 @@ export default function Import() {
           </div>
         </Card>
       )}
-    </div>
+    </>
   );
 }

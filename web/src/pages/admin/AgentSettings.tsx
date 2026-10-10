@@ -4,6 +4,7 @@ import { api, errMsg } from '../../api';
 import { Badge, Button, Card, Field, Input, Select, Spinner, Toggle, ToggleRow, toast } from '../../components/ui';
 import { t } from '../../i18n';
 import type { AccessPolicy, AdminUser, AgentAdminData, AgentSettings, ModelInfo } from '../../types';
+import { useUnsavedGuard } from './settings-common';
 
 function fmtMb(n: number): string { return `${Math.round(n / 1048576)} MB`; }
 
@@ -60,8 +61,10 @@ export default function AgentSettingsPage() {
     api.get<ModelInfo[]>('/api/models').then(setModels).catch(() => { /* optional */ });
   }, []);
 
+  const dirty = !!data && !!s && JSON.stringify(s) !== JSON.stringify(data.settings);
+  useUnsavedGuard(dirty);
+
   if (!data || !s) return <div className="flex justify-center py-16 text-tx3"><Spinner className="h-6 w-6" /></div>;
-  const dirty = JSON.stringify(s) !== JSON.stringify(data.settings);
 
   async function save() {
     if (!s) return;

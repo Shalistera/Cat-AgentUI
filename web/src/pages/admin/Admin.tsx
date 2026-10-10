@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowUpDown, BarChart3, Bot, Boxes, DatabaseZap, Plug, Settings2, ShieldCheck, Sparkles, Terminal, Users as UsersIcon, Wrench, X,
+  ArrowUpDown, BarChart3, Bot, Boxes, DatabaseBackup, HardDrive, Plug, Settings2, ShieldCheck, Sparkles, Terminal, Users as UsersIcon,
+  Workflow, Wrench, X,
 } from 'lucide-react';
-import { Button } from '../../components/ui';
+import { Button, useConfirm } from '../../components/ui';
 import { t } from '../../i18n';
 import Chat from '../Chat';
 import Dashboard from './Dashboard';
@@ -15,11 +16,14 @@ import Models from './Models';
 import ModelDetail from './ModelDetail';
 import ModelOrder from './ModelOrder';
 import Mcp from './Mcp';
-import AppSettings from './AppSettings';
-import Import from './Import';
+import GeneralSettings from './GeneralSettings';
+import TaskModels from './TaskModels';
+import Storage from './Storage';
+import Backup from './Backup';
 import Sandbox from './Sandbox';
 import Skills from './Skills';
 import AgentSettingsPage from './AgentSettings';
+import { confirmLeave, hasUnsaved } from './settings-common';
 
 /* The admin console is a dialog, the same shape as 设置: sections down the
    left, content on the right, floating over the app. It keeps URL routing
@@ -33,12 +37,14 @@ const SECTIONS: { to: string; label: string; icon: typeof BarChart3; end?: boole
   { to: '/admin/providers', label: t('模型服务'), icon: Plug, group: t('模型@@nav') },
   { to: '/admin/models', label: t('模型设置'), icon: Boxes },
   { to: '/admin/model-order', label: t('模型排序'), icon: ArrowUpDown },
+  { to: '/admin/task-models', label: t('任务模型'), icon: Workflow },
   { to: '/admin/agent', label: t('总控'), icon: Bot, group: t('Agent 能力') },
   { to: '/admin/mcp', label: 'MCP', icon: Wrench },
   { to: '/admin/sandbox', label: t('沙盒'), icon: Terminal },
   { to: '/admin/skills', label: t('技能'), icon: Sparkles },
-  { to: '/admin/settings', label: t('站点设置'), icon: Settings2, group: t('站点') },
-  { to: '/admin/import', label: t('数据迁移'), icon: DatabaseZap },
+  { to: '/admin/settings', label: t('通用'), icon: Settings2, group: t('站点') },
+  { to: '/admin/storage', label: t('存储空间'), icon: HardDrive },
+  { to: '/admin/backup', label: t('备份与迁移'), icon: DatabaseBackup },
 ];
 
 /** Where "关闭" goes: the page the person came from, remembered by whoever
@@ -50,10 +56,18 @@ export default function Admin() {
   const nav = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const close = () => nav(adminReturn.path.startsWith('/admin') ? '/' : adminReturn.path);
+  // A section with unsaved edits asks first (see useUnsavedGuard).
+  const leaveTo = (path: string) => { void confirmLeave().then((ok) => { if (ok) nav(path); }); };
+  const close = () => leaveTo(adminReturn.path.startsWith('/admin') ? '/' : adminReturn.path);
 
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // Escape belongs to an open modal (portalled to <body>) or the confirm
+      // dialog first; closing the whole console with it would lose the modal.
+      if (useConfirm.getState().open || document.querySelector('body > [aria-modal="true"]')) return;
+      close();
+    };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }); // eslint-disable-line react-hooks/exhaustive-deps
@@ -92,6 +106,7 @@ export default function Admin() {
                     {s.group && <div className="eyebrow hidden px-2.5 pb-1 pt-3 sm:block">{s.group}</div>}
                     <NavLink
                       to={s.to} end={s.end}
+                      onClick={(e) => { if (hasUnsaved() && s !== active) { e.preventDefault(); leaveTo(s.to); } }}
                       className={({ isActive }) => `flex shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors ${
                         isActive ? 'bg-bg2 font-medium text-tx shadow-xs' : 'text-tx2 hover:bg-bg2/70 hover:text-tx'}`}
                     >
@@ -127,8 +142,12 @@ export default function Admin() {
                 <Route path="sandbox" element={<Sandbox />} />
                 <Route path="skills" element={<Skills />} />
                 <Route path="agent" element={<AgentSettingsPage />} />
-                <Route path="settings" element={<AppSettings />} />
-                <Route path="import" element={<Import />} />
+                <Route path="task-models" element={<TaskModels />} />
+                <Route path="settings" element={<GeneralSettings />} />
+                <Route path="storage" element={<Storage />} />
+                <Route path="backup" element={<Backup />} />
+                {/* Old address of the importer, now part of 备份与迁移. */}
+                <Route path="import" element={<Navigate to="/admin/backup" replace />} />
               </Routes>
             </div>
           </div>

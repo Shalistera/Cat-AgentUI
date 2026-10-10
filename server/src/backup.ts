@@ -198,6 +198,6 @@ export function startBackupScheduler(): void {
   const s = getBackupSettings();
   console.log(s.enabled
     ? `[backup] automatic snapshots every ${s.intervalHours}h, keeping ${s.keep}`
-    : '[backup] automatic snapshots disabled (enable in 应用设置 → 数据库备份)');
+    : '[backup] automatic snapshots disabled (enable in 管理后台 → 备份与迁移)');
   rescheduleBackups();
 }

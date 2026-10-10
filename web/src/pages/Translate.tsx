@@ -277,7 +277,7 @@ export default function Translate() {
               <EmptyState
                 icon={<Languages size={22} />}
                 title={t('管理员尚未配置翻译模型')}
-                hint={t('请管理员在「管理后台 → 应用设置 → 翻译工坊」中为默认、快速或思考模式指定至少一个模型。')}
+                hint={t('请管理员在「管理后台 → 任务模型 → 翻译工坊」中为默认、快速或思考模式指定至少一个模型。')}
               />
             </Card>
           )}

@@ -628,8 +628,8 @@ export function Sidebar() {
                 <ShieldCheck size={13} />{t('管理后台')}
               </button>
             )}
-            {/* Quick flip pins the opposite theme; 跟随系统 lives in 设置 → 外观. */}
-            <button className={menuItem} title={t('固定为另一种主题;要跟随系统请到「设置 → 外观」')}
+            {/* Quick flip pins the opposite theme; 跟随系统 lives in 设置 → 通用. */}
+            <button className={menuItem} title={t('固定为另一种主题;要跟随系统请到「设置 → 通用」')}
               onClick={() => setThemeMode(theme === 'dark' ? 'light' : 'dark')}>
               {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
               {theme === 'dark' ? t('切换到浅色主题') : t('切换到深色主题')}
