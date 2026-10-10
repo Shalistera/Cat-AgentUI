@@ -37,10 +37,11 @@ import { WEB_FETCH_TOOL, WEB_FETCH_TOOL_DEF, runWebFetch, webFetchAvailable } fr
 import { agentWebToolsAllowed, WebToolBudget, webResearchPrompt } from '../web-tool-policy.js';
 import {
   branchSummary, clearSummaries, historyBudget, isSummaryLead, planHistory, saveSummary, summaryLead, summaryTargetChars, writeSummary,
+  COMPACTION_MODEL_KEY, COMPACTION_FALLBACK_KEY,
   type HistoryPlan,
 } from '../compaction.js';
 import type {
-  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry, UsageInfo,
+  AdapterMessage, AdapterMessagePart, GroundingInfo, GroundingSource, MessagePart, ProviderType, FinishReason, ReasoningRequest, ToolDef, ProviderFailover, ProviderRetry,
 } from '../types.js';
 import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
@@ -641,6 +642,20 @@ function getTaskModelCandidates(settingKey: string, user: { role: string }, curr
   push(current);
   push(pickModel(enabledModelRows().filter((r) => !r.models.imageGen && providerAllowed(user, r.providers.type))));
   return out;
+}
+
+/** A dedicated summarizer never silently falls through to an expensive model.
+    Fallback is an explicit admin choice, and ordinary model grants still apply. */
+function getCompactionModelCandidates(user: { id: string; role: string }, current: ModelPick): ModelPick[] {
+  const configured = getSetting<string>(COMPACTION_MODEL_KEY, '');
+  const ids = configured
+    ? [configured, ...(getSetting(COMPACTION_FALLBACK_KEY, false) ? [current.model.id] : [])]
+    : [current.model.id];
+  return [...new Set(ids)].flatMap((id) => {
+    const pick = getModelWithProvider(id);
+    return pick && !pick.model.imageGen && pick.provider.type !== 'novelai'
+      && providerAllowed(user, pick.provider.type) && canUseModel(user, id) ? [pick] : [];
+  });
 }
 
 const IMAGE_TIMEOUT_MS = 300_000;
@@ -1775,23 +1790,58 @@ export async function chatRoutes(app: FastifyInstance) {
       }, state.queued ? 'Provider busy; queued behind shared backoff' : 'Provider busy; retry scheduled');
     };
 
-    // 上下文压缩: fold the turns that no longer fit into the branch's summary,
-    // with the chat's own model, before answering. If it fails the turn still
-    // goes ahead — with the previous summary, or with recent turns only.
+    // Fold older history with the configured summarizer (or the conversation
+    // model when unset). Failed compaction keeps the existing history fallback.
     const compactHistory = async () => {
       const covered = (plan.summary?.covered ?? 0) + compactRows!.length;
       const part: Extract<MessagePart, { type: 'context_summary' }> = { type: 'context_summary', state: 'running', covered };
       parts.push(part);
       sse.send('context_summary', part);
-      const startedAt = Date.now();
-      let spent: UsageInfo = {};
       try {
-        const text = await writeSummary({
-          adapter, cfg, model: model.modelId,
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(COMPACT_TIMEOUT_MS)]),
-          onUsage: (u) => { spent = u; },
-        }, plan.summary?.summary ?? null, compactRows!.map((m) => ({ role: m.role, parts: parseParts(m.parts) })), summaryTargetChars(budget));
-        saveSummary(chatId, chain[plan.compact!.to].id, text, covered, model.modelId);
+        const candidates = getCompactionModelCandidates(user, { model, provider });
+        const configured = getSetting<string>(COMPACTION_MODEL_KEY, '');
+        const totalSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(COMPACT_TIMEOUT_MS)]);
+        let completed: { text: string; model: string } | null = null;
+        let lastError: unknown = new Error('压缩模型不可用或未向当前用户开放');
+        for (const [index, pick] of candidates.entries()) {
+          totalSignal.throwIfAborted();
+          if (configured && pick.model.id !== configured) {
+            sse.send('notice', { message: '专用压缩模型未能完成摘要,正在改用当前对话模型' });
+          }
+          const attemptMs = index < candidates.length - 1 ? COMPACT_TIMEOUT_MS / candidates.length : COMPACT_TIMEOUT_MS;
+          const signal = AbortSignal.any([totalSignal, AbortSignal.timeout(attemptMs)]);
+          try {
+            const text = await writeSummary({
+              adapter: getAdapter(pick.provider.type), cfg: toRuntimeConfig(pick.provider), model: pick.model.modelId, signal,
+              beforeRequest: () => {
+                signal.throwIfAborted();
+                const active = getModelWithProvider(pick.model.id);
+                if (!active || active.model.imageGen || !canUseModel(user, pick.model.id)
+                  || !providerAllowed(user, active.provider.type)) throw new Error('压缩模型已停用或访问权限已变更');
+                const quota = checkQuota(user.id);
+                if (!quota.ok) throw new Error(quotaBlockMessage(quota));
+                const limit = checkModelLimit(user, active.model);
+                if (!limit.ok) throw new Error(modelLimitReason(active.model, limit));
+              },
+              onUsage: (spent, durationMs) => recordUsage({
+                userId: user.id, chatId, messageId: assistantId,
+                providerId: pick.provider.id, providerType: pick.provider.type, model: pick.model.modelId,
+                kind: 'compaction', images: 0, promptTokens: spent.promptTokens,
+                completionTokens: spent.completionTokens, totalTokens: spent.totalTokens, durationMs,
+              }),
+            }, plan.summary?.summary ?? null, compactRows!.map((m) => ({ role: m.role, parts: parseParts(m.parts) })), summaryTargetChars(budget));
+            completed = { text: redactSensitiveText(text, secretValues), model: pick.model.modelId };
+            break;
+          } catch (err) {
+            if (totalSignal.aborted) throw err;
+            lastError = err;
+            req.log.warn({ providerId: pick.provider.id, model: pick.model.modelId,
+              err: redactSensitiveText(err instanceof Error ? err.message : String(err), secretValues) }, 'Compaction model failed');
+          }
+        }
+        if (!completed) throw lastError;
+        const { text } = completed;
+        saveSummary(chatId, chain[plan.compact!.to].id, text, covered, completed.model);
         const first = baseHistory[0];
         if (first) {
           const lead: AdapterMessagePart = { type: 'text', text: summaryLead(text) };
@@ -1805,12 +1855,6 @@ export async function chatRoutes(app: FastifyInstance) {
         part.state = 'failed';
         sse.send('notice', { message: '较早的对话没能压缩成摘要,这一轮只带上了最近的内容' });
         req.log.warn({ err: redactSensitiveText(err instanceof Error ? err.message : String(err), secretValues) }, 'History compaction failed');
-      } finally {
-        recordUsage({
-          userId: user.id, chatId, messageId: assistantId, providerId: provider.id, providerType: provider.type,
-          model: model.modelId, kind: 'compaction', images: 0, promptTokens: spent.promptTokens,
-          completionTokens: spent.completionTokens, totalTokens: spent.totalTokens, durationMs: Date.now() - startedAt,
-        });
       }
       sse.send('context_summary', part);
     };

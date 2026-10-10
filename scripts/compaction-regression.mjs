@@ -17,12 +17,13 @@ process.env.DATA_DIR = path.join(data, 'module');
 process.env.SECRET_KEY = 'compaction-test-only';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let app;
+let auditDb;
 let logs = '';
 
 try {
   // ---------- budgets & planning (module level) ----------
   process.env.MAX_CONTEXT_TEXT_CHARS = '2000000';
-  const { historyBudget, planHistory, summaryTargetChars } = await import(`${root}/server/dist/compaction.js`);
+  const { historyBudget, planHistory, summaryTargetChars, writeSummary } = await import(`${root}/server/dist/compaction.js`);
   assert.equal(historyBudget('claude-opus-5-5').textChars, 500_000);
   assert.equal(historyBudget('gpt-5').textChars, 200_000);
   assert.equal(historyBudget('claude-haiku-4-5').textChars, 100_000);
@@ -39,8 +40,51 @@ try {
   assert.equal(planHistory(turns(19, 900), sum, b).compact.from, 6, 'next fold starts after the summary');
   assert.equal(planHistory(turns(1, 50_000), null, b).compact, null, 'one huge message: nothing older to fold');
 
+  // A small summarizer must receive every part of a large-model transcript,
+  // while keeping each request inside its own context budget.
+  const batches = [];
+  const reported = [];
+  let checked = 0;
+  const stubAdapter = {
+    async *streamChat(_cfg, req) {
+      const prompt = req.messages[0].parts[0].text;
+      assert(req.system.length + prompt.length <= 64_000, 'summary input exceeds the selected model budget');
+      assert.equal(req.reasoning.level, 'off');
+      const excerpt = prompt.split('[需要压缩的对话]\n')[1].split('\n\n请写一份新的完整摘要')[0];
+      batches.push(excerpt);
+      if (batches.length > 1) assert(prompt.includes(`摘要-${batches.length - 1}`), 'rolling summary carries earlier batches');
+      yield { type: 'text', text: `摘要-${batches.length}` };
+      yield { type: 'usage', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } };
+      yield { type: 'stop', reason: 'stop' };
+    },
+  };
+  const oldSummary = '旧事实'.repeat(20_000);
+  const longText = `START-${'正文'.repeat(42_000)}-MIDDLE-${'内容'.repeat(35_000)}-END`;
+  const unitDeps = { adapter: stubAdapter, cfg: {}, model: 'summary-small', signal: new AbortController().signal,
+    beforeRequest: () => { checked++; }, onUsage: (u) => reported.push(u) };
+  const folded = await writeSummary(unitDeps, oldSummary, [{ role: 'user', parts: [{ type: 'text', text: longText }] }], 24_000);
+  assert(batches.length > 2);
+  assert.equal(batches.join(''), `[较早的对话摘要]\n${oldSummary}\n\n【用户】\n${longText}`, 'no transcript prefix, middle or tail is dropped');
+  assert.equal(folded, `摘要-${batches.length}`);
+  assert.equal(reported.length, batches.length);
+  assert.equal(checked, batches.length, 'recheck limits before each batch');
+  const aborted = new AbortController(); aborted.abort();
+  await assert.rejects(writeSummary({ ...unitDeps, signal: aborted.signal }, null, [{ role: 'user', parts: [{ type: 'text', text: 'q' }] }], 3_000));
+  assert.equal(checked, batches.length, 'cancelled jobs do not start another request');
+  const failedUsage = [];
+  await assert.rejects(writeSummary({ ...unitDeps, onUsage: (u) => failedUsage.push(u), adapter: {
+    async *streamChat() {
+      yield { type: 'usage', usage: { promptTokens: 10, completionTokens: 5 } };
+      yield { type: 'text', text: '不完整的摘要' };
+      yield { type: 'usage', usage: { totalTokens: 7 } };
+      yield { type: 'stop', reason: 'length' };
+    },
+  } }, null, [{ role: 'user', parts: [{ type: 'text', text: 'q' }] }], 3_000), /未完整返回/);
+  assert.equal(failedUsage[0].totalTokens, 22, 'provider-line attempts and failed requests are all accounted for');
+
   // ---------- end to end ----------
   const requests = [];
+  let summarizerFails = false;
   const upstream = http.createServer(async (req, res) => {
     let raw = ''; for await (const c of req) raw += c;
     if (!req.url.includes('/chat/completions')) { res.statusCode = 404; return res.end('{}'); }
@@ -49,7 +93,11 @@ try {
     const users = body.messages.filter((m) => m.role === 'user').map((m) => typeof m.content === 'string' ? m.content : m.content.map((p) => p.text ?? '').join(''));
     const compacting = system.includes('负责压缩一段很长的对话');
     const titling = !compacting && body.messages.length <= 2 && /标题|title/i.test(system + users.join(''));
-    requests.push({ compacting, titling, users, system });
+    requests.push({ compacting, titling, users, system, model: body.model, url: req.url });
+    if (compacting && body.model === 'summary-small' && summarizerFails) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'forced summarizer failure' } }));
+    }
     const base = { id: 'c', object: 'chat.completion.chunk', created: 0, model: body.model };
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const say = (text) => {
@@ -77,13 +125,16 @@ try {
     return { status: r.status, data: await r.json() };
   };
   await api('POST', '/api/auth/register', { username: 'compactadmin', password: 'compaction-test-password' });
+  const defaults = (await api('GET', '/api/admin/settings')).data;
+  assert.equal(defaults.compactionModelId, null);
+  assert.equal(defaults.compactionFallbackToChat, false);
   const provider = (await api('POST', '/api/admin/providers', { name: 'stub', type: 'openai', apiKey: 'k', baseUrl: `http://127.0.0.1:${upstream.address().port}/v1` })).data;
   await api('POST', '/api/admin/models', { providerId: provider.id, models: [{ modelId: 'gpt-4o' }] });
   const modelId = (await api('GET', '/api/admin/providers')).data.find((p) => p.id === provider.id).models[0].id;
   const chat = (await api('POST', '/api/chats', { modelId })).data.chat.id;
-  const turn = async (n) => {
+  const turn = async (n, chatId = chat) => {
     const before = requests.length;
-    const r = await fetch(`${base}/api/chats/${chat}/stream`, { method: 'POST', headers: { cookie, 'x-csrf': '1', 'content-type': 'application/json' }, body: JSON.stringify({ content: [{ type: 'text', text: `第${n}轮的问题:${'问'.repeat(1400)}` }] }) });
+    const r = await fetch(`${base}/api/chats/${chatId}/stream`, { method: 'POST', headers: { cookie, 'x-csrf': '1', 'content-type': 'application/json' }, body: JSON.stringify({ content: [{ type: 'text', text: `第${n}轮的问题:${'问'.repeat(1400)}` }] }) });
     const events = await r.text();
     assert(events.includes(`第${n}轮的回答`), events.slice(-500));
     await sleep(150); // title / follow-up requests settle
@@ -126,13 +177,90 @@ try {
   const after = await turn(compactedAt + 2);
   assert(after.made.some((q) => q.compacting), 'summary rebuilt after a deletion');
   assert(!after.made.find((q) => !q.compacting).users.join('').includes('第1轮的问题'));
-  console.log(`Compaction regression passed: model-sized budgets, planning, fold at turn ${compactedAt}, summary reuse, marker + export, invalidation on delete.`);
+
+  // Dedicated model configuration, actual provider/model accounting, and
+  // opt-in fallback. Each scenario reaches compaction through the real route.
+  const summaryProvider = (await api('POST', '/api/admin/providers', { name: 'summarizer', type: 'openai', apiKey: 'summary-key', baseUrl: `http://127.0.0.1:${upstream.address().port}/summary/v1` })).data;
+  await api('POST', '/api/admin/models', { providerId: summaryProvider.id, models: [{ modelId: 'summary-small' }, { modelId: 'summary-image', imageGen: true }] });
+  const summaryModels = (await api('GET', '/api/admin/providers')).data.find((p) => p.id === summaryProvider.id).models;
+  const summaryId = summaryModels.find((m) => m.modelId === 'summary-small').id;
+  const imageId = summaryModels.find((m) => m.modelId === 'summary-image').id;
+  assert.equal((await api('PUT', '/api/admin/settings', { compactionModelId: 'missing', brand: 'must-not-save' })).status, 400);
+  assert.equal((await api('GET', '/api/admin/settings')).data.brand, defaults.brand);
+  assert.equal((await api('PUT', '/api/admin/settings', { compactionModelId: imageId })).status, 400);
+  const configured = await api('PUT', '/api/admin/settings', { compactionModelId: summaryId, compactionFallbackToChat: false, followupEnabled: false });
+  assert.equal(configured.status, 200);
+  assert.equal((await api('GET', '/api/admin/settings')).data.compactionModelId, summaryId);
+  const { default: Database } = await import('better-sqlite3');
+  auditDb = new Database(path.join(data, 'server', 'cat-agentui.db'), { readonly: true });
+  const compactNewChat = async () => {
+    const id = (await api('POST', '/api/chats', { modelId })).data.chat.id;
+    for (let n = 1; n <= 8; n++) {
+      const result = await turn(n, id);
+      if (result.events.includes('event: context_summary')) return { ...result, id };
+    }
+    assert.fail('compaction did not run');
+  };
+  const summaryOf = (id) => auditDb.prepare('SELECT model, summary FROM chat_summaries WHERE chat_id = ?').get(id);
+  const usageOf = (id) => auditDb.prepare("SELECT provider_id, model, total_tokens FROM usage_log WHERE chat_id = ? AND kind = 'compaction'").all(id);
+  const dedicated = await compactNewChat();
+  assert(dedicated.events.includes('"state":"done"'));
+  assert(dedicated.made.filter((q) => q.compacting).every((q) => q.model === 'summary-small' && q.url.startsWith('/summary/')));
+  assert.equal(summaryOf(dedicated.id).model, 'summary-small');
+  assert(usageOf(dedicated.id).length > 0 && usageOf(dedicated.id).every((u) => u.provider_id === summaryProvider.id && u.model === 'summary-small' && u.total_tokens === 15));
+  assert.equal((await api('GET', `/api/chats/${dedicated.id}`)).data.chat.modelId, modelId, 'summarization does not switch the conversation model');
+
+  summarizerFails = true;
+  const noFallback = await compactNewChat();
+  assert(noFallback.events.includes('"state":"failed"'));
+  assert(noFallback.made.filter((q) => q.compacting).every((q) => q.model === 'summary-small'), 'no unapproved expensive fallback');
+  assert.equal(summaryOf(noFallback.id), undefined, 'failed summaries are never saved');
+  assert.equal((await api('PUT', '/api/admin/settings', { compactionFallbackToChat: true })).status, 200);
+  const fallback = await compactNewChat();
+  assert(fallback.events.includes('"state":"done"') && fallback.events.includes('正在改用当前对话模型'));
+  assert.deepEqual(fallback.made.filter((q) => q.compacting).map((q) => q.model), ['summary-small', 'gpt-4o']);
+  assert.equal(summaryOf(fallback.id).model, 'gpt-4o');
+  assert(usageOf(fallback.id).some((u) => u.provider_id === summaryProvider.id));
+  assert(usageOf(fallback.id).some((u) => u.provider_id === provider.id && u.total_tokens === 15));
+  summarizerFails = false;
+
+  await api('PUT', '/api/admin/settings', { compactionFallbackToChat: false });
+  await api('PATCH', `/api/admin/models/${summaryId}`, { enabled: false });
+  assert.equal((await api('PUT', '/api/admin/settings', { compactionModelId: summaryId })).status, 400);
+  const disabled = await compactNewChat();
+  assert(disabled.events.includes('"state":"failed"') && !disabled.made.some((q) => q.compacting));
+  await api('PATCH', `/api/admin/models/${summaryId}`, { enabled: true, accessMode: 'restricted', allowedUserIds: [] });
+
+  // A globally selected helper cannot bypass user grants or model allowances.
+  const normalUser = (await api('POST', '/api/admin/users', { username: 'compactuser', password: 'compaction-test-password', role: 'user' })).data.user;
+  const adminCookie = cookie;
+  cookie = undefined;
+  await api('POST', '/api/auth/login', { username: 'compactuser', password: 'compaction-test-password' });
+  const userCookie = cookie;
+  assert.equal((await api('PUT', '/api/admin/settings', { compactionModelId: null })).status, 403);
+  const forbidden = await compactNewChat();
+  assert(forbidden.events.includes('"state":"failed"') && !forbidden.made.some((q) => q.compacting));
+  cookie = adminCookie;
+  assert.equal((await api('PATCH', `/api/admin/models/${summaryId}`, { allowedUserIds: [normalUser.id], limitRequests: 1 })).status, 200);
+  cookie = userCookie;
+  const allowed = await compactNewChat();
+  assert(allowed.events.includes('"state":"done"'));
+  assert.equal(summaryOf(allowed.id).model, 'summary-small');
+  const limited = await compactNewChat();
+  assert(limited.events.includes('"state":"failed"') && !limited.made.some((q) => q.compacting));
+  cookie = adminCookie;
+  const cleared = await api('PUT', '/api/admin/settings', { compactionModelId: null });
+  assert.equal(cleared.data.compactionModelId, null);
+  const restored = await compactNewChat();
+  assert.equal(summaryOf(restored.id).model, 'gpt-4o');
+  console.log(`Compaction regression passed: fold at turn ${compactedAt}, summary reuse, dedicated model + accounting, opt-in fallback, grants + quotas, ${batches.length} bounded batches without lost source text, cancellation and incomplete-summary rejection.`);
 } catch (err) {
   console.error(err);
   if (logs) console.error(`--- server log ---\n${logs.slice(-2000)}`);
   process.exitCode = 1;
 } finally {
   if (app && app.exitCode === null) { app.kill('SIGTERM'); await new Promise((r) => { app.once('exit', r); setTimeout(r, 2000).unref(); }); }
+  auditDb?.close();
   fs.rmSync(data, { recursive: true, force: true });
   process.exit(process.exitCode ?? 0);
 }

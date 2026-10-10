@@ -452,6 +452,8 @@ export default function AppSettings() {
   const [quotaAction, setQuotaAction] = useState<AppSettingsDto['quotaAction']>('block');
   const [quotaFallback, setQuotaFallback] = useState('');
   const [titleModel, setTitleModel] = useState('');
+  const [compactionModel, setCompactionModel] = useState('');
+  const [compactionFallback, setCompactionFallback] = useState(false);
   const [followupEnabled, setFollowupEnabled] = useState(true);
   const [followupModel, setFollowupModel] = useState('');
   const [announcement, setAnnouncement] = useState('');
@@ -474,6 +476,8 @@ export default function AppSettings() {
     setQuotaAction(r.quotaAction ?? 'block');
     setQuotaFallback(r.quotaFallbackModelId ?? '');
     setTitleModel(r.titleModelId ?? '');
+    setCompactionModel(r.compactionModelId ?? '');
+    setCompactionFallback(r.compactionFallbackToChat ?? false);
     setFollowupEnabled(r.followupEnabled ?? true);
     setFollowupModel(r.followupModelId ?? '');
     setAnnouncement(r.announcement ?? '');
@@ -528,6 +532,8 @@ export default function AppSettings() {
         quotaAction,
         quotaFallbackModelId: quotaFallback || null,
         titleModelId: titleModel || null,
+        compactionModelId: compactionModel || null,
+        compactionFallbackToChat: compactionFallback,
         followupEnabled,
         followupModelId: followupModel || null,
         announcement: announcement.trim(),
@@ -664,6 +670,27 @@ export default function AppSettings() {
               ))}
             </Select>
           </Field>
+
+          <Field
+            label={t('对话压缩模型')}
+            hint={t('长对话生成摘要所用的模型。可选择成本较低、向用户开放的文本模型;长历史会分批压缩,用量记在实际使用的模型下。未设置时沿用对话模型。')}
+          >
+            <Select value={compactionModel} onChange={(e) => setCompactionModel(e.target.value)}>
+              <option value="">{t('未设置(跟随对话模型)')}</option>
+              {compactionModel && !textModels.some((m) => m.id === compactionModel) && (
+                <option value={compactionModel}>{t('模型不可用:{id}', { id: compactionModel })}</option>
+              )}
+              {textModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.displayName}({m.providerName})</option>
+              ))}
+            </Select>
+          </Field>
+
+          <ToggleRow
+            label={t('压缩失败时改用对话模型')}
+            desc={t('专用压缩模型不可用或失败时,允许改用当前对话模型。默认关闭,避免意外使用高价模型;关闭时会提示压缩失败并继续使用近期历史。')}
+            checked={compactionFallback} onChange={setCompactionFallback} disabled={!compactionModel}
+          />
 
           <ToggleRow
             label={t('回答后生成快速追问')}

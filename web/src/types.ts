@@ -502,6 +502,10 @@ export interface AppSettings {
   quotaFallbackModelId: string | null;
   /** 对话标题生成模型(models.id),null = 跟随当前对话的模型。 */
   titleModelId: string | null;
+  /** Dedicated summary model; null follows the conversation model. */
+  compactionModelId: string | null;
+  /** Explicit opt-in to the conversation model if the dedicated model fails. */
+  compactionFallbackToChat: boolean;
   /** 回答完成后自动生成 3 个快速追问。 */
   followupEnabled: boolean;
   /** 快速追问生成模型(models.id),null = 跟随当前对话的模型。 */

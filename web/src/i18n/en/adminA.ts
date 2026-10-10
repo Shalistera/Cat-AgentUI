@@ -1,5 +1,11 @@
 // Admin console: providers, app settings, agent capabilities, dashboard.
 export default {
+  '对话压缩模型': 'Conversation compaction model',
+  '长对话生成摘要所用的模型。可选择成本较低、向用户开放的文本模型;长历史会分批压缩,用量记在实际使用的模型下。未设置时沿用对话模型。':
+    'The model used to summarize long conversations. Choose an affordable text model available to your users. Long histories are processed in batches, and usage is attributed to the model used. Leave unset to follow the chat model.',
+  '压缩失败时改用对话模型': 'Fall back to the chat model if compaction fails',
+  '专用压缩模型不可用或失败时,允许改用当前对话模型。默认关闭,避免意外使用高价模型;关闭时会提示压缩失败并继续使用近期历史。':
+    'Allow the chat model to take over if the dedicated summarizer is unavailable or fails. Off by default to avoid unexpected costs. When off, a failure notice is shown and the chat continues with recent history.',
   '({n} 份)': ' ({n} snapshots)',
   '(已停用)': ' (disabled)',
   '(当前:{name})': ' (current: {name})',

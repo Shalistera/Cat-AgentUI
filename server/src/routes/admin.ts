@@ -31,6 +31,7 @@ import {
 } from '../storage.js';
 import { readTranslateChain, translateModelSchema, TRANSLATE_CHAIN_MAX, TRANSLATE_DEFAULT_KEY, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel } from '../translate-settings.js';
 import { effectiveLevels } from '../reasoning.js';
+import { COMPACTION_MODEL_KEY, COMPACTION_FALLBACK_KEY } from '../compaction.js';
 import type { ProviderType } from '../types.js';
 
 const DAY_MS = 86_400_000;
@@ -174,6 +175,8 @@ const settingsSchema = z.object({
   quotaAction: z.enum(['block', 'downgrade']).optional(),
   quotaFallbackModelId: z.string().max(64).nullish(), // models.id,空 = 未设置
   titleModelId: z.string().max(64).nullish(), // 对话标题生成模型,空 = 跟随对话模型
+  compactionModelId: z.string().max(64).nullish(),
+  compactionFallbackToChat: z.boolean().optional(),
   followupEnabled: z.boolean().optional(), // 回答后自动生成快速追问
   followupModelId: z.string().max(64).nullish(), // 快速追问生成模型,空 = 跟随对话模型
   announcement: z.string().max(4000).optional(), // 站内公告,空 = 不显示
@@ -524,6 +527,8 @@ export async function adminRoutes(app: FastifyInstance) {
       quotaAction: quota.action,
       quotaFallbackModelId: quota.fallbackModelId || null,
       titleModelId: getSetting(TITLE_MODEL_KEY, '') || null,
+      compactionModelId: getSetting(COMPACTION_MODEL_KEY, '') || null,
+      compactionFallbackToChat: getSetting(COMPACTION_FALLBACK_KEY, false),
       followupEnabled: getSetting(FOLLOWUP_ENABLED_KEY, true),
       followupModelId: getSetting(FOLLOWUP_MODEL_KEY, '') || null,
       announcement: getSetting(ANNOUNCEMENT_KEY, ''),
@@ -545,6 +550,14 @@ export async function adminRoutes(app: FastifyInstance) {
     requireAdmin(req, reply);
     const body = settingsSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    if (body.data.compactionModelId) {
+      const row = db.select().from(schema.models)
+        .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
+        .where(eq(schema.models.id, body.data.compactionModelId)).get();
+      if (!row || !row.models.enabled || !row.providers.enabled || row.models.imageGen || row.providers.type === 'novelai') {
+        return reply.code(400).send({ error: '压缩模型无效,请选择已启用的文本模型' });
+      }
+    }
     // Validate all chains before persisting any settings in this request.
     const translateUpdates: [string, TranslateModel[]][] = [];
     for (const [field, legacyField, key, mode] of [
@@ -622,6 +635,8 @@ export async function adminRoutes(app: FastifyInstance) {
     }
     db.transaction(() => {
       for (const [key, entries] of translateUpdates) setSetting(key, entries);
+      if (body.data.compactionModelId !== undefined) setSetting(COMPACTION_MODEL_KEY, body.data.compactionModelId ?? '');
+      if (body.data.compactionFallbackToChat !== undefined) setSetting(COMPACTION_FALLBACK_KEY, body.data.compactionFallbackToChat);
     });
     if (body.data.imageRetentionDays !== undefined || body.data.chatImageRetentionDays !== undefined) {
       // A shortened window should take effect now, not at the next hourly tick.

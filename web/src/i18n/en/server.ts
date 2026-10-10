@@ -31,6 +31,8 @@ export default {
   '翻译模型无效,请选择文本模型': 'Invalid translation model — pick a text model',
   '降级模型无效,请选择一个文本模型': 'Invalid fallback model — pick a text model',
   '标题模型无效,请选择一个文本模型': 'Invalid title model — pick a text model',
+  '压缩模型无效,请选择已启用的文本模型': 'Invalid compaction model — select an enabled text model',
+  '专用压缩模型未能完成摘要,正在改用当前对话模型': 'The dedicated summarizer could not finish; switching to the chat model',
   '追问模型无效,请选择一个文本模型': 'Invalid follow-up model — pick a text model',
   '备份不存在': 'Backup not found',
 
