@@ -34,7 +34,7 @@ export function CreateProjectModal({ open, onClose }: { open: boolean; onClose()
 
   return (
     <Modal open={open} onClose={onClose} title={t('新建项目')}
-      desc={t('项目就像一个文件夹:把给 AI 的固定要求(比如「用中文回答、语气正式」)和参考资料放进去,之后在项目里开的每个对话都会自动带上这些内容,不用每次重复说。')}>
+      desc={t('把固定要求(比如「用中文回答、语气正式」)和参考资料放进项目,项目里的对话会自动遵循这些要求,并按需查阅资料。')}>
       <form onSubmit={(e) => { e.preventDefault(); create(); }}>
         <Field label={t('项目名称')} required>
           <Input value={name} onChange={(e) => setName(e.target.value)}

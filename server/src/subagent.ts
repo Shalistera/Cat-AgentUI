@@ -12,7 +12,7 @@ import { getAgentSettings, policyAllows, userWantsAgentTools, type AgentUser } f
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool } from './workspace.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from './skills.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from './sandbox/tool.js';
-import { callProjectTool, isProjectTool } from './knowledge.js';
+import { ProjectKnowledgeSession, isProjectTool } from './knowledge.js';
 import { buildProjectPrompt, projectFilesPrompt } from './routes/projects.js';
 import { historyBudget } from './compaction.js';
 import { WEB_SEARCH_TOOL, WEB_SEARCH_TOOL_DEF, runWebSearch, webSearchToolAvailable } from './web-search.js';
@@ -131,10 +131,12 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
   if (convertOn) tools.push(CONVERT_TOOL_DEF);
   if (skillRows.length) tools.push(...SKILL_TOOL_DEFS);
   if (fetchOn && webToolBudget.allows(WEB_FETCH_TOOL)) tools.push(WEB_FETCH_TOOL_DEF);
-  // 项目资料 the same way the parent turn gets them, sized for this model.
+  // Each subagent retrieves evidence for its own task, even if the operator
+  // has opted the main chat into whole-document loading.
   const project = deps.projectId
-    ? buildProjectPrompt(deps.projectId, user.id, { canUseTools: true, modelId: deps.model.modelId })
+    ? buildProjectPrompt(deps.projectId, user.id, { canUseTools: true, modelId: deps.model.modelId, retrievalOnly: true })
     : { block: null, tools: null, docCount: 0 };
+  const projectKnowledge = new ProjectKnowledgeSession(Math.min(100_000, Math.floor(historyBudget(deps.model.modelId).textChars / 4)));
   const projectOn = !!project.tools?.length;
   if (projectOn) tools.push(...project.tools!);
   const sandboxProjectId = project.docCount ? deps.projectId : null;
@@ -242,7 +244,7 @@ export async function runSubagent(deps: SubagentDeps, task: string): Promise<Sub
         } else if (isSkillTool(call.name) && skillRows.length) {
           ({ result, isError } = callSkillTool(user, call.name, call.args));
         } else if (isProjectTool(call.name) && projectOn) {
-          ({ result, isError } = callProjectTool(deps.projectId!, call.name, call.args));
+          ({ result, isError } = projectKnowledge.call(deps.projectId!, call.name, call.args));
         } else if (call.name === WEB_FETCH_TOOL && fetchOn) {
           ({ result, isError } = await runWebFetch({ user, chatId: deps.chatId, messageId: deps.parentMessageId, signal, budget: webToolBudget }, call.args));
         } else if (call.name === WEB_SEARCH_TOOL && searchOn) {

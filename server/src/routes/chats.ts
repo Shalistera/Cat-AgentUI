@@ -24,7 +24,7 @@ import { canUseModel, grantedModelIds, imageModelsAllowed, providerAllowed } fro
 import { checkModelLimit, checkQuota, modelLimitBlockMessage, modelLimitReason, quotaBlockMessage } from '../quota.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt, projectFilesPrompt } from './projects.js';
-import { callProjectTool, isProjectTool } from '../knowledge.js';
+import { ProjectKnowledgeSession, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
@@ -1533,12 +1533,12 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // Project knowledge leads the prompt: it is the stable, cacheable prefix
     // (per-chat systemPrompt varies more often than the project block does).
-    // As many whole documents as fit this model ride along; the rest become a
-    // manifest plus the project_search / project_read_doc tools. Image turns
-    // skip all of it.
+    // Documents default to a manifest and on-demand search/read tools. Image
+    // turns skip project context entirely.
     const project = chat.projectId && !model.imageGen
       ? buildProjectPrompt(chat.projectId, user.id, { canUseTools: !!model.tools, modelId: model.modelId })
       : { block: null, tools: null, docCount: 0 };
+    const projectKnowledge = new ProjectKnowledgeSession(Math.min(100_000, Math.floor(budget.textChars / 4)));
     // Access-checked above (docCount is 0 without access): the sandbox may mount the files.
     const sandboxProjectId = project.docCount ? chat.projectId : null;
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
@@ -2066,8 +2066,8 @@ export async function chatRoutes(app: FastifyInstance) {
               // goes out to its MCP server.
               const toolImages: MessagePart[] = [];
               let toolComparison: Extract<MessagePart, { type: 'data_comparison' }> | undefined;
-              const { result, isError } = isProjectTool(call.name) && chat.projectId
-                ? callProjectTool(chat.projectId, call.name, call.args)
+              const { result, isError } = isProjectTool(call.name) && chat.projectId && project.tools?.length
+                ? projectKnowledge.call(chat.projectId, call.name, call.args)
                 : call.name === GENERATE_IMAGE_TOOL && imageToolActive
                 ? await (async () => {
                   clearProviderIdleTimer();

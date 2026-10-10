@@ -177,8 +177,8 @@ export interface ProjectDoc { id: string; name: string; chars: number; createdAt
 
 export interface ProjectLimits {
   maxDocs: number; maxDocChars: number; maxTotalChars: number; maxInstructionsChars: number;
-  /** Characters loaded whole into a turn on an ordinary (~128K) model and on
-      a 1M-context one; documents that don't fit are retrieved on demand. */
+  /** Optional whole-document budget for ordinary (~128K) and 1M contexts;
+      zero means tool-capable models retrieve all document bodies on demand. */
   injectChars: number;
   injectCharsMax: number;
 }

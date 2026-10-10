@@ -308,10 +308,10 @@ export default {
     'Put recurring instructions and reference files in a project, and every chat inside it uses them',
   '加载项目列表失败': 'Failed to load your projects',
   '还没有项目': 'No projects yet',
-  '项目就像一个文件夹:把给 AI 的固定要求和参考资料放进去,之后在项目里开的每个对话都会自动带上这些内容,不用每次重复说。':
-    'A project works like a folder: put your standing instructions for the AI and your reference files in it, and every chat you start there carries them automatically.',
-  '项目就像一个文件夹:把给 AI 的固定要求(比如「用中文回答、语气正式」)和参考资料放进去,之后在项目里开的每个对话都会自动带上这些内容,不用每次重复说。':
-    'A project works like a folder: put your standing instructions for the AI (say, "answer in English, keep the tone formal") and your reference files in it, and every chat you start there carries them automatically.',
+  '把给 AI 的固定要求和参考资料放进项目,项目里的对话会自动遵循这些要求,并按需查阅资料,不用每次重复提供。':
+    'Keep standing instructions and reference files in a project. Chats follow those instructions and consult the files as needed, so you do not have to provide them again.',
+  '把固定要求(比如「用中文回答、语气正式」)和参考资料放进项目,项目里的对话会自动遵循这些要求,并按需查阅资料。':
+    'Keep standing instructions (say, "answer in English, keep the tone formal") and reference files in a project. Chats follow those instructions and consult the files as needed.',
   '已共享给所有人': 'Shared with everyone',
   '已共享给 {n} 位成员': 'Shared with {n} member(s)',
   '{owner} 共享 · {role}': 'Shared by {owner} · {role}',
@@ -358,6 +358,8 @@ export default {
   '删除文档': 'Delete file',
   '将从项目资料中移除「{name}」。': 'This removes "{name}" from the project\'s reference files.',
   '{docs} 个文档 · {chars} 字符': '{docs} file(s) · {chars} characters',
+  '资料按需检索:先提供目录,模型需要时再搜索和阅读相关内容。请使用支持工具调用的模型。':
+    'Files are retrieved on demand: the model starts with a directory, then searches and reads relevant content as needed. Use a model that supports tool calls.',
   '资料不多,每次对话都整篇提供给模型':
     'Small enough that every chat gets all of it in full',
   '长上下文模型(如 Claude、Gemini)整篇读取;其他模型放不下的部分按需检索':

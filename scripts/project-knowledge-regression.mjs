@@ -1,5 +1,5 @@
-// 项目资料: model-sized whole-document loading, CJK-aware search with
-// offsets, sandbox file copies, and sub-agents that can see the project.
+// Project documents: retrieval-first prompts, bounded reads, search recall,
+// per-context deduplication, sandbox copies, and independent subagents.
 // Module checks run against a temporary DATA_DIR; the end-to-end part drives
 // the built server with a local OpenAI-compatible stub. Never calls a real model.
 import assert from 'node:assert/strict';
@@ -15,6 +15,7 @@ const moduleData = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-project-mod-'));
 const e2eData = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-project-e2e-'));
 process.env.DATA_DIR = moduleData;
 process.env.SECRET_KEY = 'project-knowledge-test-only';
+process.env.PROJECT_INJECT_MAX_CHARS = '0';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const filler = (label, n) => Array.from({ length: n }, (_, i) => `${label}第${i + 1}段:这里是与主题无关的填充内容,用来把文档撑大。\n`).join('\n');
@@ -29,8 +30,9 @@ try {
   // ---------- module level ----------
   const { runMigrations, db, schema, now } = await import(`${root}/server/dist/db/index.js`);
   runMigrations();
-  const { contextWindowTokens, projectInjectBudget, callProjectTool, projectFilesDir, removeProjectFiles, initProjectKnowledge } =
+  const { contextWindowTokens, projectInjectBudget, callProjectTool, ProjectKnowledgeSession, projectFilesDir, removeProjectFiles, initProjectKnowledge } =
     await import(`${root}/server/dist/knowledge.js`);
+  const { config } = await import(`${root}/server/dist/config.js`);
   const { buildProjectPrompt } = await import(`${root}/server/dist/routes/projects.js`);
   initProjectKnowledge();
 
@@ -40,8 +42,8 @@ try {
   assert.equal(contextWindowTokens('claude-haiku-4-5-20251001'), 200_000);
   assert.equal(contextWindowTokens('gemini-2.5-pro'), 1_000_000);
   assert.equal(contextWindowTokens('gpt-4o-mini'), 128_000);
-  assert.equal(projectInjectBudget('gpt-4o-mini'), 19_200);
-  assert.equal(projectInjectBudget('claude-opus-5-5'), 150_000);
+  assert.equal(projectInjectBudget('gpt-4o-mini'), 0);
+  assert.equal(projectInjectBudget('claude-opus-5-5'), 0);
 
   const owner = 'u-owner';
   for (const [id, name] of [[owner, 'owner'], ['u-other', 'other']]) {
@@ -55,20 +57,22 @@ try {
   addDoc('d-mid', '会议/纪要.md', midDoc, 3);
   assert(bigDoc.length > 19_200 && midDoc.length < 19_200 && bigDoc.length + smallDoc.length + midDoc.length < 150_000);
 
-  // 128K model: only what fits loads whole, smallest first; the rest is a manifest + tools.
+  // Small and large context models both start with a manifest, including tiny documents.
   const small = buildProjectPrompt(projectId, owner, { canUseTools: true, modelId: 'gpt-4o-mini' });
   assert(small.block.startsWith('[项目指令]\n用中文回答'));
-  assert(small.block.includes('<document name="简介.md" ref="dsmall">'), 'documents carry their citation ref');
-  assert(!small.block.includes('<document name="员工手册.md"'));
+  assert(small.block.includes('- 简介.md(ref dsmall,'), 'documents carry their citation ref');
+  assert(!small.block.includes('<document '));
+  assert(!small.block.includes('每天300元'), 'unrequested evidence stays out of the system prompt');
   assert(small.block.includes('[项目资料清单]') && small.block.includes('- 员工手册.md(ref dbig,'), small.block.slice(0, 600));
   assert(small.block.includes('[文档名](doc:ref)'), 'citation format is explained');
   assert(small.block.includes('目录:差旅 / Budget'), 'manifest lists headings');
   assert.deepEqual(small.tools.map((t) => t.name), ['project_search', 'project_read_doc']);
   assert.equal(small.docCount, 3);
-  // 1M model: everything fits → no manifest, no tools.
   const large = buildProjectPrompt(projectId, owner, { canUseTools: true, modelId: 'claude-opus-5-5' });
-  assert(large.block.includes('全部参考文档') && large.block.includes('<document name="员工手册.md" ref="dbig">') && large.block.includes('(doc:ref)'));
-  assert.equal(large.tools, null);
+  assert.equal(large.block, small.block, 'a larger context must not cause eager loading');
+  assert.deepEqual(large.tools, small.tools);
+  assert(small.block.length < 1_500, `manifest is unexpectedly large: ${small.block.length}`);
+  console.log(`Project prompt fixture: ${bigDoc.length + smallDoc.length + midDoc.length} document characters -> ${small.block.length} characters of instructions and directory.`);
   // Same inputs, same bytes: the block is a cacheable prefix.
   assert.equal(buildProjectPrompt(projectId, owner, { canUseTools: true, modelId: 'gpt-4o-mini' }).block, small.block);
   // No tools: at least the old 100K allowance, and a note for what was left out.
@@ -77,6 +81,14 @@ try {
   assert(noTools.block.includes('<document name="简介.md" ref="dsmall">'));
   // No access, nothing.
   assert.deepEqual(buildProjectPrompt(projectId, 'u-other', { canUseTools: true, modelId: 'gpt-4o-mini' }), { block: null, tools: null, docCount: 0 });
+
+  // Explicit legacy opt-in still works, but does not spill into a subagent.
+  config.projectInjectMaxChars = 200_000;
+  assert.equal(projectInjectBudget('gpt-4o-mini'), 19_200);
+  assert.equal(projectInjectBudget('claude-opus-5-5'), 150_000);
+  assert(buildProjectPrompt(projectId, owner, { canUseTools: true, modelId: 'claude-opus-5-5' }).block.includes('<document '));
+  assert.equal(buildProjectPrompt(projectId, owner, { canUseTools: true, modelId: 'claude-opus-5-5', retrievalOnly: true }).block, small.block);
+  config.projectInjectMaxChars = 0;
 
   // Search: space-separated two-character Chinese terms, offsets that point at the original text.
   const hit = callProjectTool(projectId, 'project_search', JSON.stringify({ query: '差旅 报销 标准' }));
@@ -90,6 +102,52 @@ try {
   assert(callProjectTool(projectId, 'project_search', JSON.stringify({ query: '量子纠缠' })).result.startsWith('没有找到'));
   const read = callProjectTool(projectId, 'project_read_doc', JSON.stringify({ name: '员工手册.md', offset: Number(m[1]) }));
   assert(read.result.includes('每天300元') && read.result.includes(`【员工手册.md · ref dbig】第 ${m[1]}–`));
+  assert(read.result.includes(`第 ${m[1]}–${Number(m[1]) + 4_000} 字符`), 'default reads are bounded to 4000 characters');
+  const range = callProjectTool(projectId, 'project_read_doc', JSON.stringify({ ref: 'dbig', offset: 20, max_chars: 80 }));
+  assert(range.result.includes('第 20–100 字符') && range.result.includes(bigDoc.slice(20, 100)) && range.result.includes('offset=100'));
+  const capped = callProjectTool(projectId, 'project_read_doc', JSON.stringify({ ref: 'dbig', max_chars: 999_999 }));
+  assert(capped.result.includes('第 0–15000 字符'));
+  assert(callProjectTool(projectId, 'project_read_doc', 'null').isError);
+  assert(callProjectTool(projectId, 'project_search', JSON.stringify({ query: '差旅', ref: 'dsmall' })).result.startsWith('没有找到'), 'document filters do not search another file');
+
+  // Repeated evidence is not copied back into the same context. Other contexts,
+  // clipped results, and changed source text remain readable.
+  const session = new ProjectKnowledgeSession();
+  const query = JSON.stringify({ query: '差旅 报销 标准' });
+  assert(session.call(projectId, 'project_search', query).result.includes('每天300元'));
+  assert(session.call(projectId, 'project_search', query).result.startsWith('本轮已返回相同内容'));
+  assert(new ProjectKnowledgeSession().call(projectId, 'project_search', query).result.includes('每天300元'));
+  const clipped = new ProjectKnowledgeSession(20);
+  clipped.call(projectId, 'project_search', query);
+  assert(clipped.call(projectId, 'project_search', query).result.includes('每天300元'));
+  const smallArgs = JSON.stringify({ ref: 'dsmall' });
+  session.call(projectId, 'project_read_doc', smallArgs);
+  const { rawDb } = await import(`${root}/server/dist/db/index.js`);
+  rawDb.prepare('UPDATE project_docs SET content = ?, chars = ? WHERE id = ?').run('已修改的资料正文', 8, 'd-small');
+  assert(session.call(projectId, 'project_read_doc', smallArgs).result.includes('已修改的资料正文'));
+  rawDb.prepare('UPDATE project_docs SET content = ?, chars = ? WHERE id = ?').run(smallDoc, smallDoc.length, 'd-small');
+
+  // Search covers chunk boundaries, filename-only terms, multiple documents,
+  // and scopes citation refs to the current project.
+  const searchProject = '22222222-2222-3333-4444-555555555555';
+  db.insert(schema.projects).values({ id: searchProject, userId: owner, name: 'Search', createdAt: now(), updatedAt: now() }).run();
+  const boundary = `${'x'.repeat(1_195)}boundaryneedle${'y'.repeat(2_000)}`;
+  const searchFixtures = [
+    ['b1111111', '边界.txt', boundary],
+    ['b2222222', '专用预算文件.md', '这份资料的正文没有重复文件名。'],
+    ['b3333333', '长文件.txt', '共享术语。'.repeat(1_500)],
+    ['b4444444', '另一份文件.txt', '共享术语也在这份文件出现,要结合查看。'],
+  ];
+  for (const [id, name, content] of searchFixtures) {
+    db.insert(schema.projectDocs).values({ id, projectId: searchProject, name, content, chars: content.length, createdAt: now() }).run();
+  }
+  assert(callProjectTool(searchProject, 'project_search', JSON.stringify({ query: 'boundaryneedle' })).result.includes('boundaryneedle'));
+  assert(callProjectTool(searchProject, 'project_search', JSON.stringify({ query: '专用预算文件' })).result.includes('ref b2222222'));
+  const diverse = callProjectTool(searchProject, 'project_search', JSON.stringify({ query: '共享术语' }));
+  assert(diverse.result.includes('另一份文件.txt'));
+  assert((diverse.result.match(/【/g) ?? []).length <= 4);
+  assert.equal((callProjectTool(searchProject, 'project_search', JSON.stringify({ query: '共享术语', limit: 1 })).result.match(/【/g) ?? []).length, 1);
+  assert(callProjectTool(projectId, 'project_read_doc', JSON.stringify({ ref: 'b1111111' })).isError);
 
   // Sandbox copies: sanitized unique names, reused while unchanged, a new version after an edit.
   const dir = projectFilesDir(projectId);
@@ -98,6 +156,8 @@ try {
   assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
   assert.equal(projectFilesDir(projectId), dir, 'unchanged corpus reuses the directory');
   addDoc('d-dup', '简介.md', '同名文档', 4);
+  assert(callProjectTool(projectId, 'project_read_doc', JSON.stringify({ name: '简介.md' })).isError, 'same names must not select an arbitrary document');
+  assert(callProjectTool(projectId, 'project_read_doc', JSON.stringify({ ref: 'ddup' })).result.includes('同名文档'));
   const dir2 = projectFilesDir(projectId);
   assert.notEqual(dir2, dir);
   assert(fs.readdirSync(dir2).includes('简介 (2).md'), fs.readdirSync(dir2).join(','));
@@ -133,7 +193,7 @@ try {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const send = (o) => res.write(`data: ${JSON.stringify({ ...base, ...o })}\n\n`);
     const call = (name, args) => {
-      send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: `call_${name}`, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] });
+      send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: `call_${name}_${toolMessages.length}`, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] });
       send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args) } }] }, finish_reason: null }] });
       send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } });
     };
@@ -144,10 +204,15 @@ try {
     if (system.includes('你是一个子代理')) {
       subRequests.push({ system, tools, toolMessages });
       if (!toolMessages.length) call('project_search', { query: '差旅 报销 标准' });
+      else if (toolMessages.length < 3) {
+        const location = String(toolMessages[0].content).match(/ref ([0-9a-f]{8}) · 第 (\d+)–/);
+        call('project_read_doc', { ref: location[1], offset: Number(location[2]), max_chars: 1_800 });
+      }
       else say('子代理结论:差旅费每天300元。');
     } else if (tools.includes('spawn_subagent')) {
       mainRequests.push({ system, tools, toolMessages });
-      if (!toolMessages.length) call('spawn_subagent', { task: '阅读员工手册,找出差旅费报销标准', title: '查差旅标准' });
+      if (toolMessages.length < 2) call('project_search', { query: '差旅 报销 标准' });
+      else if (toolMessages.length === 2) call('spawn_subagent', { task: '阅读员工手册,找出差旅费报销标准', title: '查差旅标准' });
       else say('完成:差旅费每天300元。');
     } else {
       say('标题');
@@ -177,22 +242,26 @@ try {
     assert.equal((await api('POST', `/api/projects/${project.id}/docs`, { name, content })).status, 200);
   }
   const detail = (await api('GET', `/api/projects/${project.id}`)).data;
-  assert.equal(detail.limits.injectChars, 19_200); assert.equal(detail.limits.injectCharsMax, 150_000);
+  assert.equal(detail.limits.injectChars, 0); assert.equal(detail.limits.injectCharsMax, 0);
   const chat = (await api('POST', '/api/chats', { modelId, projectId: project.id })).data.chat.id;
   const stream = await fetch(`${base}/api/chats/${chat}/stream`, { method: 'POST', headers: { cookie, 'x-csrf': '1', 'content-type': 'application/json' }, body: JSON.stringify({ content: [{ type: 'text', text: '差旅费标准是多少?' }] }) });
   const events = await stream.text();
   assert(events.includes('完成:差旅费每天300元'), events.slice(-800));
 
-  assert(mainRequests[0].tools.includes('project_search') && mainRequests[0].system.includes('<document name="简介.md" ref='));
+  assert(mainRequests[0].tools.includes('project_search') && !mainRequests[0].system.includes('<document '));
+  assert(mainRequests[1].toolMessages[0].content.includes('每天300元'));
+  assert(mainRequests[2].toolMessages[1].content.startsWith('本轮已返回相同内容'));
   const sub = subRequests[0];
   assert(sub, `sub-agent never ran\n${logs.slice(-1500)}`);
   assert(sub.tools.includes('project_search') && sub.tools.includes('project_read_doc'), `sub-agent tools: ${sub.tools}`);
-  assert(sub.system.includes('[项目资料清单]') && sub.system.includes('员工手册.md') && sub.system.includes('<document name="简介.md" ref='));
+  assert(sub.system.includes('[项目资料清单]') && sub.system.includes('员工手册.md') && !sub.system.includes('<document '));
   assert(subRequests[1].toolMessages.some((t) => String(t.content).includes('每天300元')), 'sub-agent search ran against the project');
+  assert(subRequests[2].toolMessages[1].content.includes('每天300元'), 'subagent reads a bounded passage by ref');
+  assert(subRequests[3].toolMessages[2].content.startsWith('本轮已返回相同内容'));
   // A doc:ref citation resolves to the document for people who can open the project, and to nothing for others.
   const docs = detail.docs;
   const ref = docs[0].id.replace(/-/g, '').slice(0, 8);
-  assert(mainRequests[0].system.includes(`ref="${docs.find((d) => d.name === '简介.md').id.replace(/-/g, '').slice(0, 8)}"`));
+  assert(mainRequests[0].system.includes(`ref ${docs.find((d) => d.name === '简介.md').id.replace(/-/g, '').slice(0, 8)}`));
   const resolved = await api('GET', `/api/project-docs/${ref}`);
   assert.equal(resolved.status, 200, JSON.stringify(resolved.data));
   assert.deepEqual(resolved.data.doc, { id: docs[0].id, projectId: project.id, name: docs[0].name });
@@ -205,7 +274,7 @@ try {
   assert.equal((await api('POST', '/api/auth/login', { username: 'outsider', password: 'project-test-password' })).status, 200);
   assert.equal((await api('GET', `/api/project-docs/${ref}`)).status, 404, 'private project docs stay hidden');
   cookie = ownerCookie;
-  console.log('Project knowledge regression passed: context-sized loading, manifest + tools, CJK search with offsets, citation refs + resolve, sandbox copies, sub-agent access.');
+  console.log('Project knowledge regression passed: retrieval-first prompts, bounded ref reads, search recall + diversity, context-local deduplication, citations, sandbox copies, independent subagent retrieval.');
 } catch (err) {
   console.error(err);
   if (logs) console.error(`--- server log ---\n${logs.slice(-2000)}`);

@@ -502,7 +502,9 @@ export default function ProjectPage() {
                     <p className="mt-2 border-t border-line pt-2 text-[11px] leading-relaxed text-tx3">
                       {t('{docs} 个文档 · {chars} 字符', { docs: docs.length, chars: totalChars.toLocaleString(locale) })}
                       <br />
-                      {totalChars <= limits.injectChars
+                      {limits.injectChars === 0
+                        ? t('资料按需检索:先提供目录,模型需要时再搜索和阅读相关内容。请使用支持工具调用的模型。')
+                        : totalChars <= limits.injectChars
                         ? t('资料不多,每次对话都整篇提供给模型')
                         : totalChars <= (limits.injectCharsMax ?? limits.injectChars)
                           ? t('长上下文模型(如 Claude、Gemini)整篇读取;其他模型放不下的部分按需检索')

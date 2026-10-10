@@ -11,8 +11,7 @@ import {
 } from '../project-access.js';
 import type { ToolDef } from '../types.js';
 
-// Retrieval (knowledge.ts) means the caps are storage hygiene, not a context
-// budget: how much rides along whole is decided per turn by the model's size.
+// Storage limits are independent of how much text a model retrieves.
 export const PROJECT_LIMITS = {
   maxDocs: 50,
   maxDocChars: 300_000,
@@ -55,28 +54,28 @@ function totalChars(projectId: string): number {
 
 /** One manifest line: size, the opening line and the first headings — enough
     for the model to judge whether a document is worth fetching. */
-function manifestLine(d: { id: string; name: string; chars: number; content: string }): string {
+function manifestLine(d: { id: string; name: string; chars: number; content: string }, hintBudget: { remaining: number }): string {
   const lines = d.content.split('\n').map((l) => l.trim()).filter(Boolean);
   const opening = (lines[0] ?? '').replace(/^#+\s*/, '').slice(0, 60);
   const headings = lines.slice(1).filter((l) => /^#{1,3}\s/.test(l)).slice(0, 4)
     .map((l) => l.replace(/^#+\s*/, '').slice(0, 24));
-  const hint = [opening, headings.length ? `目录:${headings.join(' / ')}` : ''].filter(Boolean).join(' | ');
+  const hint = [opening, headings.length ? `目录:${headings.join(' / ')}` : ''].filter(Boolean).join(' | ').slice(0, hintBudget.remaining);
+  hintBudget.remaining -= hint.length;
   return `- ${d.name}(ref ${docRef(d.id)},${d.chars.toLocaleString()} 字符)${hint ? `:${hint}` : ''}`;
 }
 
 export interface ProjectTurnContext {
   /** System-prompt block (instructions, whole documents, manifest); null when there is nothing. */
   block: string | null;
-  /** project_search / project_read_doc when some documents were left out. */
+  /** Search/read tools for all accessible documents on tool-capable models. */
   tools: ToolDef[] | null;
   /** Documents the person may read in this project — gates the sandbox's /project mount. */
   docCount: number;
 }
 
-/** What a project contributes to a chat turn. As many whole documents as fit
-    the model's budget ride along (smallest first, so the most of them fit);
-    the rest are listed in a manifest the model searches and reads on demand. */
-export function buildProjectPrompt(projectId: string, userId: string, opts: { canUseTools: boolean; modelId: string }): ProjectTurnContext {
+/** Start with instructions and a compact manifest. Whole documents are an
+    operator opt-in; subagents always retrieve their own task's evidence. */
+export function buildProjectPrompt(projectId: string, userId: string, opts: { canUseTools: boolean; modelId: string; retrievalOnly?: boolean }): ProjectTurnContext {
   const p = projectAccess(projectId, userId)?.project;
   if (!p) return { block: null, tools: null, docCount: 0 };
   const docs = db.select().from(schema.projectDocs)
@@ -88,7 +87,7 @@ export function buildProjectPrompt(projectId: string, userId: string, opts: { ca
   if (!docs.length) return { block: blocks.length ? blocks.join('\n\n') : null, tools: null, docCount: 0 };
 
   const budget = opts.canUseTools
-    ? projectInjectBudget(opts.modelId)
+    ? (opts.retrievalOnly ? 0 : projectInjectBudget(opts.modelId))
     : Math.max(projectInjectBudget(opts.modelId), NO_TOOLS_INJECT_CAP);
   const whole = new Set<string>();
   let used = 0;
@@ -101,7 +100,7 @@ export function buildProjectPrompt(projectId: string, userId: string, opts: { ca
   const listed = docs.filter((d) => !whole.has(d.id));
   const documents = loaded.map((d) => `<document name=${JSON.stringify(d.name)} ref="${docRef(d.id)}">\n${d.content}\n</document>`).join('\n\n');
 
-  let tools: ToolDef[] | null = null;
+  const tools = opts.canUseTools ? PROJECT_TOOL_DEFS : null;
   if (!listed.length) {
     blocks.push(`[项目资料]\n以下是本项目的全部参考文档(已整篇载入)。回答与项目相关的问题时,优先依据这些资料;资料没有覆盖的内容,如实说明。${DOC_CITE_RULE}\n\n${documents}`);
   } else if (!opts.canUseTools) {
@@ -111,11 +110,12 @@ export function buildProjectPrompt(projectId: string, userId: string, opts: { ca
     if (loaded.length) {
       blocks.push(`[项目资料]\n以下 ${loaded.length} 个文档已整篇载入。回答与项目相关的问题时,优先依据这些资料。${DOC_CITE_RULE}\n\n${documents}`);
     }
+    const hintBudget = { remaining: 2_400 };
     blocks.push(
-      `[项目资料清单]\n${loaded.length ? `另有 ${listed.length} 个文档` : `本项目的 ${listed.length} 个参考文档`}篇幅较大,只列出清单、内容未载入。问题可能涉及它们时,先用 project_search 检索(结果带文档名、ref 和字符位置),需要完整上下文再用 project_read_doc 从对应位置读取原文。与资料无关的问题不必调用。${loaded.length ? '引用格式同上。' : DOC_CITE_RULE}\n`
-      + listed.map(manifestLine).join('\n'),
+      `[项目资料清单]\n${loaded.length ? `另有 ${listed.length} 个文档` : `本项目的 ${listed.length} 个参考文档`}只提供目录和简短提示,正文尚未读取。回答涉及项目资料的问题前,先用 project_search 查关键词;已知资料名或 ref 时可直接用 project_read_doc 读取所需部分。检索可用 ref 限定文档;补读用 ref、offset 和 max_chars 精确指定范围。与资料无关的问题不必调用。${loaded.length ? '引用格式同上。' : DOC_CITE_RULE}\n`
+      + '只读取与当前问题有关的内容,证据足够就回答,不要为了填满上下文而通读。一次搜索无命中不等于资料没有答案,可换关键词或按目录定向阅读;跨文档汇总应覆盖相关文档,不能把排名靠前的片段当成全部资料。用户要求完整审阅时应继续分段阅读,可委派子代理提炼并保留来源。不要重复获取本轮已经返回的相同内容。\n'
+      + listed.map((d) => manifestLine(d, hintBudget)).join('\n'),
     );
-    tools = PROJECT_TOOL_DEFS;
   }
   return { block: blocks.join('\n\n'), tools, docCount: docs.length };
 }

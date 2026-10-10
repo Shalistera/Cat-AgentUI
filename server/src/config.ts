@@ -120,10 +120,9 @@ export const config = {
   maxSandboxConcurrency: intEnv('MAX_SANDBOX_CONCURRENCY', 3, 1, 32),
   maxSandboxTimeoutSec: intEnv('MAX_SANDBOX_TIMEOUT_SECONDS', 600, 10, 3_600),
 
-  // 项目资料 loaded whole into a turn: at most this many characters, and never
-  // more than ~15% of the model's context window (see knowledge.ts). What
-  // doesn't fit stays listed for project_search / project_read_doc.
-  projectInjectMaxChars: intEnv('PROJECT_INJECT_MAX_CHARS', 200_000, 0, 2_000_000),
+  // Tool-capable models get a document manifest by default. Operators may opt
+  // into whole-document loading, capped at ~15% of the model's context.
+  projectInjectMaxChars: intEnv('PROJECT_INJECT_MAX_CHARS', 0, 0, 2_000_000),
 
   // Scheduled SQLite snapshots (see backup.ts). 0 hours = disabled.
   backupIntervalHours: intEnv('BACKUP_INTERVAL_HOURS', 24, 0, 720),

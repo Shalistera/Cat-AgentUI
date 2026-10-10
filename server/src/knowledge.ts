@@ -5,16 +5,17 @@ import { config } from './config.js';
 import { rawDb } from './db/index.js';
 import type { ToolDef } from './types.js';
 
-// Project knowledge, retrieval side. A turn loads as many whole documents as
-// the model's context comfortably holds (routes/projects.ts); the rest are
-// listed in a manifest and fetched on demand through these tools — the same
-// pattern the first-party Claude/ChatGPT project features use. The sandbox
-// additionally sees every document as a read-only file under /project.
+// Project documents stay behind search/read tools by default. Only the
+// selected passages enter model context. The sandbox can also mount the
+// documents as read-only files under /project.
 
 const CHUNK_CHARS = 1200;
+const CHUNK_OVERLAP = 180;
+const SEARCH_DEFAULT_LIMIT = 4;
 const SEARCH_LIMIT = 8;
 const SEARCH_RESULT_CAP = 12_000; // chars of snippets per tool call
-const READ_WINDOW = 15_000; // chars per project_read_doc call
+const READ_DEFAULT_CHARS = 4_000;
+const READ_WINDOW = 15_000; // maximum chars per project_read_doc call
 const MAX_TERMS = 16;
 
 /** Below this a tool round-trip costs more than just shipping the text. */
@@ -70,7 +71,8 @@ function chunkDoc(content: string): Chunk[] {
     const raw = content.slice(pos, end);
     const text = raw.trim();
     if (text) out.push({ offset: pos + (raw.length - raw.trimStart().length), text });
-    pos = end;
+    if (end === content.length) break;
+    pos = Math.max(pos + 1, end - CHUNK_OVERLAP);
   }
   return out;
 }
@@ -109,19 +111,40 @@ export function docRef(id: string): string {
 /** How the model is asked to cite project documents. */
 export const DOC_CITE_RULE = '引用资料时,在依据它的句子末尾用 Markdown 链接标注出处:[文档名](doc:ref),ref 是该文档的编号,例如「……须在 30 日内完成[合同.md](doc:1a2b3c4d)」。界面会把它显示成可点开的资料标签;只标注真正用到的资料,不要编造编号,不要在文末再罗列。';
 
+interface ProjectDocument { id: string; name: string; content: string }
 interface Hit { name: string; ref: string; offset: number; text: string; docChars: number }
+
+function projectDocuments(projectId: string): ProjectDocument[] {
+  return rawDb.prepare('SELECT id, name, content FROM project_docs WHERE project_id = ? ORDER BY created_at, id')
+    .all(projectId) as ProjectDocument[];
+}
+
+/** Never silently select one of several same-named documents. Refs also
+    resolve only within the current project's accessible corpus. */
+function selectDocument(docs: ProjectDocument[], args: Record<string, unknown>): ProjectDocument | string {
+  const ref = typeof args.ref === 'string' ? args.ref.trim().toLowerCase() : '';
+  const name = typeof args.name === 'string' ? args.name.trim() : '';
+  if (!ref && !name) return '缺少 ref 或 name 参数';
+  const exact = ref ? docs.filter((d) => docRef(d.id).toLowerCase() === ref) : docs.filter((d) => d.name === name);
+  const matches = exact.length || ref ? exact : docs.filter((d) => d.name.includes(name) || name.includes(d.name));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) return `有多个匹配的文档,请用 ref 指定:${matches.map((d) => `${d.name}(ref ${docRef(d.id)})`).join('、')}`;
+  return `没有找到文档「${ref || name}」。可用文档:${docs.map((d) => `${d.name}(ref ${docRef(d.id)})`).join('、') || '(无)'}`;
+}
+
+function boundedInt(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
 
 /** Ranks chunks by query terms weighted by rarity (idf) and term frequency,
     then by how much of the query a chunk covers. A project's corpus is capped
     at a few MB, so scoring every chunk in memory is fast and — unlike a
     trigram index — handles one- and two-character Chinese terms. */
-function searchDocs(projectId: string, query: string): Hit[] {
+function searchDocs(docs: ProjectDocument[], query: string, limit: number): Hit[] {
   const { terms, grams } = queryTerms(query);
   if (!terms.length) return [];
-  const docs = rawDb.prepare('SELECT id, name, content FROM project_docs WHERE project_id = ? ORDER BY created_at')
-    .all(projectId) as { id: string; name: string; content: string }[];
   const chunks = docs.flatMap((d) => chunkDoc(d.content).map((c) => ({
-    ...c, name: d.name, ref: docRef(d.id), lowerName: d.name.toLowerCase(), lower: c.text.toLowerCase(), docChars: d.content.length,
+    ...c, id: d.id, name: d.name, ref: docRef(d.id), lowerName: d.name.toLowerCase(), lower: c.text.toLowerCase(), docChars: d.content.length,
   })));
   if (!chunks.length) return [];
   const idf = (key: string) => {
@@ -140,7 +163,8 @@ function searchDocs(projectId: string, query: string): Hit[] {
       const weight = t.length === 1 ? 0.3 : 1;
       const tf = termIdf[k] ? occurrences(c.lower, t) : 0;
       if (tf) { score += weight * termIdf[k] * sat(tf); covered += 1; }
-      if (termIdf[k] && c.lowerName.includes(t)) score += 0.5 * termIdf[k];
+      // A filename can be the only occurrence of a term in the corpus.
+      if (c.lowerName.includes(t)) { score += weight * Math.max(1, termIdf[k]); if (!tf) covered += 1; }
       if (!tf && grams[k].length) {
         let present = 0;
         grams[k].forEach((g, j) => {
@@ -153,7 +177,21 @@ function searchDocs(projectId: string, query: string): Hit[] {
     return { c, score: score * (0.5 + covered / terms.length) };
   }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
 
-  return scored.slice(0, SEARCH_LIMIT).map(({ c }) => ({ name: c.name, ref: c.ref, offset: c.offset, text: c.text, docChars: c.docChars }));
+  // Suppress heavily overlapping passages, and give other matching documents
+  // room before filling remaining slots from a single long document.
+  const selected: typeof chunks = [];
+  for (const perDoc of [2, limit]) {
+    for (const { c } of scored) {
+      if (selected.length >= limit) break;
+      const sameDoc = selected.filter((s) => s.id === c.id);
+      if (sameDoc.length >= perDoc || sameDoc.some((s) => {
+        const overlap = Math.min(s.offset + s.text.length, c.offset + c.text.length) - Math.max(s.offset, c.offset);
+        return overlap > Math.min(s.text.length, c.text.length) * 0.5;
+      })) continue;
+      selected.push(c);
+    }
+  }
+  return selected.map((c) => ({ name: c.name, ref: c.ref, offset: c.offset, text: c.text, docChars: c.docChars }));
 }
 
 // ---- tools ----
@@ -161,23 +199,29 @@ function searchDocs(projectId: string, query: string): Hit[] {
 export const PROJECT_TOOL_DEFS: ToolDef[] = [
   {
     name: 'project_search',
-    description: '在当前项目的参考资料中检索,返回最相关的片段、所属文档名和字符位置。用几个关键词或短语查询(空格分隔),中文不必分词;一次没搜到可以换近义词再试。需要片段前后文时,用 project_read_doc 从给出的位置读取原文。',
+    description: '在当前项目的参考资料中检索,默认返回最多4个相关片段及文档ref、名称和字符位置。用几个关键词或短语查询(空格分隔),中文不必分词;可用ref或name限定某份文档。一次没搜到可换近义词或直接阅读。需要前后文时用project_read_doc按ref和offset补读;结果足够时不要反复搜索。',
     parameters: {
       type: 'object',
-      properties: { query: { type: 'string', description: '检索关键词或短语,多个用空格分隔' } },
+      properties: {
+        query: { type: 'string', description: '检索关键词或短语,多个用空格分隔' },
+        ref: { type: 'string', description: '可选:仅检索这个文档编号,来自资料目录或搜索结果' },
+        name: { type: 'string', description: '可选:仅检索这个文档名;同名文件请用ref区分' },
+        limit: { type: 'integer', minimum: 1, maximum: SEARCH_LIMIT, description: '最多返回的片段数,默认4,最多8' },
+      },
       required: ['query'],
     },
   },
   {
     name: 'project_read_doc',
-    description: '按文档名读取项目参考资料的原文。长文档分段返回,响应里会给出继续读取所需的 offset;从检索结果跳读时,offset 可以设为片段位置之前一点。',
+    description: '按ref或文档名读取项目资料原文,默认只读4000字符。用offset跳到相关位置,max_chars控制需要的长度(最多15000);响应给出继续读取的offset。优先用ref避免同名歧义。',
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '文档名,须与资料清单中的名称一致' },
+        ref: { type: 'string', description: '文档编号,来自资料目录或搜索结果;ref与name至少提供一个' },
+        name: { type: 'string', description: '文档名,须与资料清单中的名称一致;也可只提供ref' },
         offset: { type: 'integer', description: '起始字符位置,默认 0' },
+        max_chars: { type: 'integer', minimum: 1, maximum: READ_WINDOW, description: '读取的字符数,默认4000,最多15000' },
       },
-      required: ['name'],
     },
   },
 ];
@@ -192,12 +236,21 @@ export function callProjectTool(
   argsJson: string,
 ): { result: string; isError: boolean } {
   let args: Record<string, unknown> = {};
-  try { args = JSON.parse(argsJson || '{}'); } catch { /* treated as empty */ }
+  try {
+    const parsed = JSON.parse(argsJson || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed;
+  } catch { /* treated as empty */ }
 
   if (name === 'project_search') {
-    const query = typeof args.query === 'string' ? args.query : '';
+    const query = typeof args.query === 'string' ? args.query.slice(0, 512) : '';
     if (!query.trim()) return { result: '缺少 query 参数', isError: true };
-    const hits = searchDocs(projectId, query);
+    let docs = projectDocuments(projectId);
+    if (args.ref || args.name) {
+      const selected = selectDocument(docs, args);
+      if (typeof selected === 'string') return { result: selected, isError: true };
+      docs = [selected];
+    }
+    const hits = searchDocs(docs, query, boundedInt(args.limit, SEARCH_DEFAULT_LIMIT, 1, SEARCH_LIMIT));
     if (!hits.length) return { result: `没有找到与「${query}」相关的内容。可以换个说法或拆成更短的关键词,也可以用 project_read_doc 直接读取某个文档。`, isError: false };
     const parts: string[] = [];
     let used = 0;
@@ -207,22 +260,15 @@ export function callProjectTool(
       parts.push(block);
       used += block.length;
     }
-    return { result: `${parts.join('\n\n---\n\n')}\n\n(需要上下文时,用 project_read_doc 传文档名和 offset 读取原文)`, isError: false };
+    return { result: `${parts.join('\n\n---\n\n')}\n\n(以上是相关片段,不代表全部资料;需要上下文时,用 project_read_doc 传 ref、offset 和 max_chars 读取原文)`, isError: false };
   }
 
   if (name === 'project_read_doc') {
-    const docName = typeof args.name === 'string' ? args.name.trim() : '';
-    const offset = Number.isInteger(args.offset) && (args.offset as number) > 0 ? args.offset as number : 0;
-    if (!docName) return { result: '缺少 name 参数', isError: true };
-    const rows = rawDb.prepare('SELECT id, name, content FROM project_docs WHERE project_id = ?')
-      .all(projectId) as { id: string; name: string; content: string }[];
-    const doc = rows.find((r) => r.name === docName)
-      ?? rows.find((r) => r.name.includes(docName) || docName.includes(r.name));
-    if (!doc) {
-      const names = rows.map((r) => r.name).join('、') || '(项目没有任何文档)';
-      return { result: `没有名为「${docName}」的文档。可用文档:${names}`, isError: true };
-    }
-    const slice = doc.content.slice(offset, offset + READ_WINDOW);
+    const offset = boundedInt(args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const doc = selectDocument(projectDocuments(projectId), args);
+    if (typeof doc === 'string') return { result: doc, isError: true };
+    const length = boundedInt(args.max_chars, READ_DEFAULT_CHARS, 1, READ_WINDOW);
+    const slice = doc.content.slice(offset, offset + length);
     if (!slice) return { result: `offset ${offset} 超出文档长度(共 ${doc.content.length} 字符)`, isError: true };
     const end = offset + slice.length;
     const header = `【${doc.name} · ref ${docRef(doc.id)}】第 ${offset}–${end} 字符,共 ${doc.content.length} 字符`;
@@ -231,6 +277,27 @@ export function callProjectTool(
   }
 
   return { result: `未知的项目工具「${name}」`, isError: true };
+}
+
+/** One instance per model context/turn. Subagents must own separate instances:
+    they cannot see the parent's results. Read before hashing so document edits
+    remain visible; do not suppress results that downstream limits would clip. */
+export class ProjectKnowledgeSession {
+  private seen = new Set<string>();
+
+  constructor(private resultLimit = Infinity) {}
+
+  call(projectId: string, name: string, argsJson: string): { result: string; isError: boolean } {
+    const response = callProjectTool(projectId, name, argsJson);
+    if (response.isError || response.result.length > this.resultLimit) return response;
+    const key = createHash('sha256').update(projectId).update('\0').update(name).update('\0').update(response.result).digest('hex');
+    if (this.seen.has(key)) return {
+      result: '本轮已返回相同内容,请使用前面的工具结果。需要新证据时请更换检索关键词或文档ref,或调整offset读取其他位置。',
+      isError: false,
+    };
+    this.seen.add(key);
+    return response;
+  }
 }
 
 // ---- sandbox files ----

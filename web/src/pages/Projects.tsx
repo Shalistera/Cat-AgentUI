@@ -44,7 +44,7 @@ export default function ProjectsPage() {
           <div className="flex h-full items-center justify-center text-tx3"><Spinner className="h-6 w-6" /></div>
         ) : projectsStore.projects.length === 0 ? (
           <EmptyState icon={<FolderClosed size={22} />} title={t('还没有项目')}
-            hint={t('项目就像一个文件夹:把给 AI 的固定要求和参考资料放进去,之后在项目里开的每个对话都会自动带上这些内容,不用每次重复说。')}
+            hint={t('把给 AI 的固定要求和参考资料放进项目,项目里的对话会自动遵循这些要求,并按需查阅资料,不用每次重复提供。')}
             action={<Button variant="primary" size="sm" onClick={() => setCreating(true)}><Plus size={14} />{t('新建项目')}</Button>} />
         ) : (
           <div className="mx-auto grid max-w-5xl gap-4 p-6 sm:grid-cols-2 lg:grid-cols-3">
