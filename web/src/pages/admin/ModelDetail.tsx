@@ -9,6 +9,7 @@ import { ProviderAvatar } from '../../components/ModelAvatar';
 import { t } from '../../i18n';
 import type { AdminModel, AdminProvider, LimitPeriod, ReasoningLevel, ReasoningMode } from '../../types';
 import { TYPE_LABELS } from './provider-common';
+import { adminModelLabel } from './settings-common';
 
 /* The per-model drill-down. The list page keeps the toggles an admin flips in
    passing; anything that needs a form — the user-facing blurb, the reasoning
@@ -34,15 +35,16 @@ function FallbackCard({ model, providers, reload }: { model: AdminModel; provide
     } catch (err) { toast(errMsg(err), 'err'); }
     finally { setBusy(false); }
   }
-  return <Card title={t('限流或空回时自动兜底')} desc={t('首次限流或空回自动恢复失败、且尚未输出正文时,自动尝试指定模型一次。成功后当前对话沿用兜底模型,新对话默认模型不变。')}>
+  return <Card title={t('限流或空回时自动兜底')} desc={t('首次限流或空回自动恢复失败、且尚未输出正文时,自动尝试指定模型一次。成功后仅沿用用户可直接选择的兜底模型,新对话默认模型不变。')}>
     <div className="space-y-3">
-      <Field label={t('兜底模型')} hint={t('可以选择同一服务商的其他模型。仅对有权限、额度充足且能力兼容的用户生效。')}>
+      <Field label={t('兜底模型')} hint={t('可以选择同一服务商的其他模型,包括仅系统调用的模型。目标须获得任务授权、额度充足且能力兼容。')}>
         <Select aria-label={t('兜底模型')} value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy}>
           <option value="">{t('关闭自动兜底')}</option>
           {missing && <option value={selected} disabled>{t('原兜底模型已不可用,请重新选择')}</option>}
-          {candidates.map((m) => <option key={m.id} value={m.id}>{m.displayName || m.modelId} · {m.providerName}</option>)}
+          {candidates.map((m) => <option key={m.id} value={m.id}>{adminModelLabel(m)}</option>)}
         </Select>
       </Field>
+      <p className="text-xs text-tx3">{t('可选择仅系统调用的模型作为备用。它只接管当次回复,不会成为普通用户的对话默认模型。')}</p>
       <p className="text-xs text-tx3">{t('不会丢弃已开始的回复或重做工具操作。兜底也失败时停止自动切换,由用户决定下一步。')}</p>
       <div className="flex justify-end"><Button size="sm" disabled={busy || missing || selected === (model.fallbackModelId ?? '')} onClick={save}>
         {busy && <Spinner className="h-3.5 w-3.5" />}{t('保存兜底模型')}

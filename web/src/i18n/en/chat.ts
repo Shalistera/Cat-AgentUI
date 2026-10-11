@@ -2,6 +2,7 @@
 // charts, markdown/code blocks, streaming errors. Keys are the Chinese source
 // strings passed to t().
 export default {
+  '正在使用系统备用模型恢复回复': 'Recovering the reply with the system fallback model',
   // ---- composer ----
   '输入消息…': 'Message…',
   '输入消息,Enter 发送,Shift + Enter 换行': 'Message. Enter to send, Shift + Enter for a new line',

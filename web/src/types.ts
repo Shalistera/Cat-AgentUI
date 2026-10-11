@@ -233,6 +233,9 @@ export interface SearchResult {
 
 export interface ModelInfo {
   id: string; modelId: string; displayName: string;
+  accessMode?: ModelAccessMode;
+  /** A server-configured hidden fallback; no selectable target is exposed. */
+  systemFallbackAvailable?: boolean;
   fallbackModelId?: string | null;
   /** Admin-written blurb shown under the model name on the new-chat page. */
   description: string | null;
@@ -380,7 +383,7 @@ export interface AdminUser {
   usage: { totalTokens: number; requests: number; images: number; monthTokens: number };
 }
 
-export type ModelAccessMode = 'shared' | 'restricted';
+export type ModelAccessMode = 'shared' | 'restricted' | 'system';
 
 export interface AdminModel {
   id: string; providerId: string; modelId: string; displayName: string | null;
@@ -567,6 +570,7 @@ export interface ActiveChatTurn {
 
 export interface ChatStreamState {
   fallbackModelId?: string | null;
+  systemFallbackAvailable?: boolean;
   chatModelId?: string | null;
   active: boolean;
   activeTurn: ActiveChatTurn | null;

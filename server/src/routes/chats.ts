@@ -20,7 +20,7 @@ import { validateMcpSelection } from '../mcp/access.js';
 import { getSearchServerId } from './mcp.js';
 import { saveGeneratedImage } from './images.js';
 import { recordUsage } from '../usage.js';
-import { canUseModel, grantedModelIds, imageModelsAllowed, providerAllowed } from '../model-access.js';
+import { canUseModel, canUseSystemModel, grantedModelIds, imageModelsAllowed, providerAllowed } from '../model-access.js';
 import { checkModelLimit, checkQuota, modelLimitBlockMessage, modelLimitReason, quotaBlockMessage } from '../quota.js';
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt, projectFilesPrompt } from './projects.js';
@@ -611,7 +611,7 @@ function getDefaultModel(user: { id: string; role: string }) {
   if (user.role !== 'admin') {
     const granted = grantedModelIds(user.id);
     rows = rows.filter((r) => providerAllowed(user, r.providers.type)
-      && (r.models.accessMode === 'shared' || granted.has(r.models.id)));
+      && (r.models.accessMode === 'shared' || (r.models.accessMode === 'restricted' && granted.has(r.models.id))));
   }
   const text = rows.filter((r) => !r.models.imageGen);
   return pickModel(text.length ? text : rows);
@@ -640,7 +640,8 @@ function getTaskModelCandidates(settingKey: string, user: { role: string }, curr
   const configured = getSetting<string>(settingKey, '');
   if (configured) push(getModelWithProvider(configured));
   push(current);
-  push(pickModel(enabledModelRows().filter((r) => !r.models.imageGen && providerAllowed(user, r.providers.type))));
+  push(pickModel(enabledModelRows().filter((r) => !r.models.imageGen && providerAllowed(user, r.providers.type)
+    && (user.role === 'admin' || r.models.accessMode !== 'system'))));
   return out;
 }
 
@@ -654,7 +655,7 @@ function getCompactionModelCandidates(user: { id: string; role: string }, curren
   return [...new Set(ids)].flatMap((id) => {
     const pick = getModelWithProvider(id);
     return pick && !pick.model.imageGen && pick.provider.type !== 'novelai'
-      && providerAllowed(user, pick.provider.type) && canUseModel(user, id) ? [pick] : [];
+      && providerAllowed(user, pick.provider.type) && canUseSystemModel(user, id) ? [pick] : [];
   });
 }
 
@@ -707,6 +708,7 @@ const partSchema = z.union([
 const streamBodySchema = z.object({
   requestId: z.string().uuid().optional(),
   fallbackModelId: z.string().max(64).optional(),
+  allowSystemFallback: z.boolean().optional(),
   automaticFallback: z.boolean().optional(),
   // Leave room for text alongside the largest permitted attachment batch.
   content: z.array(partSchema).min(1).max(ATTACHMENT_COUNT_MAX + 20).optional(),
@@ -783,6 +785,9 @@ export async function chatRoutes(app: FastifyInstance) {
       temporary: z.boolean().optional(),
     }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    if (body.data.modelId && !canUseModel(req.user!, body.data.modelId)) {
+      return reply.code(403).send({ error: '该模型未对你开放,请选择其他模型' });
+    }
     if (body.data.projectId && !canUseProject(body.data.projectId, req.user!.id)) {
       return reply.code(404).send({ error: '项目不存在' });
     }
@@ -856,6 +861,7 @@ export async function chatRoutes(app: FastifyInstance) {
       active: !!matching, activeTurn: matching ? activeTurnDto(id) : null,
       chatModelId: chat.modelId,
       fallbackModelId: matching?.fallbackModelId ?? receipt?.fallbackModelId ?? null,
+      systemFallbackAvailable: matching?.systemFallbackAvailable ?? receipt?.systemFallbackAvailable ?? false,
       message: row?.role === 'assistant' ? liveMessageDto(row, marks) : null,
       userMessage: userRow ? messageDto(userRow, marks) : null,
     };
@@ -1040,7 +1046,10 @@ export async function chatRoutes(app: FastifyInstance) {
     if (d.pinned !== undefined) patch.pinned = d.pinned ? 1 : 0;
     if (d.archived !== undefined) patch.archived = d.archived ? 1 : 0;
     if (d.temporary !== undefined) patch.temporary = 0;
-    if (d.modelId !== undefined) patch.modelId = d.modelId;
+    if (d.modelId !== undefined) {
+      if (d.modelId && !canUseModel(req.user!, d.modelId)) return reply.code(403).send({ error: '该模型未对你开放,请选择其他模型' });
+      patch.modelId = d.modelId;
+    }
     if (d.projectId !== undefined) {
       if (d.projectId && !canUseProject(d.projectId, req.user!.id)) {
         return reply.code(404).send({ error: '项目不存在' });
@@ -1287,11 +1296,36 @@ export async function chatRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: '这个请求已接收,请恢复查看原回复', code: 'request_exists' });
     }
 
-    // resolve model
-    const picked = getModelWithProvider(body.modelId ?? chat.modelId) ?? getDefaultModel(user);
+    // Automatic recovery is a server-resolved, admin-configured delegation.
+    // The browser never needs the hidden target's id to request it.
+    let automaticPick: ModelPick | null = null;
+    if (body.automaticFallback) {
+      if (!body.regenerateMessageId || body.content || body.editMessageId) {
+        return reply.code(400).send({ error: '这条回复不适合自动兜底,请手动选择模型重试' });
+      }
+      const failed = db.select().from(schema.messages).where(and(eq(schema.messages.id, body.regenerateMessageId),
+        eq(schema.messages.chatId, chatId), eq(schema.messages.role, 'assistant'))).get();
+      const source = failed && db.select().from(schema.models).where(and(
+        eq(schema.models.modelId, failed.model ?? ''), eq(schema.models.providerId, failed.providerId ?? ''),
+      )).get();
+      const target = source ? getModelWithProvider(configuredModelFallback(source.id)) : null;
+      if (!failed || failed.status !== 'error' || !source || !canUseModel(user, source.id) || source.imageGen
+        || !['provider_busy', 'provider_empty', 'provider_timeout'].includes(failed.errorCode ?? '')
+        || parseParts(failed.parts).some((p) => !isMetaPart(p))
+        || !target || target.model.imageGen || !canUseSystemModel(user, target.model.id)
+        || (body.modelId && body.modelId !== target.model.id)
+        || (source.vision && !target.model.vision) || (source.tools && !target.model.tools)) {
+        return reply.code(400).send({ error: '这条回复不适合自动兜底,请手动选择模型重试' });
+      }
+      automaticPick = target;
+    }
+    if (!automaticPick && body.modelId && !canUseModel(user, body.modelId)) {
+      return reply.code(403).send({ error: '该模型未对你开放,请选择其他模型' });
+    }
+    const picked = automaticPick ?? getModelWithProvider(body.modelId ?? chat.modelId) ?? getDefaultModel(user);
     if (!picked) return reply.code(400).send({ error: '没有可用的模型,请联系管理员配置' });
     let { model, provider } = picked;
-    if (!canUseModel(user, model.id)) {
+    if (!automaticPick && !canUseModel(user, model.id)) {
       return reply.code(403).send({ error: '该模型未对你开放,请选择其他模型' });
     }
     if (model.imageGen && !imageModelsAllowed(user)) {
@@ -1307,7 +1341,7 @@ export async function chatRoutes(app: FastifyInstance) {
       let downgraded = false;
       if (quota.action === 'downgrade' && !model.imageGen && quota.fallbackModelId) {
         const fallback = getModelWithProvider(quota.fallbackModelId);
-        if (fallback && !fallback.model.imageGen) {
+        if (fallback && !fallback.model.imageGen && canUseSystemModel(user, fallback.model.id)) {
           if (fallback.model.id !== model.id) {
             ({ model, provider } = fallback);
             downgradeNotice = `本月 token 配额已用完,已自动切换到基础模型「${model.displayName || model.modelId}」`;
@@ -1327,7 +1361,7 @@ export async function chatRoutes(app: FastifyInstance) {
       if (quota.action === 'downgrade' && !model.imageGen && quota.fallbackModelId
         && quota.fallbackModelId !== model.id) {
         const fallback = getModelWithProvider(quota.fallbackModelId);
-        if (fallback && !fallback.model.imageGen && checkModelLimit(user, fallback.model).ok) {
+        if (fallback && !fallback.model.imageGen && canUseSystemModel(user, fallback.model.id) && checkModelLimit(user, fallback.model).ok) {
           downgradeNotice = `${modelLimitReason(model, modelLimit)},已自动切换到基础模型「${fallback.model.displayName || fallback.model.modelId}」`;
           ({ model, provider } = fallback);
           downgraded = true;
@@ -1403,7 +1437,7 @@ export async function chatRoutes(app: FastifyInstance) {
       const source = failed && db.select().from(schema.models).where(and(
         eq(schema.models.modelId, failed.model ?? ''), eq(schema.models.providerId, failed.providerId ?? ''),
       )).get();
-      if (!failed || !source || (failed.errorCode !== 'provider_busy' && failed.errorCode !== 'provider_empty')
+      if (!failed || !source || !['provider_busy', 'provider_empty', 'provider_timeout'].includes(failed.errorCode ?? '')
         || parseParts(failed.parts).some((p) => !isMetaPart(p))
         || configuredModelFallback(source.id) !== model.id || !canUseModel(user, source.id)) {
         return reply.code(400).send({ error: '这条回复不适合自动兜底,请手动选择模型重试' });
@@ -1713,12 +1747,17 @@ export async function chatRoutes(app: FastifyInstance) {
     for (const te of toolErrors) sse.send('notice', { message: `MCP 服务器「${te.name}」连接失败: ${te.error}` });
 
     const cfg = toRuntimeConfig(provider);
-    const fallbackPick = body.fallbackModelId && !body.automaticFallback
-      && configuredModelFallback(model.id) === body.fallbackModelId ? getModelWithProvider(body.fallbackModelId) : null;
+    const configuredFallbackId = configuredModelFallback(model.id);
+    const configuredFallback = getModelWithProvider(configuredFallbackId);
+    const fallbackPick = !body.automaticFallback && configuredFallback
+      && (body.fallbackModelId === configuredFallbackId
+        || (body.allowSystemFallback && configuredFallback.model.accessMode === 'system')) ? configuredFallback : null;
     const clientFallback = !!fallbackPick && !model.imageGen && !fallbackPick.model.imageGen
-      && canUseModel(user, fallbackPick.model.id) && checkModelLimit(user, fallbackPick.model).ok
+      && canUseSystemModel(user, fallbackPick.model.id) && checkModelLimit(user, fallbackPick.model).ok
       && (!model.vision || !!fallbackPick.model.vision) && (!model.tools || !!fallbackPick.model.tools);
-    live.fallbackModelId = clientFallback ? body.fallbackModelId : null;
+    const hiddenFallback = fallbackPick?.model.accessMode === 'system' && user.role !== 'admin';
+    live.fallbackModelId = clientFallback && !hiddenFallback ? fallbackPick!.model.id : null;
+    live.systemFallbackAvailable = clientFallback && hiddenFallback;
     const adapter = getAdapter(provider.type);
     const parts = live.parts;
     const usage = { prompt: 0, completion: 0, total: 0 };
@@ -1816,7 +1855,7 @@ export async function chatRoutes(app: FastifyInstance) {
               beforeRequest: () => {
                 signal.throwIfAborted();
                 const active = getModelWithProvider(pick.model.id);
-                if (!active || active.model.imageGen || !canUseModel(user, pick.model.id)
+                if (!active || active.model.imageGen || !canUseSystemModel(user, pick.model.id)
                   || !providerAllowed(user, active.provider.type)) throw new Error('压缩模型已停用或访问权限已变更');
                 const quota = checkQuota(user.id);
                 if (!quota.ok) throw new Error(quotaBlockMessage(quota));
@@ -2183,7 +2222,7 @@ export async function chatRoutes(app: FastifyInstance) {
                   if (!subQuota.ok) return { result: `无法委派子代理:${quotaBlockMessage(subQuota)}`, isError: true };
                   const subLimit = checkModelLimit(user, sm.model);
                   if (!subLimit.ok) return { result: `无法委派子代理:${modelLimitReason(sm.model, subLimit)}`, isError: true };
-                  if (!canUseModel(user, sm.model.id)) return { result: '无法委派子代理:所选模型未对你开放', isError: true };
+                  if (!canUseSystemModel(user, sm.model.id)) return { result: '无法委派子代理:所选模型未对你开放', isError: true };
                   clearProviderIdleTimer(); // the nested run has its own timeout
                   const r = await runSubagent({
                     user, chatId, projectId: chat.projectId, parentMessageId: assistantId,
@@ -2305,7 +2344,7 @@ export async function chatRoutes(app: FastifyInstance) {
       sse.send('response_recovery', continuation);
     }
     const durationMs = Date.now() - t0;
-    if (fallbackMeta && status === 'done' && finishReason === 'stop'
+    if (fallbackMeta && canUseModel(user, model.id) && status === 'done' && finishReason === 'stop'
       && (chat.modelId === null || chat.modelId === fallbackMeta.fromModelId)) {
       const changed = db.update(schema.chats).set({ modelId: model.id })
         .where(and(eq(schema.chats.id, chatId), sql`${schema.chats.modelId} is ${chat.modelId}`)).run();

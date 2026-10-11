@@ -40,21 +40,33 @@ export function grantedModelIds(userId: string): Set<string> {
     .map((r) => r.modelId));
 }
 
-/** Re-check at the point of use: shared models pass, restricted ones need a grant. */
-export function canUseModel(user: ModelAccessUser, modelDbId: string): boolean {
+function modelAccessAllowed(user: ModelAccessUser, modelDbId: string, systemTask: boolean): boolean {
   if (user.role === 'admin') return true;
   const row = db.select({ accessMode: schema.models.accessMode, providerType: schema.providers.type })
     .from(schema.models)
     .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
     .where(eq(schema.models.id, modelDbId)).get();
   if (!row || !providerAllowed(user, row.providerType)) return false;
+  if (row.accessMode === 'system') return systemTask;
   if (row.accessMode === 'shared') return true;
+  if (row.accessMode !== 'restricted') return false;
   return !!db.select({ userId: schema.modelAccess.userId })
     .from(schema.modelAccess)
     .where(and(
       eq(schema.modelAccess.modelId, modelDbId),
       eq(schema.modelAccess.userId, user.id),
     )).get();
+}
+
+/** User-selected models: system-only models stay inaccessible even with an old grant. */
+export function canUseModel(user: ModelAccessUser, modelDbId: string): boolean {
+  return modelAccessAllowed(user, modelDbId, false);
+}
+
+/** Only use after resolving an admin-configured task/fallback on the server.
+    This must never authorize an arbitrary model id supplied by a client. */
+export function canUseSystemModel(user: ModelAccessUser, modelDbId: string): boolean {
+  return modelAccessAllowed(user, modelDbId, true);
 }
 
 /**
@@ -67,7 +79,8 @@ export function accessibleOnly<T extends { id: string; accessMode: string }>(
   if (user.role === 'admin') return rows;
   const granted = grantedModelIds(user.id);
   const adminOnly = adminOnlyModelIds();
-  return rows.filter((r) => !adminOnly.has(r.id) && (r.accessMode === 'shared' || granted.has(r.id)));
+  return rows.filter((r) => !adminOnly.has(r.id)
+    && (r.accessMode === 'shared' || (r.accessMode === 'restricted' && granted.has(r.id))));
 }
 
 export function accessUserIds(modelDbId: string): string[] {

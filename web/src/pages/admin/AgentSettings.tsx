@@ -4,7 +4,7 @@ import { api, errMsg } from '../../api';
 import { Badge, Button, Card, Field, Input, Select, Spinner, Toggle, ToggleRow, toast } from '../../components/ui';
 import { t } from '../../i18n';
 import type { AccessPolicy, AdminUser, AgentAdminData, AgentSettings, ModelInfo } from '../../types';
-import { useUnsavedGuard } from './settings-common';
+import { adminModelLabel, useUnsavedGuard } from './settings-common';
 
 function fmtMb(n: number): string { return `${Math.round(n / 1048576)} MB`; }
 
@@ -228,6 +228,7 @@ export default function AgentSettingsPage() {
                         onChange={(e) => setS({ ...s, imageGeneration: { ...s.imageGeneration, modelIds: e.target.checked
                           ? [...s.imageGeneration.modelIds, m.id] : s.imageGeneration.modelIds.filter((id) => id !== m.id) } })} />
                       <span className="min-w-0 flex-1 text-[13px] text-tx">{m.displayName || m.modelId}<span className="ml-1 text-xs text-tx3">({m.providerName})</span></span>
+                      {m.accessMode === 'system' && <Badge>{t('仅系统')}</Badge>}
                       {s.imageGeneration.modelIds[0] === m.id && <Badge>{t('默认')}</Badge>}
                     </label>
                   ))}
@@ -267,7 +268,7 @@ export default function AgentSettingsPage() {
               <Field label={t('子代理使用的模型')} hint={t('留空 = 与主对话相同;指定一个便宜的工具模型可以控制成本')}>
                 <Select value={s.subagent.modelId} onChange={(e) => setS({ ...s, subagent: { ...s.subagent, modelId: e.target.value } })}>
                   <option value="">{t('与主对话相同')}</option>
-                  {models.filter((m) => m.tools && !m.imageGen).map((m) => <option key={m.id} value={m.id}>{m.displayName || m.modelId}({m.providerName})</option>)}
+                  {models.filter((m) => m.tools && !m.imageGen).map((m) => <option key={m.id} value={m.id}>{adminModelLabel(m)}</option>)}
                 </Select>
               </Field>
               <Field label={t('每轮最多委派次数')} hint={t('一条回复里 spawn_subagent 的上限')}>{num(s.subagent.maxPerTurn, (n) => setS({ ...s, subagent: { ...s.subagent, maxPerTurn: n } }), 1, 20)}</Field>

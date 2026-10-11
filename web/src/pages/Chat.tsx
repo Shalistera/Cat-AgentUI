@@ -572,17 +572,17 @@ export default function Chat() {
     return created;
   }
 
-  function startModelFallback(chatId: string, failed: Pick<Message, 'id' | 'error' | 'finishReason' | 'errorCode'>, target: ModelInfo) {
+  function startModelFallback(chatId: string, failed: Pick<Message, 'id' | 'error' | 'finishReason' | 'errorCode'>, target: ModelInfo | null) {
     setMessages((prev) => [...prev.map((m) => m.id === failed.id
       ? { ...m, status: 'error' as const, error: failed.error, errorCode: failed.errorCode, finishReason: failed.finishReason, retry: null } : m), {
       id: 'tmp-a', parentId: prev.find((m) => m.id === failed.id)?.parentId ?? null,
-      role: 'assistant', parts: [], model: target.modelId, providerId: target.providerId,
+      role: 'assistant', parts: [], model: target?.modelId ?? null, providerId: target?.providerId ?? null,
       status: 'streaming', finishReason: null, error: null, promptTokens: null, completionTokens: null,
       totalTokens: null, durationMs: null, ttftMs: null, createdAt: Date.now(),
     }]);
     setLeafId('tmp-a');
-    toast(t('正在使用兜底模型「{model}」恢复回复', { model: target.displayName }), 'info');
-    void runStream(chatId, { regenerateMessageId: failed.id, modelId: target.id, automaticFallback: true }, { allowAutoFallback: false });
+    toast(target ? t('正在使用兜底模型「{model}」恢复回复', { model: target.displayName }) : t('正在使用系统备用模型恢复回复'), 'info');
+    void runStream(chatId, { regenerateMessageId: failed.id, ...(target ? { modelId: target.id } : {}), automaticFallback: true }, { allowAutoFallback: false });
   }
 
   async function followStream(chatId: string, identity: StreamIdentity, existing?: AbortController, placeholders = false, onAccepted?: () => void): Promise<boolean> {
@@ -618,15 +618,15 @@ export default function Chat() {
       }, controller.signal);
       if (!current()) return acknowledged;
       const failed = result.message;
-      if (!stoppingRef.current && failed?.status === 'error' && (failed.errorCode === 'provider_busy' || failed.errorCode === 'provider_empty')
-        && result.fallbackModelId && failed.parts.every((p) => p.type === 'service_tier' || p.type === 'context_summary')) {
+      if (!stoppingRef.current && failed?.status === 'error' && ['provider_busy', 'provider_empty', 'provider_timeout'].includes(failed.errorCode ?? '')
+        && (result.fallbackModelId || result.systemFallbackAvailable) && failed.parts.every((p) => p.type === 'service_tier' || p.type === 'context_summary')) {
         const source = models.find((m) => m.providerId === failed.providerId && m.modelId === failed.model) ?? null;
         const target = configuredFallbackModel(models, source);
-        if (target?.id === result.fallbackModelId) {
+        if (result.systemFallbackAvailable || target?.id === result.fallbackModelId) {
           // The next request replaces the controller. Commit this acknowledged
           // snapshot first, including when the original meta event was lost.
           setMessages((prev) => mergeStreamSnapshot(prev, result, placeholders));
-          startModelFallback(chatId, failed, target);
+          startModelFallback(chatId, failed, result.systemFallbackAvailable ? null : target);
           return acknowledged;
         }
       }
@@ -639,7 +639,7 @@ export default function Chat() {
       sendingRef.current = false;
       setToolConfirm(null);
       chatsStore.load().catch(() => {});
-      if (models.some((m) => m.usageLimit)) loadModels(true).catch(() => {});
+      if (models.some((m) => m.usageLimit || m.systemFallbackAvailable)) loadModels(true).catch(() => {});
       return acknowledged;
     } catch (err) {
       if (!current()) return acknowledged;
@@ -656,8 +656,10 @@ export default function Chat() {
   function runStream(chatId: string, payload: Parameters<typeof streamChat>[1], opts?: { busyRetries?: number; allowAutoFallback?: boolean }): Promise<boolean> {
     const source = models.find((m) => m.id === (payload.modelId ?? chatRef.current?.modelId)) ?? modelSel;
     const fallback = opts?.allowAutoFallback === false || payload.automaticFallback ? null : configuredFallbackModel(models, source);
+    const systemFallback = opts?.allowAutoFallback !== false && !payload.automaticFallback && !!source?.systemFallbackAvailable;
     payload = { ...payload, requestId: payload.requestId ?? crypto.randomUUID() };
     if (fallback) payload.fallbackModelId = fallback.id;
+    if (systemFallback) payload.allowSystemFallback = true;
     // Resolve on persistence acknowledgement, not when generation finishes.
     let acknowledge!: (accepted: boolean | PromiseLike<boolean>) => void;
     const accepted = new Promise<boolean>((resolve) => { acknowledge = resolve; });
@@ -722,7 +724,9 @@ export default function Chat() {
       setToolConfirm(null);
       // The turn just spent part of someone's daily/weekly allowance — pull
       // fresh counters so the picker doesn't promise room that is gone.
-      if (models.some((m) => m.usageLimit)) loadModels(true).catch(() => { /* stale counter only */ });
+      if (payload.automaticFallback || models.some((m) => m.usageLimit || m.systemFallbackAvailable)) {
+        loadModels(true).catch(() => { /* stale counter only */ });
+      }
       // "stopped" is always user-initiated from this tab — no need to flag it.
       if (status !== 'stopped') {
         tabAlert();
@@ -847,13 +851,13 @@ export default function Chat() {
           : m)));
       },
       onError(message, errorCode) {
-        pendingFallback = !!fallback && !produced && (errorCode === 'provider_busy' || errorCode === 'provider_empty');
+        pendingFallback = (!!fallback || systemFallback) && !produced && ['provider_busy', 'provider_empty', 'provider_timeout'].includes(errorCode ?? '');
         if (pendingFallback) { fallbackError = message; fallbackErrorCode = errorCode; }
         applyToAssistant((m) => ({ ...m, status: pendingFallback ? 'streaming' : 'error', error: message, errorCode, retry: null }));
       },
       onDone(status, finishReason, id) {
         if (id && id !== messageId) return;
-        if (pendingFallback && fallback && status === 'error' && !produced && !finished
+        if (pendingFallback && (fallback || systemFallback) && status === 'error' && !produced && !finished
           && !stoppingRef.current && abortRef.current === controller && !controller.signal.aborted) {
           finished = true;
           if (flushTimer) clearInterval(flushTimer);

@@ -10,13 +10,14 @@ export interface ChatStreamState {
   retrySince?: number;
   priority: boolean;
   fallbackModelId?: string | null;
+  systemFallbackAvailable?: boolean;
   toolConfirm: { messageId: string; calls: { id: string; name: string; args: string }[] } | null;
 }
 
 const active = new Map<string, ChatStreamState>();
 // Small receipts let a browser that missed even 'meta' find its saved reply.
 // Keep only identifiers here; completed content remains in SQLite.
-const receipts = new Map<string, { messageId: string; userMessageId: string | null; fallbackModelId?: string | null }>();
+const receipts = new Map<string, { messageId: string; userMessageId: string | null; fallbackModelId?: string | null; systemFallbackAvailable?: boolean }>();
 const key = (chatId: string, requestId: string) => `${chatId}:${requestId}`;
 
 export function activeChatStream(chatId: string) { return active.get(chatId); }
@@ -32,7 +33,7 @@ export function beginChatStream(chatId: string, requestId: string): ChatStreamSt
 export function identifyChatStream(chatId: string, state: ChatStreamState, messageId: string, userMessageId: string | null) {
   state.messageId = messageId;
   state.userMessageId = userMessageId;
-  receipts.set(key(chatId, state.requestId), { messageId, userMessageId, fallbackModelId: state.fallbackModelId });
+  receipts.set(key(chatId, state.requestId), { messageId, userMessageId, fallbackModelId: state.fallbackModelId, systemFallbackAvailable: state.systemFallbackAvailable });
   while (receipts.size > 1024) receipts.delete(receipts.keys().next().value!);
 }
 export function endChatStream(chatId: string, state: ChatStreamState) {

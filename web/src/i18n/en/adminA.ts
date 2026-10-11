@@ -563,7 +563,7 @@ export default {
   '对话中的自动任务': 'Automatic tasks in chats',
   '这些任务在后台自动调用模型。指定一个便宜的小模型可以省下大模型的 tokens;未设置时沿用当前对话的模型。': 'These tasks call a model in the background. Pointing them at a cheap small model saves tokens on the big ones; unset, they use the current chat model.',
   '首轮回复后自动为对话命名。': 'Names the chat automatically after the first reply.',
-  '长对话生成摘要所用的模型。可选择成本较低、向用户开放的文本模型;长历史会分批压缩,用量记在实际使用的模型下。': 'The model that summarizes long chats. Pick a cheaper text model that users have access to; long histories are compacted in batches, and usage is recorded under the model actually used.',
+  '长对话生成摘要所用的模型。可选择成本较低的文本模型,包括仅系统调用的模型;长历史会分批压缩,用量记在实际使用的模型下。': 'The model that summarizes long chats. Pick a cheaper text model, including a system-only model; long histories are compacted in batches, and usage is recorded under the model actually used.',
   '放弃未保存的更改?': 'Discard unsaved changes?',
   '本页有尚未保存的修改,离开后这些修改会丢失。': 'This page has changes that have not been saved. They will be lost if you leave.',
   '有未保存的更改': 'You have unsaved changes',

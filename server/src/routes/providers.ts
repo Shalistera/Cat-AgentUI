@@ -8,7 +8,7 @@ import { requireAuth, requireAdmin } from '../auth.js';
 import {
   allConfiguredSecretValues, decryptSecretRecord, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
 } from '../secrets.js';
-import { accessUserIds, accessibleOnly, imageModelsAllowed, replaceModelAccess } from '../model-access.js';
+import { accessUserIds, accessibleOnly, canUseSystemModel, imageModelsAllowed, replaceModelAccess } from '../model-access.js';
 import { checkModelLimit, hasModelLimit, parseLimitPeriod } from '../quota.js';
 import { broadcast } from './events.js';
 import { configuredModelFallback, setModelFallback } from '../model-fallback.js';
@@ -46,7 +46,7 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
     imageGen: !!m.imageGen,
     // Like the provider avatar, only the content-addressed URL is inlined.
     avatarUrl: m.avatar ? modelAvatarUrl(m.id, m.avatar) : null,
-    accessMode: m.accessMode === 'restricted' ? 'restricted' : 'shared',
+    accessMode: m.accessMode === 'system' ? 'system' : m.accessMode === 'restricted' ? 'restricted' : 'shared',
     allowedUserIds: allowedUserIds ?? accessUserIds(m.id),
     reasoning: {
       mode: parseMode(m.reasoningMode),
@@ -293,7 +293,7 @@ const modelPatchSchema = z.object({
   isDefault: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
   defaultWebSearch: z.boolean().optional(),
-  accessMode: z.enum(['shared', 'restricted']).optional(),
+  accessMode: z.enum(['shared', 'restricted', 'system']).optional(),
   allowedUserIds: z.array(z.string().max(64)).max(500).optional(),
   // Per-1M-token prices in the site currency; null = unknown (no cost shown)
   inputPrice: z.number().min(0).max(1e6).nullish(),
@@ -974,11 +974,21 @@ export async function providerRoutes(app: FastifyInstance) {
       // Global admin order, no provider grouping — providers can interleave.
       .orderBy(asc(schema.models.sortOrder), asc(schema.models.modelId))
       .all();
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const systemFallbackAvailable = (source: typeof rows[number]) => {
+      const fallback = byId.get(configuredModelFallback(source.id) ?? '');
+      return !!fallback && req.user!.role !== 'admin' && fallback.accessMode === 'system'
+        && !source.imageGen && !fallback.imageGen && canUseSystemModel(req.user!, fallback.id)
+        && checkModelLimit(req.user!, fallback).ok
+        && (!source.vision || !!fallback.vision) && (!source.tools || !!fallback.tools);
+    };
     const list = accessibleOnly(rows, req.user!)
       .filter((r) => r.providerType !== 'novelai' && (!r.imageGen || imageModelsAllowed(req.user!)))
       .map((r) => ({
       id: r.id,
       fallbackModelId: configuredModelFallback(r.id),
+      systemFallbackAvailable: systemFallbackAvailable(r),
+      ...(req.user!.role === 'admin' ? { accessMode: r.accessMode } : {}),
       modelId: r.modelId,
       displayName: r.displayName || r.modelId,
       description: r.description,

@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, X } from 'lucide-react';
 import { Card, Field, Select, Spinner, ToggleRow } from '../../components/ui';
 import { t } from '../../i18n';
 import type { AppSettings, ModelInfo, TranslateModel } from '../../types';
-import { ModelSelect, SaveBar, SectionIntro, useSettingsForm, useTextModels } from './settings-common';
+import { adminModelLabel, ModelSelect, SaveBar, SectionIntro, useSettingsForm, useTextModels } from './settings-common';
 
 const CHAIN_MAX = 6;
 
@@ -36,7 +36,7 @@ function ModelChain({ entries, mode, configureDefaults = false, onChange, models
                 <div className="flex items-center gap-2">
                   <span className="w-4 shrink-0 text-xs tabular-nums text-tx3">{i + 1}.</span>
                   <span className={`min-w-0 flex-1 truncate ${m ? 'text-tx' : 'text-err'}`}>
-                    {m ? `${m.displayName}(${m.providerName})` : t('模型已删除或停用({id})', { id: entry.modelId })}
+                    {m ? adminModelLabel(m) : t('模型已删除或停用({id})', { id: entry.modelId })}
                   </span>
                   <button type="button" title={t('上移')} disabled={disabled || i === 0}
                     className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-tx disabled:cursor-default disabled:opacity-30"
@@ -85,7 +85,7 @@ function ModelChain({ entries, mode, configureDefaults = false, onChange, models
           onChange={(e) => { if (e.target.value) onChange([...entries, { modelId: e.target.value, mode, reasoningEffort: null }]); }}>
           <option value="">{remaining.length ? t('添加模型…') : t('没有更多可添加的模型')}</option>
           {remaining.map((m) => (
-            <option key={m.id} value={m.id}>{m.displayName}({m.providerName})</option>
+            <option key={m.id} value={m.id}>{adminModelLabel(m)}</option>
           ))}
         </Select>
       )}
@@ -158,7 +158,7 @@ export default function TaskModels() {
           <div className="space-y-3 rounded-lg border border-line p-3">
             <Field
               label={t('对话压缩模型')}
-              hint={t('长对话生成摘要所用的模型。可选择成本较低、向用户开放的文本模型;长历史会分批压缩,用量记在实际使用的模型下。')}
+              hint={t('长对话生成摘要所用的模型。可选择成本较低的文本模型,包括仅系统调用的模型;长历史会分批压缩,用量记在实际使用的模型下。')}
             >
               <ModelSelect value={form.compactionModel} onChange={(id) => set({ compactionModel: id })} models={textModels} emptyLabel={follow} />
             </Field>

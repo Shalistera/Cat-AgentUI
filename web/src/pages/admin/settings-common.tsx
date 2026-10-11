@@ -94,6 +94,10 @@ export function useTextModels(): ModelInfo[] | null {
   return models;
 }
 
+export function adminModelLabel(model: { displayName?: string | null; modelId: string; providerName: string; accessMode?: string }): string {
+  return `${model.displayName || model.modelId}(${model.providerName})${model.accessMode === 'system' ? ` · ${t('仅系统')}` : ''}`;
+}
+
 /** A text-model picker. A saved id that is no longer enabled stays visible as
     "unavailable" instead of silently reading as the empty option. */
 export function ModelSelect({ value, onChange, models, emptyLabel, disabled }: {
@@ -106,7 +110,7 @@ export function ModelSelect({ value, onChange, models, emptyLabel, disabled }: {
       {value && !list.some((m) => m.id === value) && (
         <option value={value}>{models ? t('模型不可用:{id}', { id: value }) : t('加载中…')}</option>
       )}
-      {list.map((m) => <option key={m.id} value={m.id}>{m.displayName}({m.providerName})</option>)}
+      {list.map((m) => <option key={m.id} value={m.id}>{adminModelLabel(m)}</option>)}
     </Select>
   );
 }

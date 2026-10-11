@@ -69,6 +69,7 @@ export async function uploadWorkspaceFile(chatId: string, file: File, dir?: stri
 export interface StreamPayload {
   requestId?: string;
   fallbackModelId?: string;
+  allowSystemFallback?: boolean;
   automaticFallback?: boolean;
   content?: ({ type: 'text'; text: string }
     | { type: 'image'; uploadId: string }

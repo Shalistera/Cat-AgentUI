@@ -13,9 +13,8 @@ import { TYPE_LABELS } from './provider-common';
 
 // ---------- model visibility ----------
 /**
- * Mirrors the MCP servers' access control: shared models are visible to every
- * account, restricted ones only to the ticked ordinary users (admins always
- * see everything). Enforced across chat, 绘图 and PPT.
+ * Direct model access is separate from admin-configured system tasks.
+ * Admins see every mode. Enforced across chat, images, OCR and PPT.
  */
 function AccessModal({ model, reload, onClose }: {
   model: AdminModel; reload(): Promise<void>; onClose(): void;
@@ -50,8 +49,13 @@ function AccessModal({ model, reload, onClose }: {
           <Select value={mode} onChange={(e) => setMode(e.target.value as ModelAccessMode)}>
             <option value="shared">{t('所有登录用户')}</option>
             <option value="restricted">{t('仅指定普通用户')}</option>
+            <option value="system">{t('仅系统调用(对用户隐藏)')}</option>
           </Select>
         </Field>
+
+        {mode === 'system' && <p className="text-xs leading-relaxed text-tx3">
+          {t('普通用户看不到此模型,也不能直接选择或调用。管理员可将它用于自动降级、压缩、标题、翻译等系统任务;管理员始终可见。')}
+        </p>}
 
         {mode === 'restricted' && (
           <Field label={t('指定普通用户')} hint={t('管理员始终可用;未勾选的用户在模型列表里看不到它')}>
@@ -95,6 +99,7 @@ function AccessModal({ model, reload, onClose }: {
 function AccessCell({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
   const [open, setOpen] = useState(false);
   const restricted = model.accessMode === 'restricted';
+  const system = model.accessMode === 'system';
 
   return (
     <>
@@ -104,8 +109,8 @@ function AccessCell({ model, reload }: { model: AdminModel; reload(): Promise<vo
         onClick={() => setOpen(true)}
         className="flex cursor-pointer items-center gap-1.5 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-bg3"
       >
-        <Badge tone={restricted ? 'acc' : 'default'}>
-          {restricted
+        <Badge tone={restricted || system ? 'acc' : 'default'}>
+          {system ? <><Server size={10} />{t('仅系统')}</> : restricted
             ? <><Users size={10} />{t('指定 {n}', { n: model.allowedUserIds.length })}</>
             : t('全员')}
         </Badge>

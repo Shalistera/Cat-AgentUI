@@ -128,8 +128,9 @@ export const models = sqliteTable('models', {
   // model. Only takes effect when search is actually available to the model
   // (Vertex native search or the designated search MCP).
   defaultWebSearch: integer('default_web_search').notNull().default(0),
-  // Mirrors mcpServers.accessMode: 'shared' shows the model to everyone,
-  // 'restricted' only to explicitly granted users. Admins always see all.
+  // 'shared': everyone; 'restricted': explicitly granted users; 'system':
+  // admin-configured tasks only, never ordinary users' direct selections.
+  // Admins always see all modes, including in every task-model picker.
   accessMode: text('access_mode').notNull().default('shared'),
   // Per-account usage ceiling for THIS model, on top of the monthly quota:
   // each ordinary user may make at most limitRequests user-initiated requests

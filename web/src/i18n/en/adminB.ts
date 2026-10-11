@@ -156,6 +156,12 @@ export default {
   '详细设置:描述、单价、使用限制、推理档位':
     'Detail settings: description, pricing, usage limits, reasoning tiers',
   '模型可见性': 'Model visibility',
+  '仅系统': 'System only',
+  '仅系统调用(对用户隐藏)': 'System tasks only (hidden from users)',
+  '普通用户看不到此模型,也不能直接选择或调用。管理员可将它用于自动降级、压缩、标题、翻译等系统任务;管理员始终可见。':
+    'Hidden from ordinary users and unavailable for direct selection or calls. Admins can select it for automatic fallback, compaction, titles, translation and other system tasks. Admins always retain access.',
+  '可选择仅系统调用的模型作为备用。它只接管当次回复,不会成为普通用户的对话默认模型。':
+    'A system-only model can serve as the fallback. It handles that reply without becoming the default model for an ordinary user’s chat.',
   '已更新模型可见性': 'Model visibility updated',
   '访问范围': 'Access',
   '贵模型建议仅指定用户,配合用量配额控制成本': 'Limit expensive models to selected users — together with usage quotas, this keeps costs in check',
@@ -187,11 +193,11 @@ export default {
   '能力开关、可见性等基础项仍在模型设置列表页;这里放需要展开编辑的详细配置。':
     'Capability toggles and visibility stay on the model list; the settings that need a form live here.',
   '限流或空回时自动兜底': 'Automatic fallback on rate limits or empty replies',
-  '首次限流或空回自动恢复失败、且尚未输出正文时,自动尝试指定模型一次。成功后当前对话沿用兜底模型,新对话默认模型不变。':
-    'When the first rate limit or empty reply cannot be recovered automatically and nothing has been written yet, one chosen model is tried instead. On success the current chat keeps using the fallback; the default for new chats does not change.',
+  '首次限流或空回自动恢复失败、且尚未输出正文时,自动尝试指定模型一次。成功后仅沿用用户可直接选择的兜底模型,新对话默认模型不变。':
+    'When the first rate limit or empty reply cannot be recovered automatically and nothing has been written yet, one chosen model is tried instead. On success the chat keeps the fallback only if the user can select it directly; the default for new chats does not change.',
   '兜底模型': 'Fallback model',
-  '可以选择同一服务商的其他模型。仅对有权限、额度充足且能力兼容的用户生效。':
-    'Can be another model from the same provider. Applies only to users who have access, enough allowance and a compatible model.',
+  '可以选择同一服务商的其他模型,包括仅系统调用的模型。目标须获得任务授权、额度充足且能力兼容。':
+    'Can be another model from the same provider, including a system-only model. The target must be authorized for the task, have enough allowance and support the required capabilities.',
   '关闭自动兜底': 'No automatic fallback',
   '原兜底模型已不可用,请重新选择': 'The previous fallback is no longer available — pick another',
   '不会丢弃已开始的回复或重做工具操作。兜底也失败时停止自动切换,由用户决定下一步。':
