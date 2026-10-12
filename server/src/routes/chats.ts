@@ -27,6 +27,7 @@ import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt, projectFilesPrompt } from './projects.js';
 import { ProjectKnowledgeSession, isProjectTool } from '../knowledge.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
+import { withWorkspaceScope } from '../workspace-scope.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from '../skills.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
@@ -1385,6 +1386,10 @@ export async function chatRoutes(app: FastifyInstance) {
       .where(and(eq(schema.chats.id, chatId), eq(schema.chats.userId, user.id))).get();
     if (!chat) return reply.code(404).send({ error: '对话不存在' });
 
+    // Keep prompt, model tools, child agents and commands on one directory
+    // throughout this turn, even if project settings change while it runs.
+    return withWorkspaceScope(chatId, async () => {
+
     if (body.requestId && chatStreamReceipt(chatId, body.requestId)) {
       return reply.code(409).send({ error: '这个请求已接收,请恢复查看原回复', code: 'request_exists' });
     }
@@ -2620,5 +2625,6 @@ export async function chatRoutes(app: FastifyInstance) {
         endSse?.();
       }
     }
+    });
   });
 }

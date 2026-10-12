@@ -11,7 +11,7 @@ import { Composer, type ComposerSettings, type PendingAttachment } from '../comp
 import { ProjectDocDialog } from '../components/ProjectDocDialog';
 import {
   Badge, Button, Card, EmptyState, Field, Input, Modal, ModalActions, PageHeader, Select, Spinner, Textarea,
-  confirmDialog, toast,
+  confirmDialog, toast, ToggleRow,
 } from '../components/ui';
 import type {
   ChatSummary, DirectoryUser, ModelInfo, Project, ProjectAccessMode, ProjectDoc, ProjectLimits, ProjectMember,
@@ -154,6 +154,7 @@ export default function ProjectPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
+  const [workspaceDraft, setWorkspaceDraft] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
 
   // Composer state — same defaults as a fresh chat on the chat page: last used
@@ -243,6 +244,7 @@ export default function ProjectPage() {
     try {
       const r = await api.patch<{ project: Project }>(`/api/projects/${project.id}`, {
         name: nameDraft.trim(),
+        sharedWorkspace: workspaceDraft,
         description: descDraft.trim() === '' ? null : descDraft.trim(),
       });
       setProject(r.project);
@@ -256,7 +258,7 @@ export default function ProjectPage() {
     if (!project) return;
     const ok = await confirmDialog(
       t('删除项目'),
-      t('将删除项目「{name}」及其全部资料。项目里的对话会保留,只是以后不再自动带上项目的要求和资料。', { name: project.name }),
+      t('将删除项目「{name}」、全部资料和各成员的项目工作区。项目里的对话及各对话独立工作区会保留。', { name: project.name }),
     );
     if (!ok) return;
     try {
@@ -360,8 +362,8 @@ export default function ProjectPage() {
             <Button variant="ghost" size="iconSm" title={t('共享设置')} onClick={() => setSharingOpen(true)}>
               <Users size={14} className={project.accessMode !== 'private' ? 'text-acc' : ''} />
             </Button>
-            <Button variant="ghost" size="iconSm" title={t('编辑名称与描述')}
-              onClick={() => { setNameDraft(project.name); setDescDraft(project.description ?? ''); setEditOpen(true); }}>
+            <Button variant="ghost" size="iconSm" title={t('项目设置')}
+              onClick={() => { setNameDraft(project.name); setDescDraft(project.description ?? ''); setWorkspaceDraft(project.sharedWorkspace); setEditOpen(true); }}>
               <Pencil size={14} />
             </Button>
             <Button variant="dangerGhost" size="iconSm" title={t('删除项目')} onClick={removeProject}>
@@ -387,6 +389,7 @@ export default function ProjectPage() {
               <div className="min-w-0">
                 <h2 className="truncate text-2xl font-semibold tracking-tight text-tx">{project.name}</h2>
                 {project.description && <p className="mt-0.5 truncate text-[13px] text-tx3">{project.description}</p>}
+                {project.sharedWorkspace && <p className="mt-1 text-[11px] text-tx3">{t('你的项目对话共用一个工作区')}</p>}
                 {isShared && (
                   <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-tx3">
                     <Users size={11} />
@@ -518,7 +521,7 @@ export default function ProjectPage() {
         </div>
       </div>
 
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={t('编辑项目')}>
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={t('项目设置')}>
         <form onSubmit={(e) => { e.preventDefault(); void saveMeta(); }} className="space-y-4">
           <Field label={t('项目名称')} required>
             <Input value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} maxLength={80} autoFocus />
@@ -526,6 +529,9 @@ export default function ProjectPage() {
           <Field label={t('描述')} hint={t('一句话说明这个项目是做什么的,显示在页头。')}>
             <Input value={descDraft} onChange={(e) => setDescDraft(e.target.value)} maxLength={300} />
           </Field>
+          <ToggleRow checked={workspaceDraft} onChange={setWorkspaceDraft} disabled={savingMeta}
+            label={t('项目对话共享工作区')}
+            desc={t('开启后,同一用户在本项目中的对话共用文件,每位成员各自独立。原有对话文件分别保留;关闭后恢复各对话工作区,项目文件保留供下次开启。')} />
           <ModalActions>
             <Button variant="outline" onClick={() => setEditOpen(false)}>{t('取消')}</Button>
             <Button type="submit" variant="primary" disabled={savingMeta || !nameDraft.trim()}>

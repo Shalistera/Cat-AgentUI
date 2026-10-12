@@ -51,15 +51,17 @@ function FileGlyph({ path, size = 14 }: { path: string; size?: number }) {
   return <FileIcon size={size} className={cls} />;
 }
 
-function fileUrl(chatId: string, path: string, download = false): string {
-  return `/api/chats/${chatId}/workspace/file?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`;
+function fileUrl(chatId: string, path: string, download = false, scopeKey?: string): string {
+  return `/api/chats/${chatId}/workspace/file?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}${scopeKey ? `&scope=${encodeURIComponent(scopeKey)}` : ''}`;
 }
 
 // ---- preview / editor for one file ----
 
-function FileView({ chatId, file, onBack, onChanged }: {
-  chatId: string; file: WorkspaceFile; onBack(): void; onChanged(): void;
+function FileView({ chatId, file, scopeKey, onBack, onChanged }: {
+  chatId: string; file: WorkspaceFile; scopeKey: string; onBack(): void; onChanged(): void;
 }) {
+  // Keep an open editor tied to the directory from which its draft was loaded.
+  const [fileScope] = useState(scopeKey);
   const ext = extOf(file.path);
   const isImage = IMAGE_EXT.has(ext);
   const isPdf = ext === 'pdf';
@@ -79,10 +81,10 @@ function FileView({ chatId, file, onBack, onChanged }: {
     if (!isText) { setText(null); return; }
     setText(null);
     setError(null);
-    api.get<{ text: string }>(`${fileUrl(chatId, file.path)}&text=1`)
+    api.get<{ text: string }>(`${fileUrl(chatId, file.path, false, fileScope)}&text=1`)
       .then((r) => setText(r.text))
       .catch((e) => setError(errMsg(e)));
-  }, [chatId, file.path, isText]);
+  }, [chatId, file.path, isText, fileScope]);
 
   // Reload when the same file changes underneath (model edited it) unless the
   // person is mid-edit — their draft must not be clobbered.
@@ -91,7 +93,7 @@ function FileView({ chatId, file, onBack, onChanged }: {
   async function save() {
     setSaving(true);
     try {
-      await api.put(`/api/chats/${chatId}/workspace/file`, { path: file.path, content: draft });
+      await api.put(`/api/chats/${chatId}/workspace/file?scope=${encodeURIComponent(fileScope)}`, { path: file.path, content: draft });
       setText(draft);
       setEditing(false);
       onChanged();
@@ -114,15 +116,15 @@ function FileView({ chatId, file, onBack, onChanged }: {
   if (error) {
     body = <p className="p-4 text-sm text-err">{error}</p>;
   } else if (isImage) {
-    body = <div className="flex items-start justify-center p-4"><img src={fileUrl(chatId, file.path)} alt={file.path} className="max-w-full rounded-md border border-line" /></div>;
+    body = <div className="flex items-start justify-center p-4"><img src={fileUrl(chatId, file.path, false, fileScope)} alt={file.path} className="max-w-full rounded-md border border-line" /></div>;
   } else if (isPdf) {
-    body = <iframe src={fileUrl(chatId, file.path)} title={file.path} className="h-full w-full border-0" />;
+    body = <iframe src={fileUrl(chatId, file.path, false, fileScope)} title={file.path} className="h-full w-full border-0" />;
   } else if (!isText) {
     body = (
       <div className="flex flex-col items-center gap-3 p-8 text-center text-sm text-tx3">
         <FileIcon size={28} />
         <div>{t('无法预览这种文件({size})', { size: fmtBytes(file.size) })}</div>
-        <a href={fileUrl(chatId, file.path, true)} className="text-acc hover:underline">{t('下载')}</a>
+        <a href={fileUrl(chatId, file.path, true, fileScope)} className="text-acc hover:underline">{t('下载')}</a>
       </div>
     );
   } else if (text === null) {
@@ -173,7 +175,7 @@ function FileView({ chatId, file, onBack, onChanged }: {
           </>
         )}
         {!editing && (
-          <a className={headBtn} title={t('下载')} href={fileUrl(chatId, file.path, true)}><Download size={14} /></a>
+          <a className={headBtn} title={t('下载')} href={fileUrl(chatId, file.path, true, fileScope)}><Download size={14} /></a>
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-auto">{body}</div>
@@ -245,15 +247,25 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
   }, [chatId]);
 
   useEffect(() => { reload(); return () => { requestId.current += 1; }; }, [version, reload]);
+  // Refresh cross-chat changes while showing the list. An open editor keeps
+  // its draft and its original scope until the person returns to the list.
+  useEffect(() => {
+    if (!chatId || selected) return;
+    reload();
+    const refresh = () => { if (document.visibilityState === 'visible') reload(); };
+    const timer = window.setInterval(refresh, 5000);
+    window.addEventListener('focus', refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); };
+  }, [chatId, selected, reload]);
 
   const selectedFile = useMemo(() => data?.files.find((f) => f.path === selected) ?? null, [data, selected]);
 
   async function uploadFiles(files: FileList | File[] | null) {
-    if (!chatId || !files || !files.length) return;
+    if (!chatId || !data || !files || !files.length) return;
     setUploading(true);
     let ok = 0;
     for (const f of Array.from(files)) {
-      try { await uploadWorkspaceFile(chatId, f); ok += 1; }
+      try { await uploadWorkspaceFile(chatId, f, undefined, data.scopeKey); ok += 1; }
       catch (e) { toast(`${f.name}:${errMsg(e)}`, 'err'); }
     }
     setUploading(false);
@@ -264,7 +276,7 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
     if (!chatId) return;
     if (!(await confirmDialog(t('删除文件'), t('确定删除「{path}」?此操作不可恢复。', { path: f.path })))) return;
     try {
-      await api.del(`${fileUrl(chatId, f.path)}`);
+      await api.del(`${fileUrl(chatId, f.path, false, data?.scopeKey)}`);
       bump();
     } catch (e) { toast(errMsg(e), 'err'); }
   }
@@ -280,7 +292,7 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
         </div>
         <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 py-10 text-center text-sm text-tx3">
           <FolderOpen size={26} className="text-tx3/70" />
-          <div className="mt-2 text-tx2">{t('每段对话都有自己的工作区')}</div>
+          <div className="mt-2 text-tx2">{t('在工作区保存和管理对话文件')}</div>
           <div className="mt-1 text-xs leading-relaxed">
             {t('助手会把长文、报告、代码、数据结果写成文件放在这里,并且可以在原文上反复修改;你也可以把文件拖进来交给它处理。发出第一条消息后这里就会接上这段对话。')}
           </div>
@@ -299,17 +311,17 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
       onDrop={(e) => { e.preventDefault(); dragDepth.current = 0; setDragging(false); uploadFiles(e.dataTransfer.files); }}
     >
       {selectedFile ? (
-        <FileView key={`${chatId}:${selectedFile.path}`} chatId={chatId} file={selectedFile} onBack={() => setSelected(null)} onChanged={bump} />
+        <FileView key={`${chatId}:${selectedFile.path}`} chatId={chatId} file={selectedFile} scopeKey={data!.scopeKey} onBack={() => setSelected(null)} onChanged={bump} />
       ) : (
         <>
           <div className="flex items-center justify-between border-b border-line bg-bg2 py-1.5 pl-4 pr-2">
             <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-tx3">
               {selected && <button className={headBtn} title={t('返回文件列表')} onClick={() => setSelected(null)}><ChevronLeft size={15} /></button>}
-              <FolderOpen size={13} /> {t('工作区')}
+              <FolderOpen size={13} /> {data?.scope === 'project' ? t('个人项目工作区') : t('工作区')}
             </span>
             <div className="flex items-center gap-1">
               <input ref={fileRef} type="file" multiple hidden onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
-              <button className={headBtn} title={t('上传文件到工作区')} onClick={() => fileRef.current?.click()} disabled={uploading}>
+              <button className={headBtn} title={t('上传文件到工作区')} onClick={() => fileRef.current?.click()} disabled={uploading || !data}>
                 {uploading ? <Spinner className="h-3.5 w-3.5" /> : <Upload size={14} />}
               </button>
               <button className={headBtn} title={t('刷新')} onClick={reload}><RefreshCw size={13} /></button>
@@ -317,6 +329,9 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
             </div>
           </div>
 
+          {data?.scope === 'project' && <p className="border-b border-line px-4 py-2 text-[11px] text-tx3">
+            {t('你的项目对话共用这些文件,其他成员各自独立。')}
+          </p>}
           <div className="min-h-0 flex-1 overflow-y-auto">
             {error ? (
               <p className="p-4 text-sm text-err">{error}</p>
@@ -347,7 +362,7 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
                         <span className="block text-[11px] tabular-nums text-tx3">{fmtBytes(f.size)} · {fmtWhen(f.mtime)}</span>
                       </span>
                     </button>
-                    <a className={`${headBtn} opacity-0 group-hover:opacity-100 max-md:opacity-100`} title={t('下载')} href={fileUrl(chatId, f.path, true)}>
+                    <a className={`${headBtn} opacity-0 group-hover:opacity-100 max-md:opacity-100`} title={t('下载')} href={fileUrl(chatId, f.path, true, data?.scopeKey)}>
                       <Download size={13} />
                     </a>
                     <button className={`${headBtn} opacity-0 hover:!text-err group-hover:opacity-100 max-md:opacity-100`} title={t('删除')} onClick={() => remove(f)}>

@@ -148,6 +148,7 @@ export type ProjectRole = 'owner' | 'editor' | 'viewer';
 export type ProjectMemberRole = 'editor' | 'viewer';
 
 export interface Project {
+  sharedWorkspace: boolean;
   id: string; name: string;
   description: string | null;
   instructions: string | null;
@@ -560,6 +561,8 @@ export interface AppSettings {
 export interface WorkspaceFile { path: string; size: number; mtime: number }
 
 export interface WorkspaceListing {
+  scope: 'chat' | 'project';
+  scopeKey: string;
   enabled: boolean;
   files: WorkspaceFile[];
   bytes: number;

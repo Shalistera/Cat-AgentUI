@@ -168,6 +168,8 @@ export const projects = sqliteTable('projects', {
   // projectMembers. Admins get NO implicit access — a project is personal
   // data until its owner opens it up. Chats stay per-user in every mode.
   accessMode: text('access_mode').notNull().default('private'),
+  // Share files across this user's project chats; each member has separate files.
+  sharedWorkspace: integer('shared_workspace').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 }, (t) => [index('idx_projects_user').on(t.userId, t.updatedAt)]);
@@ -226,7 +228,7 @@ export const chats = sqliteTable('chats', {
   // 临时对话: hidden from the chat list and search, swept (with uploads) after
   // a TTL of inactivity. Clearing the flag "saves" it as a normal chat.
   temporary: integer('temporary').notNull().default(0),
-  // 工作区: a private per-chat directory (data/workspaces/<chatId>) the model
+  // 工作区: a private chat or per-user project directory the model
   // reads and writes through in-process tools, so long deliverables live in
   // files it can revise in place instead of being re-emitted every turn.
   workspace: integer('workspace').notNull().default(0),

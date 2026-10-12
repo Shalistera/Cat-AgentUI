@@ -2,6 +2,9 @@
 // charts, markdown/code blocks, streaming errors. Keys are the Chinese source
 // strings passed to t().
 export default {
+  '在工作区保存和管理对话文件': 'Save and manage chat files in a workspace',
+  "个人项目工作区": "Personal project workspace",
+  "你的项目对话共用这些文件,其他成员各自独立。": "Your chats in this project share these files. Other members have separate workspaces.",
   '正在使用系统备用模型恢复回复': 'Recovering the reply with the system fallback model',
   // ---- composer ----
   '输入消息…': 'Message…',

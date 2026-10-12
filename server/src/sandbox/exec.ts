@@ -152,8 +152,14 @@ function stopUnit(systemctlDir: string, unit: string) {
 
 // ---- run ----
 
-export async function runInSandbox(req: RunRequest): Promise<RunResult> {
+export function runInSandbox(req: RunRequest): Promise<RunResult> {
+  return withChatLock(req.chatId, () => runInSandboxLocked(req));
+}
+
+async function runInSandboxLocked(req: RunRequest): Promise<RunResult> {
+  req.signal?.throwIfAborted();
   const env = cachedSandboxEnv() ?? await probeSandboxEnv();
+  req.signal?.throwIfAborted();
   if (!env.runnable || !env.bwrapPath) throw new Error('沙盒环境不可用,请管理员在后台检查');
   const s = getSandboxSettings();
   const timeoutSec = Math.max(5, Math.min(s.timeoutSec, req.timeoutSec ?? s.timeoutSec));
@@ -187,7 +193,7 @@ export async function runInSandbox(req: RunRequest): Promise<RunResult> {
   // The chat lock is shared with every host-side write (tool, panel upload,
   // edit, delete): while a command may be rearranging the directory from
   // inside, nothing on the host writes into it.
-  const result = await withChatLock(req.chatId, () => new Promise<RunResult>((resolve) => {
+  const result = await new Promise<RunResult>((resolve) => {
     let stdout = '';
     let stderr = '';
     let truncated = false;
@@ -239,7 +245,7 @@ export async function runInSandbox(req: RunRequest): Promise<RunResult> {
       if (q.removed.length) r.quotaRemoved = q.removed;
     } catch { /* best effort */ }
     return r;
-  })).finally(release);
+  }).finally(release);
 
   db.insert(schema.sandboxRuns).values({
     id: newId(), userId: req.userId, chatId: req.chatId, messageId: req.messageId ?? null,

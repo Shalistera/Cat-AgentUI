@@ -15,8 +15,10 @@ import { config } from '../config.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import {
   WorkspaceError, deleteWorkspacePath, extOf, isTextPath, listWorkspace, openRegular, readWorkspaceText,
-  renameWorkspacePath, resolveSafe, workspaceRoot, writeWorkspaceFile,
+  renameWorkspacePath, resolveSafe, writeWorkspaceFile,
 } from '../workspace.js';
+
+import { withWorkspaceScope, workspaceScope } from '../workspace-scope.js';
 
 const MIME_BY_EXT: Record<string, string> = {
   md: 'text/markdown', markdown: 'text/markdown', txt: 'text/plain', csv: 'text/csv', tsv: 'text/tab-separated-values',
@@ -51,31 +53,42 @@ function touchChat(chatId: string) {
   db.update(schema.chats).set({ updatedAt: now() }).where(eq(schema.chats.id, chatId)).run();
 }
 
+// Pin ownership and storage through async uploads; a stale editor cannot save
+// into a different directory after the project setting or chat membership changes.
+function scoped(handler: (req: FastifyRequest, reply: FastifyReply, id: string) => Promise<unknown>) {
+  return async (req: FastifyRequest, reply: FastifyReply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    if (!ownChat(req, reply, id)) return;
+    return withWorkspaceScope(id, () => {
+      const expected = (req.query as { scope?: string }).scope;
+      if (expected !== undefined && expected !== workspaceScope(id).key) {
+        return reply.code(409).send({ error: '工作区已切换,请刷新文件列表后重试' });
+      }
+      return handler(req, reply, id);
+    });
+  };
+}
+
 const pathQuery = z.object({ path: z.string().min(1).max(300) });
 
 export async function workspaceRoutes(app: FastifyInstance) {
   await app.register(multipart, { limits: { fileSize: config.maxWorkspaceFileBytes, files: 1 } });
 
-  app.get('/api/chats/:id/workspace', async (req, reply) => {
-    requireAuth(req, reply);
-    const { id } = req.params as { id: string };
-    const c = ownChat(req, reply, id);
-    if (!c) return;
+  app.get('/api/chats/:id/workspace', scoped(async (req, reply, id) => {
     const listing = listWorkspace(id, config.maxWorkspaceFiles);
     return {
       enabled: userWantsAgentTools(req.user!.settings) && policyAllows(getAgentSettings().workspace, req.user!),
+      scope: workspaceScope(id).kind, scopeKey: workspaceScope(id).key,
       files: listing.files,
       bytes: listing.bytes,
       limits: { bytes: config.maxWorkspaceBytes, files: config.maxWorkspaceFiles, fileBytes: config.maxWorkspaceFileBytes },
     };
-  });
+  }));
 
   // ?path=a/b.md            raw bytes (inline; ?download=1 forces attachment)
   // ?path=a/b.docx&text=1   text rendition (docx → plain text) for the previewer
-  app.get('/api/chats/:id/workspace/file', async (req, reply) => {
-    requireAuth(req, reply);
-    const { id } = req.params as { id: string };
-    if (!ownChat(req, reply, id)) return;
+  app.get('/api/chats/:id/workspace/file', scoped(async (req, reply, id) => {
     const q = pathQuery.extend({ download: z.string().optional(), text: z.string().optional() }).safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: '参数错误' });
     try {
@@ -100,13 +113,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
       reply.header('content-length', String(size));
       return reply.send(fs.createReadStream('', { fd, autoClose: true }));
     } catch (err) { return sendError(reply, err); }
-  });
+  }));
 
   // Browser-side text save (the panel's editor).
-  app.put('/api/chats/:id/workspace/file', async (req, reply) => {
-    requireAuth(req, reply);
-    const { id } = req.params as { id: string };
-    if (!ownChat(req, reply, id)) return;
+  app.put('/api/chats/:id/workspace/file', scoped(async (req, reply, id) => {
     const body = pathQuery.extend({ content: z.string().max(config.maxWorkspaceFileBytes) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     try {
@@ -114,13 +124,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
       touchChat(id);
       return { ok: true, path: r.rel, size: r.size };
     } catch (err) { return sendError(reply, err); }
-  });
+  }));
 
   // multipart: one `file` field; optional `dir` field puts it under a folder.
-  app.post('/api/chats/:id/workspace/upload', async (req, reply) => {
-    requireAuth(req, reply);
-    const { id } = req.params as { id: string };
-    if (!ownChat(req, reply, id)) return;
+  app.post('/api/chats/:id/workspace/upload', scoped(async (req, reply, id) => {
     const file = await req.file();
     if (!file) return reply.code(400).send({ error: '未收到文件' });
     const dirField = file.fields.dir;
@@ -148,13 +155,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
     } finally {
       try { fs.unlinkSync(staging); } catch { /* already moved or never written */ }
     }
-  });
+  }));
 
   // Copy one of the person's chat attachments (uploads row) into the workspace.
-  app.post('/api/chats/:id/workspace/from-upload', async (req, reply) => {
-    requireAuth(req, reply);
-    const { id } = req.params as { id: string };
-    if (!ownChat(req, reply, id)) return;
+  app.post('/api/chats/:id/workspace/from-upload', scoped(async (req, reply, id) => {
     const body = z.object({ uploadId: z.string().min(1).max(64), path: z.string().max(300).optional() }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     const row = db.select().from(schema.uploads)
@@ -176,12 +180,9 @@ export async function workspaceRoutes(app: FastifyInstance) {
       touchChat(id);
       return { ok: true, path: r.rel, size: r.size };
     } catch (err) { return sendError(reply, err); }
-  });
+  }));
 
-  app.post('/api/chats/:id/workspace/rename', async (req, reply) => {
-    requireAuth(req, reply);
-    const { id } = req.params as { id: string };
-    if (!ownChat(req, reply, id)) return;
+  app.post('/api/chats/:id/workspace/rename', scoped(async (req, reply, id) => {
     const body = z.object({ from: z.string().min(1).max(300), to: z.string().min(1).max(300) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
     try {
@@ -189,12 +190,9 @@ export async function workspaceRoutes(app: FastifyInstance) {
       touchChat(id);
       return { ok: true, ...r };
     } catch (err) { return sendError(reply, err); }
-  });
+  }));
 
-  app.delete('/api/chats/:id/workspace/file', async (req, reply) => {
-    requireAuth(req, reply);
-    const { id } = req.params as { id: string };
-    if (!ownChat(req, reply, id)) return;
+  app.delete('/api/chats/:id/workspace/file', scoped(async (req, reply, id) => {
     const q = pathQuery.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ error: '参数错误' });
     try {
@@ -202,5 +200,5 @@ export async function workspaceRoutes(app: FastifyInstance) {
       touchChat(id);
       return { ok: true, ...r };
     } catch (err) { return sendError(reply, err); }
-  });
+  }));
 }

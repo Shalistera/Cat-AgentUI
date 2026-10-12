@@ -108,9 +108,9 @@ function OverviewCard({ reloadKey }: { reloadKey: number }) {
               <div className="mt-1 text-tx3">{t('来源:中断的上传、手工拷贝、迁移残留')}</div>
             </div>
             <div className="rounded-lg bg-bg0 px-3.5 py-3 text-xs">
-              <div className="eyebrow mb-1">{t('对话工作区')}</div>
+              <div className="eyebrow mb-1">{t('文件工作区')}</div>
               <div className="text-base font-semibold tabular-nums text-tx">{fmtBytes(data.workspaces?.bytes ?? 0)}</div>
-              <div className="mt-0.5 text-tx3">{t('{count} 个对话有文件', { count: (data.workspaces?.chats ?? 0).toLocaleString() })}</div>
+              <div className="mt-0.5 text-tx3">{t('{count} 个工作区', { count: (data.workspaces?.chats ?? 0).toLocaleString() })}</div>
               <div className="mt-1 text-tx3">{t('随对话删除;上限见 MAX_WORKSPACE_MB')}</div>
             </div>
           </div>

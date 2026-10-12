@@ -1,3 +1,4 @@
+import { removeProjectWorkspaces } from '../workspace.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
@@ -36,6 +37,7 @@ function ownerOf(userId: string) {
 function projectDto(p: typeof schema.projects.$inferSelect, role: ProjectRole) {
   return {
     id: p.id, name: p.name, description: p.description,
+    sharedWorkspace: !!p.sharedWorkspace,
     instructions: p.instructions, createdAt: p.createdAt, updatedAt: p.updatedAt,
     accessMode: p.accessMode as 'private' | 'shared' | 'restricted',
     role,
@@ -160,6 +162,7 @@ export async function projectRoutes(app: FastifyInstance) {
     requireAuth(req, reply);
     const body = z.object({
       name: z.string().trim().min(1).max(80),
+      sharedWorkspace: z.boolean().optional(),
       description: z.string().max(300).nullish(),
       instructions: z.string().max(PROJECT_LIMITS.maxInstructionsChars).nullish(),
     }).safeParse(req.body);
@@ -168,6 +171,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const t = now();
     db.insert(schema.projects).values({
       id, userId: req.user!.id, name: body.data.name,
+      sharedWorkspace: body.data.sharedWorkspace ? 1 : 0,
       description: body.data.description ?? null,
       instructions: body.data.instructions ?? null,
       createdAt: t, updatedAt: t,
@@ -209,6 +213,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const body = z.object({
       name: z.string().trim().min(1).max(80).optional(),
+      sharedWorkspace: z.boolean().optional(),
       description: z.string().max(300).nullish(),
       instructions: z.string().max(PROJECT_LIMITS.maxInstructionsChars).nullish(),
     }).safeParse(req.body);
@@ -218,10 +223,11 @@ export async function projectRoutes(app: FastifyInstance) {
     const d = body.data;
     // Editors may rewrite the instructions; the project's identity is the owner's.
     if (!canEditProject(access.role)) return reply.code(403).send(NO_EDIT);
-    if ((d.name !== undefined || d.description !== undefined) && access.role !== 'owner') {
-      return reply.code(403).send({ error: '只有项目所有者可以修改名称与描述' });
+    if ((d.name !== undefined || d.description !== undefined || d.sharedWorkspace !== undefined) && access.role !== 'owner') {
+      return reply.code(403).send({ error: '只有项目所有者可以修改项目设置' });
     }
     const patch: Record<string, unknown> = { updatedAt: now() };
+    if (d.sharedWorkspace !== undefined) patch.sharedWorkspace = d.sharedWorkspace ? 1 : 0;
     if (d.name !== undefined) patch.name = d.name;
     if (d.description !== undefined) patch.description = d.description;
     if (d.instructions !== undefined) patch.instructions = d.instructions;
@@ -240,6 +246,7 @@ export async function projectRoutes(app: FastifyInstance) {
     // they just fall back to plain chats.
     db.update(schema.chats).set({ projectId: null }).where(eq(schema.chats.projectId, id)).run();
     db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
+    removeProjectWorkspaces(id);
     try { removeProjectFiles(id); } catch { /* swept at next startup */ }
     return { ok: true };
   });

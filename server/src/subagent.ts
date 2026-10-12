@@ -9,6 +9,7 @@ import { schema, today } from './db/index.js';
 import { recordUsage } from './usage.js';
 import { StreamingSecretRedactor, redactSensitiveText } from './secrets.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools, type AgentUser } from './agent-settings.js';
+import { withWorkspaceScope } from './workspace-scope.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool } from './workspace.js';
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from './skills.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from './sandbox/tool.js';
@@ -109,7 +110,11 @@ const VERB: Record<string, string> = {
   run_command: '执行', convert_file: '转换', web_search: '搜索', web_fetch: '阅读网页', load_skill: '加载技能', read_skill_file: '读取技能文件', project_search: '检索资料', project_read_doc: '读取资料',
 };
 
-export async function runSubagent(deps: SubagentDeps, task: string): Promise<SubagentResult> {
+export function runSubagent(deps: SubagentDeps, task: string): Promise<SubagentResult> {
+  return withWorkspaceScope(deps.chatId, () => runScopedSubagent(deps, task));
+}
+
+async function runScopedSubagent(deps: SubagentDeps, task: string): Promise<SubagentResult> {
   const s = getAgentSettings().subagent;
   const t0 = Date.now();
   const user = deps.user;

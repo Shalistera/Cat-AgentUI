@@ -1,6 +1,11 @@
 // App shell: sidebar, settings dialog, login, projects, bookmarks, release notes.
 // Keys are the Chinese source strings passed to t().
 export default {
+  "项目设置": "Project settings",
+  "项目对话共享工作区": "Share a workspace across project chats",
+  "开启后,同一用户在本项目中的对话共用文件,每位成员各自独立。原有对话文件分别保留;关闭后恢复各对话工作区,项目文件保留供下次开启。": "When enabled, each user shares files across their own chats in this project. Each member has separate files. Existing chat files are kept separately. Turning this off restores individual chat workspaces; project files remain available when it is enabled again.",
+  "你的项目对话共用一个工作区": "Your chats in this project share one workspace",
+  "将删除项目「{name}」、全部资料和各成员的项目工作区。项目里的对话及各对话独立工作区会保留。": "Delete “{name}”, all reference documents and every member’s project workspace. Chats and their individual workspaces will be kept.",
   // ---- shared words ----
   '取消': 'Cancel',
   '确认': 'Confirm',

@@ -1,4 +1,4 @@
-// 工作区 — a private directory per chat (data/workspaces/<chatId>) that the
+// 工作区 — a private directory per chat or per user within a project that the
 // model reads and writes through in-process tools, the way a coding agent
 // treats a repo: long deliverables live in files it can revise in place with
 // small targeted edits instead of being re-emitted whole every turn.
@@ -26,6 +26,8 @@ import { db, schema } from './db/index.js';
 import type { ToolDef } from './types.js';
 import { withChatLock } from './workspace-lock.js';
 import { workspaceFileLink } from './workspace-link.js';
+import { WorkspaceError, WORKSPACE_ID_RE, privateWorkspaceRoot, projectWorkspaceRoot, withWorkspaceScope, workspaceScope } from './workspace-scope.js';
+export { WorkspaceError } from './workspace-scope.js';
 
 const READ_WINDOW = 20_000; // chars per workspace_read call
 const LIST_LIMIT = 300; // entries shown to the model / in the prompt manifest
@@ -49,18 +51,8 @@ export interface WorkspaceListing {
   truncated: boolean;
 }
 
-export class WorkspaceError extends Error {
-  constructor(message: string, readonly statusCode = 400) {
-    super(message);
-  }
-}
-
-const CHAT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
 export function workspaceRoot(chatId: string): string {
-  // chat ids are our own nanoid-style strings; refuse anything else outright
-  if (!CHAT_ID_RE.test(chatId)) throw new WorkspaceError('无效的对话', 400);
-  return path.join(config.dataDir, 'workspaces', chatId);
+  return workspaceScope(chatId).root;
 }
 
 function hasControlChars(s: string): boolean {
@@ -211,31 +203,44 @@ export function workspaceBytes(chatId: string): number {
  * budget and the reclaimer must never rely on that listing.
  */
 export function accountWorkspace(chatId: string): { files: WorkspaceEntry[]; bytes: number } {
+  return accountRoot(workspaceRoot(chatId));
+}
+
+function accountRoot(rootPath: string): { files: WorkspaceEntry[]; bytes: number } {
   const files: WorkspaceEntry[] = [];
   let bytes = 0;
-  if (!workspaceExists(chatId)) return { files, bytes };
-  withDir(chatId, [], false, (root) => walk(root, '', 0, {
-    file(_fd, name, rel, st) {
+  let root: number;
+  try { root = fs.openSync(rootPath, DIR_FLAGS); }
+  catch (err) { if (errCode(err) === 'ENOENT') return { files, bytes }; throw err; }
+  try { walk(root, '', 0, {
+    file(_fd, _name, rel, st) {
       bytes += st.size;
       files.push({ path: rel, size: st.size, mtime: st.mtimeMs });
     },
-  }));
+  }); } finally { fs.closeSync(root); }
   return { files, bytes };
 }
 
-/** Total workspace bytes across every chat (storage overview). */
+function directories(root: string): string[] {
+  try { return fs.readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && WORKSPACE_ID_RE.test(e.name)).map((e) => e.name); }
+  catch { return []; }
+}
+
+function storedWorkspaces(): { root: string; chatId?: string; projectId?: string; userId?: string }[] {
+  const privateDirs = directories(path.join(config.dataDir, 'workspaces'))
+    .map((chatId) => ({ root: privateWorkspaceRoot(chatId), chatId }));
+  const projectDirs = directories(path.join(config.dataDir, 'project-workspaces')).flatMap((projectId) =>
+    directories(projectWorkspaceRoot(projectId)).map((userId) => ({
+      root: projectWorkspaceRoot(projectId, userId), projectId, userId,
+    })));
+  return [...privateDirs, ...projectDirs];
+}
+
+/** Physical storage, including inactive private/shared directories, counted once. */
 export function allWorkspacesBytes(): { chats: number; bytes: number } {
-  const base = path.join(config.dataDir, 'workspaces');
-  let chats = 0;
-  let bytes = 0;
-  let dirs: string[] = [];
-  try { dirs = fs.readdirSync(base); } catch { return { chats, bytes }; }
-  for (const d of dirs) {
-    if (!CHAT_ID_RE.test(d)) continue;
-    bytes += workspaceBytes(d);
-    chats += 1;
-  }
-  return { chats, bytes };
+  const dirs = storedWorkspaces();
+  return { chats: dirs.length, bytes: dirs.reduce((n, d) => n + accountRoot(d.root).bytes, 0) };
 }
 
 function assertBudget(chatId: string, addedBytes: number, addedFiles: number) {
@@ -374,15 +379,19 @@ export async function readWorkspaceText(chatId: string, rel: string): Promise<st
     FIFOs, sockets). Run before and after every 沙盒 command and at startup,
     so the host side only ever meets plain files. */
 export function sweepIrregularEntries(chatId: string): number {
-  if (!workspaceExists(chatId)) return 0;
+  return sweepRoot(workspaceRoot(chatId));
+}
+
+function sweepRoot(rootPath: string): number {
+  let root: number;
+  try { root = fs.openSync(rootPath, DIR_FLAGS); } catch { return 0; }
   let removed = 0;
-  withDir(chatId, [], false, (root) => walk(root, '', 0, {
+  try { walk(root, '', 0, {
     file() { /* keep */ },
     other(dirFd, name) {
       try { fs.unlinkSync(fdPath(dirFd, name)); removed += 1; } catch { /* best effort */ }
     },
-  }));
-  if (removed) console.warn(`[workspace] ${chatId}: removed ${removed} irregular entr${removed === 1 ? 'y' : 'ies'}`);
+  }); } finally { fs.closeSync(root); }
   return removed;
 }
 
@@ -521,26 +530,29 @@ export function renameWorkspacePath(chatId: string, from: string, to: string): P
 /** Remove the whole directory (chat deleted / swept). fs.rm never follows
     symlinks, and the root path is ours. Best effort. */
 export function removeWorkspace(chatId: string): void {
-  try { fs.rmSync(workspaceRoot(chatId), { recursive: true, force: true }); }
+  try { fs.rmSync(privateWorkspaceRoot(chatId), { recursive: true, force: true }); }
   catch (err) { console.warn(`[workspace] remove ${chatId} failed: ${(err as Error).message}`); }
 }
 
-/** Startup: drop directories whose chat no longer exists (crash between
-    delete and rm) and scrub irregular entries from the ones that remain —
-    a workspace from before seccomp may still hold a planted symlink. */
+/** Project deletion owns the project directory; chat deletion only owns its
+    private directory, even while that chat uses a shared workspace. */
+export function removeProjectWorkspaces(projectId: string): void {
+  try { fs.rmSync(projectWorkspaceRoot(projectId), { recursive: true, force: true }); }
+  catch (err) { console.warn(`[workspace] remove project ${projectId} failed: ${(err as Error).message}`); }
+}
+
+/** Keep project files even if their last chat was deleted or sharing is off.
+    Remove them only when the project or the file owner no longer exists. */
 export function sweepOrphanWorkspaces(): number {
-  const base = path.join(config.dataDir, 'workspaces');
-  let dirs: string[] = [];
-  try { dirs = fs.readdirSync(base); } catch { return 0; }
   let removed = 0;
-  for (const d of dirs) {
-    if (!CHAT_ID_RE.test(d)) continue;
-    const row = db.select({ id: schema.chats.id }).from(schema.chats).where(eq(schema.chats.id, d)).get();
-    if (row) { try { sweepIrregularEntries(d); } catch { /* best effort */ } continue; }
-    removeWorkspace(d);
-    removed += 1;
+  for (const d of storedWorkspaces()) {
+    const keep = d.chatId
+      ? db.select({ id: schema.chats.id }).from(schema.chats).where(eq(schema.chats.id, d.chatId)).get()
+      : db.select({ id: schema.projects.id }).from(schema.projects).where(eq(schema.projects.id, d.projectId!)).get()
+        && db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, d.userId!)).get();
+    if (keep) { sweepRoot(d.root); continue; }
+    try { fs.rmSync(d.root, { recursive: true, force: true }); removed += 1; } catch { /* retry next startup */ }
   }
-  if (removed) console.log(`[workspace] removed ${removed} orphan workspace dir(s)`);
   return removed;
 }
 
@@ -628,7 +640,9 @@ export function buildWorkspacePrompt(chatId: string): string {
   const manifest = listing.files.length ? manifestLines(listing, chatId) : '(工作区目前为空)';
   return [
     '[工作区]',
-    '本对话有一个私有的文件工作区,用户能在界面右侧的「工作区」面板查看、预览、下载、上传和删除其中的文件。你通过 workspace_* 工具读写它。用法:',
+    workspaceScope(chatId).kind === 'project'
+      ? '本对话使用当前用户的项目工作区,同一用户在本项目中的所有对话和子代理共用这些文件,其他项目成员各自独立。已有文件可能来自另一段对话,修改前先读取。用户可在右侧工作区面板管理文件。你通过 workspace_* 工具读写它。用法:'
+      : '本对话有一个私有的文件工作区,用户能在界面右侧的「工作区」面板查看、预览、下载、上传和删除其中的文件。你通过 workspace_* 工具读写它。用法:',
     '- 篇幅较长或需要反复打磨的成果(文章、报告、方案、代码、数据、大纲等)写进文件,而不是整段贴在回复里;回复中说明做了什么、文件叫什么,并给出简短摘要或要点。零散的简短回答照常直接回复,不必写文件。',
     '- 修改已有文件时,先 workspace_read 核对原文,再用 workspace_edit 做局部替换;不要为了改几句话就用 workspace_write 整篇重写。',
     '- 文件名要有意义并带扩展名(如 方案.md、数据.csv、index.html)。用户上传到工作区的文件,先读取再处理。',
@@ -640,7 +654,11 @@ export function buildWorkspacePrompt(chatId: string): string {
 
 type ToolOutcome = { result: string; isError: boolean };
 
-export async function callWorkspaceTool(chatId: string, name: string, argsJson: string): Promise<ToolOutcome> {
+export function callWorkspaceTool(chatId: string, name: string, argsJson: string): Promise<ToolOutcome> {
+  return withWorkspaceScope(chatId, () => callScopedWorkspaceTool(chatId, name, argsJson));
+}
+
+async function callScopedWorkspaceTool(chatId: string, name: string, argsJson: string): Promise<ToolOutcome> {
   let args: Record<string, unknown> = {};
   try { args = JSON.parse(argsJson || '{}'); } catch { /* treated as empty */ }
   const str = (k: string) => (typeof args[k] === 'string' ? (args[k] as string) : '');

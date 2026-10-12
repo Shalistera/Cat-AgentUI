@@ -1,5 +1,7 @@
 // Admin console: providers, app settings, agent capabilities, dashboard.
 export default {
+  "文件工作区": "File workspaces",
+  "{count} 个工作区": "{count} workspaces",
   '对话压缩模型': 'Conversation compaction model',
   '长对话生成摘要所用的模型。可选择成本较低、向用户开放的文本模型;长历史会分批压缩,用量记在实际使用的模型下。未设置时沿用对话模型。':
     'The model used to summarize long conversations. Choose an affordable text model available to your users. Long histories are processed in batches, and usage is attributed to the model used. Leave unset to follow the chat model.',

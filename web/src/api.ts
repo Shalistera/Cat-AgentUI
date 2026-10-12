@@ -53,11 +53,11 @@ export async function uploadFile(file: File): Promise<{ id: string; mime: string
 }
 
 /** Upload one file into a chat's 工作区 (optionally under a sub-folder). */
-export async function uploadWorkspaceFile(chatId: string, file: File, dir?: string): Promise<{ path: string; size: number }> {
+export async function uploadWorkspaceFile(chatId: string, file: File, dir?: string, scopeKey?: string): Promise<{ path: string; size: number }> {
   const form = new FormData();
   if (dir) form.append('dir', dir);
   form.append('file', file);
-  const res = await fetch(`/api/chats/${chatId}/workspace/upload`, {
+  const res = await fetch(`/api/chats/${chatId}/workspace/upload${scopeKey ? `?scope=${encodeURIComponent(scopeKey)}` : ''}`, {
     method: 'POST', credentials: 'same-origin', headers: { 'x-csrf': '1' }, body: form,
   });
   if (res.status === 401) onUnauthorized.handler?.();

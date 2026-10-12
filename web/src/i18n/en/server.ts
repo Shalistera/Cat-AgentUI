@@ -3,6 +3,9 @@
 // `error`/`notice` payloads, and a few server-built labels. Keys are the exact
 // Chinese strings the server sends; dynamic ones live in ../server-patterns.ts.
 export default {
+  "只有项目所有者可以修改项目设置": "Only the project owner can change project settings",
+  "无效的工作区": "Invalid workspace",
+  "工作区已切换,请刷新文件列表后重试": "The workspace has changed. Refresh the file list and try again.",
   // ---- generic / auth (index.ts, auth.ts, crypto.ts) ----
   '请先登录': 'Please sign in first',
   '需要管理员权限': 'Admin permission required',
