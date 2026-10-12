@@ -531,7 +531,7 @@ export default function ProjectPage() {
           </Field>
           <ToggleRow checked={workspaceDraft} onChange={setWorkspaceDraft} disabled={savingMeta}
             label={t('项目对话共享工作区')}
-            desc={t('开启后,同一用户在本项目中的对话共用文件,每位成员各自独立。原有对话文件分别保留;关闭后恢复各对话工作区,项目文件保留供下次开启。')} />
+            desc={t('开启后,同一用户在本项目中的对话共用文件,每位成员各自独立。已有文件自动合并,同名且内容不同的文件另存保留。关闭后恢复各对话工作区,项目文件保留供下次开启。')} />
           <ModalActions>
             <Button variant="outline" onClick={() => setEditOpen(false)}>{t('取消')}</Button>
             <Button type="submit" variant="primary" disabled={savingMeta || !nameDraft.trim()}>

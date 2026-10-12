@@ -5,11 +5,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { eq } from 'drizzle-orm';
 
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-project-workspace-'));
+const restarting = process.argv[2] === '--verify-restart';
+const temp = restarting ? process.env.DATA_DIR : fs.mkdtempSync(path.join(os.tmpdir(), 'cat-project-workspace-'));
 process.env.DATA_DIR = temp;
 process.env.SECRET_KEY = 'project-workspace-regression';
 process.env.MAX_WORKSPACE_FILES = '10';
@@ -49,6 +52,12 @@ const { workspaceRoot, writeWorkspaceFile, readWorkspaceText, callWorkspaceTool,
 const { getAdapter, toRuntimeConfig } = await import('../server/dist/providers/index.js');
 const { runSubagent } = await import('../server/dist/subagent.js');
 const { runInSandbox } = await import('../server/dist/sandbox/exec.js');
+if (restarting) {
+  const listing = await withWorkspaceScope(process.argv[3], () => listWorkspace(process.argv[3]));
+  console.log(JSON.stringify(listing));
+  rawDb.close();
+  process.exit(0);
+}
 const adapter = getAdapter('openai');
 const originalStream = adapter.streamChat;
 let promptSawShared = false;
@@ -110,7 +119,7 @@ try {
   assert.equal(ok(await request('PATCH', `/api/projects/${p.id}`, { sharedWorkspace: true })).project.sharedWorkspace, true);
   const sharedKey = (await list(a1)).scopeKey;
   assert.equal((await list(a1)).scope, 'project');
-  assert.equal((await list(a1)).files.length, 0, 'private files are preserved separately');
+  assert.equal(await read(a2, 'private.md'), 'Original private file', 'existing files are imported across chats');
   assert.equal((await list(a2)).scopeKey, sharedKey);
   assert.notEqual((await list(b1, 'bob')).scopeKey, sharedKey);
   assert.notEqual((await list(other)).scopeKey, sharedKey);
@@ -242,6 +251,94 @@ try {
   assert(!fs.existsSync(projectWorkspaceRoot(p.id)));
   assert.equal(ok(await request('GET', `/api/chats/${a3}`)).chat.projectId, null);
   assert.equal((await list(a3)).scope, 'chat');
+
+  // Upgrade recovery: already-enabled projects import all old private files,
+  // preserve every conflicting version, and survive a fresh server process.
+  const recovery = ok(await request('POST', '/api/projects', { name: 'Import existing files' })).project;
+  ok(await request('PUT', `/api/projects/${recovery.id}/sharing`, { accessMode: 'restricted', members: [{ userId: 'admin', role: 'editor' }] }));
+  const c1 = await newChat(recovery.id), c2 = await newChat(recovery.id), c3 = await newChat(recovery.id, 'admin');
+  for (const [id, version] of [[c1, 'First private version'], [c2, 'Second private version']]) {
+    ok(await put(id, 'notes.md', version));
+    ok(await put(id, 'same.md', 'Identical in both chats'));
+    for (let i = 0; i < 5; i++) ok(await put(id, `${id === c1 ? 'alpha' : 'beta'}-${i}.txt`, `File ${i}`));
+  }
+  ok(await put(c1, 'nested/readme.md', 'Nested file'));
+  ok(await put(c1, 'collision.txt', 'File at directory path'));
+  ok(await put(c2, 'collision.txt/deep.md', 'File under conflicting directory'));
+  await writeWorkspaceFile(c2, 'binary.bin', Buffer.from([0, 255, 42, 128]));
+  ok(await put(c3, 'admin-private.md', 'Another member only', undefined, 'admin'));
+  const root = projectWorkspaceRoot(recovery.id, 'alice');
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'notes.md'), 'Existing shared version');
+  const outside = path.join(temp, 'outside');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'Untouched');
+  fs.symlinkSync(outside, path.join(privateWorkspaceRoot(c1), 'escape'));
+  fs.symlinkSync(outside, path.join(root, 'nested'));
+  // Simulate the state written by the previous release, without a new toggle.
+  db.update(schema.projects).set({ sharedWorkspace: 1 }).where(eq(schema.projects.id, recovery.id)).run();
+  const imported = await list(c2);
+  assert.equal(imported.files.length, 18, 'all merged files remain listed even above the configured quota');
+  assert.equal(await read(c1, 'notes.md'), 'Existing shared version');
+  const contents = await Promise.all(imported.files.filter((f) => f.path.endsWith('.md')).map((f) => read(c2, f.path)));
+  for (const version of ['First private version', 'Second private version', 'Nested file', 'File under conflicting directory']) assert(contents.includes(version), version);
+  assert.equal(imported.files.filter((f) => f.path === 'same.md').length, 1);
+  assert.deepEqual((await request('GET', `/api/chats/${c1}/workspace/file?path=binary.bin`)).rawPayload, Buffer.from([0, 255, 42, 128]));
+  assert.deepEqual(fs.readdirSync(outside), ['sentinel.txt']);
+  assert.equal(fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8'), 'Untouched');
+  assert(!imported.files.some((f) => f.path.includes('admin-private') || f.path.includes('sentinel')));
+  assert.equal(await read(c3, 'admin-private.md', 'admin'), 'Another member only');
+  assert.equal((await list(c3, 'admin')).files.length, 1);
+  assert.equal((await put(c1, 'over-quota.txt', 'Blocked')).statusCode, 413);
+  // Simulate a crash after copies were committed but before the import ledger.
+  fs.writeFileSync(path.join(temp, 'workspace-imports', recovery.id, 'alice.json'), '[]');
+  assert.deepEqual((await list(c1)).files.map((f) => f.path), imported.files.map((f) => f.path));
+  for (const file of imported.files.filter((f) => /^(alpha|beta)-/.test(f.path))) {
+    ok(await request('DELETE', `/api/chats/${c1}/workspace/file?path=${file.path}`));
+  }
+  assert.equal((await list(c2)).files.length, 8, 'deleted imports stay deleted');
+  ok(await put(c2, 'notes.md', 'Edited shared version'));
+  ok(await request('POST', `/api/chats/${c1}/workspace/rename`, { from: 'same.md', to: 'renamed.md' }));
+  const beforeRestart = (await list(c2)).files.map((f) => f.path);
+  const restart = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--verify-restart', c1], { env: process.env, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(restart.status, 0, restart.stderr || restart.stdout);
+  assert.deepEqual(JSON.parse(restart.stdout).files.map((f) => f.path), beforeRestart);
+  assert.equal(await read(c1, 'notes.md'), 'Edited shared version');
+  ok(await request('PATCH', `/api/projects/${recovery.id}`, { sharedWorkspace: false }));
+  assert.equal(await read(c1, 'notes.md'), 'First private version');
+  ok(await put(c1, 'notes.md', 'New private revision'));
+  ok(await request('PATCH', `/api/projects/${recovery.id}`, { sharedWorkspace: true }));
+  assert.equal(await read(c2, 'notes.md'), 'Edited shared version');
+  const revised = (await list(c1)).files;
+  assert.equal(revised.length, 9);
+  assert((await Promise.all(revised.filter((f) => f.path.endsWith('.md')).map((f) => read(c1, f.path)))).includes('New private revision'));
+  // Wait for an in-flight private writer before importing its completed file.
+  ok(await request('PATCH', `/api/projects/${recovery.id}`, { sharedWorkspace: false }));
+  let releasePrivate, privateReady;
+  const readyPrivate = new Promise((resolve) => { privateReady = resolve; });
+  const writer = withChatLock(c1, async () => {
+    privateReady();
+    await new Promise((resolve) => { releasePrivate = resolve; });
+    fs.writeFileSync(path.join(privateWorkspaceRoot(c1), 'late.md'), 'Finished before import');
+  });
+  await readyPrivate;
+  ok(await request('PATCH', `/api/projects/${recovery.id}`, { sharedWorkspace: true }));
+  let importFinished = false;
+  const pendingListing = list(c2).then((r) => { importFinished = true; return r; });
+  await tick();
+  assert.equal(importFinished, false);
+  releasePrivate();
+  await writer;
+  await pendingListing;
+  assert.equal(await read(c2, 'late.md'), 'Finished before import');
+  const moved = await newChat(null);
+  ok(await put(moved, 'moved.md', 'Existing file in moved chat'));
+  ok(await request('PATCH', `/api/chats/${moved}`, { projectId: recovery.id }));
+  assert.equal(await read(c1, 'moved.md'), 'Existing file in moved chat');
+  ok(await request('DELETE', `/api/projects/${recovery.id}`));
+  assert(!fs.existsSync(path.join(temp, 'workspace-imports', recovery.id)));
+  assert.equal(await read(c1, 'notes.md'), 'New private revision');
+  console.log('Workspace import regression passed: legacy recovery, content and directory collisions, binary files, member isolation, symlink isolation, quota preservation, crash retries, restart/toggle idempotence, shared edits/deletes/renames, private revisions, in-flight writes and moved chats.');
   console.log('Project workspace regression passed: default/owner settings, same-user cross-chat files, member/project isolation, model/subagent tools, uploads/rename/download/delete, stale-scope rejection, shared lock/quota, cancellation while waiting for the sandbox lock, pinned async work, toggle preservation, move/delete/orphan cleanup and storage accounting.');
 } finally {
   adapter.streamChat = originalStream;

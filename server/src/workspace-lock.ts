@@ -12,7 +12,7 @@ export async function withChatLock<T>(chatId: string, fn: () => Promise<T> | T):
   return withWorkspaceScope(chatId, () => withScopeLock(workspaceScope(chatId).key, fn));
 }
 
-async function withScopeLock<T>(key: string, fn: () => Promise<T> | T): Promise<T> {
+export async function withScopeLock<T>(key: string, fn: () => Promise<T> | T): Promise<T> {
   const prev = chains.get(key) ?? Promise.resolve();
   let release!: () => void;
   const mine = new Promise<void>((r) => { release = r; });

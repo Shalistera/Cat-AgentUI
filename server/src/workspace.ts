@@ -20,13 +20,15 @@
 // below the root except to open the root itself (which we own).
 import fs from 'node:fs';
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { and, asc, eq } from 'drizzle-orm';
 import { config } from './config.js';
 import { db, schema } from './db/index.js';
 import type { ToolDef } from './types.js';
-import { withChatLock } from './workspace-lock.js';
+import { withChatLock, withScopeLock } from './workspace-lock.js';
 import { workspaceFileLink } from './workspace-link.js';
 import { WorkspaceError, WORKSPACE_ID_RE, privateWorkspaceRoot, projectWorkspaceRoot, withWorkspaceScope, workspaceScope } from './workspace-scope.js';
+import type { WorkspaceScope } from './workspace-scope.js';
 export { WorkspaceError } from './workspace-scope.js';
 
 const READ_WINDOW = 20_000; // chars per workspace_read call
@@ -100,8 +102,7 @@ function translate(err: unknown, what: string): never {
 /** Open the workspace root directory (creating it when asked). The root's own
     path is ours — nothing below data/ is attacker-writable except the
     workspace contents, which this fd sits above. */
-function openRoot(chatId: string, create: boolean): number {
-  const root = workspaceRoot(chatId);
+function openRootPath(root: string, create: boolean): number {
   if (create) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   try { return fs.openSync(root, DIR_FLAGS); } catch (err) {
     if (errCode(err) === 'ENOENT') throw new WorkspaceError('工作区为空', 404);
@@ -125,7 +126,11 @@ function openChildDir(parentFd: number, name: string, create: boolean): number {
 /** Walk `dirs` from the root, one descriptor per level, and hand the final
     directory fd to `fn`. Every fd opened along the way is closed afterwards. */
 function withDir<T>(chatId: string, dirs: string[], create: boolean, fn: (dirFd: number) => T): T {
-  let fd = openRoot(chatId, create);
+  return withRootDir(workspaceRoot(chatId), dirs, create, fn);
+}
+
+function withRootDir<T>(root: string, dirs: string[], create: boolean, fn: (dirFd: number) => T): T {
+  let fd = openRootPath(root, create);
   try {
     for (const seg of dirs) {
       let next: number;
@@ -155,19 +160,22 @@ interface WalkVisit { file(dirFd: number, name: string, rel: string, st: fs.Stat
 
 /** Depth-first walk anchored on descriptors; symlinks and other irregular
     entries are reported to `other` (if given) and never followed. */
-function walk(dirFd: number, relDir: string, depth: number, visit: WalkVisit): void {
+function walk(dirFd: number, relDir: string, depth: number, visit: WalkVisit, strict = false): void {
   let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(fdPath(dirFd), { withFileTypes: true }); } catch { return; }
+  try { entries = fs.readdirSync(fdPath(dirFd), { withFileTypes: true }); } catch (err) { if (strict) throw err; return; }
   entries.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
   for (const e of entries) {
     const rel = relDir ? `${relDir}/${e.name}` : e.name;
     let st: fs.Stats;
-    try { st = fs.lstatSync(fdPath(dirFd, e.name)); } catch { continue; }
+    try { st = fs.lstatSync(fdPath(dirFd, e.name)); } catch (err) { if (strict) throw err; continue; }
     if (st.isDirectory()) {
-      if (depth >= MAX_DEPTH + 2) continue;
+      if (depth >= MAX_DEPTH + 2) {
+        if (strict) throw new WorkspaceError(`目录层级不能超过 ${MAX_DEPTH} 层`);
+        continue;
+      }
       let child: number;
-      try { child = fs.openSync(fdPath(dirFd, e.name), DIR_FLAGS); } catch { continue; }
-      try { walk(child, rel, depth + 1, visit); } finally { fs.closeSync(child); }
+      try { child = fs.openSync(fdPath(dirFd, e.name), DIR_FLAGS); } catch (err) { if (strict) throw err; continue; }
+      try { walk(child, rel, depth + 1, visit, strict); } finally { fs.closeSync(child); }
     } else if (st.isFile()) {
       visit.file(dirFd, e.name, rel, st);
     } else {
@@ -219,6 +227,130 @@ function accountRoot(rootPath: string): { files: WorkspaceEntry[]; bytes: number
     },
   }); } finally { fs.closeSync(root); }
   return { files, bytes };
+}
+
+type ImportedFile = { signature: string; hash: string };
+
+function hashFile(fd: number): string {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let offset = 0;
+  for (;;) {
+    const length = fs.readSync(fd, buffer, 0, buffer.length, offset);
+    if (!length) break;
+    hash.update(buffer.subarray(0, length));
+    offset += length;
+  }
+  return hash.digest('hex');
+}
+
+/** Copy with both workspace locks held. All descendant I/O stays anchored on
+ * descriptors, including source reads and collision checks. Existing files
+ * are never overwritten. A deterministic alternative makes crash retries
+ * reuse the same copy rather than adding another version. */
+function importFile(chatId: string, root: string, source: number, rel: string, sourceChat: string, hash: string): void {
+  const basename = path.posix.basename(rel).replace(/[\x00-\x1f\x7f\\]/g, '_');
+  const ext = path.posix.extname(basename).slice(0, 15);
+  const stem = basename.slice(0, basename.length - path.posix.extname(basename).length).slice(0, 40);
+  const fallback = `import-${sourceChat.slice(0, 8)}-${hash.slice(0, 12)}-${stem}${ext}`;
+  let candidate: string;
+  try { candidate = resolveSafe(chatId, rel).rel; } catch { candidate = fallback; }
+  for (let attempt = 0; ; attempt++) {
+    const segments = candidate.split('/');
+    const name = segments.pop()!;
+    let copied = false;
+    try {
+      copied = withRootDir(root, segments, true, (dir) => {
+        try {
+          const st = fs.lstatSync(fdPath(dir, name));
+          if (!st.isFile()) return false;
+          const existing = fs.openSync(fdPath(dir, name), FILE_READ_FLAGS);
+          try { return hashFile(existing) === hash; } finally { fs.closeSync(existing); }
+        } catch (err) { if (errCode(err) !== 'ENOENT') throw err; }
+        const tmp = `.workspace-import-${hash}.tmp`;
+        // Only an interrupted import can leave this temporary file; unlinking
+        // the directory entry also safely handles a leftover symlink.
+        try { fs.unlinkSync(fdPath(dir, tmp)); } catch (err) { if (errCode(err) !== 'ENOENT') throw err; }
+        const dest = fs.openSync(fdPath(dir, tmp), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+        try {
+          const buffer = Buffer.allocUnsafe(64 * 1024);
+          let offset = 0;
+          for (;;) {
+            const length = fs.readSync(source, buffer, 0, buffer.length, offset);
+            if (!length) break;
+            for (let written = 0; written < length;) written += fs.writeSync(dest, buffer, written, length - written);
+            offset += length;
+          }
+          fs.fsyncSync(dest);
+          fs.renameSync(fdPath(dir, tmp), fdPath(dir, name));
+          return true;
+        } finally {
+          fs.closeSync(dest);
+          try { fs.unlinkSync(fdPath(dir, tmp)); } catch (err) { if (errCode(err) !== 'ENOENT') throw err; }
+        }
+      });
+    } catch (err) {
+      // A source directory may collide with a destination file or symlink.
+      // Flatten that file into an accessible, deterministic alternative.
+      if (!(err instanceof WorkspaceError && err.statusCode === 404) && errCode(err) !== 'ELOOP') throw err;
+    }
+    if (copied) return;
+    candidate = attempt === 0 ? fallback : `import-${attempt}-${fallback.slice(7)}`;
+  }
+}
+
+/** Import existing private files on access, including already-enabled projects
+ * after an upgrade. The host-only ledger records source versions so a deleted
+ * or edited shared copy is not resurrected on refresh, toggle or restart.
+ * Existing files are retained even when their combined size exceeds today's
+ * quota; normal write and sandbox admission checks then require cleanup. */
+export async function importProjectWorkspace(chatId: string, scope: WorkspaceScope): Promise<void> {
+  const { projectId, userId } = scope;
+  if (!projectId || !userId) return;
+  await withScopeLock(scope.key, async () => {
+    const ledgerDir = path.join(config.dataDir, 'workspace-imports', projectId);
+    const ledgerPath = path.join(ledgerDir, `${userId}.json`);
+    let ledger = new Map<string, ImportedFile>();
+    try { ledger = new Map(JSON.parse(fs.readFileSync(ledgerPath, 'utf8'))); }
+    catch (err) { if (errCode(err) !== 'ENOENT') throw err; }
+    const chats = db.select({ id: schema.chats.id }).from(schema.chats)
+      .where(and(eq(schema.chats.projectId, projectId), eq(schema.chats.userId, userId)))
+      .orderBy(asc(schema.chats.createdAt), asc(schema.chats.id)).all();
+    for (const chat of chats) await withScopeLock(`chat:${chat.id}`, () => {
+      const current = db.select().from(schema.chats).where(eq(schema.chats.id, chat.id)).get();
+      if (current?.projectId !== projectId || current.userId !== userId) return;
+      let source: number;
+      try { source = fs.openSync(privateWorkspaceRoot(chat.id), DIR_FLAGS); }
+      catch (err) { if (errCode(err) === 'ENOENT') return; throw err; }
+      let changed = false;
+      try { walk(source, '', 0, {
+        file(dir, name, rel) {
+          const fd = fs.openSync(fdPath(dir, name), FILE_READ_FLAGS);
+          try {
+            const st = fs.fstatSync(fd);
+            if (!st.isFile()) return;
+            const key = `${chat.id}/${rel}`;
+            const signature = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+            const previous = ledger.get(key);
+            if (previous?.signature === signature) return;
+            const hash = hashFile(fd);
+            if (previous?.hash !== hash) importFile(chatId, scope.root, fd, rel, chat.id, hash);
+            ledger.set(key, { signature, hash });
+            changed = true;
+          } finally { fs.closeSync(fd); }
+        },
+      }, true); } finally {
+        fs.closeSync(source);
+        if (changed) {
+          fs.mkdirSync(ledgerDir, { recursive: true, mode: 0o700 });
+          const tmp = `${ledgerPath}.tmp`;
+          const fd = fs.openSync(tmp, O_WRONLY | O_CREAT | fs.constants.O_TRUNC | O_NOFOLLOW, 0o600);
+          try { fs.writeFileSync(fd, JSON.stringify([...ledger])); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+          fs.renameSync(tmp, ledgerPath);
+        }
+      }
+    });
+  });
 }
 
 function directories(root: string): string[] {
@@ -539,6 +671,8 @@ export function removeWorkspace(chatId: string): void {
 export function removeProjectWorkspaces(projectId: string): void {
   try { fs.rmSync(projectWorkspaceRoot(projectId), { recursive: true, force: true }); }
   catch (err) { console.warn(`[workspace] remove project ${projectId} failed: ${(err as Error).message}`); }
+  try { fs.rmSync(path.join(config.dataDir, 'workspace-imports', projectId), { recursive: true, force: true }); }
+  catch (err) { console.warn(`[workspace] remove import ledger ${projectId} failed: ${(err as Error).message}`); }
 }
 
 /** Keep project files even if their last chat was deleted or sharing is off.
@@ -551,7 +685,11 @@ export function sweepOrphanWorkspaces(): number {
       : db.select({ id: schema.projects.id }).from(schema.projects).where(eq(schema.projects.id, d.projectId!)).get()
         && db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, d.userId!)).get();
     if (keep) { sweepRoot(d.root); continue; }
-    try { fs.rmSync(d.root, { recursive: true, force: true }); removed += 1; } catch { /* retry next startup */ }
+    try {
+      fs.rmSync(d.root, { recursive: true, force: true });
+      if (d.projectId && d.userId) fs.rmSync(path.join(config.dataDir, 'workspace-imports', d.projectId, `${d.userId}.json`), { force: true });
+      removed += 1;
+    } catch { /* retry next startup */ }
   }
   return removed;
 }

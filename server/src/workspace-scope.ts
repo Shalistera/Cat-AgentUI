@@ -22,6 +22,7 @@ export interface WorkspaceScope {
   key: string;
   root: string;
   projectId: string | null;
+  userId: string | null;
 }
 
 export function privateWorkspaceRoot(chatId: string): string {
@@ -44,16 +45,25 @@ export function workspaceScope(chatId: string): WorkspaceScope {
   const access = chat?.projectId ? projectAccess(chat.projectId, chat.userId) : null;
   if (chat && access?.project.sharedWorkspace) {
     return { kind: 'project', key: `project:${access.project.id}:${chat.userId}`,
-      root: projectWorkspaceRoot(access.project.id, chat.userId), projectId: access.project.id };
+      root: projectWorkspaceRoot(access.project.id, chat.userId), projectId: access.project.id, userId: chat.userId };
   }
-  return { kind: 'chat', key: `chat:${chatId}`, root, projectId: null };
+  return { kind: 'chat', key: `chat:${chatId}`, root, projectId: null, userId: chat?.userId ?? null };
 }
 
 /** Pin the directory through awaits, including a queued lock, upload or sandbox
  * run. Changing the project setting affects subsequent operations. */
-export function withWorkspaceScope<T>(chatId: string, fn: () => T): T {
+export async function withWorkspaceScope<T>(chatId: string, fn: () => T | Promise<T>): Promise<T> {
+  if (scopes.getStore()?.has(chatId)) return fn();
   const scope = workspaceScope(chatId);
   const pinned = new Map(scopes.getStore());
   pinned.set(chatId, scope);
-  return scopes.run(pinned, fn);
+  return scopes.run(pinned, async () => {
+    if (scope.kind === 'project') {
+      // Lazy preparation also repairs projects enabled by an older release,
+      // and imports a chat moved into the project without a server restart.
+      const { importProjectWorkspace } = await import('./workspace.js');
+      await importProjectWorkspace(chatId, scope);
+    }
+    return fn();
+  });
 }

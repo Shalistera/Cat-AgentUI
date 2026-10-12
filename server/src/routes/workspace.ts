@@ -76,7 +76,9 @@ export async function workspaceRoutes(app: FastifyInstance) {
   await app.register(multipart, { limits: { fileSize: config.maxWorkspaceFileBytes, files: 1 } });
 
   app.get('/api/chats/:id/workspace', scoped(async (req, reply, id) => {
-    const listing = listWorkspace(id, config.maxWorkspaceFiles);
+    // An import can preserve more old files than the current quota permits.
+    // Keep all of them reachable so the user can download or clean them up.
+    const listing = listWorkspace(id);
     return {
       enabled: userWantsAgentTools(req.user!.settings) && policyAllows(getAgentSettings().workspace, req.user!),
       scope: workspaceScope(id).kind, scopeKey: workspaceScope(id).key,
