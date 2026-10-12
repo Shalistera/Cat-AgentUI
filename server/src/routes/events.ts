@@ -32,7 +32,10 @@ export async function eventRoutes(app: FastifyInstance) {
   });
 
   // Open streams would otherwise hold the server up during graceful shutdown.
-  app.addHook('onClose', async () => {
+  // preClose, not onClose: Fastify's own onClose waits for every connection
+  // to end before later onClose hooks run, so one open tab used to stall each
+  // restart until systemd gave up and killed the process (90 s).
+  app.addHook('preClose', async () => {
     for (const res of clients) { try { res.end(); } catch { /* already gone */ } }
     clients.clear();
   });
