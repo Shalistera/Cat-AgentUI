@@ -47,6 +47,8 @@ const INCOMING_MAX = 50;
 export interface CommitInfo { hash: string; subject: string; author: string; date: number }
 
 export interface RepoState {
+  /** The checkout this process runs from. */
+  root: string;
   /** False when this deployment can't be updated from the panel; `reason` says why. */
   available: boolean;
   reason: string | null;
@@ -318,15 +320,41 @@ function sameDir(a: string, b: string): boolean {
   try { return fs.realpathSync(a) === fs.realpathSync(b); } catch { return false; }
 }
 
+/** What stopped `git rev-parse` in the checkout, in words an operator can act on. */
+function gitProblem(r: RunResult | null): string {
+  if (!r || r.code === 127) return '服务器上找不到 git(没有安装,或不在服务的 PATH 里),无法在面板里更新';
+  if (/dubious ownership/.test(r.stderr)) {
+    return `仓库 ${repoRoot} 的所有者不是运行服务的用户,git 拒绝操作;请让服务以仓库所有者的身份运行(systemd 单元的 User=),或把仓库 chown 给服务用户`;
+  }
+  if (/not a git repository/.test(r.stderr)) return `${repoRoot} 不是 git 仓库的检出(例如复制文件或解压部署的),无法在面板里更新`;
+  return `无法读取 git 仓库:${redactUrls(r.stderr.split('\n').map((l) => l.trim()).find(Boolean) ?? `退出码 ${r.code}`)}`;
+}
+
 export async function inspectRepo(): Promise<RepoState> {
   const s: RepoState = {
-    available: false, reason: null, branch: null, upstream: null, remoteUrl: null,
+    root: repoRoot, available: false, reason: null, branch: null, upstream: null, remoteUrl: null,
     head: null, upstreamHead: null, ahead: 0, behind: 0, incoming: [],
     changes: { files: 0, server: false, web: false, deps: false }, dirty: [], lastFetchAt: null,
   };
-  const top = (await gitOut(['rev-parse', '--show-toplevel']))?.trim();
-  if (!top || !sameDir(top, repoRoot)) {
-    s.reason = '这个部署不是 git 仓库的检出(或服务器上没有 git),无法在面板里更新';
+  const probe = await run('git', ['--no-optional-locks', 'rev-parse', '--show-toplevel'], { timeoutMs: GIT_TIMEOUT_MS })
+    .catch(() => null);
+  const top = probe?.code === 0 ? probe.stdout.trim() : '';
+  if (!top) {
+    s.reason = gitProblem(probe);
+    return s;
+  }
+  if (!sameDir(top, repoRoot)) {
+    s.reason = `${repoRoot} 在另一个 git 仓库(${top})里面,无法在面板里更新`;
+    return s;
+  }
+  // Updating as someone other than the owner leaves files the owner can't
+  // touch, and their next `git pull` by hand fails on them. git refuses this
+  // by itself, unless safe.directory has been set to let it through.
+  const uid = process.getuid?.();
+  let owner: number | null = null;
+  try { owner = fs.statSync(path.join(repoRoot, '.git')).uid; } catch { /* checked by git above */ }
+  if (uid !== undefined && owner !== null && owner !== uid) {
+    s.reason = `仓库 ${repoRoot} 属于另一个用户(uid ${owner}),服务以 uid ${uid} 运行;从面板更新会留下属主不同的文件。请让服务以仓库所有者的身份运行(systemd 单元的 User=),或把仓库 chown 给服务用户`;
     return s;
   }
   s.head = parseCommits(await gitOut(['log', '-1', LOG_FORMAT, 'HEAD']))[0] ?? null;

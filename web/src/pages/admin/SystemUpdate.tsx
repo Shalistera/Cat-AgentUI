@@ -12,7 +12,7 @@ import { SectionIntro } from './settings-common';
 
 interface CommitInfo { hash: string; subject: string; author: string; date: number }
 interface RepoState {
-  available: boolean; reason: string | null;
+  root: string; available: boolean; reason: string | null;
   branch: string | null; upstream: string | null; remoteUrl: string | null;
   head: CommitInfo | null; upstreamHead: CommitInfo | null;
   ahead: number; behind: number; incoming: CommitInfo[];
@@ -395,6 +395,8 @@ export default function SystemUpdate() {
             <span className="font-mono text-xs"> · {short(proc.commit)}</span>
             <span className="text-tx3"> · {t('启动于 {time}', { time: fmtTime(proc.bootedAt) })}</span>
           </dd>
+          <dt className="text-tx3">{t('目录')}</dt>
+          <dd className="mb-2 min-w-0 truncate font-mono text-xs leading-5 text-tx2 sm:mb-0" title={repo.root}>{repo.root}</dd>
           {repo.branch && (
             <>
               <dt className="text-tx3">{t('分支')}</dt>

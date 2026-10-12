@@ -627,6 +627,7 @@ export default {
   '当前版本': 'Current version',
   '运行中': 'Running',
   '启动于 {time}': 'started {time}',
+  '目录': 'Directory',
   '分支': 'Branch',
   '进程守护': 'Supervisor',
   '仓库里的代码已经是 {head},运行中的服务还是 {running},重启服务后才会生效。':

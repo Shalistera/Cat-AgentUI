@@ -57,6 +57,14 @@ const serverPatterns: [RegExp, string][] = [
   [/^对话生成超过 (\d+) 秒总时限$/, 'The reply exceeded the $1s total time limit'],
 
   // ---- system update (system-update.ts): errors and job log lines ----
+  [/^仓库 (.+?) 的所有者不是运行服务的用户,git 拒绝操作;请让服务以仓库所有者的身份运行\(systemd 单元的 User=\),或把仓库 chown 给服务用户$/,
+    'The checkout $1 is owned by a different user than the one running the service, so git refuses to touch it. Run the service as the checkout\'s owner (User= in the systemd unit), or chown the checkout to the service user'],
+  [/^(.+?) 不是 git 仓库的检出\(例如复制文件或解压部署的\),无法在面板里更新$/,
+    '$1 isn\'t a git checkout (it was probably deployed by copying files or unpacking an archive), so it can\'t be updated from the panel'],
+  [/^(.+?) 在另一个 git 仓库\((.+?)\)里面,无法在面板里更新$/, '$1 sits inside another git repository ($2), so it can\'t be updated from the panel'],
+  [/^仓库 (.+?) 属于另一个用户\(uid (\d+)\),服务以 uid (\d+) 运行;从面板更新会留下属主不同的文件。请让服务以仓库所有者的身份运行\(systemd 单元的 User=\),或把仓库 chown 给服务用户$/,
+    'The checkout $1 belongs to another user (uid $2) while the service runs as uid $3; updating from the panel would leave files owned by the wrong user. Run the service as the checkout\'s owner (User= in the systemd unit), or chown the checkout to the service user'],
+  [/^无法读取 git 仓库:(.+)$/, 'Couldn\'t read the git repository: $1'],
   [/^分支 (.+?) 没有设置上游分支,无法在面板里更新$/, 'Branch $1 has no upstream set, so it can\'t be updated from the panel'],
   [/^拉取远端失败:(.+)$/, 'Fetching from the remote failed: $1'],
   [/^新版本没有通过启动自检\(退出码 (.+?)\)$/, 'The new version failed its startup self-test (exit code $1)'],

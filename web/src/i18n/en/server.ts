@@ -262,8 +262,8 @@ export default {
   'zip 里没有找到 SKILL.md(需在根目录或唯一的一层文件夹内)': 'No SKILL.md found in the zip (it must sit at the root or inside a single top-level folder)',
 
   // ---- system update (system-update.ts): errors and job log lines ----
-  '这个部署不是 git 仓库的检出(或服务器上没有 git),无法在面板里更新':
-    'This deployment isn\'t a git checkout (or git isn\'t installed on the server), so it can\'t be updated from the panel',
+  '服务器上找不到 git(没有安装,或不在服务的 PATH 里),无法在面板里更新':
+    'git can\'t be found on the server (it isn\'t installed, or isn\'t on the service\'s PATH), so it can\'t be updated from the panel',
   '仓库没有检出分支(处于分离 HEAD 状态),无法在面板里更新': 'The checkout is on a detached HEAD rather than a branch, so it can\'t be updated from the panel',
   '当前分支没有设置上游分支': 'The current branch has no upstream set',
   '有更新任务正在进行,请稍后再检查': 'An update is in progress — check again later',
