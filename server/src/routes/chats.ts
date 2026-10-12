@@ -781,6 +781,9 @@ function wantsToolConfirm(settingsJson: string): boolean {
 }
 
 const TOOL_DENIED_RESULT = '(用户拒绝执行此工具调用。不要重试同一调用;如无法继续,请直接告诉用户你需要这个工具做什么。)';
+// Calls made after the reply has used up MAX_TOOL_ITERATIONS rounds are not
+// run; the model gets one more round to answer from what it already has.
+const TOOL_CAP_RESULT = `(本次回复的工具调用已达 ${config.maxToolIterations} 轮上限,此调用没有执行。不要再调用工具;请根据已有结果直接回复用户,说明已完成和未完成的部分,用户回复后可以接着做。)`;
 
 // Anchored to the QUESTION, not the answer: for tasks like translation the
 // answer is (a) in another language and (b) much longer, and a small model
@@ -2071,6 +2074,7 @@ export async function chatRoutes(app: FastifyInstance) {
           }
         };
         let iterations = 0;
+        let toolCapHit = false;
         for (;;) {
           iterations++;
           const messages = [...baseHistory, ...replyMessages(parts)];
@@ -2397,6 +2401,23 @@ export async function chatRoutes(app: FastifyInstance) {
             }
             deliverInterjections();
             continue;
+          }
+          // Out of tool rounds. The calls are answered with the reason instead
+          // of being left as 调用未完成, and the model gets one more round to
+          // say what is done and what is left, so the reply does not end
+          // mid-task with no answer. Calls made in that round get the same
+          // answer and end the reply.
+          if (stopReason === 'tool_calls' && pendingCalls.length) {
+            for (const call of pendingCalls) {
+              const part: MessagePart = { type: 'tool_result', toolCallId: call.id, name: call.name, result: TOOL_CAP_RESULT, isError: true };
+              parts.push(part);
+              sse.send('tool_result', part);
+            }
+            if (!toolCapHit) {
+              toolCapHit = true;
+              deliverInterjections();
+              continue;
+            }
           }
           // A 追加 that arrived while the model was writing its last words
           // gets one more round in the same reply, answered now rather than
