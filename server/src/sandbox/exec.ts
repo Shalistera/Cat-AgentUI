@@ -271,7 +271,14 @@ export function formatRunResult(r: RunResult, timeoutSec: number): string {
   const parts = [head];
   if (r.stdout.trim()) parts.push(`--- stdout ---\n${r.stdout.trimEnd()}`);
   if (r.stderr.trim()) parts.push(`--- stderr ---\n${r.stderr.trimEnd()}`);
-  if (!r.stdout.trim() && !r.stderr.trim()) parts.push('(没有输出)');
+  if (!r.stdout.trim() && !r.stderr.trim()) {
+    // Spaces and newlines are still output; 没有输出 would read as if the
+    // command had not run at all.
+    const blank = r.stdout + r.stderr;
+    parts.push(!blank ? '(没有输出)'
+      : blank.length <= 40 ? `(输出只有空白字符:${JSON.stringify(blank)})`
+      : `(输出只有 ${blank.length} 个空白字符)`);
+  }
   if (r.truncated) parts.push('(输出过长,已截断)');
   if (r.quotaRemoved?.length) {
     parts.push(`工作区超出 ${Math.round(config.maxWorkspaceBytes / 1048576)} MB 配额,本次命令生成的以下文件已被删除:${r.quotaRemoved.map((f) => `${f.path}(${(f.size / 1048576).toFixed(1)} MB)`).join(', ')}。请控制输出文件大小。`);
