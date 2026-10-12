@@ -259,6 +259,33 @@ export interface ModelInfo {
 
 export type LimitPeriod = 'day' | 'week';
 
+/** 本地 Claude Code: one window of the claude.ai plan (server: planUsage in providers/claude-code.ts). */
+export interface PlanWindow {
+  /** five_hour, seven_day, seven_day_opus, seven_day_sonnet, seven_day_oauth_apps, or model. */
+  key: string;
+  /** A per-model window's bucket name. */
+  label: string | null;
+  /** Percent used, 0–100. */
+  utilization: number | null;
+  resetsAt: number | null;
+}
+
+/** The plan's windows as Claude Code's own /usage shows them. */
+export interface PlanUsage {
+  plan: string | null;
+  /** False when the login has no plan limits (an API key). */
+  available: boolean;
+  windows: PlanWindow[];
+  extra: { enabled: boolean; utilization: number | null } | null;
+  /** Where this week's usage came from; absent when the endpoint doesn't say. */
+  sources: { key: string | null; label: string; percent: number }[] | null;
+  /** The rate-limit state the latest turn reported. */
+  limit: { status: 'allowed' | 'allowed_warning' | 'rejected'; window: string | null; resetsAt: number | null; at: number } | null;
+  /** The newest read failed; the rest is the last good reading. */
+  error: string | null;
+  fetchedAt: number;
+}
+
 /** Per-account model allowance and how much of it is spent (see quota.ts). */
 export interface UsageLimit {
   period: LimitPeriod;

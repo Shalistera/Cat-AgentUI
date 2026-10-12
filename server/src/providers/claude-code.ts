@@ -27,13 +27,16 @@
 //
 // The mod in server/claude-code-mod strips what Claude Code injects about
 // the machine it runs on (cwd, the operator's e-mail, token counters).
+//
+// planUsage() reads the plan's 5-hour and weekly windows — what Claude Code's
+// own /usage shows — through a `claude` process as well.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  query, type EffortLevel, type Options, type Query, type SDKMessage, type SDKUserMessage,
+  query, type EffortLevel, type Options, type Query, type SDKMessage, type SDKRateLimitInfo, type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
@@ -478,6 +481,8 @@ async function* pump(run: Run, req: ChatRequest): AsyncGenerator<AdapterEvent> {
       req.onActivity?.();
       if (m.type === 'system' && m.subtype === 'init') {
         run.sessionId = m.session_id;
+      } else if (m.type === 'rate_limit_event') {
+        noteRateLimit(m.rate_limit_info);
       } else if (m.type === 'stream_event') {
         if (m.parent_tool_use_id) continue;
         const ev = m.event as any;
@@ -581,34 +586,158 @@ export const claudeCodeAdapter: ChatAdapter = {
   },
 
   async listModels() {
-    const run = new Run();
-    async function* input(): AsyncGenerator<SDKUserMessage> { await run.done.promise; }
-    const q = query({
-      prompt: input(),
-      options: {
-        pathToClaudeCodeExecutable: executable(),
-        cwd: WORK_DIR, env: childEnv(), abortController: run.abort,
-        ...ISOLATION, persistSession: false,
-      },
-    });
-    run.q = q;
-    try {
-      const list = await Promise.race([
-        q.supportedModels(),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Claude Code 没有响应（是否已安装并登录？）')), 30_000).unref()),
-      ]);
-      const seen = new Set<string>();
-      const out: { id: string; name?: string }[] = [];
-      for (const m of list) {
-        if (m.value === 'default') continue;
-        const id = m.resolvedModel || m.value;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        out.push({ id, name: m.displayName });
-      }
-      return out;
-    } finally {
-      run.close();
+    const list = await control((q) => q.supportedModels());
+    const seen = new Set<string>();
+    const out: { id: string; name?: string }[] = [];
+    for (const m of list) {
+      if (m.value === 'default') continue;
+      const id = m.resolvedModel || m.value;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, name: m.displayName });
     }
+    return out;
   },
 };
+
+/** A `claude` process with no conversation, for asking it about itself. */
+async function control<T>(ask: (q: Query) => Promise<T>): Promise<T> {
+  const run = new Run();
+  async function* input(): AsyncGenerator<SDKUserMessage> { await run.done.promise; }
+  const q = query({
+    prompt: input(),
+    options: {
+      pathToClaudeCodeExecutable: executable(),
+      cwd: WORK_DIR, env: childEnv(), abortController: run.abort,
+      ...ISOLATION, persistSession: false,
+    },
+  });
+  run.q = q;
+  try {
+    return await Promise.race([
+      ask(q),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Claude Code 没有响应（是否已安装并登录？）')), 30_000).unref()),
+    ]);
+  } finally {
+    run.close();
+  }
+}
+
+// ---- plan usage ----
+//
+// The SDK marks the call behind /usage experimental: it is looked up by name
+// and its answer read field by field, so a later SDK that renames or reshapes
+// it costs the meter, not the panel.
+
+const USAGE_METHOD = 'usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET';
+const WINDOW_KEYS = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'seven_day_oauth_apps'];
+
+export interface PlanWindow {
+  /** One of WINDOW_KEYS, or 'model' for a per-model weekly window. */
+  key: string;
+  /** The server's name for a per-model window's bucket. */
+  label: string | null;
+  /** Percent used, 0–100. */
+  utilization: number | null;
+  resetsAt: number | null;
+}
+
+interface PlanReading {
+  /** pro / max / team / enterprise; null when not signed in with claude.ai. */
+  plan: string | null;
+  /** False for an API key and other logins the plan limits don't apply to. */
+  available: boolean;
+  windows: PlanWindow[];
+  /** Paid extra usage beyond the plan, when the plan has it. */
+  extra: { enabled: boolean; utilization: number | null } | null;
+  /** Where this week's usage came from (Claude Code, chats…). Not part of the
+      SDK's documented answer: shown only while the endpoint keeps sending it. */
+  sources: { key: string | null; label: string; percent: number }[] | null;
+  fetchedAt: number;
+}
+
+export interface PlanUsage extends PlanReading {
+  /** The rate-limit state the latest conversation turn reported. */
+  limit: { status: SDKRateLimitInfo['status']; window: string | null; resetsAt: number | null; at: number } | null;
+  /** Reading afresh failed; what is shown is the last good reading. */
+  error: string | null;
+}
+
+let reading: PlanReading | null = null;
+let readingNow: Promise<PlanReading> | null = null;
+let limitState: PlanUsage['limit'] = null;
+
+const record = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null);
+const number = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const instant = (v: unknown) => {
+  const t = typeof v === 'string' ? Date.parse(v) : NaN;
+  return Number.isFinite(t) ? t : null;
+};
+
+function parsePlanUsage(raw: unknown): PlanReading {
+  const r = record(raw) ?? {};
+  const limits = record(r.rate_limits);
+  const windows: PlanWindow[] = [];
+  for (const key of WINDOW_KEYS) {
+    const w = record(limits?.[key]);
+    if (w) windows.push({ key, label: null, utilization: number(w.utilization), resetsAt: instant(w.resets_at) });
+  }
+  for (const m of Array.isArray(limits?.model_scoped) ? limits.model_scoped : []) {
+    const w = record(m);
+    if (typeof w?.display_name === 'string') {
+      windows.push({ key: 'model', label: w.display_name, utilization: number(w.utilization), resetsAt: instant(w.resets_at) });
+    }
+  }
+  const extra = record(limits?.extra_usage);
+  const rows = record(limits?.seven_day_breakdown)?.rows;
+  const sources = (Array.isArray(rows) ? rows : []).flatMap((row) => {
+    const x = record(row);
+    const percent = number(x?.percent);
+    return typeof x?.display_name === 'string' && percent !== null
+      ? [{ key: typeof x.key === 'string' ? x.key : null, label: x.display_name, percent }]
+      : [];
+  });
+  return {
+    plan: typeof r.subscription_type === 'string' ? r.subscription_type : null,
+    available: r.rate_limits_available === true && !!limits,
+    windows,
+    extra: extra ? { enabled: extra.is_enabled === true, utilization: number(extra.utilization) } : null,
+    sources: sources.length ? sources : null,
+    fetchedAt: Date.now(),
+  };
+}
+
+async function readPlanUsage(): Promise<PlanReading> {
+  return parsePlanUsage(await control((q) => {
+    const ask = (q as unknown as Record<string, unknown>)[USAGE_METHOD];
+    if (typeof ask !== 'function') throw new Error('这个版本的 Claude Code SDK 不提供用量数据');
+    return (ask as (opts: { skipBehaviors: boolean }) => Promise<unknown>).call(q, { skipBehaviors: true });
+  }));
+}
+
+/** The plan's usage, read afresh when the last reading is older than `maxAgeMs`. */
+export async function planUsage(maxAgeMs: number): Promise<PlanUsage> {
+  let error: string | null = null;
+  if (!reading || Date.now() - reading.fetchedAt >= maxAgeMs) {
+    readingNow ??= readPlanUsage().finally(() => { readingNow = null; });
+    try {
+      reading = await readingNow;
+    } catch (err) {
+      if (!reading) throw err;
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return { ...reading, limit: limitState, error };
+}
+
+/** A turn reported where the plan stands: keep its verdict, and read the
+    windows afresh next time — they have moved. */
+function noteRateLimit(info: SDKRateLimitInfo) {
+  limitState = {
+    status: info.status,
+    window: info.rateLimitType ?? null,
+    resetsAt: info.resetsAt ? info.resetsAt * 1000 : null,
+    at: Date.now(),
+  };
+  if (reading) reading = { ...reading, fetchedAt: 0 };
+}

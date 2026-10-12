@@ -16,6 +16,7 @@ import {
   endpointRuntimeConfig, getRawAdapter, primaryLineKey, providerTakesInterjections, toPrimaryRuntimeConfig, type EndpointRow,
 } from '../providers/index.js';
 import { lineStatus, resetLineHealth } from '../providers/failover.js';
+import { planUsage } from '../providers/claude-code.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
 import { normalizeVertexLocations, parsePriorityMode, vertexLines } from '../providers/vertex.js';
 import {
@@ -641,6 +642,19 @@ export async function providerRoutes(app: FastifyInstance) {
     if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
     for (const key of providerLineKeys(provider)) resetLineHealth(key);
     return publicProvider(provider);
+  });
+
+  // 本地 Claude Code: the plan's 5-hour and weekly windows, as its /usage shows
+  // them. `refresh=1` (after a reply, or the refresh button) re-reads anything
+  // older than a few seconds; otherwise a minute-old reading will do.
+  app.get('/api/admin/claude-code/usage', async (req, reply) => {
+    requireAdmin(req, reply);
+    const refresh = (req.query as { refresh?: string }).refresh === '1';
+    try {
+      return await planUsage(refresh ? 5_000 : 60_000);
+    } catch (err) {
+      return reply.code(502).send({ error: `读取 Claude 用量失败:${err instanceof Error ? err.message : String(err)}` });
+    }
   });
 
   // One request per drag/click: renumber in list order instead of a PATCH

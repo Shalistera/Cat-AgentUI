@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { api } from './api';
+import { api, errMsg } from './api';
 import { adoptAccountLang } from './i18n';
-import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, PendingInterjection, Project, User, AgentCapabilities } from './types';
+import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, PendingInterjection, PlanUsage, Project, User, AgentCapabilities } from './types';
 import type { ComposerSettings, PendingAttachment } from './components/Composer';
 
 // ---- theme ----
@@ -422,6 +422,51 @@ export const useModels = create<ModelsState>((set, get) => ({
     set({ models: Array.isArray(r) ? r : [], loaded: true });
   },
 }));
+
+// ---- 本地 Claude Code: the claude.ai plan's usage windows ----
+interface PlanUsageState {
+  usage: PlanUsage | null;
+  /** The reading before, while it was a different one: what the stretch in between cost. */
+  previous: PlanUsage | null;
+  error: string | null;
+  loading: boolean;
+  /** Meters on screen; a finished reply only re-reads for them. */
+  watchers: number;
+  /** When `usage` arrived here (the server's fetchedAt is its own clock). */
+  receivedAt: number;
+  load(fresh?: boolean): Promise<void>;
+}
+let planUsageLoad: Promise<void> | null = null;
+export const usePlanUsage = create<PlanUsageState>((set, get) => ({
+  usage: null,
+  previous: null,
+  error: null,
+  loading: false,
+  watchers: 0,
+  receivedAt: 0,
+  load(fresh = false) {
+    planUsageLoad ??= (async () => {
+      set({ loading: true });
+      try {
+        const usage = await api.get<PlanUsage>(`/api/admin/claude-code/usage${fresh ? '?refresh=1' : ''}`);
+        const prev = get().usage;
+        const newer = !prev || usage.fetchedAt !== prev.fetchedAt;
+        set({ usage, previous: newer ? prev : get().previous, error: null, receivedAt: Date.now() });
+      } catch (e) {
+        set({ error: errMsg(e) });
+      } finally {
+        set({ loading: false });
+        planUsageLoad = null;
+      }
+    })();
+    return planUsageLoad;
+  },
+}));
+
+/** After a reply: meters on screen re-read the plan, a moment later — its books trail the reply. */
+export function planUsageAfterReply(): void {
+  if (usePlanUsage.getState().watchers > 0) setTimeout(() => { void usePlanUsage.getState().load(true); }, 2_000);
+}
 
 // ---- Agent 能力 (per-user capability flags) ----
 interface AgentCapsState {

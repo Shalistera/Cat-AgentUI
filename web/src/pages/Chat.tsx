@@ -7,11 +7,12 @@ import {
 import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, suggestFallbackModel, configuredFallbackModel, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
 import { recoverChatStream, mergeStreamSnapshot, type StreamIdentity } from '../streamRecovery';
-import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useInterjections, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
+import { chatHandoff, LAST_MODEL_KEY, planUsageAfterReply, useAuth, useChats, useComposerInsert, useInterjections, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { SelectionQuote, asQuote } from '../components/SelectionQuote';
 import { ModelAvatar } from '../components/ModelAvatar';
+import { PlanUsageMeter } from '../components/PlanUsage';
 import { CatMark } from '../components/Logo';
 import { Button, Modal, ModalActions, PageHeader, Textarea, confirmDialog, toast } from '../components/ui';
 import { tabAlert } from '../tabAlert';
@@ -681,6 +682,7 @@ export default function Chat() {
       settleInterjections(chatId, result.message?.status === 'stopped');
       chatsStore.load().catch(() => {});
       if (models.some((m) => m.usageLimit || m.systemFallbackAvailable)) loadModels(true).catch(() => {});
+      planUsageAfterReply();
       return acknowledged;
     } catch (err) {
       if (!current()) return acknowledged;
@@ -770,6 +772,8 @@ export default function Chat() {
       if (payload.automaticFallback || models.some((m) => m.usageLimit || m.systemFallbackAvailable)) {
         loadModels(true).catch(() => { /* stale counter only */ });
       }
+      // …and the Claude plan meter, when one is on screen.
+      planUsageAfterReply();
       // "stopped" is always user-initiated from this tab — no need to flag it.
       if (status !== 'stopped') {
         tabAlert();
@@ -1392,6 +1396,7 @@ export default function Chat() {
           </Button>
         )}
       >
+        {modelSel?.providerType === 'claude-code' && <PlanUsageMeter />}
         {(() => {
           const pid = chat?.projectId ?? projectParam;
           const project = pid ? projects.find((p) => p.id === pid) : null;

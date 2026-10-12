@@ -485,6 +485,31 @@ export default {
   '每日 Token 用量柱状图': 'Daily token usage bar chart',
   '{day} · {tokens} tokens · {requests} 次请求': '{day} · {tokens} tokens · {requests} request(s)',
 
+  // ---- Claude plan usage (components/PlanUsage.tsx) ----
+  'Claude 订阅用量': 'Claude plan usage',
+  '周': 'wk',
+  '用量': 'Usage',
+  '5 小时': '5 hours',
+  '本周 · 全部模型': 'This week · all models',
+  '本周 · Opus': 'This week · Opus',
+  '本周 · Sonnet': 'This week · Sonnet',
+  '本周 · 第三方应用': 'This week · third-party apps',
+  '本周 · {model}': 'This week · {model}',
+  '较上次 +{n}%': '+{n}% since last reading',
+  '{time} 重置': 'Resets {time}',
+  '已达到用量上限,{time} 恢复': 'Usage limit reached — available again at {time}',
+  '已达到用量上限': 'Usage limit reached',
+  '快到用量上限了': 'Close to the usage limit',
+  '正在读取…': 'Reading…',
+  'Claude Code 登录的不是 claude.ai 订阅(例如用的是 API Key),没有订阅额度可看。':
+    'Claude Code isn\'t signed in with a claude.ai plan (it uses an API key, for example), so there are no plan limits to show.',
+  '额外用量': 'Extra usage',
+  '本周用量来自(本面板算在 Claude Code 里)': 'This week\'s usage came from (this panel counts as Claude Code)',
+  '网页和 App 对话': 'Web and app chats',
+  '其他': 'Other',
+  '与 claude.ai、手机 App 和其他 Claude Code 共用同一份额度。': 'Shared with claude.ai, the mobile app and any other Claude Code.',
+  '更新于 {time}': 'Updated {time}.',
+
   // ---- misc ----
   '模型': 'Model',
 } satisfies Record<string, string>;

@@ -56,6 +56,9 @@ const serverPatterns: [RegExp, string][] = [
   [/^Provider 连续 (\d+) 秒没有返回数据$/, 'The provider sent no data for $1s'],
   [/^对话生成超过 (\d+) 秒总时限$/, 'The reply exceeded the $1s total time limit'],
 
+  // ---- 本地 Claude Code plan usage (routes/providers.ts) ----
+  [/^读取 Claude 用量失败:(.+)$/, 'Couldn\'t read the Claude plan usage: $1'],
+
   // ---- system update (system-update.ts): errors and job log lines ----
   [/^仓库 (.+?) 的所有者不是运行服务的用户,git 拒绝操作;请让服务以仓库所有者的身份运行\(systemd 单元的 User=\),或把仓库 chown 给服务用户$/,
     'The checkout $1 is owned by a different user than the one running the service, so git refuses to touch it. Run the service as the checkout\'s owner (User= in the systemd unit), or chown the checkout to the service user'],

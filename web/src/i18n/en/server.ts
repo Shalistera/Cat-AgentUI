@@ -285,6 +285,8 @@ export default {
   '不再等待,立即重启': 'Stopped waiting — restarting now',
   '等待已超过 20 分钟,直接重启': 'Waited 20 minutes — restarting anyway',
   '正在重启服务…': 'Restarting the service…',
+  // 本地 Claude Code plan usage (providers/claude-code.ts)
+  '这个版本的 Claude Code SDK 不提供用量数据': 'This version of the Claude Code SDK doesn\'t provide usage data',
   // the root helper (update-helper.ts)
   '服务器上正在进行另一个更新,请稍后再试': 'Another update is running on the server — try again later',
   'git merge 失败': 'git merge failed',
