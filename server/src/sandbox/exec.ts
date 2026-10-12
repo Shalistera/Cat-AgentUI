@@ -141,7 +141,11 @@ function systemdArgv(systemdRun: string, unit: string, s: SandboxSettings, timeo
     // of defence; the post-run enforcer handles the sum
     '-p', `LimitFSIZE=${config.maxWorkspaceFileBytes}`,
     '-p', `RuntimeMaxSec=${timeoutSec + 15}`,
-    '--', ...inner,
+    // The service manager expands ${VAR} in the command line as it does in
+    // ExecStart=, before sh runs: `${n}` in a command would reach the shell
+    // empty. `$$` is its escape for a literal `$` (--expand-environment=no
+    // would do the same, but needs systemd 254+).
+    '--', ...inner.map((arg) => arg.split('$').join('$$')),
   ];
 }
 
