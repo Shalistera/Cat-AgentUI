@@ -119,6 +119,23 @@ try {
   assert.equal(prevUser.content.at(-1).cache_control.type, 'ephemeral');
   assert.equal(JSON.stringify(body).split('cache_control').length - 1, 3, 'at most three breakpoints here (limit is four)');
 
+  // 追加 mid-turn: the reply is split around the person's message, but every
+  // piece of it is still the turn in progress — thinking comes back for each
+  // call, and the message rides in the user turn that carries the results.
+  const secondCall = { ...call, id: 'toolu_second' };
+  ({ body } = await run({
+    model: 'claude-opus-5-5', reasoning: { level: 'high', ratio: 1 },
+    messages: [user('上一轮'), earlier, user('差旅标准?'),
+      { role: 'assistant', parts: [{ type: 'tool_call', id: call.id, name: call.name, args: call.args, sig: call.sig }, { type: 'tool_result', toolCallId: call.id, name: call.name, result: '每天300元' }] },
+      { role: 'user', interjection: '也查一下住宿', parts: [{ type: 'text', text: '用户追加:也查一下住宿' }] },
+      { role: 'assistant', parts: [{ type: 'tool_call', id: secondCall.id, name: call.name, args: call.args, sig: call.sig }, { type: 'tool_result', toolCallId: secondCall.id, name: call.name, result: '每晚500元' }] }],
+  }));
+  const split = body.messages;
+  assert.deepEqual(split.map((m) => m.role), ['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user']);
+  assert(!split[1].content.some((b) => b.type === 'thinking'), 'the earlier turn still is not replayed');
+  for (const at of [5, 7]) assert.equal(split[at].content[0].type, 'thinking', `call ${at} keeps its thinking across the 追加`);
+  assert.deepEqual(split[6].content.map((b) => b.type), ['tool_result', 'text'], 'results first, then the 追加');
+
   // A chat switched to Gemini: Claude's thinking signature must not be echoed as Gemini's.
   const gcfg = { ...cfg, type: 'gemini', baseUrl: `http://127.0.0.1:${server.address().port}` };
   await run({ model: 'gemini-2.5-pro', messages: [user('q'), { role: 'assistant', parts: [{ type: 'tool_call', id: 'c1', name: 'project_search', args: '{}', sig: call.sig }, { type: 'tool_result', toolCallId: 'c1', name: 'project_search', result: 'r' }] }, user('next')] }, geminiAdapter, gcfg);

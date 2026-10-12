@@ -9,6 +9,7 @@ import { config } from '../config.js';
 import { configuredModelFallback } from '../model-fallback.js';
 import { ContinuationText } from '../continuation-text.js';
 import { activeChatStream, beginChatStream, chatStreamReceipt, endChatStream, identifyChatStream } from '../chat-stream-state.js';
+import { MAX_INTERJECTIONS, interjectionMessage, interjectionPrompt } from '../interjection.js';
 import { ProviderBusyError, isNetworkError } from '../providers/sse.js';
 import { ProviderEmptyError, ProviderInterruptedError } from '../providers/stream-integrity.js';
 import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
@@ -175,6 +176,25 @@ function toAdapterPartsNoImages(parts: MessagePart[]): AdapterMessagePart[] {
   return out;
 }
 
+/** The reply so far as provider messages. Each 追加 splits it: what the
+ * model wrote before, the person's message, then what came after — the same
+ * shape buildBoundedHistory replays it in later. */
+function replyMessages(parts: MessagePart[]): AdapterMessage[] {
+  const out: AdapterMessage[] = [];
+  let segment: MessagePart[] = [];
+  const flush = () => {
+    const converted = toAdapterPartsNoImages(segment);
+    if (converted.length) out.push({ role: 'assistant', parts: converted });
+    segment = [];
+  };
+  for (const p of parts) {
+    if (p.type === 'interjection') { flush(); out.push(interjectionMessage(p.text)); }
+    else segment.push(p);
+  }
+  flush();
+  return out;
+}
+
 const MAX_GROUNDING_QUERIES = 20;
 const MAX_GROUNDING_SOURCES = 30;
 const MAX_GROUNDING_SUPPORTS = 200;
@@ -257,13 +277,17 @@ async function normalizeIncomingParts(parts: MessagePart[], ownerId: string): Pr
 }
 
 // pending media resolves to base64 only after the whole window is chosen —
-// `as` keeps PDFs (native document blocks) apart from pictures.
-type PlannedPart = AdapterMessagePart | { type: 'pending_media'; as: 'image' | 'file'; media: OwnedMedia };
+// `as` keeps PDFs (native document blocks) apart from pictures. A 追加 is
+// cut out into a user message of its own when the window is assembled.
+type PlannedPart = AdapterMessagePart
+  | { type: 'pending_media'; as: 'image' | 'file'; media: OwnedMedia }
+  | { type: 'interjection'; text: string };
 
 function adapterTextCost(part: MessagePart): number {
   if (part.type === 'text') return part.text.length;
   if (part.type === 'tool_call') return part.id.length + part.name.length + part.args.length;
   if (part.type === 'tool_result') return part.toolCallId.length + part.name.length + part.result.length;
+  if (part.type === 'interjection') return interjectionPrompt(part.text).length;
   return 0;
 }
 
@@ -451,6 +475,10 @@ async function buildBoundedHistory(
           continue;
         }
         rowText += adapterTextCost(part);
+        if (part.type === 'interjection') {
+          planned.push({ type: 'interjection', text: part.text });
+          continue;
+        }
         const converted = toAdapterPartNoImage(part);
         if (converted) planned.push(converted);
       }
@@ -497,9 +525,16 @@ async function buildBoundedHistory(
   const out: AdapterMessage[] = [];
   try {
     for (const message of chosen) {
-      const parts: AdapterMessagePart[] = [];
+      let parts: AdapterMessagePart[] = [];
+      const flush = () => {
+        if (parts.length) out.push({ role: message.role, parts });
+        parts = [];
+      };
       for (const part of message.parts) {
-        if (part.type === 'pending_media') {
+        if (part.type === 'interjection') {
+          flush();
+          out.push(interjectionMessage(part.text));
+        } else if (part.type === 'pending_media') {
           parts.push({
             type: part.as,
             name: part.as === 'file' ? part.media.name : undefined,
@@ -509,7 +544,7 @@ async function buildBoundedHistory(
           parts.push(part);
         }
       }
-      if (parts.length) out.push({ role: message.role, parts });
+      flush();
     }
     return { messages: out, mediaLease };
   } catch (err) {
@@ -549,7 +584,7 @@ function activeTurnDto(chatId: string) {
   const turn = activeChatStream(chatId);
   return turn ? {
     requestId: turn.requestId, messageId: turn.messageId, userMessageId: turn.userMessageId,
-    toolConfirm: turn.toolConfirm,
+    toolConfirm: turn.toolConfirm, interjections: turn.interjections,
   } : null;
 }
 
@@ -883,6 +918,54 @@ export async function chatRoutes(app: FastifyInstance) {
     return { stopped: true };
   });
 
+  // 追加: a message for the reply being generated right now. It waits on the
+  // live turn and reaches the model at its next step — after the tool round
+  // in progress, or once it stops writing. 409 once the turn can no longer
+  // take one; the tab then sends it as an ordinary message instead.
+  app.post('/api/chats/:id/interject', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const owned = db.select({ id: schema.chats.id }).from(schema.chats)
+      .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+    if (!owned) return reply.code(404).send({ error: '对话不存在' });
+    const body = z.object({
+      requestId: z.string().max(64).optional(),
+      messageId: z.string().max(64).optional(),
+      text: z.string().trim().min(1),
+    }).refine((v) => !!v.requestId || !!v.messageId).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    if (body.data.text.length > config.maxMessageTextChars) {
+      return reply.code(413).send({ error: `消息文字超过 ${config.maxMessageTextChars.toLocaleString()} 字符限制` });
+    }
+    const current = activeChatStream(id);
+    if (!current?.acceptsInterjections
+      || (body.data.requestId && body.data.requestId !== current.requestId)
+      || (body.data.messageId && body.data.messageId !== current.messageId)) {
+      return reply.code(409).send({ error: '这条回复已经结束', code: 'turn_ended' });
+    }
+    if (current.interjections.length + current.parts.filter((p) => p.type === 'interjection').length >= MAX_INTERJECTIONS) {
+      return reply.code(409).send({ error: `每条回复最多追加 ${MAX_INTERJECTIONS} 条消息`, code: 'interjection_limit' });
+    }
+    const interjection = { id: newId(), text: body.data.text };
+    current.interjections.push(interjection);
+    return { interjection };
+  });
+
+  // Take back a 追加 the model has not read yet. Already delivered (or the
+  // turn is over): nothing to take back.
+  app.delete('/api/chats/:id/interject/:itemId', async (req, reply) => {
+    requireAuth(req, reply);
+    const { id, itemId } = req.params as { id: string; itemId: string };
+    const owned = db.select({ id: schema.chats.id }).from(schema.chats)
+      .where(and(eq(schema.chats.id, id), eq(schema.chats.userId, req.user!.id))).get();
+    if (!owned) return reply.code(404).send({ error: '对话不存在' });
+    const pending = activeChatStream(id)?.interjections;
+    const at = pending?.findIndex((x) => x.id === itemId) ?? -1;
+    if (at < 0) return { removed: false };
+    pending!.splice(at, 1);
+    return { removed: true };
+  });
+
   // Download a conversation as a file. Markdown renders the branch currently
   // on screen (what the user thinks of as "the conversation"); JSON dumps the
   // whole tree so nothing is lost to branch switching.
@@ -964,6 +1047,9 @@ export async function chatRoutes(app: FastifyInstance) {
             break;
           case 'tool_result':
             lines.push(`<details><summary>工具结果: ${p.name}${p.isError ? '(出错)' : ''}</summary>`, '', '```', p.result, '```', '', '</details>', '');
+            break;
+          case 'interjection':
+            lines.push(`> **用户追加:** ${p.text.trim().replace(/\n/g, '\n> ')}`, '');
             break;
           case 'grounding':
             if (p.sources.length) {
@@ -1730,6 +1816,8 @@ export async function chatRoutes(app: FastifyInstance) {
       model: model.modelId, providerId: provider.id, status: 'streaming', createdAt: now(),
     }).run();
     identifyChatStream(chatId, live, assistantId, userMessageId);
+    // 追加 is for text turns; an image model answers in one shot.
+    live.acceptsInterjections = !model.imageGen;
     // The freshly generated reply becomes the visible branch. New activity in
     // an archived chat also un-archives it — a talking chat isn't shelved.
     db.update(schema.chats).set({
@@ -1959,12 +2047,19 @@ export async function chatRoutes(app: FastifyInstance) {
         textTurnTimer = setTimeout(() => abortTextForTimeout(
           `对话生成超过 ${Math.ceil(config.chatTurnTimeoutMs / 1000)} 秒总时限`,
         ), config.chatTurnTimeoutMs);
+        // 追加 that came in while the model was busy reach it now, each as a
+        // part at this point of the reply.
+        const deliverInterjections = () => {
+          for (const item of live.interjections.splice(0)) {
+            const part: MessagePart = { type: 'interjection', id: item.id, text: item.text };
+            parts.push(part);
+            sse.send('interjection', part);
+          }
+        };
         let iterations = 0;
         for (;;) {
           iterations++;
-          const messages = [...baseHistory];
-          const sofar = toAdapterPartsNoImages(parts);
-          if (sofar.length) messages.push({ role: 'assistant', parts: sofar });
+          const messages = [...baseHistory, ...replyMessages(parts)];
           if (continuation) messages.push({ role: 'user', parts: [{ type: 'text', text:
             '上一条助手回复因传输中断尚未完成。请从中断位置直接续写剩余内容,不要重复已有文字,不要重新开头,不要解释中断。保留原有结构和代码块状态,不调用任何工具。',
           }] });
@@ -1976,10 +2071,13 @@ export async function chatRoutes(app: FastifyInstance) {
           let roundError: unknown;
           const textRedactor = new StreamingSecretRedactor(secretValues);
           const reasoningRedactor = new StreamingSecretRedactor(secretValues);
-          const continuationText = continuation ? new ContinuationText(parts.filter((p) => p.type === 'text').map((p) => p.text).join('')) : null;
+          // Only the reply since the latest 追加 can be resumed mid-sentence;
+          // what came before it was finished and has been answered past.
+          const sinceInterjection = () => parts.slice(parts.findLastIndex((p) => p.type === 'interjection') + 1);
+          const continuationText = continuation ? new ContinuationText(sinceInterjection().filter((p) => p.type === 'text').map((p) => p.text).join('')) : null;
           const emitText = (text: string) => {
             if (!text) return;
-            const previous = continuation ? parts.filter((p) => p.type === 'text').at(-1) : undefined;
+            const previous = continuation ? sinceInterjection().filter((p) => p.type === 'text').at(-1) : undefined;
             if (previous) previous.text += text;
             else appendText(parts, 'text', text);
             sse.send('delta', { text });
@@ -2086,7 +2184,7 @@ export async function chatRoutes(app: FastifyInstance) {
           }
 
           const canContinue = !continuation && !controller.signal.aborted
-            && parts.some((p) => p.type === 'text' && p.text.trim())
+            && sinceInterjection().some((p) => p.type === 'text' && p.text.trim())
             && !parts.some((p) => p.type === 'tool_call' || p.type === 'tool_result' || p.type === 'image')
             && (roundError instanceof ProviderInterruptedError || isNetworkError(roundError)
               || (!roundError && stopReason === 'other'));
@@ -2283,6 +2381,15 @@ export async function chatRoutes(app: FastifyInstance) {
                 sse.send('image', image);
               }
             }
+            deliverInterjections();
+            continue;
+          }
+          // A 追加 that arrived while the model was writing its last words
+          // gets one more round in the same reply, answered now rather than
+          // left for the next turn.
+          if (live.interjections.length && stopReason === 'stop' && !continuation
+            && iterations < config.maxToolIterations) {
+            deliverInterjections();
             continue;
           }
           break;
@@ -2309,6 +2416,9 @@ export async function chatRoutes(app: FastifyInstance) {
         sse.send('error', { message: errMsg, code: errCode ?? undefined });
       }
     }
+    // The reply takes no more 追加. Any still waiting were never read; the
+    // tab sends them as ordinary messages instead.
+    live.acceptsInterjections = false;
     clearTextTimers();
 
     // web_search turns get a grounding part built from the sources the

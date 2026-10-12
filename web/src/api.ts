@@ -26,9 +26,9 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) onUnauthorized.handler?.();
-  let json: { error?: string } & Record<string, unknown> = {};
+  let json: { error?: string; code?: string } & Record<string, unknown> = {};
   try { json = await res.json(); } catch { /* non-json */ }
-  if (!res.ok) throw new ApiError(res.status, json.error ? tServer(json.error as string) : t('请求失败 ({status})', { status: res.status }), undefined, json.error as string | undefined);
+  if (!res.ok) throw new ApiError(res.status, json.error ? tServer(json.error as string) : t('请求失败 ({status})', { status: res.status }), json.code, json.error as string | undefined);
   return json as T;
 }
 
@@ -124,6 +124,7 @@ export async function streamChat(
       case 'tool_result': handlers.onToolResult?.(data); break;
       case 'subagent_progress': handlers.onSubagentProgress?.(data); break;
       case 'tool_confirm': handlers.onToolConfirm?.(data); break;
+      case 'interjection': handlers.onInterjection?.(data); break;
       case 'grounding': handlers.onGrounding?.(data); break;
       case 'context_summary': handlers.onContextSummary?.(data); break;
       case 'data_comparison': handlers.onDataComparison?.(data); break;

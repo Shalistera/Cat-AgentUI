@@ -43,6 +43,7 @@ const serverPatterns: [RegExp, string][] = [
   [/^每次最多添加 (\d+) 个附件$/, 'At most $1 attachments at a time'],
   [/^附件总大小超过 (\d+) MB 限制$/, 'The attachments exceed the $1 MB limit'],
   [/^单次回复超过 (.+?) 字符限制$/, 'The reply exceeds the $1 character limit'],
+  [/^每条回复最多追加 (\d+) 条消息$/, 'At most $1 messages can be added to one reply'],
   [/^单个文件不能超过 (\d+) MB$/, 'A single file can\'t exceed $1 MB'],
   [/^工作区已达 (\d+) MB 上限,请先删除一些文件$/, 'The workspace has hit its $1 MB limit — delete some files first'],
   [/^工作区文件数不能超过 (\d+) 个$/, 'The workspace can\'t hold more than $1 files'],

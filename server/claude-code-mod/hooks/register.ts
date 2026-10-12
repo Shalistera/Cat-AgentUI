@@ -9,6 +9,8 @@ import type { Register } from 'claude-code'
 export const register: Register = (on) => {
   // The first user message's context blocks (CLAUDE.md, userEmail, date).
   on('prompt.context', () => ({ blocks: [] }))
-  // Every reminder Claude Code injects on its own as a request carries it.
-  on('prompt.attachment', () => ({ text: null }))
+  // Every reminder Claude Code injects on its own as a request carries it —
+  // except a queued_command: that is the person's own 追加, folded into the
+  // running turn, and the model has to read it.
+  on('prompt.attachment', ($, e, next) => (e.type === 'queued_command' ? next(e) : { text: null }))
 }

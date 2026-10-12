@@ -49,12 +49,13 @@ function thinkingFromSig(sig?: string): ThinkingBlock[] {
 }
 
 // One AdapterMessage may expand to several Anthropic messages (tool results go back as user turns).
-// Thinking blocks are replayed only for the turn in progress (the trailing
-// assistant message): earlier turns may have been trimmed or summarized since,
-// and a block whose preceding conversation changed is no longer valid.
+// Thinking blocks are replayed only for the turn in progress (the assistant
+// messages after the last user turn — a 追加 sent mid-reply belongs to the
+// turn it interrupted): earlier turns may have been trimmed or summarized
+// since, and a block whose preceding conversation changed is no longer valid.
 function toMessages(messages: AdapterMessage[]): { role: 'user' | 'assistant'; content: any[] }[] {
   const out: { role: 'user' | 'assistant'; content: any[] }[] = [];
-  const last = messages.length - 1;
+  const turnStart = messages.findLastIndex((m) => m.role === 'user' && m.interjection === undefined);
 
   for (const [index, m] of messages.entries()) {
     if (m.role === 'user') {
@@ -79,7 +80,7 @@ function toMessages(messages: AdapterMessage[]): { role: 'user' | 'assistant'; c
       if (content.length) out.push({ role: 'user', content });
     } else {
       // assistant: walk parts in order; tool results flush as a user message
-      const replayThinking = index === last;
+      const replayThinking = index > turnStart;
       let blocks: any[] = [];
       let results: any[] = [];
       const flushBlocks = () => {

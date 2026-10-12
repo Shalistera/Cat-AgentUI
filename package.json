@@ -35,7 +35,8 @@
     "test:system-model": "npm run build -w server && node scripts/system-model-regression.mjs",
     "test:anthropic": "npm run build -w server && node scripts/anthropic-adapter-regression.mjs",
     "test:web-search": "npm run build -w server && node scripts/web-search-regression.mjs",
-    "test:web-fetch": "npm run build -w server && node scripts/web-fetch-regression.mjs"
+    "test:web-fetch": "npm run build -w server && node scripts/web-fetch-regression.mjs",
+    "test:interjection": "npm run build -w server && node scripts/interjection-regression.mjs"
   },
   "devDependencies": {
     "pm2": "^7.0.3"

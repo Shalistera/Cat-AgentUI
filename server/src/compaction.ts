@@ -126,6 +126,7 @@ function partLine(p: MessagePart): string | null {
     case 'file': return `〔附件:${p.name ?? '文件'}〕`;
     case 'image': return '〔图片〕';
     case 'data_comparison': return `〔数据对比图:${p.title}〕`;
+    case 'interjection': return `〔用户在这段回复进行中追加:${p.text.trim()}〕`;
     default: return null;
   }
 }

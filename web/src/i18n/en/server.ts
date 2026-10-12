@@ -58,6 +58,7 @@ export default {
   '所选 MCP 服务器不存在、已禁用或未授权': 'The selected MCP server is missing, disabled or not authorized',
   '正在生成中的消息不能删除': 'A message that is still generating can\'t be deleted',
   '正在生成中的消息不能编辑': 'A message that is still generating can\'t be edited',
+  '这条回复已经结束': 'This reply has already finished',
   '这次调用已不再等待确认(可能已超时或对话已停止)': 'This call is no longer waiting for confirmation (it timed out or the chat was stopped)',
   '这个请求已接收,请恢复查看原回复': 'This request was already received — reload to see the original reply',
   '没有可用的模型,请联系管理员配置': 'No models are available — ask an admin to set one up',

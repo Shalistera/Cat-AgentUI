@@ -7,7 +7,7 @@ import {
 import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, suggestFallbackModel, configuredFallbackModel, usageLimitExhausted, ApiError } from '../api';
 import { computePath, newestLeafUnder } from '../tree';
 import { recoverChatStream, mergeStreamSnapshot, type StreamIdentity } from '../streamRecovery';
-import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
+import { chatHandoff, LAST_MODEL_KEY, useAuth, useChats, useComposerInsert, useInterjections, useMcp, useModels, useProjects, useQueue, useSubagentProgress, useUi, useWorkspacePanel, type QueuedMessage } from '../store';
 import { Composer, type ComposerSettings, type PendingAttachment } from '../components/Composer';
 import { ChatMessage } from '../components/ChatMessage';
 import { SelectionQuote, asQuote } from '../components/SelectionQuote';
@@ -18,7 +18,7 @@ import { tabAlert } from '../tabAlert';
 import { notifyDone } from '../notify';
 import { FindBar } from '../components/FindBar';
 import { normalizeWorkspacePath } from '../workspaceLinks';
-import type { ActiveChatTurn, ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, ToolConfirmRequest, User } from '../types';
+import type { ActiveChatTurn, ChatDetail, ChatSummary, Message, MessagePart, ModelInfo, PendingInterjection, ToolConfirmRequest, User } from '../types';
 import { t } from '../i18n';
 
 /** First line-ish of a reply's text, for the notification body. */
@@ -291,6 +291,7 @@ export default function Chat() {
   const loadMcp = useMcp((s) => s.load);
   const chatsStore = useChats();
   const queueStore = useQueue();
+  const pendingInterjections = useInterjections((s) => s.pending);
 
   const [chat, setChat] = useState<ChatDetail | null>(null);
   const workspaceFileParam = searchParams.get('file');
@@ -422,6 +423,12 @@ export default function Chat() {
           void followStream(r.chat.id, {
             requestId: r.activeTurn.requestId, messageId: r.activeTurn.messageId ?? undefined,
           });
+        } else {
+          // A reply that ended while this chat was closed: 追加 it read are
+          // in its parts, the rest go out as ordinary messages.
+          const ij = useInterjections.getState();
+          for (const m of r.messages) for (const p of m.parts) if (p.type === 'interjection') ij.resolve(r.chat.id, p.id);
+          settleInterjections(r.chat.id, false);
         }
         if (msgParam || findParam) {
           params.delete('msg'); params.delete('find');
@@ -608,6 +615,9 @@ export default function Chat() {
           setMessages((prev) => current() ? mergeStreamSnapshot(prev, snapshot, placeholders) : prev);
           setLeafId((leaf) => placeholders && !leaf?.startsWith('tmp-') ? leaf : id);
           setCompare((c) => c?.challengerId === 'tmp-a' ? { ...c, challengerId: id } : c);
+          const ij = useInterjections.getState();
+          for (const p of snapshot.message.parts) if (p.type === 'interjection') ij.resolve(chatId, p.id);
+          for (const x of snapshot.activeTurn?.interjections ?? []) ij.add(chatId, x);
           if (!snapshot.active && snapshot.chatModelId && snapshot.message.parts.some((p) => p.type === 'model_fallback')) {
             setChat((c) => c?.id === chatId ? { ...c, modelId: snapshot.chatModelId! } : c);
             const selected = models.find((m) => m.id === snapshot.chatModelId);
@@ -638,6 +648,7 @@ export default function Chat() {
       setStreaming(false);
       sendingRef.current = false;
       setToolConfirm(null);
+      settleInterjections(chatId, result.message?.status === 'stopped');
       chatsStore.load().catch(() => {});
       if (models.some((m) => m.usageLimit || m.systemFallbackAvailable)) loadModels(true).catch(() => {});
       return acknowledged;
@@ -646,6 +657,7 @@ export default function Chat() {
       setStreaming(false);
       sendingRef.current = false;
       setToolConfirm(null);
+      settleInterjections(chatId, false);
       setMessages((prev) => prev.map((m) => m.id === identity.messageId || (placeholders && m.id === 'tmp-a')
         ? { ...m, status: 'error', recovering: false, error: errMsg(err) } : m));
       toast(errMsg(err), 'err');
@@ -722,6 +734,7 @@ export default function Chat() {
       setStreaming(false);
       sendingRef.current = false;
       setToolConfirm(null);
+      settleInterjections(chatId, status === 'stopped');
       // The turn just spent part of someone's daily/weekly allowance — pull
       // fresh counters so the picker doesn't promise room that is gone.
       if (payload.automaticFallback || models.some((m) => m.usageLimit || m.systemFallbackAvailable)) {
@@ -794,6 +807,11 @@ export default function Chat() {
             .catch(() => { /* ignore */ });
         }
       },
+      onInterjection(d) {
+        flush();
+        useInterjections.getState().resolve(chatId, d.id);
+        applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] }));
+      },
       onToolConfirm(d) {
         flush();
         setToolConfirm(d);
@@ -863,6 +881,7 @@ export default function Chat() {
           if (flushTimer) clearInterval(flushTimer);
           flush();
           applyToAssistant((m) => ({ ...m, status: 'error', finishReason }));
+          settleInterjections(chatId, false);
           // Same saved question/attachments, new sibling reply. Admission has
           // already been released by 'done', so no abort/retry race is needed.
           startModelFallback(chatId, { id: messageId, error: fallbackError, errorCode: fallbackErrorCode, finishReason }, fallback);
@@ -1026,6 +1045,64 @@ export default function Chat() {
     // promoted item. Not streaming (paused queue) → the dispatcher effect has
     // already been re-armed by the promote() state change.
     if (streaming) stop();
+  }
+
+  // 追加: while a reply is being written, a send goes into it and the model
+  // reads it at its next step — the way Claude Code takes input typed
+  // mid-turn. The server holds it until then; one the reply never reads
+  // (it ended first) goes out as an ordinary message instead.
+  const sameTurn = (a: { chatId: string } & StreamIdentity, b: { chatId: string } & StreamIdentity) => a.chatId === b.chatId
+    && ((!!a.requestId && a.requestId === b.requestId) || (!!a.messageId && a.messageId === b.messageId));
+
+  async function interject(text: string): Promise<boolean> {
+    const target = turnIdentityRef.current;
+    if (!target || (!target.requestId && !target.messageId)) { enqueue(text, []); return true; }
+    try {
+      const r = await api.post<{ interjection: PendingInterjection }>(`/api/chats/${target.chatId}/interject`, {
+        requestId: target.requestId, messageId: target.messageId, text,
+      });
+      const ij = useInterjections.getState();
+      const live = turnIdentityRef.current;
+      if (sendingRef.current && live && sameTurn(live, target)) ij.add(target.chatId, r.interjection);
+      // The reply ended while this was on its way and never read it.
+      else if (!ij.isResolved(r.interjection.id)) queueStore.enqueue(target.chatId, text, []);
+      return true;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        queueStore.enqueue(target.chatId, text, []);
+        toast(e.code === 'interjection_limit' ? t('这条回复的追加已达上限,这条改为排队发送') : t('回复已经结束,这条改为排队发送'), 'info');
+        return true;
+      }
+      toast(errMsg(e), 'err');
+      return false;
+    }
+  }
+
+  /** Take back a 追加 the model has not read yet; its text returns to the composer. */
+  async function withdrawInterjection(id: string) {
+    const target = turnIdentityRef.current;
+    if (!target) return;
+    const item = (useInterjections.getState().pending[target.chatId] ?? []).find((x) => x.id === id);
+    try {
+      const r = await api.del<{ removed: boolean }>(`/api/chats/${target.chatId}/interject/${id}`);
+      if (!r.removed) { toast(t('这条追加已经送出,无法撤回'), 'info'); return; }
+      useInterjections.getState().resolve(target.chatId, id);
+      if (item) setRecoveredDraft({ chatId: target.chatId, text: item.text, attachments: [] });
+    } catch (e) { toast(errMsg(e), 'err'); }
+  }
+
+  // The reply is over: 追加 it never read go out as ordinary messages —
+  // queued, or back into the composer when the person stopped it.
+  function settleInterjections(chatId: string, stopped: boolean) {
+    const left = useInterjections.getState().settle(chatId);
+    if (!left.length) return;
+    if (stopped) {
+      setRecoveredDraft({ chatId, text: left.map((x) => x.text).join('\n\n'), attachments: [] });
+      toast(t('已停止生成,没送达的追加放回了输入框'), 'info');
+    } else {
+      for (const x of left) queueStore.enqueue(chatId, x.text, []);
+      toast(t('回复先结束了,{count} 条追加改为排队发送', { count: left.length }), 'info');
+    }
   }
 
   function regenerate(msgId: string, withModel: ModelInfo | null = modelSel, busyRetries = 0) {
@@ -1261,6 +1338,7 @@ export default function Chat() {
       recoveredDraft={recoveredDraft?.chatId === (chat?.id ?? null) ? recoveredDraft : null}
       onDraftRecovered={() => setRecoveredDraft(null)}
       onEnqueue={chat ? enqueue : undefined}
+      onInterject={chat && !modelSel?.imageGen ? interject : undefined}
       onStop={stop}
       draftKey={draftKey}
       autoFocus
@@ -1477,6 +1555,8 @@ export default function Chat() {
                     onBookmark={!!chat && m.status !== 'streaming' && !m.id.startsWith('tmp-') ? () => void toggleBookmark(m) : undefined}
                     toolConfirm={toolConfirm && toolConfirm.messageId === m.id ? toolConfirm : null}
                     onToolDecision={toolConfirm && toolConfirm.messageId === m.id ? (d, r) => void decideTools(toolConfirm, d, r) : undefined}
+                    pendingInterjections={chat && streaming && m.id === streamMsgIdRef.current ? pendingInterjections[chat.id] : undefined}
+                    onWithdrawInterjection={streaming && m.id === streamMsgIdRef.current ? (id) => void withdrawInterjection(id) : undefined}
                   />
                 );
               })}

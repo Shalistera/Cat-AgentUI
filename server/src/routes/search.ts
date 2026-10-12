@@ -56,7 +56,7 @@ export function textPartsOf(partsJson: string): string[] {
   try {
     const parts = JSON.parse(partsJson) as { type?: string; text?: string }[];
     return Array.isArray(parts)
-      ? parts.filter((p) => p?.type === 'text' && typeof p.text === 'string').map((p) => p.text!)
+      ? parts.filter((p) => (p?.type === 'text' || p?.type === 'interjection') && typeof p.text === 'string').map((p) => p.text!)
       : [];
   } catch { return []; }
 }

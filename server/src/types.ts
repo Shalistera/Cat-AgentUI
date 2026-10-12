@@ -53,6 +53,10 @@ export type MessagePart =
   // require to be echoed verbatim when the call is replayed as history.
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string } // args = JSON string
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
+  // 追加: a message the person sent while this reply was being written. It
+  // reached the model where it sits among the parts — after a tool round, or
+  // after the text it arrived during — and replays there as a user message.
+  | { type: 'interjection'; id: string; text: string }
   // Google Search grounding is executed inside Vertex AI rather than through
   // our function/MCP loop. Keep its attribution metadata beside the answer so
   // saved chats can still render sources.
@@ -188,6 +192,10 @@ export interface AdapterMessagePart {
 export interface AdapterMessage {
   role: 'user' | 'assistant';
   parts: AdapterMessagePart[];
+  /** 追加: a user message the person sent mid-reply, as they typed it. Its
+      parts carry the framed prompt (interjection.ts) that adapters send;
+      the message belongs to the turn it interrupted, not a new one. */
+  interjection?: string;
 }
 
 export interface ReasoningRequest {

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { api } from './api';
 import { adoptAccountLang } from './i18n';
-import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, Project, User, AgentCapabilities } from './types';
+import type { Bootstrap, ChatSummary, McpServerInfo, ModelInfo, PendingInterjection, Project, User, AgentCapabilities } from './types';
 import type { ComposerSettings, PendingAttachment } from './components/Composer';
 
 // ---- theme ----
@@ -309,6 +309,51 @@ export const useQueue = create<QueueState>((set, get) => {
       if (!q.length) return null;
       patch(chatId, (list) => list.slice(1));
       return q[0];
+    },
+  };
+});
+
+// ---- 追加 (per chat) ----
+// Messages sent into the reply being generated, until the model reads them.
+// Whatever is still here when the reply ends was never read: the chat page
+// settles it into the queue (or back into the composer after a stop). Module
+// state like the queue, so a chat left mid-reply settles on return.
+interface InterjectionState {
+  pending: Record<string, PendingInterjection[]>;
+  add(chatId: string, item: PendingInterjection): void;
+  /** The model read it (or it was taken back): never pending again. */
+  resolve(chatId: string, id: string): void;
+  isResolved(id: string): boolean;
+  /** Empty this chat's list and return what was on it. */
+  settle(chatId: string): PendingInterjection[];
+}
+
+export const useInterjections = create<InterjectionState>((set, get) => {
+  // Not state: only consulted, and a late POST reply or a stale server list
+  // must not resurrect an entry.
+  const resolved = new Set<string>();
+  const patch = (chatId: string, fn: (q: PendingInterjection[]) => PendingInterjection[]) => {
+    const pending = { ...get().pending };
+    const next = fn(pending[chatId] ?? []);
+    if (next.length) pending[chatId] = next; else delete pending[chatId];
+    set({ pending });
+  };
+  return {
+    pending: {},
+    add(chatId, item) {
+      if (resolved.has(item.id) || (get().pending[chatId] ?? []).some((x) => x.id === item.id)) return;
+      patch(chatId, (q) => [...q, item]);
+    },
+    resolve(chatId, id) {
+      resolved.add(id);
+      if ((get().pending[chatId] ?? []).some((x) => x.id === id)) patch(chatId, (q) => q.filter((x) => x.id !== id));
+    },
+    isResolved: (id) => resolved.has(id),
+    settle(chatId) {
+      const left = get().pending[chatId] ?? [];
+      for (const x of left) resolved.add(x.id);
+      if (left.length) patch(chatId, () => []);
+      return left;
     },
   };
 });

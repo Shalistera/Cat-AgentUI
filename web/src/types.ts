@@ -78,6 +78,8 @@ export type MessagePart =
   | { type: 'file'; uploadId: string; name?: string; mime?: string }
   | { type: 'tool_call'; id: string; name: string; args: string; sig?: string }
   | { type: 'tool_result'; toolCallId: string; name: string; result: string; isError?: boolean }
+  /** 追加: something the person sent while this reply was being written, where the model read it. */
+  | { type: 'interjection'; id: string; text: string }
   | { type: 'grounding'; queries: string[]; sources: { uri: string; title: string }[]; supports?: { text: string; start: number; sources: number[] }[]; label?: string }
   | { type: 'followups'; questions: string[] }
   /** 上下文压缩 ran before this reply: older turns now reach the model as a summary. */
@@ -545,6 +547,7 @@ export interface StreamHandlers {
   onToolCall?(d: { id: string; name: string; args: string; sig?: string }): void;
   onToolResult?(d: { toolCallId: string; name: string; result: string; isError?: boolean }): void;
   onToolConfirm?(d: ToolConfirmRequest): void;
+  onInterjection?(d: Extract<MessagePart, { type: 'interjection' }>): void;
   /** 子代理 live progress for the parent's spawn_subagent tool row. */
   onSubagentProgress?(d: { toolCallId: string; text: string }): void;
   onGrounding?(d: Extract<MessagePart, { type: 'grounding' }>): void;
@@ -566,7 +569,12 @@ export interface ActiveChatTurn {
   messageId: string | null;
   userMessageId: string | null;
   toolConfirm: ToolConfirmRequest | null;
+  /** 追加 the model has not read yet. */
+  interjections?: PendingInterjection[];
 }
+
+/** A 追加 sent into the reply being generated, not yet read by the model. */
+export interface PendingInterjection { id: string; text: string }
 
 export interface ChatStreamState {
   fallbackModelId?: string | null;

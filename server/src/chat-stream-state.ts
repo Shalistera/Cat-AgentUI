@@ -12,6 +12,10 @@ export interface ChatStreamState {
   fallbackModelId?: string | null;
   systemFallbackAvailable?: boolean;
   toolConfirm: { messageId: string; calls: { id: string; name: string; args: string }[] } | null;
+  /** 追加 waiting for the model's next step, oldest first. */
+  interjections: { id: string; text: string }[];
+  /** Cleared the moment the turn passes its last chance to deliver one. */
+  acceptsInterjections: boolean;
 }
 
 const active = new Map<string, ChatStreamState>();
@@ -26,6 +30,7 @@ export function beginChatStream(chatId: string, requestId: string): ChatStreamSt
   const state: ChatStreamState = {
     requestId, messageId: null, userMessageId: null, controller: new AbortController(),
     parts: [], retry: null, priority: false, toolConfirm: null,
+    interjections: [], acceptsInterjections: false,
   };
   active.set(chatId, state);
   return state;
