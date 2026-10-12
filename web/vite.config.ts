@@ -64,6 +64,10 @@ export default defineConfig({
     } : {}),
   },
   build: {
+    // The in-panel updater builds into a staging directory and swaps it in
+    // as the server restarts (server/src/system-update.ts), so the running
+    // server never hands out a frontend newer than itself.
+    outDir: process.env.WEB_OUT_DIR || 'dist',
     chunkSizeWarningLimit: 1500,
   },
 });

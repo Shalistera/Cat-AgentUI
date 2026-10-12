@@ -38,6 +38,13 @@ interface PptJob {
 
 const jobs = new Map<string, PptJob>();
 
+/** Decks still being written — a restart would lose them. */
+export function activePptJobs(): number {
+  let n = 0;
+  for (const j of jobs.values()) if (j.status === 'running') n++;
+  return n;
+}
+
 function cleanupJobs() {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, j] of jobs) {

@@ -260,4 +260,29 @@ export default {
   'SKILL.md 过长(上限 6 万字符)': 'SKILL.md is too long (60,000 characters max)',
   '不是有效的 zip 文件': 'Not a valid zip file',
   'zip 里没有找到 SKILL.md(需在根目录或唯一的一层文件夹内)': 'No SKILL.md found in the zip (it must sit at the root or inside a single top-level folder)',
+
+  // ---- system update (system-update.ts): errors and job log lines ----
+  '这个部署不是 git 仓库的检出(或服务器上没有 git),无法在面板里更新':
+    'This deployment isn\'t a git checkout (or git isn\'t installed on the server), so it can\'t be updated from the panel',
+  '仓库没有检出分支(处于分离 HEAD 状态),无法在面板里更新': 'The checkout is on a detached HEAD rather than a branch, so it can\'t be updated from the panel',
+  '当前分支没有设置上游分支': 'The current branch has no upstream set',
+  '有更新任务正在进行,请稍后再检查': 'An update is in progress — check again later',
+  '已有更新或重启任务在进行中': 'An update or restart is already in progress',
+  '无法在面板里更新': 'Can\'t update from the panel',
+  '仓库里有未提交的修改,无法自动更新': 'The checkout has uncommitted changes, so it can\'t be updated automatically',
+  '已经是这个版本': 'Already on that version',
+  '目标版本不在上游分支上,或无法从当前版本快进到它': 'That version isn\'t on the upstream branch, or can\'t be fast-forwarded to from the current one',
+  '没有检测到会自动拉起服务的进程守护,无法从面板重启': 'No supervisor that would start the service again was detected, so it can\'t be restarted from the panel',
+  '没有正在等待重启的任务': 'No job is waiting to restart',
+  '任务进行中服务被重启或中断,没有完成': 'The service was restarted or stopped while the job was running, so it didn\'t finish',
+  '依赖没有变化,跳过安装': 'Dependencies unchanged — skipping the install',
+  '前端构建结果没有出现在 web/dist.next(vite.config.ts 需要支持 WEB_OUT_DIR)':
+    'The frontend build didn\'t land in web/dist.next (vite.config.ts has to honour WEB_OUT_DIR)',
+  '自检通过': 'Self-test passed',
+  '已回滚,运行中的服务没有受到影响': 'Rolled back; the running service was not affected',
+  '新版本已就绪;面板无法自行重启,请手动重启服务': 'The new version is ready; the panel can\'t restart itself, so restart the service by hand',
+  '已取消重启;新版本会在下次重启服务后生效': 'Restart cancelled; the new version takes effect the next time the service restarts',
+  '不再等待,立即重启': 'Stopped waiting — restarting now',
+  '等待已超过 20 分钟,直接重启': 'Waited 20 minutes — restarting anyway',
+  '正在重启服务…': 'Restarting the service…',
 } satisfies Record<string, string>;

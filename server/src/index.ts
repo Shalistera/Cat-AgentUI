@@ -27,12 +27,14 @@ import { workspaceRoutes } from './routes/workspace.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import { skillRoutes } from './routes/skills.js';
 import { agentRoutes } from './routes/agent.js';
+import { systemUpdateRoutes } from './routes/system-update.js';
 import { reconcileSkills } from './skills.js';
 import { probeSandboxEnv } from './sandbox/env.js';
 import { warmPackagesCache } from './sandbox/venv.js';
 import { sweepOrphanWorkspaces } from './workspace.js';
 import { startRetentionSweeper } from './retention.js';
 import { startBackupScheduler } from './backup.js';
+import { SELF_TEST_OK, initUpdater, onRestartClose } from './system-update.js';
 import { reconcileStorageMetadata } from './storage.js';
 import { PasswordQueueFullError } from './crypto.js';
 import {
@@ -45,6 +47,12 @@ import {
 // calls no matter what AbortSignal the route passes. Long thinking pauses in
 // reasoning-model streams hit the same wall via bodyTimeout.
 setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000 }));
+
+// The in-panel updater (system-update.ts) starts every new build once with
+// this set, against a scratch copy of the database: all modules load, the
+// migrations and startup maintenance run on the copy, every route registers —
+// then the process exits instead of listening.
+const selfTest = process.env.STARTUP_SELF_TEST === '1';
 
 async function main() {
   runMigrations();
@@ -63,9 +71,12 @@ async function main() {
   await reconcileStorageMetadata();
   sweepOrphanWorkspaces();
   reconcileSkills();
-  // Host probes take a few seconds; run them off the startup path so the
-  // first chat turn already knows whether run_command can be offered.
-  probeSandboxEnv().then(() => warmPackagesCache()).catch(() => { /* reported on the admin page */ });
+  if (!selfTest) {
+    initUpdater();
+    // Host probes take a few seconds; run them off the startup path so the
+    // first chat turn already knows whether run_command can be offered.
+    probeSandboxEnv().then(() => warmPackagesCache()).catch(() => { /* reported on the admin page */ });
+  }
 
   const app = Fastify({
     logger: {
@@ -132,6 +143,7 @@ async function main() {
   await app.register(sandboxRoutes);
   await app.register(skillRoutes);
   await app.register(agentRoutes);
+  await app.register(systemUpdateRoutes);
 
   // static SPA
   const webDist = path.join(repoRoot, 'web', 'dist');
@@ -159,10 +171,18 @@ async function main() {
     }
   });
 
+  if (selfTest) {
+    await app.ready();
+    await app.close();
+    console.log(SELF_TEST_OK);
+    process.exit(0);
+  }
+
   await app.listen({ port: config.port, host: config.host });
   console.log(`🐈‍⬛ Cat-AgentUI listening on http://${config.host}:${config.port}`);
   startRetentionSweeper();
   startBackupScheduler();
+  onRestartClose(() => app.close());
 
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     process.on(sig, async () => {

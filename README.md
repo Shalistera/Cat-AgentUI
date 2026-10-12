@@ -51,6 +51,7 @@ A self-hosted AI panel that deliberately stays "light": no RAG, no plugin market
 - **Site announcements**: administrators publish a banner announcement that every logged-in user sees in real time and can dismiss
 - **Cost conversion**: once a price per million tokens is configured per model, the usage dashboard and the personal usage page show the converted cost
 - **Automatic backups**: a built-in scheduled SQLite online snapshot task with rotation; Admin can back up and download manually
+- **Updates from Admin**: **Admin → System update** checks the Git remote and lists the incoming commits. One click backs up the database, fast-forwards the checkout, installs dependencies if they changed, builds, starts the new build once against a copy of the database, and then restarts the service. A failed step rolls everything back while the running service carries on, and the restart waits for replies still being generated (up to 20 minutes). Restarting from the panel needs a supervisor that starts the process again after it exits: pm2, or a systemd unit with `Restart=always`
 - **PWA**: a manifest and a full icon set are included, so phones can "add to home screen"
 - **Security**: an asynchronous bounded scrypt queue, HttpOnly session cookies, CSRF protection, login rate limiting, MCP capability ACLs, and API keys stored AES-256-GCM encrypted and never returned to the frontend
 - **The isolation boundary of the Sandbox and the Workspace**: inside the sandbox, seccomp forbids creating symlinks / pipes / mounts and namespace operations; on the host side, workspace files are always opened O_NOFOLLOW and the path verified by inode, writes and command execution share a per-chat mutex, and irregular files are swept after every command. Only the skill directories the user is allowed to use are mounted at /skills, and zip imports are limited by the actual number of bytes extracted
@@ -92,6 +93,8 @@ npx pm2 save
 # Start on boot (without root): run crontab -e and add
 # @reboot cd /path/to/Cat-AgentUI && npx pm2 resurrect
 ```
+
+To update later, use **Admin → System update**, or by hand: `git pull && npm install && npm run build`, then `npx pm2 restart cat-agentui`.
 
 ### Environment variables (`.env`, generated automatically)
 

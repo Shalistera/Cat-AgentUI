@@ -34,6 +34,12 @@ export function tryAcquireChatTurn(userId: string, chatId: string): AdmissionLea
   });
 }
 
+/** Chat turns (translation, OCR and NAI prompt prep included) and image jobs
+    in flight — what a restart would cut off. */
+export function activeWork(): { chats: number; images: number } {
+  return { chats: activeChatsGlobal, images: activeImagesGlobal };
+}
+
 let activeImagesGlobal = 0;
 const activeImagesByUser = new Map<string, number>();
 // One job per (user, model): a user can drive several different image models

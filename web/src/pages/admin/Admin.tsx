@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowUpDown, BarChart3, Bot, Boxes, DatabaseBackup, HardDrive, Plug, Settings2, ShieldCheck, Sparkles, Terminal, Users as UsersIcon,
-  Workflow, Wrench, X,
+  ArrowUpDown, BarChart3, Bot, Boxes, CircleFadingArrowUp, DatabaseBackup, HardDrive, Plug, Settings2, ShieldCheck, Sparkles, Terminal,
+  Users as UsersIcon, Workflow, Wrench, X,
 } from 'lucide-react';
 import { Button, useConfirm } from '../../components/ui';
 import { t } from '../../i18n';
@@ -23,6 +23,7 @@ import Backup from './Backup';
 import Sandbox from './Sandbox';
 import Skills from './Skills';
 import AgentSettingsPage from './AgentSettings';
+import SystemUpdate from './SystemUpdate';
 import { confirmLeave, hasUnsaved } from './settings-common';
 
 /* The admin console is a dialog, the same shape as 设置: sections down the
@@ -45,6 +46,7 @@ const SECTIONS: { to: string; label: string; icon: typeof BarChart3; end?: boole
   { to: '/admin/settings', label: t('通用'), icon: Settings2, group: t('站点') },
   { to: '/admin/storage', label: t('存储空间'), icon: HardDrive },
   { to: '/admin/backup', label: t('备份与迁移'), icon: DatabaseBackup },
+  { to: '/admin/update', label: t('系统更新'), icon: CircleFadingArrowUp },
 ];
 
 /** Where "关闭" goes: the page the person came from, remembered by whoever
@@ -146,6 +148,7 @@ export default function Admin() {
                 <Route path="settings" element={<GeneralSettings />} />
                 <Route path="storage" element={<Storage />} />
                 <Route path="backup" element={<Backup />} />
+                <Route path="update" element={<SystemUpdate />} />
                 {/* Old address of the importer, now part of 备份与迁移. */}
                 <Route path="import" element={<Navigate to="/admin/backup" replace />} />
               </Routes>

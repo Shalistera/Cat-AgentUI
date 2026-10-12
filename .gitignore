@@ -3,6 +3,9 @@ dist/
 data/
 web/dist/
 server/dist/
+# The in-panel updater's staged web build and the one it replaces.
+web/dist.next/
+web/dist.old/
 
 # `tsc -b` rewrites this on every build — pure diff noise.
 *.tsbuildinfo

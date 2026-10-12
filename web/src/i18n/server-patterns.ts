@@ -55,6 +55,20 @@ const serverPatterns: [RegExp, string][] = [
   // ---- chat turn timeouts (routes/chats.ts) ----
   [/^Provider 连续 (\d+) 秒没有返回数据$/, 'The provider sent no data for $1s'],
   [/^对话生成超过 (\d+) 秒总时限$/, 'The reply exceeded the $1s total time limit'],
+
+  // ---- system update (system-update.ts): errors and job log lines ----
+  [/^分支 (.+?) 没有设置上游分支,无法在面板里更新$/, 'Branch $1 has no upstream set, so it can\'t be updated from the panel'],
+  [/^拉取远端失败:(.+)$/, 'Fetching from the remote failed: $1'],
+  [/^新版本没有通过启动自检\(退出码 (.+?)\)$/, 'The new version failed its startup self-test (exit code $1)'],
+  [/^(.+?) 失败\(退出码 (.+?)\)$/, '$1 failed (exit code $2)'],
+  [/^(.+?) 失败\(npm 报告了错误\)$/, '$1 failed (npm reported an error)'],
+  [/^(.+?) 超时\((\d+) 秒\),已终止$/, '$1 timed out after $2s and was stopped'],
+  [/^数据库已快照:(.+)$/, 'Database snapshot taken: $1'],
+  [/^等待 (\d+) 个进行中的任务结束…$/, 'Waiting for $1 running task(s) to finish…'],
+  [/^回滚到 (\S+)…$/, 'Rolling back to $1…'],
+  [/^回滚失败:(.+)$/, 'Rollback failed: $1'],
+  [/^切换前端文件失败:(.+)$/, 'Swapping in the new frontend failed: $1'],
+  [/^服务已重启,当前版本 (\S+)$/, 'Service restarted, now on $1'],
 ];
 
 export default serverPatterns;
