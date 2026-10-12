@@ -34,7 +34,7 @@ import { warmPackagesCache } from './sandbox/venv.js';
 import { sweepOrphanWorkspaces } from './workspace.js';
 import { startRetentionSweeper } from './retention.js';
 import { startBackupScheduler } from './backup.js';
-import { SELF_TEST_OK, initUpdater, onRestartClose } from './system-update.js';
+import { SELF_TEST_OK, closeForSignal, initUpdater, onRestartClose } from './system-update.js';
 import { reconcileStorageMetadata } from './storage.js';
 import { PasswordQueueFullError } from './crypto.js';
 import {
@@ -186,7 +186,7 @@ async function main() {
 
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     process.on(sig, async () => {
-      try { await app.close(); } finally { process.exit(0); }
+      try { await closeForSignal(() => app.close()); } finally { process.exit(0); }
     });
   }
 }

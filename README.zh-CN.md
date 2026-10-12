@@ -96,6 +96,19 @@ npx pm2 save
 
 之后更新可以在「管理后台 → 系统更新」一键完成,也可以手动:`git pull && npm install && npm run build`,然后 `npx pm2 restart cat-agentui`。
 
+### 代码属于 root 的部署
+
+仓库属于 root、服务以专用用户运行(systemd 的 `User=`、`NoNewPrivileges=`)时,面板改不了自己的代码,「系统更新」会把活交给以 root 运行的更新助手。先为每个实例写一份属于 root 的 `/etc/cat-agentui/instances.d/<实例名>.conf`:
+
+```bash
+REPO_DIR=/opt/cat-agentui
+SERVICE_NAME=cat-agentui.service
+SSH_KEY=/etc/cat-agentui/deploy-key            # 可选:通过 SSH 拉取用的密钥
+HEALTH_URL=http://127.0.0.1:3000/api/health    # 可选:重启后检查
+```
+
+再为每个实例安装一次:`sudo bash deploy/update-helper-setup.sh <实例名>`。面板只能往助手的收件箱里放一行请求(由 systemd path 单元接手);备份数据库、用新构建做启动自检、等正在生成的回复结束仍由面板完成,合并、构建、切换前端、重启或回滚由助手完成。手动更新也用同一个助手:`sudo cat-agentui-update <实例名>`。
+
 ### 环境变量(`.env`,自动生成)
 
 | 变量 | 说明 | 默认 |

@@ -1,0 +1,600 @@
+#!/usr/bin/env bash
+# Update a root-owned Cat-AgentUI checkout and restart its service.
+#
+#   sudo cat-agentui-update INSTANCE [--test]        update to the head of the remote branch
+#   sudo cat-agentui-update --list                   configured instances
+#   sudo cat-agentui-update --enable-panel INSTANCE  let the instance's admin panel ask for updates
+#   cat-agentui-update --serve INSTANCE              answer the panel (run by systemd, as root)
+#
+# INSTANCE is described by /etc/cat-agentui/instances.d/INSTANCE.conf, a root-owned
+# file of KEY=value lines:
+#   REPO_DIR=/opt/cat-agentui                      the checkout the service runs from
+#   SERVICE_NAME=cat-agentui.service
+#   SSH_KEY=/etc/cat-agentui/deploy-key            optional: key for fetching over SSH
+#   HEALTH_URL=http://127.0.0.1:3007/api/health    optional: checked after the restart
+#   GIT_REMOTE=origin  GIT_BRANCH=main  RUN_SECURITY_TESTS=0    (the defaults)
+#
+# The panel runs as its own user and cannot write the checkout. To update, it
+# drops a one-line request into STATE_ROOT/INSTANCE/inbox, the one place here it
+# can write; cat-agentui-update@INSTANCE.path then starts --serve as root, which
+# reports back through the status and log files beside the inbox. A request
+# names a commit at most: the checkout only ever moves forward along
+# GIT_BRANCH, and nothing read from the inbox reaches a shell.
+set -Eeuo pipefail
+umask 022
+
+readonly CONFIG_DIR="${CAUI_UPDATE_CONFIG_DIR:-/etc/cat-agentui/instances.d}"
+readonly STATE_ROOT="${CAUI_UPDATE_STATE_DIR:-/var/lib/cat-agentui-update}"
+# Version of the inbox/status format the panel speaks.
+readonly PROTOCOL=1
+# A prepared update waits this long for the panel's go-ahead (its self-test,
+# then running replies finishing) before it is rolled back.
+readonly GO_TIMEOUT_SECONDS=1800
+readonly NPM_TIMEOUT=20m
+
+usage() {
+  cat <<'EOF'
+Usage:
+  sudo cat-agentui-update INSTANCE [--test]
+  sudo cat-agentui-update --list
+  sudo cat-agentui-update --enable-panel INSTANCE
+
+Updates one configured Cat-AgentUI instance using a fast-forward-only Git
+update, installs locked dependencies, builds, restarts systemd, and verifies
+the instance health endpoint. --test also runs the security regression suite.
+If anything fails before the restart, the checkout and its build output are
+rolled back and the running service is left alone.
+
+--enable-panel lets the instance's admin panel (System update) ask for updates
+through cat-agentui-update@INSTANCE.path; deploy/update-helper-setup.sh runs it.
+EOF
+}
+
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+# Why the run failed, for the panel: a short code and the message.
+error_code=""
+error_detail=""
+
+die() {
+  error_detail="$*"
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+fail() {
+  error_code="$1"
+  shift
+  die "$@"
+}
+
+# ---------- state of this run ----------
+
+serving=0         # --serve: report to the panel, always exit 0
+final=0           # the panel has been told how it ended
+merged=0          # the checkout may have moved: undo it if the run fails
+committed=0       # the new version is going live: no undoing it any more
+install_always=0
+deps_changed=0
+rollback_failed=0
+instance=""
+state_dir=""
+inbox=""
+saved_dist=""
+old_head=""
+invocation_before=""
+health_response=""
+declare -A st=([id]="" [action]="" [state]="" [step]="" [from]="" [to]="" [deps]=0 [error]="" [detail]="" [rollback_failed]=0)
+
+# The panel reads STATE_ROOT/INSTANCE/status: KEY=value lines, replaced whole.
+set_status() {
+  local kv key value
+  for kv in "$@"; do
+    key="${kv%%=*}"
+    value="${kv#*=}"
+    value="${value//[$'\r\n']/ }"
+    st[$key]="${value:0:300}"
+  done
+  (( serving )) || return 0
+  {
+    printf 'protocol=%s\n' "$PROTOCOL"
+    for key in id action state step from to deps error detail rollback_failed; do
+      printf '%s=%s\n' "$key" "${st[$key]}"
+    done
+    printf 'updated=%s\n' "$(date +%s)"
+  } >"$state_dir/status.tmp"
+  mv -f -- "$state_dir/status.tmp" "$state_dir/status"
+}
+
+# Read and remove an inbox file. The inbox belongs to the panel's user: never
+# follow a link out of it, and take no more than a short line of expected characters.
+take_inbox() {
+  local file="$inbox/$1" line=""
+  if [[ -f "$file" && ! -L "$file" ]]; then
+    line="$(head -c 200 -- "$file" | head -n 1 | tr -cd '0-9a-z -')" || line=""
+  fi
+  rm -f -- "$file"
+  printf '%s' "$line"
+}
+
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  set +eu
+  if (( merged && !committed )); then
+    if ! rollback; then
+      rollback_failed=1
+      log "[$instance] ROLLBACK FAILED: check $REPO_DIR before restarting $SERVICE_NAME"
+    fi
+  fi
+  if (( serving )); then
+    if (( !final )); then
+      set_status state=failed error="${error_code:-internal}" detail="${error_detail:-exit status $rc}" \
+        rollback_failed="$rollback_failed"
+    fi
+    exit 0
+  fi
+  exit "$rc"
+}
+
+# ---------- configuration ----------
+
+list_instances() {
+  if [[ -d "$CONFIG_DIR" ]]; then
+    find "$CONFIG_DIR" -maxdepth 1 -type f -name '*.conf' -printf '%f\n' \
+      | sed 's/\.conf$//' | sort
+  fi
+}
+
+load_instance() {
+  instance="$1"
+  [[ "$instance" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] \
+    || fail config "invalid instance name: $instance"
+
+  local config_file="$CONFIG_DIR/$instance.conf"
+  [[ -f "$config_file" ]] || fail config "instance config not found: $config_file"
+  [[ $(stat -c '%u' "$config_file") == "0" ]] \
+    || fail config "instance config must be owned by root"
+  [[ -z $(find "$config_file" -maxdepth 0 -perm /022 -print -quit) ]] \
+    || fail config "instance config must not be group/world writable"
+
+  unset REPO_DIR SERVICE_NAME GIT_REMOTE GIT_BRANCH SSH_KEY HEALTH_URL RUN_SECURITY_TESTS
+  # This file is root-owned and deliberately supports simple KEY=value settings.
+  # shellcheck source=/dev/null
+  source "$config_file"
+
+  [[ -n "${REPO_DIR:-}" ]] || fail config "missing REPO_DIR in $config_file"
+  [[ -n "${SERVICE_NAME:-}" ]] || fail config "missing SERVICE_NAME in $config_file"
+  GIT_REMOTE="${GIT_REMOTE:-origin}"
+  GIT_BRANCH="${GIT_BRANCH:-main}"
+  SSH_KEY="${SSH_KEY:-}"
+  HEALTH_URL="${HEALTH_URL:-}"
+  RUN_SECURITY_TESTS="${RUN_SECURITY_TESTS:-0}"
+
+  [[ "$REPO_DIR" == /* && -d "$REPO_DIR/.git" ]] \
+    || fail config "REPO_DIR is not an absolute Git worktree: $REPO_DIR"
+  [[ "$SERVICE_NAME" =~ ^[A-Za-z0-9@_.-]+\.service$ ]] \
+    || fail config "invalid SERVICE_NAME: $SERVICE_NAME"
+  [[ "$GIT_REMOTE" =~ ^[A-Za-z0-9_.-]+$ ]] \
+    || fail config "invalid GIT_REMOTE: $GIT_REMOTE"
+  [[ "$GIT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] \
+    || fail config "invalid GIT_BRANCH: $GIT_BRANCH"
+  [[ -z "$SSH_KEY" || ( "$SSH_KEY" =~ ^/[A-Za-z0-9_./-]+$ && -r "$SSH_KEY" ) ]] \
+    || fail config "SSH_KEY is not a readable absolute path: $SSH_KEY"
+  [[ -z "$HEALTH_URL" || "$HEALTH_URL" =~ ^https?:// ]] || fail config "invalid HEALTH_URL"
+  [[ "$RUN_SECURITY_TESTS" == "0" || "$RUN_SECURITY_TESTS" == "1" ]] \
+    || fail config "RUN_SECURITY_TESTS must be 0 or 1"
+  state_dir="$STATE_ROOT/$instance"
+  saved_dist="$state_dir/server-dist"
+}
+
+require_commands() {
+  local command_name
+  for command_name in git npm systemctl curl flock ssh timeout; do
+    command -v "$command_name" >/dev/null || fail config "missing command: $command_name"
+  done
+}
+
+# npm, and every node its scripts start, must be the service's own node: one
+# of another major version builds native modules (better-sqlite3) for the
+# wrong ABI, and the restarted service can't load them.
+use_service_node() {
+  local exec_start node
+  exec_start="$(systemctl show -p ExecStart --value "$SERVICE_NAME" 2>/dev/null)" || return 0
+  node="$(sed -nE 's/.*path=([^ ;]+).*/\1/p' <<<"$exec_start" | head -n 1)"
+  if [[ "$node" == /* && "$(basename "$node")" == node* && -x "$node" ]]; then
+    PATH="$(dirname "$node"):$PATH"
+    export PATH
+  fi
+}
+
+take_lock() {
+  local lock_file="/run/lock/cat-agentui-update-$instance.lock"
+  exec 9>"$lock_file"
+  flock -n 9 || fail busy "another update is already running for $instance"
+}
+
+# ---------- repository ----------
+
+git_() {
+  git -C "$REPO_DIR" "$@"
+}
+
+fetch_remote() {
+  if [[ -n "$SSH_KEY" ]]; then
+    GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes" \
+      git_ fetch --prune "$GIT_REMOTE" "$GIT_BRANCH"
+  else
+    git_ fetch --prune "$GIT_REMOTE" "$GIT_BRANCH"
+  fi
+}
+
+check_service() {
+  systemctl cat "$SERVICE_NAME" >/dev/null \
+    || fail config "systemd service not found: $SERVICE_NAME"
+}
+
+check_clean() {
+  [[ -z $(git_ status --porcelain) ]] \
+    || fail dirty "Git worktree is not clean: $REPO_DIR"
+}
+
+check_branch() {
+  local current_branch
+  current_branch="$(git_ branch --show-current)"
+  [[ "$current_branch" == "$GIT_BRANCH" ]] \
+    || fail branch "expected branch $GIT_BRANCH, found $current_branch"
+}
+
+service_invocation() {
+  systemctl show -p InvocationID --value "$SERVICE_NAME" 2>/dev/null || true
+}
+
+# npm's exit status alone can't be trusted: npm 9 under Node 22 exits 0 when a
+# workspace script fails. Its own error lines can.
+run_npm() {
+  local out rc=0
+  out="$(mktemp)"
+  timeout --kill-after=30s "$NPM_TIMEOUT" npm "$@" 2>&1 | tee "$out" || rc=$?
+  if (( rc == 0 )) && grep -Eq '^npm (ERR!|error)( |$)' "$out"; then
+    rc=1
+  fi
+  rm -f -- "$out"
+  return "$rc"
+}
+
+npm_ci() {
+  (cd "$REPO_DIR" && run_npm ci --include=dev --no-audit --no-fund)
+}
+
+# Between steps of a panel update: has the panel called it off?
+check_abort() {
+  if (( serving )) && [[ "$(take_inbox abort)" == "${st[id]}" ]]; then
+    cancel_update cancelled
+    exit 0
+  fi
+}
+
+# ---------- update ----------
+
+# Move the checkout to TARGET and build it. The web build is staged in
+# web/dist.next, so until it is swapped in every page still matches the
+# running server.
+prepare() {
+  local target="$1" changed
+  invocation_before="$(service_invocation)"
+  install -d -m 0755 "$STATE_ROOT" "$state_dir"
+  rm -rf -- "$saved_dist"
+  if [[ -d "$REPO_DIR/server/dist" ]]; then
+    cp -a -- "$REPO_DIR/server/dist" "$saved_dist" || fail merge "could not save server/dist"
+  fi
+
+  merged=1
+  set_status step=merge
+  log "[$instance] merging ${old_head:0:7} -> ${target:0:7}"
+  git_ merge --ff-only "$target" || fail merge "git merge --ff-only $target failed"
+  changed="$(git_ diff --name-only "$old_head" "$target")"
+  if grep -Eq '(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|\.npmrc)$' <<<"$changed"; then
+    deps_changed=1
+  fi
+  check_abort
+
+  set_status step=install deps="$deps_changed"
+  if (( install_always || deps_changed )); then
+    log "[$instance] installing locked dependencies"
+    npm_ci || fail install "npm ci failed"
+  else
+    log "[$instance] dependencies unchanged"
+  fi
+  check_abort
+
+  set_status step=build
+  log "[$instance] building"
+  rm -rf -- "$REPO_DIR/web/dist.next"
+  (cd "$REPO_DIR" && export WEB_OUT_DIR="$REPO_DIR/web/dist.next" && run_npm run build) \
+    || fail build "npm run build failed"
+  [[ -f "$REPO_DIR/web/dist.next/index.html" ]] \
+    || fail build "the web build is not in web/dist.next (vite.config.ts must honour WEB_OUT_DIR)"
+  if [[ "$RUN_SECURITY_TESTS" == "1" ]]; then
+    set_status step=test
+    log "[$instance] running security regression tests"
+    (cd "$REPO_DIR" && node scripts/security-regression.mjs) || fail test "security regression tests failed"
+  fi
+  [[ -z $(git_ status --porcelain) ]] \
+    || fail changed "build changed tracked or untracked repository files; refusing restart"
+  check_abort
+}
+
+swap_web() {
+  local web="$REPO_DIR/web"
+  rm -rf -- "$web/dist.old"
+  if [[ -e "$web/dist" ]]; then
+    mv -T -- "$web/dist" "$web/dist.old" || return 1
+  fi
+  if ! mv -T -- "$web/dist.next" "$web/dist"; then
+    if [[ -e "$web/dist.old" ]]; then mv -T -- "$web/dist.old" "$web/dist"; fi
+    return 1
+  fi
+  rm -rf -- "$web/dist.old"
+}
+
+health_check() {
+  if [[ -z "$HEALTH_URL" ]]; then
+    log "[$instance] HEALTH_URL is not set; skipping the health check"
+    return 0
+  fi
+  set_status step=health
+  local _attempt
+  for _attempt in $(seq 1 20); do
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+      if health_response="$(curl --fail --silent --show-error --max-time 3 "$HEALTH_URL" 2>/dev/null)"; then
+        if [[ "$health_response" == *'"ok":true'* ]]; then
+          return 0
+        fi
+      fi
+    fi
+    sleep 1
+  done
+  if (( !serving )); then
+    systemctl status "$SERVICE_NAME" --no-pager >&2 || true
+    journalctl -u "$SERVICE_NAME" -n 40 --no-pager >&2 || true
+  fi
+  fail health "health check failed: $HEALTH_URL"
+}
+
+# Swap the staged web build in and restart onto the new version.
+go_live() {
+  set_status state=running step=swap
+  swap_web || fail swap "could not move web/dist.next into place"
+  committed=1
+  rm -rf -- "$saved_dist"
+  set_status state=restarting step=restart
+  log "[$instance] restarting $SERVICE_NAME"
+  systemctl restart "$SERVICE_NAME" || fail restart "systemctl restart $SERVICE_NAME failed"
+  health_check
+}
+
+# Undo prepare(). Called with errexit off: every step checks for itself.
+rollback() {
+  log "[$instance] rolling back to ${old_head:0:7}"
+  set_status step=rollback
+  rm -rf -- "$REPO_DIR/web/dist.next"
+  git_ reset --hard --quiet "$old_head" || return 1
+  if [[ -d "$saved_dist" ]]; then
+    rm -rf -- "$REPO_DIR/server/dist" && cp -a -- "$saved_dist" "$REPO_DIR/server/dist" || return 1
+    rm -rf -- "$saved_dist"
+  fi
+  if (( deps_changed )); then
+    npm_ci || return 1
+  fi
+  merged=0
+  # A service that started again meanwhile (a crash, a manual restart) is
+  # running the code just taken back: put it on the old version too.
+  if [[ -n "$invocation_before" && "$(service_invocation)" != "$invocation_before" ]]; then
+    log "[$instance] $SERVICE_NAME restarted during the update; restarting it on ${old_head:0:7}"
+    systemctl restart "$SERVICE_NAME" || return 1
+  fi
+  log "[$instance] rolled back to ${old_head:0:7}"
+}
+
+cancel_update() {
+  if [[ "$1" == cancelled ]]; then
+    log "[$instance] the panel called the update off"
+  else
+    log "[$instance] no go-ahead from the panel in $(( GO_TIMEOUT_SECONDS / 60 )) minutes; calling the update off"
+  fi
+  if ! rollback; then
+    rollback_failed=1
+    log "[$instance] ROLLBACK FAILED: check $REPO_DIR before restarting $SERVICE_NAME"
+  fi
+  merged=0
+  final=1
+  if [[ "$1" == cancelled ]]; then
+    set_status state=cancelled rollback_failed="$rollback_failed"
+  else
+    set_status state=failed error=timeout detail="no go-ahead from the panel" rollback_failed="$rollback_failed"
+  fi
+}
+
+# The panel's word on a prepared update: 0 go, 1 abort, 2 none in time.
+wait_for_go() {
+  local deadline=$(( SECONDS + GO_TIMEOUT_SECONDS ))
+  while (( SECONDS < deadline )); do
+    [[ "$(take_inbox abort)" == "${st[id]}" ]] && return 1
+    [[ "$(take_inbox go)" == "${st[id]}" ]] && return 0
+    sleep 1
+  done
+  return 2
+}
+
+# ---------- commands ----------
+
+manual() {
+  local arg run_tests_override="" target_head new_head
+  for arg in "$@"; do
+    case "$arg" in
+      --test) run_tests_override="1" ;;
+      --help|-h) usage; exit 0 ;;
+      --*) die "unknown option: $arg" ;;
+      *)
+        [[ -z "$instance" ]] || die "only one instance may be selected"
+        instance="$arg"
+        ;;
+    esac
+  done
+  [[ -n "$instance" ]] || { usage >&2; exit 2; }
+  [[ $EUID -eq 0 ]] || die "run this command with sudo"
+
+  load_instance "$instance"
+  RUN_SECURITY_TESTS="${run_tests_override:-$RUN_SECURITY_TESTS}"
+  use_service_node
+  require_commands
+  take_lock
+  check_service
+  check_clean
+  check_branch
+
+  old_head="$(git_ rev-parse HEAD)"
+  log "[$instance] fetching $GIT_REMOTE/$GIT_BRANCH"
+  fetch_remote
+  target_head="$(git_ rev-parse "refs/remotes/$GIT_REMOTE/$GIT_BRANCH")"
+  git_ merge-base --is-ancestor "$old_head" "$target_head" \
+    || die "update is not fast-forward; refusing to rewrite history"
+
+  trap on_exit EXIT
+  install_always=1
+  prepare "$target_head"
+  go_live
+
+  new_head="$(git_ rev-parse HEAD)"
+  if [[ -n "$HEALTH_URL" ]]; then
+    log "[$instance] healthy; ${old_head:0:7} -> ${new_head:0:7}"
+    printf '%s\n' "$health_response"
+  else
+    log "[$instance] restarted; ${old_head:0:7} -> ${new_head:0:7}"
+  fi
+}
+
+serve_check() {
+  local out first
+  set_status step=fetch
+  log "[$instance] fetching $GIT_REMOTE/$GIT_BRANCH"
+  out="$(mktemp)"
+  if ! fetch_remote 2>&1 | tee "$out"; then
+    # The first thing git said, minus any credentials in a remote URL.
+    first="$(grep -m 1 -v '^[[:space:]]*$' "$out" | sed -E 's#([a-z][a-z0-9+.-]*://)[^@/[:space:]]+@#\1#g')" || first=""
+    rm -f -- "$out"
+    fail fetch "${first:-git fetch failed}"
+  fi
+  rm -f -- "$out"
+  final=1
+  set_status state=done step=done
+}
+
+serve_update() {
+  local target="$1" verdict=0
+  check_service
+  check_clean
+  check_branch
+  old_head="$(git_ rev-parse HEAD)"
+  set_status from="$old_head"
+  [[ "$old_head" != "$target" ]] || fail same "already at $target"
+  { git_ merge-base --is-ancestor "$old_head" "$target" \
+      && git_ merge-base --is-ancestor "$target" "refs/remotes/$GIT_REMOTE/$GIT_BRANCH"; } 2>/dev/null \
+    || fail target "$target is not ahead of HEAD on $GIT_REMOTE/$GIT_BRANCH"
+  # Verdicts left over from an earlier update mean nothing to this one.
+  rm -f -- "$inbox/go" "$inbox/abort"
+
+  prepare "$target"
+  set_status state=built step=built
+  log "[$instance] ${target:0:7} is built; waiting for the panel"
+  wait_for_go || verdict=$?
+  case "$verdict" in
+    0)
+      go_live
+      final=1
+      set_status state=done step=done
+      log "[$instance] updated; ${old_head:0:7} -> ${target:0:7}"
+      ;;
+    1) cancel_update cancelled ;;
+    *) cancel_update timeout ;;
+  esac
+}
+
+serve() {
+  local line proto action id target rest
+  serving=1
+  instance="$1"
+  [[ $EUID -eq 0 ]] || die "--serve must run as root"
+  [[ "$instance" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die "invalid instance name: $instance"
+  state_dir="$STATE_ROOT/$instance"
+  inbox="$state_dir/inbox"
+  [[ -d "$inbox" && ! -L "$inbox" ]] || die "no inbox at $inbox; run: cat-agentui-update --enable-panel $instance"
+
+  # "PROTOCOL check ID" or "PROTOCOL update ID COMMIT"
+  line="$(take_inbox request)"
+  read -r proto action id target rest <<<"$line" || true
+  if [[ "$proto" != "$PROTOCOL" || ! "$id" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ || -n "$rest" ]] \
+    || [[ ! ( "$action" == check && -z "$target" ) && ! ( "$action" == update && "$target" =~ ^[0-9a-f]{40}$ ) ]]; then
+    printf 'ignoring a malformed request\n' >&2
+    exit 0
+  fi
+
+  exec >"$state_dir/log" 2>&1
+  export GIT_TERMINAL_PROMPT=0
+  trap on_exit EXIT
+  set_status id="$id" action="$action" state=running step=start to="$target"
+  load_instance "$instance"
+  use_service_node
+  require_commands
+  take_lock
+  if [[ "$action" == check ]]; then
+    serve_check
+  else
+    serve_update "$target"
+  fi
+}
+
+enable_panel() {
+  local user group
+  [[ $EUID -eq 0 ]] || die "run this command with sudo"
+  load_instance "$1"
+  [[ $(stat -c '%u' "$REPO_DIR/.git") == "0" ]] \
+    || die "$REPO_DIR is not owned by root; a panel that owns its checkout updates itself, without this helper"
+  user="$(systemctl show -p User --value "$SERVICE_NAME")"
+  [[ -n "$user" && "$user" != root ]] \
+    || die "$SERVICE_NAME runs as root; its panel can update the checkout itself, without this helper"
+  group="$(systemctl show -p Group --value "$SERVICE_NAME")"
+  [[ -n "$group" ]] || group="$(id -gn "$user")"
+
+  install -d -m 0755 -o root -g root "$STATE_ROOT" "$state_dir"
+  install -d -m 0700 -o "$user" -g "$group" "$state_dir/inbox"
+  # Lets the panel find this directory: it looks for the entry naming its checkout.
+  printf 'protocol=%s\ninstance=%s\nrepo=%s\nservice=%s\n' \
+    "$PROTOCOL" "$instance" "$REPO_DIR" "$SERVICE_NAME" >"$state_dir/info.tmp"
+  mv -f -- "$state_dir/info.tmp" "$state_dir/info"
+  systemctl enable --now "cat-agentui-update@$instance.path"
+  log "[$instance] the admin panel of $SERVICE_NAME can now ask for updates"
+}
+
+case "${1:-}" in
+  --help|-h)
+    usage
+    ;;
+  --list)
+    list_instances
+    ;;
+  --serve)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    serve "$2"
+    ;;
+  --enable-panel)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    enable_panel "$2"
+    ;;
+  *)
+    manual "$@"
+    ;;
+esac

@@ -96,6 +96,19 @@ npx pm2 save
 
 To update later, use **Admin → System update**, or by hand: `git pull && npm install && npm run build`, then `npx pm2 restart cat-agentui`.
 
+### Code owned by root
+
+When the checkout belongs to root and the service runs as a user of its own (systemd `User=`, `NoNewPrivileges=`), the panel can't change its own code, so **System update** hands the work to a helper that runs as root. Describe each instance in a root-owned `/etc/cat-agentui/instances.d/<instance>.conf`:
+
+```bash
+REPO_DIR=/opt/cat-agentui
+SERVICE_NAME=cat-agentui.service
+SSH_KEY=/etc/cat-agentui/deploy-key            # optional: key for fetching over SSH
+HEALTH_URL=http://127.0.0.1:3000/api/health    # optional: checked after the restart
+```
+
+then install the helper once per instance: `sudo bash deploy/update-helper-setup.sh <instance>`. The panel can only drop a request into the helper's inbox (a systemd path unit picks it up); it still snapshots the database, self-tests the new build and waits for running replies, while the helper merges, builds, swaps the frontend in and restarts — or rolls back. `sudo cat-agentui-update <instance>` updates by hand with the same helper.
+
 ### Environment variables (`.env`, generated automatically)
 
 | Variable | Description | Default |

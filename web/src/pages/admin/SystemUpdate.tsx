@@ -13,6 +13,8 @@ import { SectionIntro } from './settings-common';
 interface CommitInfo { hash: string; subject: string; author: string; date: number }
 interface RepoState {
   root: string; available: boolean; reason: string | null;
+  /** Older servers leave these out: the panel itself. */
+  executor?: 'panel' | 'helper'; helper?: { instance: string; service: string | null } | null;
   branch: string | null; upstream: string | null; remoteUrl: string | null;
   head: CommitInfo | null; upstreamHead: CommitInfo | null;
   ahead: number; behind: number; incoming: CommitInfo[];
@@ -27,7 +29,7 @@ interface Activity { chats: number; images: number; ppt: number }
 type StepId = 'backup' | 'merge' | 'install' | 'build' | 'selftest' | 'wait' | 'restart';
 interface UpdateStep { id: StepId; status: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; startedAt: number | null; endedAt: number | null }
 interface UpdateJob {
-  id: string; kind: 'update' | 'restart';
+  id: string; kind: 'update' | 'restart'; executor?: 'panel' | 'helper';
   status: 'running' | 'waiting' | 'restarting' | 'done' | 'failed' | 'cancelled';
   by: string; from: string | null; to: string | null;
   steps: UpdateStep[]; log: string[]; error: string | null;
@@ -135,6 +137,13 @@ function JobCard({ job, supervisor, activity, downSince, restarted, onControl }:
   const spinner = <Spinner className="h-3.5 w-3.5 text-acc" />;
   const runningStep = job.steps.find((s) => s.status === 'running');
   const logsCmd = logsCommand(supervisor);
+  // The root helper rolls a called-off update back instead of keeping it for later.
+  const viaHelper = job.executor === 'helper';
+  const rollbackFailedNote = (
+    <p className="rounded-lg border border-err/30 bg-err/10 px-3.5 py-2.5 text-xs leading-relaxed text-err">
+      {t('自动回滚也失败了,仓库和构建产物可能对不上。请登录服务器检查,处理好之前不要重启服务。')}
+    </p>
+  );
 
   let status: ReactNode;
   if (downSince !== null || job.status === 'restarting') {
@@ -157,7 +166,7 @@ function JobCard({ job, supervisor, activity, downSince, restarted, onControl }:
           {minutes !== null && <span className="text-tx3">{t('(最多再等 {n} 分钟)', { n: minutes })}</span>}
         </Status>
         <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="ghost" onClick={() => onControl('cancel')}>{t('取消重启')}</Button>
+          <Button size="sm" variant="ghost" onClick={() => onControl('cancel')}>{viaHelper ? t('取消更新') : t('取消重启')}</Button>
           <Button size="sm" onClick={() => onControl('now')}>{t('立即重启')}</Button>
         </div>
       </div>
@@ -175,20 +184,20 @@ function JobCard({ job, supervisor, activity, downSince, restarted, onControl }:
     status = (
       <div className="space-y-2">
         <Status tone="err" icon={<CircleAlert size={15} />}>{tServer(job.error ?? '')}</Status>
-        {job.rollbackFailed ? (
-          <p className="rounded-lg border border-err/30 bg-err/10 px-3.5 py-2.5 text-xs leading-relaxed text-err">
-            {t('自动回滚也失败了,仓库和构建产物可能对不上。请登录服务器检查,处理好之前不要重启服务。')}
-          </p>
-        ) : rolledBack && (
+        {job.rollbackFailed ? rollbackFailedNote : rolledBack && (
           <p className="text-xs text-tx3">{t('已自动回滚到原来的版本,运行中的服务没有受到影响。')}</p>
         )}
       </div>
     );
   } else {
     status = (
-      <Status icon={<CircleMinus size={15} className="text-tx3" />}>
-        {job.kind === 'update' ? t('已取消重启,新版本会在下次重启服务后生效。') : t('已取消重启')}
-      </Status>
+      <div className="space-y-2">
+        <Status icon={<CircleMinus size={15} className="text-tx3" />}>
+          {job.kind !== 'update' ? t('已取消重启')
+            : viaHelper ? t('已取消更新,并已回滚到原来的版本。') : t('已取消重启,新版本会在下次重启服务后生效。')}
+        </Status>
+        {job.rollbackFailed && rollbackFailedNote}
+      </div>
     );
   }
 
@@ -317,7 +326,7 @@ export default function SystemUpdate() {
     const { repo, supervisor } = status;
     const target = head.hash;
     const body = t('将更新到 {hash}(共 {n} 个新提交):先备份数据库,再合并、构建新版本,并用数据库副本做一次启动自检。任何一步失败都会自动回滚,运行中的服务不受影响。', { hash: short(target), n: repo.behind })
-      + (supervisor.canRestart
+      + (repo.executor === 'helper' || supervisor.canRestart
         ? t('通过后重启服务,网站会中断几秒钟;如有回复正在生成,会先等它们结束(最多 20 分钟)。')
         : t('面板无法自行重启,完成后需要手动重启服务,新版本才会生效。'));
     if (!await confirmDialog(t('更新到最新版本?'), body, false)) return;
@@ -365,6 +374,8 @@ export default function SystemUpdate() {
 
   const { repo, supervisor, process: proc } = status;
   const working = isActive(job) || downSince !== null;
+  // The root helper restarts the service itself, supervisor or not.
+  const restartsAfterUpdate = repo.executor === 'helper' || supervisor.canRestart;
   // The checkout moved on (by hand, or an update whose restart was called off)
   // but this process still runs what it started with.
   const notLive = !!repo.head && !!proc.commit && repo.head.hash !== proc.commit;
@@ -403,6 +414,17 @@ export default function SystemUpdate() {
               <dd className="mb-2 min-w-0 text-tx2 sm:mb-0">
                 <span className="font-mono text-xs">{repo.branch}{repo.upstream ? ` ← ${repo.upstream}` : ''}</span>
                 {repo.remoteUrl && <div className="truncate font-mono text-[11px] text-tx3" title={repo.remoteUrl}>{repo.remoteUrl}</div>}
+              </dd>
+            </>
+          )}
+          {repo.helper && (
+            <>
+              <dt className="text-tx3">{t('更新方式')}</dt>
+              <dd className="mb-2 min-w-0 text-tx2 sm:mb-0">
+                <span className="inline-flex items-center gap-1.5">
+                  <StatusDot tone="ok" />{t('更新助手 cat-agentui-update@{instance}', { instance: repo.helper.instance })}
+                </span>
+                <p className="mt-1 text-xs leading-relaxed text-tx3">{t('代码属于 root,面板只提出请求,由服务器上以 root 运行的更新助手合并、构建并重启。')}</p>
               </dd>
             </>
           )}
@@ -478,12 +500,12 @@ export default function SystemUpdate() {
               </div>
             )}
             <div className="flex flex-wrap items-center justify-end gap-3 border-t border-line pt-4">
-              {supervisor.canRestart && activity && (
+              {restartsAfterUpdate && activity && (
                 <span className="mr-auto text-xs text-tx3">{t('当前:{busy}', { busy: busyText(activity) })}</span>
               )}
               <Button variant="primary" disabled={!canUpdate} onClick={update}>
                 {busy && <Spinner className="h-3.5 w-3.5" />}
-                {supervisor.canRestart ? t('更新并重启') : t('更新(需手动重启)')}
+                {restartsAfterUpdate ? t('更新并重启') : t('更新(需手动重启)')}
               </Button>
             </div>
           </div>

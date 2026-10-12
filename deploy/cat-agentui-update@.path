@@ -1,0 +1,10 @@
+# Starts cat-agentui-update@INSTANCE.service when INSTANCE's admin panel drops an
+# update request into its inbox. Installed by deploy/update-helper-setup.sh.
+[Unit]
+Description=Cat-AgentUI update requests (%i)
+
+[Path]
+PathExists=/var/lib/cat-agentui-update/%i/inbox/request
+
+[Install]
+WantedBy=paths.target

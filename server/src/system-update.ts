@@ -9,6 +9,12 @@
 // server build has to start cleanly against a copy of the database. A failure
 // anywhere resets the checkout and the build output, and the running process —
 // whose code was loaded when it started — carries on as if nothing happened.
+//
+// Where the checkout belongs to root and the panel runs as its own user, the
+// panel can't write the code; the root helper set up by
+// deploy/update-helper-setup.sh does the merging, building and restarting
+// instead (update-helper.ts), and the panel keeps the rest: the snapshot,
+// the self-test and the wait for running work.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -18,6 +24,10 @@ import { backupDir, runBackup } from './backup.js';
 import { activeWork } from './admission.js';
 import { activePptJobs } from './routes/ppt.js';
 import { sandboxProcessEnv } from './sandbox/env.js';
+import {
+  findHelper, helperLog, readStatus, sendRequest, sendVerdict, withdrawRequest,
+  type Helper, type HelperLog, type HelperStatus,
+} from './update-helper.js';
 
 /** Printed by a build started with STARTUP_SELF_TEST=1 once every route is
     registered (index.ts). Older panels look for exactly this line — keep it. */
@@ -43,6 +53,12 @@ const LOG_LINES_MAX = 500;
 const OUTPUT_MAX = 1024 * 1024;
 const VITE_ASSET_ROW = /^\s*\S+\/assets\/\S+\s+[\d.,]+ kB/;
 const INCOMING_MAX = 50;
+// The root helper: taking a request is near instant (a systemd path unit);
+// its own npm steps are capped at 20 minutes each.
+const HELPER_PICKUP_MS = 20_000;
+const HELPER_CHECK_MS = 2 * 60_000;
+const HELPER_PREPARE_MS = 60 * 60_000;
+const HELPER_SETTLE_MS = 30 * 60_000;
 
 export interface CommitInfo { hash: string; subject: string; author: string; date: number }
 
@@ -52,6 +68,9 @@ export interface RepoState {
   /** False when this deployment can't be updated from the panel; `reason` says why. */
   available: boolean;
   reason: string | null;
+  /** Who carries an update out: this process, or the root helper of a root-owned checkout. */
+  executor: 'panel' | 'helper';
+  helper: { instance: string; service: string | null } | null;
   branch: string | null;
   upstream: string | null;
   remoteUrl: string | null;
@@ -91,6 +110,8 @@ export interface UpdateStep {
 export interface UpdateJob {
   id: string;
   kind: 'update' | 'restart';
+  /** Missing in records from before the helper existed: 'panel'. */
+  executor?: 'panel' | 'helper';
   status: 'running' | 'waiting' | 'restarting' | 'done' | 'failed' | 'cancelled';
   /** Admin who started it. */
   by: string;
@@ -113,6 +134,30 @@ export interface UpdateJob {
 
 export class UpdateError extends Error {}
 
+// A checkout owned by root holds nothing another user could have planted, so
+// reading it as the panel's own user is safe. git still refuses another
+// user's repository unless safe.directory names it, which it honours only in
+// global or system config; hand it a global config that does.
+let trustEnv: Record<string, string> | undefined;
+
+function gitTrust(): Record<string, string> {
+  if (trustEnv) return trustEnv;
+  trustEnv = {};
+  const uid = process.getuid?.();
+  try {
+    if (uid !== undefined && uid !== 0 && fs.statSync(path.join(repoRoot, '.git')).uid === 0) {
+      const file = path.join(UPDATE_DIR, 'gitconfig');
+      const dir = fs.realpathSync(repoRoot).replace(/[\\"]/g, (c) => `\\${c}`);
+      fs.mkdirSync(UPDATE_DIR, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(file, `[safe]\n\tdirectory = "${dir}"\n`);
+      trustEnv = { GIT_CONFIG_GLOBAL: file };
+    }
+  } catch {
+    // not a checkout, or nowhere to write: git reports the former itself
+  }
+  return trustEnv;
+}
+
 /** Changes with every start: the admin page polls for a new one to see a restart land. */
 export const bootId = crypto.randomUUID();
 const bootedAt = Date.now();
@@ -125,6 +170,8 @@ let starting = false;
 let fetching: Promise<void> | null = null;
 let waitAction: 'now' | 'cancel' | null = null;
 let closeServer: (() => Promise<unknown>) | null = null;
+// The root helper has been told to restart this process (see closeForSignal).
+let helperRestart = false;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const short = (hash: string | null) => (hash ? hash.slice(0, 7) : '?');
@@ -134,6 +181,7 @@ function readHead(): string | null {
   try {
     return execFileSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], {
       cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000,
+      env: { ...process.env, ...gitTrust() },
     }).trim() || null;
   } catch {
     return null;
@@ -178,7 +226,7 @@ function toolEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   env.GIT_TERMINAL_PROMPT = '0';
   env.SSH_ASKPASS_REQUIRE = 'never';
   env.npm_config_update_notifier = 'false';
-  return Object.assign(env, extra);
+  return Object.assign(env, gitTrust(), extra);
 }
 
 interface RunResult {
@@ -330,9 +378,18 @@ function gitProblem(r: RunResult | null): string {
   return `无法读取 git 仓库:${redactUrls(r.stderr.split('\n').map((l) => l.trim()).find(Boolean) ?? `退出码 ${r.code}`)}`;
 }
 
+/** The root helper serving this checkout, when one has been set up. */
+function currentHelper(): Helper | null {
+  return findHelper(repoRoot, systemdUnit()?.name ?? null);
+}
+
 export async function inspectRepo(): Promise<RepoState> {
+  const helper = currentHelper();
   const s: RepoState = {
-    root: repoRoot, available: false, reason: null, branch: null, upstream: null, remoteUrl: null,
+    root: repoRoot, available: false, reason: null,
+    executor: helper ? 'helper' : 'panel',
+    helper: helper && { instance: helper.instance, service: helper.service },
+    branch: null, upstream: null, remoteUrl: null,
     head: null, upstreamHead: null, ahead: 0, behind: 0, incoming: [],
     changes: { files: 0, server: false, web: false, deps: false }, dirty: [], lastFetchAt: null,
   };
@@ -349,16 +406,20 @@ export async function inspectRepo(): Promise<RepoState> {
   }
   // Updating as someone other than the owner leaves files the owner can't
   // touch, and their next `git pull` by hand fails on them. git refuses this
-  // by itself, unless safe.directory has been set to let it through.
+  // by itself, unless safe.directory has been set to let it through. The
+  // helper of a root-owned checkout works as root, its owner.
   const uid = process.getuid?.();
   let owner: number | null = null;
   try { owner = fs.statSync(path.join(repoRoot, '.git')).uid; } catch { /* checked by git above */ }
-  if (uid !== undefined && owner !== null && owner !== uid) {
-    s.reason = `仓库 ${repoRoot} 属于另一个用户(uid ${owner}),服务以 uid ${uid} 运行;从面板更新会留下属主不同的文件。请让服务以仓库所有者的身份运行(systemd 单元的 User=),或把仓库 chown 给服务用户`;
+  if (!helper && uid !== undefined && owner !== null && owner !== uid) {
+    s.reason = owner === 0
+      ? `仓库 ${repoRoot} 属于 root,服务以 uid ${uid} 运行,面板不能直接改动代码。要从面板更新,请在服务器上安装更新助手:sudo bash ${repoRoot}/deploy/update-helper-setup.sh <实例名>`
+      : `仓库 ${repoRoot} 属于另一个用户(uid ${owner}),服务以 uid ${uid} 运行;从面板更新会留下属主不同的文件。请让服务以仓库所有者的身份运行(systemd 单元的 User=),或把仓库 chown 给服务用户`;
     return s;
   }
   s.head = parseCommits(await gitOut(['log', '-1', LOG_FORMAT, 'HEAD']))[0] ?? null;
-  s.dirty = (await gitOut(['status', '--porcelain', '--untracked-files=no']))
+  // The helper refuses untracked files as well.
+  s.dirty = (await gitOut(['status', '--porcelain', helper ? '--untracked-files=normal' : '--untracked-files=no']))
     ?.split('\n').filter(Boolean).map((l) => l.slice(3)) ?? [];
   const fetchHead = (await gitOut(['rev-parse', '--git-path', 'FETCH_HEAD']))?.trim();
   if (fetchHead) {
@@ -398,6 +459,11 @@ export async function inspectRepo(): Promise<RepoState> {
 export function fetchUpstream(): Promise<void> {
   if (current) return Promise.reject(new UpdateError('有更新任务正在进行,请稍后再检查'));
   fetching ??= (async () => {
+    const helper = currentHelper();
+    if (helper) {
+      await helperCheck(helper);
+      return;
+    }
     const branch = (await gitOut(['symbolic-ref', '--short', '-q', 'HEAD']))?.trim();
     const remote = branch ? (await gitOut(['config', `branch.${branch}.remote`]))?.trim() : null;
     if (!remote) throw new UpdateError('当前分支没有设置上游分支');
@@ -505,12 +571,14 @@ export function currentJob(): UpdateJob | null {
   return current ?? last;
 }
 
-function newJob(kind: UpdateJob['kind'], by: string, from: string | null, to: string | null): UpdateJob {
+function newJob(
+  kind: UpdateJob['kind'], by: string, from: string | null, to: string | null, executor: UpdateJob['executor'] = 'panel',
+): UpdateJob {
   const ids: StepId[] = kind === 'update'
     ? ['backup', 'merge', 'install', 'build', 'selftest', 'wait', 'restart']
     : ['wait', 'restart'];
   return {
-    id: crypto.randomUUID(), kind, status: 'running', by, from, to,
+    id: crypto.randomUUID(), kind, executor, status: 'running', by, from, to,
     steps: ids.map((id) => ({ id, status: 'pending', startedAt: null, endedAt: null })),
     log: [], error: null, rollbackFailed: false, manualRestart: false, waitUntil: null,
     startedAt: Date.now(), endedAt: null, restartedAt: null,
@@ -570,11 +638,12 @@ export async function startUpdate(target: string, by: string): Promise<UpdateJob
       || !(await ok(['merge-base', '--is-ancestor', target, '@{upstream}']))) {
       throw new UpdateError('目标版本不在上游分支上,或无法从当前版本快进到它');
     }
-    const job = newJob('update', by, repo.head.hash, target);
+    const helper = repo.executor === 'helper' ? currentHelper() : null;
+    const job = newJob('update', by, repo.head.hash, target, helper ? 'helper' : 'panel');
     current = job;
     saveJob(job);
-    console.log(`[update] ${by} started an update ${short(job.from)} → ${short(target)}`);
-    detach(job, runUpdate(job));
+    console.log(`[update] ${by} started an update ${short(job.from)} → ${short(target)}${helper ? ` (cat-agentui-update@${helper.instance})` : ''}`);
+    detach(job, helper ? runWithHelper(job, helper) : runUpdate(job));
     return job;
   } finally {
     starting = false;
@@ -705,33 +774,12 @@ async function restartPhase(job: UpdateJob, sup: Supervisor): Promise<void> {
     return;
   }
 
-  // Let running replies, images and decks finish. New ones may still start
-  // meanwhile; the restart takes the first quiet moment.
-  const wait = stepOf(job, 'wait');
-  wait.startedAt = Date.now();
-  if (busyCount() === 0) {
-    wait.status = 'skipped';
-  } else {
-    wait.status = 'running';
-    waitAction = null;
-    job.status = 'waiting';
-    job.waitUntil = Date.now() + IDLE_WAIT_MAX_MS;
-    saveJob(job);
-    pushLog(job, `等待 ${busyCount()} 个进行中的任务结束…`);
-    while (!waitAction && busyCount() > 0 && Date.now() < job.waitUntil) await sleep(1_000);
-    if (waitAction === 'cancel') {
-      wait.status = 'skipped';
-      wait.endedAt = Date.now();
-      stepOf(job, 'restart').status = 'skipped';
-      pushLog(job, job.kind === 'update' ? '已取消重启;新版本会在下次重启服务后生效' : '已取消重启');
-      finish(job, 'cancelled');
-      return;
-    }
-    if (waitAction === 'now') pushLog(job, '不再等待,立即重启');
-    else if (busyCount() > 0) pushLog(job, '等待已超过 20 分钟,直接重启');
-    wait.status = 'done';
+  if (await waitForQuiet(job) === 'cancel') {
+    stepOf(job, 'restart').status = 'skipped';
+    pushLog(job, job.kind === 'update' ? '已取消重启;新版本会在下次重启服务后生效' : '已取消重启');
+    finish(job, 'cancelled');
+    return;
   }
-  wait.endedAt = Date.now();
 
   job.status = 'restarting';
   const restart = stepOf(job, 'restart');
@@ -739,7 +787,7 @@ async function restartPhase(job: UpdateJob, sup: Supervisor): Promise<void> {
   restart.startedAt = Date.now();
   pushLog(job, '正在重启服务…');
   try {
-    swapStagedWeb(readHead());
+    if (stagesWebHere()) swapStagedWeb(readHead());
   } catch (err) {
     pushLog(job, `切换前端文件失败:${errorText(err)}`);
   }
@@ -749,6 +797,218 @@ async function restartPhase(job: UpdateJob, sup: Supervisor): Promise<void> {
   // after a clean exit under always/on-success, needs a failure under on-failure.
   const code = sup.policy === 'on-failure' ? 75 : 0;
   setTimeout(() => { void exitForRestart(code); }, 1_500);
+}
+
+/** Let running replies, images and decks finish. New ones may still start
+    meanwhile; the restart takes the first quiet moment. */
+async function waitForQuiet(job: UpdateJob): Promise<'go' | 'cancel'> {
+  const wait = stepOf(job, 'wait');
+  wait.startedAt = Date.now();
+  if (busyCount() === 0) {
+    wait.status = 'skipped';
+    wait.endedAt = Date.now();
+    return 'go';
+  }
+  wait.status = 'running';
+  waitAction = null;
+  job.status = 'waiting';
+  job.waitUntil = Date.now() + IDLE_WAIT_MAX_MS;
+  saveJob(job);
+  pushLog(job, `等待 ${busyCount()} 个进行中的任务结束…`);
+  while (!waitAction && busyCount() > 0 && Date.now() < job.waitUntil) await sleep(1_000);
+  wait.endedAt = Date.now();
+  if (waitAction === 'cancel') {
+    wait.status = 'skipped';
+    return 'cancel';
+  }
+  if (waitAction === 'now') pushLog(job, '不再等待,立即重启');
+  else if (busyCount() > 0) pushLog(job, '等待已超过 20 分钟,直接重启');
+  wait.status = 'done';
+  return 'go';
+}
+
+// ---------- root helper ----------
+
+function helperLine(job: UpdateJob, raw: string): void {
+  const line = stripAnsi(raw);
+  if (!VITE_ASSET_ROW.test(line)) pushLog(job, line);
+}
+
+/** What the helper's failure means, in the words the panel uses for its own. */
+function helperError(s: HelperStatus): string {
+  const detail = redactUrls(s.detail);
+  switch (s.error) {
+    case 'busy': return '服务器上正在进行另一个更新,请稍后再试';
+    case 'dirty': return '仓库里有未提交的修改,无法自动更新';
+    case 'branch': return `仓库检出的分支不是更新助手配置的分支(${detail})`;
+    case 'same': return '已经是这个版本';
+    case 'target': return '目标版本不在上游分支上,或无法从当前版本快进到它';
+    case 'fetch': return `拉取远端失败:${detail}`;
+    case 'merge': return 'git merge 失败';
+    case 'install': return 'npm ci 失败';
+    case 'build': return 'npm run build 失败';
+    case 'test': return '安全回归测试没有通过';
+    case 'changed': return '构建改动了仓库里的文件,已停止更新';
+    case 'swap': return '切换前端文件失败';
+    case 'restart': return '更新助手没能重启服务';
+    case 'health': return '服务重启后没有通过健康检查';
+    case 'timeout': return '更新助手等不到面板的确认,已回滚';
+    case 'config': return `更新助手的配置有误:${detail}`;
+    default: return `更新助手出错:${detail || s.error}`;
+  }
+}
+
+/** Wait until the helper's status for request `id` satisfies `until`. A
+    request it never takes up is withdrawn: the path unit isn't running. */
+async function awaitHelper(h: Helper, id: string, until: (s: HelperStatus) => boolean, timeoutMs: number, follow?: {
+  job: UpdateJob; log: HelperLog; onStatus?: (s: HelperStatus) => void;
+}): Promise<HelperStatus> {
+  const started = Date.now();
+  let taken = false;
+  for (;;) {
+    const s = readStatus(h);
+    if (s?.id === id) {
+      // The helper starts a fresh log before it reports a new request, so
+      // only now does the log belong to this one.
+      taken = true;
+      if (follow) for (const line of follow.log.read()) helperLine(follow.job, line);
+      follow?.onStatus?.(s);
+      if (until(s)) {
+        if (follow) for (const line of follow.log.read(true)) helperLine(follow.job, line);
+        return s;
+      }
+    } else if (!taken && Date.now() - started > HELPER_PICKUP_MS) {
+      withdrawRequest(h);
+      throw new UpdateError(`更新助手没有响应,请检查 cat-agentui-update@${h.instance}.path 是否已启用`);
+    }
+    if (Date.now() - started > timeoutMs) throw new UpdateError('更新助手长时间没有完成,已不再等待');
+    await sleep(500);
+  }
+}
+
+function sendToHelper(send: () => void): void {
+  try {
+    send();
+  } catch (err) {
+    throw new UpdateError(`无法把请求交给更新助手:${errorText(err)}`);
+  }
+}
+
+/** fetchUpstream for a root-owned checkout. */
+async function helperCheck(h: Helper): Promise<void> {
+  const id = crypto.randomUUID();
+  sendToHelper(() => sendRequest(h, 'check', id));
+  const s = await awaitHelper(h, id, (st) => st.state !== 'running', HELPER_CHECK_MS);
+  if (s.state !== 'done') throw new UpdateError(helperError(s));
+}
+
+// The helper's preparation steps, as the panel's.
+const HELPER_STEPS: Record<string, StepId> = { merge: 'merge', install: 'install', build: 'build', test: 'build' };
+const PREPARE_STEPS: StepId[] = ['merge', 'install', 'build'];
+
+function syncHelperSteps(job: UpdateJob, s: HelperStatus): void {
+  const at = s.state === 'built' ? PREPARE_STEPS.length : PREPARE_STEPS.indexOf(HELPER_STEPS[s.step]);
+  if (at < 0) return;
+  const now = Date.now();
+  let changed = false;
+  PREPARE_STEPS.forEach((id, i) => {
+    const st = stepOf(job, id);
+    if (i < at && (st.status === 'pending' || st.status === 'running')) {
+      st.startedAt ??= now;
+      st.status = id === 'install' && !s.deps ? 'skipped' : 'done';
+      st.endedAt = now;
+      changed = true;
+    } else if (i === at && st.status === 'pending') {
+      st.status = 'running';
+      st.startedAt = now;
+      changed = true;
+    }
+  });
+  if (changed) saveJob(job);
+}
+
+/** Have the helper undo a prepared update, and wait for it to finish doing so. */
+async function helperRollback(job: UpdateJob, h: Helper, log: HelperLog): Promise<void> {
+  pushLog(job, `回滚到 ${short(job.from)}…`);
+  try {
+    sendToHelper(() => sendVerdict(h, 'abort', job.id));
+    const s = await awaitHelper(h, job.id, (st) => st.state === 'cancelled' || st.state === 'failed', HELPER_SETTLE_MS, { job, log });
+    job.rollbackFailed = s.rollbackFailed;
+    pushLog(job, s.rollbackFailed ? '回滚失败:详见上面更新助手的输出' : '已回滚,运行中的服务没有受到影响');
+  } catch (err) {
+    job.rollbackFailed = true;
+    pushLog(job, `回滚失败:${errorText(err)}`);
+  }
+}
+
+/** runUpdate for a root-owned checkout. The helper merges, installs and builds
+    as root; the panel snapshots the database before and self-tests the build
+    after, waits for running work, then has the helper swap the web build in
+    and restart the service — or roll everything back. */
+async function runWithHelper(job: UpdateJob, h: Helper): Promise<void> {
+  const log = helperLog(h);
+  let snapshot = '';
+  let prepared = false;
+  try {
+    await step(job, 'backup', async () => {
+      const b = await runBackup();
+      snapshot = path.join(backupDir, b.filename);
+      pushLog(job, `数据库已快照:${b.filename}`);
+    });
+    pushLog(job, `交给更新助手 cat-agentui-update@${h.instance}`);
+    sendToHelper(() => sendRequest(h, 'update', job.id, job.to!));
+    const s = await awaitHelper(h, job.id, (st) => st.state !== 'running', HELPER_PREPARE_MS, {
+      job, log, onStatus: (st) => syncHelperSteps(job, st),
+    });
+    if (s.state !== 'built') {
+      // It has rolled back by itself.
+      job.rollbackFailed = s.rollbackFailed;
+      throw new Error(helperError(s));
+    }
+    prepared = true;
+    await step(job, 'selftest', () => selfTest(job, snapshot));
+  } catch (err) {
+    const message = errorText(err);
+    for (const st of job.steps) {
+      if (st.status === 'running') {
+        st.status = 'failed';
+        st.endedAt = Date.now();
+      }
+    }
+    pushLog(job, message);
+    console.error(`[update] failed: ${message}`);
+    if (prepared) await helperRollback(job, h, log);
+    finish(job, 'failed', message);
+    return;
+  }
+
+  if (await waitForQuiet(job) === 'cancel') {
+    stepOf(job, 'restart').status = 'skipped';
+    await helperRollback(job, h, log);
+    pushLog(job, '已取消更新');
+    finish(job, 'cancelled');
+    return;
+  }
+  job.status = 'restarting';
+  const restart = stepOf(job, 'restart');
+  restart.status = 'running';
+  restart.startedAt = Date.now();
+  pushLog(job, '正在重启服务…');
+  saveJob(job);
+  console.log(`[update] restarting through cat-agentui-update@${h.instance} for ${job.by}`);
+  helperRestart = true;
+  sendToHelper(() => sendVerdict(h, 'go', job.id));
+  // Success ends this process; only a failure on the way there comes back.
+  const s = await awaitHelper(h, job.id, (st) => st.state === 'failed' || st.state === 'done', HELPER_SETTLE_MS, { job, log });
+  restart.endedAt = Date.now();
+  if (s.state === 'failed') {
+    helperRestart = false;
+    restart.status = 'failed';
+    finish(job, 'failed', helperError(s));
+  } else {
+    restart.status = 'done';
+    finish(job, 'done');
+  }
 }
 
 /** index.ts hands over app.close, so a restart stops taking requests first. */
@@ -763,6 +1023,15 @@ async function exitForRestart(code: number): Promise<never> {
   process.exit(code);
 }
 
+/** For index.ts's SIGTERM/SIGINT handler. A stop lets open requests run to
+    their end — unless it is the restart an update had the root helper make:
+    the wait for running work came before that, so it goes as quickly as
+    exitForRestart does. */
+export function closeForSignal(close: () => Promise<unknown>): Promise<unknown> {
+  if (!helperRestart) return close();
+  return Promise.race([close().catch(() => undefined), sleep(3_000)]);
+}
+
 // ---------- staged web build ----------
 
 function writeStaged(commit: string): void {
@@ -775,6 +1044,18 @@ function clearStaged(): void {
 
 function mtime(file: string): number {
   try { return fs.statSync(file).mtimeMs; } catch { return 0; }
+}
+
+/** Whether the staged web build is this process's to swap in or drop: not
+    where a root helper stages and swaps it itself, nor where web/ isn't ours. */
+function stagesWebHere(): boolean {
+  if (currentHelper()) return false;
+  try {
+    fs.accessSync(path.join(repoRoot, 'web'), fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Make the staged web build live — only when it was built from `commit` and
@@ -817,28 +1098,82 @@ export function initUpdater(): void {
   } catch { /* no update has run yet */ }
   // Normally swapped just before the restart; this covers a restart that came
   // from elsewhere while the job was waiting (systemctl restart, a crash).
-  try { swapStagedWeb(bootCommit); } catch (err) { console.error('[update] staged web build:', errorText(err)); }
+  try {
+    if (stagesWebHere()) swapStagedWeb(bootCommit);
+  } catch (err) {
+    console.error('[update] staged web build:', errorText(err));
+  }
 
   last = loadJob();
   if (!last || last.status === 'done' || last.status === 'failed' || last.status === 'cancelled') return;
+  if (last.executor === 'helper') {
+    settleHelperJob(last);
+    return;
+  }
   // This start is the restart the job asked for — or one from elsewhere that
   // beat it to it while the new version was already in place.
-  const restarted = last.status === 'restarting' || (last.status === 'waiting' && last.to === bootCommit);
-  for (const s of last.steps) {
+  settle(last, last.status === 'restarting' || (last.status === 'waiting' && last.to === bootCommit));
+}
+
+/** Close the record of a job this start interrupted or completed. */
+function settle(job: UpdateJob, restarted: boolean, error = '任务进行中服务被重启或中断,没有完成'): void {
+  for (const s of job.steps) {
     if (s.status !== 'running' && !(restarted && s.id === 'restart')) continue;
     s.status = restarted ? 'done' : 'failed';
     s.endedAt = bootedAt;
   }
   if (restarted) {
-    last.status = 'done';
-    last.restartedAt = bootedAt;
-    pushLog(last, `服务已重启,当前版本 ${short(bootCommit)}`);
+    job.status = 'done';
+    job.restartedAt = bootedAt;
+    pushLog(job, `服务已重启,当前版本 ${short(bootCommit)}`);
   } else {
-    last.status = 'failed';
-    last.error = '任务进行中服务被重启或中断,没有完成';
+    job.status = 'failed';
+    job.error = error;
   }
-  last.endedAt = bootedAt;
-  saveJob(last);
+  job.endedAt = bootedAt;
+  saveJob(job);
+}
+
+/** The same at boot for a job the root helper was carrying out. The helper
+    lives on in its own unit, so it may still be waiting for this panel. */
+function settleHelperJob(job: UpdateJob): void {
+  const h = currentHelper();
+  const s = h ? readStatus(h) : null;
+  const state = s?.id === job.id ? s.state : null;
+  const tell = (verdict: 'go' | 'abort') => {
+    try {
+      sendVerdict(h!, verdict, job.id);
+      if (verdict === 'go') helperRestart = true;
+      return true;
+    } catch (err) {
+      console.error('[update] could not reach the update helper:', errorText(err));
+      return false;
+    }
+  };
+  // A health check that failed came after the restart — and this start answers it.
+  const restarted = state === 'restarting' || state === 'done' || (state === 'failed' && s!.error === 'health');
+  if (state === 'failed' && !restarted) {
+    // It gave up (and rolled back) by itself on the way.
+    job.rollbackFailed = s!.rollbackFailed;
+    settle(job, false, helperError(s!));
+  } else if (job.status === 'restarting' || restarted) {
+    // The restart it asked for.
+    if (job.to === bootCommit) settle(job, true);
+    else settle(job, false, `重启后运行的版本是 ${short(bootCommit)},不是要更新到的 ${short(job.to)}`);
+  } else if (state === 'built' && job.to === bootCommit && tell('go')) {
+    // Restarted from elsewhere while the job waited, and already on the new
+    // server: let the helper swap the web build in and restart once more.
+    job.status = 'restarting';
+    const restart = stepOf(job, 'restart');
+    restart.status = 'running';
+    restart.startedAt = bootedAt;
+    pushLog(job, '服务在等待期间被重启,已让更新助手完成切换');
+    saveJob(job);
+  } else if ((state === 'running' || state === 'built') && tell('abort')) {
+    settle(job, false, '任务进行中服务被重启或中断,已让更新助手回滚');
+  } else {
+    settle(job, false);
+  }
 }
 
 export async function updateStatus() {

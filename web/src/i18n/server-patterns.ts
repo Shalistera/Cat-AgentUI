@@ -77,6 +77,15 @@ const serverPatterns: [RegExp, string][] = [
   [/^回滚失败:(.+)$/, 'Rollback failed: $1'],
   [/^切换前端文件失败:(.+)$/, 'Swapping in the new frontend failed: $1'],
   [/^服务已重启,当前版本 (\S+)$/, 'Service restarted, now on $1'],
+  [/^仓库 (.+?) 属于 root,服务以 uid (\d+) 运行,面板不能直接改动代码。要从面板更新,请在服务器上安装更新助手:(.+)$/,
+    'The checkout $1 belongs to root while the service runs as uid $2, so the panel can\'t change the code itself. To update from the panel, install the update helper on the server: $3'],
+  [/^仓库检出的分支不是更新助手配置的分支\((.+)\)$/, 'The checked-out branch isn\'t the one the update helper is configured for ($1)'],
+  [/^更新助手的配置有误:(.+)$/, 'The update helper\'s configuration is wrong: $1'],
+  [/^更新助手出错:(.+)$/, 'The update helper failed: $1'],
+  [/^更新助手没有响应,请检查 (\S+) 是否已启用$/, 'The update helper didn\'t respond; check that $1 is enabled'],
+  [/^无法把请求交给更新助手:(.+)$/, 'Couldn\'t hand the request to the update helper: $1'],
+  [/^交给更新助手 (\S+)$/, 'Handed over to the update helper $1'],
+  [/^重启后运行的版本是 (\S+),不是要更新到的 (\S+)$/, 'After the restart the service runs $1, not $2 as intended'],
 ];
 
 export default serverPatterns;

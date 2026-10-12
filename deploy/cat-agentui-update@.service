@@ -1,0 +1,10 @@
+# Carries out one request from INSTANCE's admin panel, as root. Started by
+# cat-agentui-update@INSTANCE.path; not meant to be enabled or started by hand.
+[Unit]
+Description=Cat-AgentUI update (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cat-agentui-update --serve %i
+# Installing, building and then waiting for the panel's go-ahead can take a while.
+TimeoutStartSec=2h

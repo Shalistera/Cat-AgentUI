@@ -628,6 +628,12 @@ export default {
   '运行中': 'Running',
   '启动于 {time}': 'started {time}',
   '目录': 'Directory',
+  '更新方式': 'Updated by',
+  '更新助手 cat-agentui-update@{instance}': 'Update helper cat-agentui-update@{instance}',
+  '代码属于 root,面板只提出请求,由服务器上以 root 运行的更新助手合并、构建并重启。':
+    'The code belongs to root: the panel only asks, and the update helper running as root on the server merges, builds and restarts.',
+  '取消更新': 'Cancel update',
+  '已取消更新,并已回滚到原来的版本。': 'Update cancelled and rolled back to the previous version.',
   '分支': 'Branch',
   '进程守护': 'Supervisor',
   '仓库里的代码已经是 {head},运行中的服务还是 {running},重启服务后才会生效。':
