@@ -3,7 +3,7 @@ import {
   BarChart3, Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
   Info, ImagePlus, MessageSquarePlus, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
 } from 'lucide-react';
-import type { Message, MessagePart, ModelInfo, PendingInterjection, ProviderRetry, ToolConfirmRequest } from '../types';
+import type { Message, MessagePart, ModelInfo, ProviderRetry, ToolConfirmRequest } from '../types';
 import { useLightbox } from './Lightbox';
 import { fmtDuration, fmtModelName, fmtTime, fmtTokens } from '../api';
 import { speak, stopSpeaking, ttsSupported } from '../speech';
@@ -626,20 +626,16 @@ function GroundingBlock({ part }: { part: GroundingPart }) {
 }
 
 /** 追加 inside a reply: what the person sent while it was being written,
- * shown where the model read it — or, still waiting, at the reply's end. */
-function InterjectionBubble({ text, pending, onWithdraw }: { text: string; pending?: boolean; onWithdraw?: () => void }) {
+ * shown where the model read it. (Still waiting, it sits above the composer.) */
+function InterjectionBubble({ text }: { text: string }) {
   return (
     <div className="my-3 flex flex-col items-end gap-1">
-      <div data-quotable className={`max-w-[85%] whitespace-pre-wrap wrap-anywhere rounded-xl rounded-br-sm border bg-bg2 px-3.5 py-2 text-[14px] leading-relaxed text-tx ${
-        pending ? 'border-dashed border-line2 opacity-70' : 'border-line'}`}>
+      <div data-quotable className="max-w-[85%] whitespace-pre-wrap wrap-anywhere rounded-xl rounded-br-sm border border-line bg-bg2 px-3.5 py-2 text-[14px] leading-relaxed text-tx">
         {text}
       </div>
       <div className="flex items-center gap-1.5 text-[11px] text-tx3">
         <MessageSquarePlus size={11} />
-        {pending ? t('追加 · 模型下一步会读到') : t('追加')}
-        {onWithdraw && (
-          <button type="button" className="cursor-pointer text-acc hover:underline" onClick={onWithdraw}>{t('撤回')}</button>
-        )}
+        {t('追加')}
       </div>
     </div>
   );
@@ -697,9 +693,6 @@ interface Props {
   onBookmark?: () => void;
   /** A pending 工具调用确认 addressed to this (streaming) message. */
   toolConfirm?: ToolConfirmRequest | null;
-  /** 追加 sent into this (streaming) reply that the model has not read yet. */
-  pendingInterjections?: PendingInterjection[];
-  onWithdrawInterjection?: (id: string) => void;
   onToolDecision?: (decisions: Record<string, 'allow' | 'deny'>, rememberChat: boolean) => void;
 }
 
@@ -735,7 +728,7 @@ export function retryStatusText(r: ProviderRetry): string {
   return t('模型提供方当前繁忙（限流），约 {secs} 秒后自动重试…', { secs });
 }
 
-export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, switchSuggestion, onSwitchModel, onRestoreModel, currentModelId, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision, pendingInterjections, onWithdrawInterjection }: Props) {
+export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isStreaming, pendingLabel, onCancel, onRegenerate, onRegenerateWith, switchSuggestion, onSwitchModel, onRestoreModel, currentModelId, onEdit, onDelete, onBranch, onFollowup, onEditAssistant, siblingInfo, onSiblingPrev, onSiblingNext, onBookmark, toolConfirm, onToolDecision }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [statsOpen, setStatsOpen] = useState(false);
@@ -1036,10 +1029,6 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
             <Spinner className="h-3.5 w-3.5" />{pendingLabel ?? t('正在思考…')}
           </div>
         )}
-        {isStreaming && pendingInterjections?.map((x) => (
-          <InterjectionBubble key={x.id} text={x.text} pending
-            onWithdraw={onWithdrawInterjection ? () => onWithdrawInterjection(x.id) : undefined} />
-        ))}
         {msg.status === 'error' && msg.error && (
           <div className={`my-2 flex items-start gap-2 rounded-lg border px-3.5 py-2.5 text-[13px] leading-relaxed ${providerBusy ? 'border-line bg-bg2 text-tx2' : 'border-err/30 bg-err/10 text-err'}`}>
             <CircleAlert size={15} className="mt-0.5 shrink-0" />

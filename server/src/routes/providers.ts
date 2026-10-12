@@ -13,7 +13,7 @@ import { checkModelLimit, hasModelLimit, parseLimitPeriod } from '../quota.js';
 import { broadcast } from './events.js';
 import { configuredModelFallback, setModelFallback } from '../model-fallback.js';
 import {
-  endpointRuntimeConfig, getRawAdapter, primaryLineKey, toPrimaryRuntimeConfig, type EndpointRow,
+  endpointRuntimeConfig, getRawAdapter, primaryLineKey, providerTakesInterjections, toPrimaryRuntimeConfig, type EndpointRow,
 } from '../providers/index.js';
 import { lineStatus, resetLineHealth } from '../providers/failover.js';
 import { supportsVertexGoogleSearch } from '../providers/gemini.js';
@@ -503,6 +503,8 @@ export async function providerRoutes(app: FastifyInstance) {
       enabled: d.enabled === false ? 0 : 1,
       createdAt: now(),
     }).run();
+    // Whether the provider's models take 追加 depends on every line.
+    broadcast('models-updated');
     return publicEndpoint(getEndpoint(eid)!);
   });
 
@@ -534,6 +536,7 @@ export async function providerRoutes(app: FastifyInstance) {
       if (patch.baseUrl !== undefined || patch.apiKeyEnc !== undefined || patch.extraHeadersEnc !== undefined) {
         resetLineHealth(id);
       }
+      if (patch.baseUrl !== undefined || patch.enabled !== undefined) broadcast('models-updated');
     }
     return publicEndpoint(getEndpoint(id)!);
   });
@@ -545,6 +548,7 @@ export async function providerRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: '备用线路不存在' });
     db.delete(schema.providerEndpoints).where(eq(schema.providerEndpoints.id, id)).run();
     resetLineHealth(id);
+    broadcast('models-updated');
     return { ok: true };
   });
 
@@ -966,6 +970,7 @@ export async function providerRoutes(app: FastifyInstance) {
       providerId: schema.providers.id,
       providerName: schema.providers.name,
       providerType: schema.providers.type,
+      providerBaseUrl: schema.providers.baseUrl,
       providerUseVertex: schema.providers.useVertex,
       providerAvatar: schema.providers.avatar,
     }).from(schema.models)
@@ -981,6 +986,16 @@ export async function providerRoutes(app: FastifyInstance) {
         && !source.imageGen && !fallback.imageGen && canUseSystemModel(req.user!, fallback.id)
         && checkModelLimit(req.user!, fallback).ok
         && (!source.vision || !!fallback.vision) && (!source.tools || !!fallback.tools);
+    };
+    const takesInterjections = new Map<string, boolean>();
+    const interjection = (r: typeof rows[number]) => {
+      if (r.imageGen) return false;
+      let ok = takesInterjections.get(r.providerId);
+      if (ok === undefined) {
+        ok = providerTakesInterjections({ id: r.providerId, type: r.providerType, baseUrl: r.providerBaseUrl });
+        takesInterjections.set(r.providerId, ok);
+      }
+      return ok;
     };
     const list = accessibleOnly(rows, req.user!)
       .filter((r) => r.providerType !== 'novelai' && (!r.imageGen || imageModelsAllowed(req.user!)))
@@ -998,6 +1013,8 @@ export async function providerRoutes(app: FastifyInstance) {
       imageGen: !!r.imageGen,
       nativeSearch: !!r.tools && !r.imageGen && r.providerType === 'gemini'
         && !!r.providerUseVertex && supportsVertexGoogleSearch(r.modelId),
+      // Sending during a reply goes into it (追加) rather than the queue.
+      interjection: interjection(r),
       defaultWebSearch: !!r.defaultWebSearch,
       // Only the resolved ladder — the chat UI has no use for how it was decided.
       reasoningLevels: effectiveLevels(

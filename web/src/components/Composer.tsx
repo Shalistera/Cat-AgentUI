@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import {
   ArrowLeft, ArrowUp, Check, ChevronDown, FileText, FolderOpen, Gauge, Image as ImageIcon,
-  ListPlus, Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
+  Loader2, Mic, Paperclip, Plus, RotateCcw, Search, Settings2, Square, Star, Wrench, X,
 } from 'lucide-react';
 import { useAgentCaps, useAuth, useMcp, useModels, useUi, useComposerInsert } from '../store';
 import { ApiError, api, errMsg, uploadFile, fmtUsageLimit, fmtUsageLimitShort, usageLimitExhausted } from '../api';
@@ -120,9 +120,9 @@ interface ComposerProps {
   onDraftRecovered?(): void;
   /** Present = sends during generation queue up instead of being blocked. */
   onEnqueue?(text: string, attachments: PendingAttachment[]): void;
-  /** Present = during generation a send goes into the reply being written
-      (追加) instead; messages with attachments still queue. Resolves false
-      when the text should stay in the composer. */
+  /** Present (the model takes 追加) = during generation a send goes into the
+      reply being written instead of the queue; messages with attachments
+      still queue. Resolves false when the text should stay in the composer. */
   onInterject?(text: string): Promise<boolean>;
   onStop(): void;
   /** Persist unsent input under this key (per chat); omit to disable drafts. */
@@ -263,8 +263,7 @@ export function Composer(props: ComposerProps) {
     setModelQuery('');
   }, [panelOpen]);
 
-  /** `queue`: during generation, wait for the reply to finish instead of 追加. */
-  async function send(mode?: 'queue') {
+  async function send() {
     const trimmed = text.trim();
     if ((!trimmed && atts.length === 0) || props.disabled || submittingRef.current) return;
     if (uploadingRef.current) return;
@@ -279,7 +278,7 @@ export function Composer(props: ComposerProps) {
     setSubmitting(true);
     try {
       if (streaming) {
-        if (props.onInterject && mode !== 'queue' && atts.length === 0) {
+        if (props.onInterject && atts.length === 0) {
           if (await props.onInterject(trimmed) === false) return;
         } else if (props.onEnqueue) {
           props.onEnqueue(trimmed, atts);
@@ -687,7 +686,8 @@ export function Composer(props: ComposerProps) {
           rows={1}
           value={text}
           placeholder={props.disabled ? t('管理员尚未配置模型')
-            : streaming && props.onInterject ? (compact || touchKeyboard ? t('追加到这条回复…') : t('生成中也能继续说,Enter 追加到这条回复'))
+            : streaming && props.onInterject ? (compact ? t('追加到回复…') : touchKeyboard ? t('追加到这条回复…') : t('生成中也能继续说,Enter 追加到这条回复'))
+            : streaming && props.onEnqueue && !compact ? (touchKeyboard ? t('回复完成后发送…') : t('生成中也能输入,Enter 排队,回复完成后自动发送'))
             : compact ? t('输入消息…')
             : imageMode ? t('描述你想生成的画面…')
             : touchKeyboard ? t('输入消息…')
@@ -996,16 +996,6 @@ export function Composer(props: ComposerProps) {
           )}
           {streaming ? (
             <>
-              {props.onEnqueue && (
-                <button
-                  title={t('加入队列:当前回复完成后自动发送')}
-                  disabled={submitting || (!text.trim() && atts.length === 0)}
-                  className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx2 shadow-xs transition-colors hover:bg-bg2 hover:text-tx disabled:opacity-40 disabled:pointer-events-none"
-                  onClick={() => send('queue')}
-                >
-                  <ListPlus size={15} />
-                </button>
-              )}
               <button
                 title={t('停止生成')}
                 className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-line2 bg-bg1 text-tx shadow-xs transition-colors hover:bg-bg2"
@@ -1013,12 +1003,15 @@ export function Composer(props: ComposerProps) {
               >
                 <Square size={12} fill="currentColor" />
               </button>
-              {/* Rightmost, where 发送 always sits: typing during a reply and
-                  sending is 追加 — the reply carries on and reads it next. */}
-              {props.onInterject && (
+              {/* Rightmost, where 发送 always sits. During a reply a send goes
+                  into it (追加) when the model takes that, else into the
+                  queue — the same two buttons either way. */}
+              {(props.onInterject || props.onEnqueue) && (
                 <button
-                  title={atts.length ? t('带附件的消息不能追加,请用排队发送') : t('追加到这条回复:不打断生成,模型会在下一步读到')}
-                  disabled={submitting || !text.trim() || atts.length > 0}
+                  title={props.onInterject && !atts.length
+                    ? t('追加到这条回复:不打断生成,模型会在下一步读到')
+                    : t('加入队列:当前回复完成后自动发送')}
+                  disabled={submitting || (!text.trim() && atts.length === 0)}
                   className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md bg-pri text-prifg shadow-xs transition-colors hover:bg-pri2 disabled:opacity-40 disabled:pointer-events-none"
                   onClick={() => send()}
                 >

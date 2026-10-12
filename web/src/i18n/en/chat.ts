@@ -398,13 +398,16 @@ export default {
 
   // ---- 追加 (sending into the reply being written) ----
   '追加到这条回复…': 'Add to this reply…',
+  '追加到回复…': 'Add to reply…',
   '生成中也能继续说,Enter 追加到这条回复': 'Keep talking while it works — Enter adds to this reply',
   '追加到这条回复:不打断生成,模型会在下一步读到': 'Add to this reply: nothing is interrupted, the model reads it at its next step',
-  '带附件的消息不能追加,请用排队发送': 'Messages with attachments can\'t be added to a reply — queue them instead',
+  '回复完成后发送…': 'Sends when the reply is done…',
+  '生成中也能输入,Enter 排队,回复完成后自动发送': 'Type while it works — Enter queues it to send when the reply is done',
   '追加': 'Added',
-  '追加 · 模型下一步会读到': 'Added · the model reads it at its next step',
+  '追加 {count} 条 · 模型下一步会读到': '{count} added · the model reads them at its next step',
   '撤回': 'Take back',
   '这条回复的追加已达上限,这条改为排队发送': 'This reply can\'t take more additions — queued as a new message instead',
+  '当前模型不支持追加,这条改为排队发送': 'This model can\'t take additions mid-reply — queued as a new message instead',
   '回复已经结束,这条改为排队发送': 'The reply had already finished — queued as a new message instead',
   '这条追加已经送出,无法撤回': 'Already passed to the model — it can\'t be taken back',
   '已停止生成,没送达的追加放回了输入框': 'Stopped. What the model hadn\'t read yet is back in the message box',

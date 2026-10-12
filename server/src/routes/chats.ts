@@ -13,7 +13,7 @@ import { MAX_INTERJECTIONS, interjectionMessage, interjectionPrompt } from '../i
 import { ProviderBusyError, isNetworkError } from '../providers/sse.js';
 import { ProviderEmptyError, ProviderInterruptedError } from '../providers/stream-integrity.js';
 import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
-import { getAdapter, toRuntimeConfig } from '../providers/index.js';
+import { getAdapter, providerTakesInterjections, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch, supportsVertexSearchWithFunctions } from '../providers/gemini.js';
 import { getToolsForServers, callTool, toolNeedsConfirm, type McpCapabilities } from '../mcp/manager.js';
 import { isAutoAllowed, rememberAutoAllow, submitToolDecision, waitForToolDecision } from '../tool-confirm.js';
@@ -920,8 +920,9 @@ export async function chatRoutes(app: FastifyInstance) {
 
   // 追加: a message for the reply being generated right now. It waits on the
   // live turn and reaches the model at its next step — after the tool round
-  // in progress, or once it stops writing. 409 once the turn can no longer
-  // take one; the tab then sends it as an ordinary message instead.
+  // in progress, or once it stops writing. 409 when the turn's model does not
+  // take one or the turn can no longer; the tab then sends it as an ordinary
+  // message instead.
   app.post('/api/chats/:id/interject', async (req, reply) => {
     requireAuth(req, reply);
     const { id } = req.params as { id: string };
@@ -938,9 +939,15 @@ export async function chatRoutes(app: FastifyInstance) {
       return reply.code(413).send({ error: `消息文字超过 ${config.maxMessageTextChars.toLocaleString()} 字符限制` });
     }
     const current = activeChatStream(id);
-    if (!current?.acceptsInterjections
+    if (!current
       || (body.data.requestId && body.data.requestId !== current.requestId)
       || (body.data.messageId && body.data.messageId !== current.messageId)) {
+      return reply.code(409).send({ error: '这条回复已经结束', code: 'turn_ended' });
+    }
+    if (current.messageId && !current.interjectionsSupported) {
+      return reply.code(409).send({ error: '当前模型不支持追加', code: 'interjection_unsupported' });
+    }
+    if (!current.acceptsInterjections) {
       return reply.code(409).send({ error: '这条回复已经结束', code: 'turn_ended' });
     }
     if (current.interjections.length + current.parts.filter((p) => p.type === 'interjection').length >= MAX_INTERJECTIONS) {
@@ -1816,8 +1823,10 @@ export async function chatRoutes(app: FastifyInstance) {
       model: model.modelId, providerId: provider.id, status: 'streaming', createdAt: now(),
     }).run();
     identifyChatStream(chatId, live, assistantId, userMessageId);
-    // 追加 is for text turns; an image model answers in one shot.
-    live.acceptsInterjections = !model.imageGen;
+    // 追加 is for text turns on providers known to take it; an image model
+    // answers in one shot.
+    live.interjectionsSupported = !model.imageGen && providerTakesInterjections(provider);
+    live.acceptsInterjections = live.interjectionsSupported;
     // The freshly generated reply becomes the visible branch. New activity in
     // an archived chat also un-archives it — a talking chat isn't shelved.
     db.update(schema.chats).set({

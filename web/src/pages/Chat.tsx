@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Archive, ArrowDown, Check, FolderClosed, FolderOpen, Ghost, ListOrdered, PanelLeft, Pencil,
+  Archive, ArrowDown, Check, FolderClosed, FolderOpen, Ghost, ListOrdered, MessageSquarePlus, PanelLeft, Pencil,
   Plus, Search, Send, Trash2,
 } from 'lucide-react';
 import { api, errMsg, fmtModelName, fmtUsageLimit, streamChat, suggestFallbackModel, configuredFallbackModel, usageLimitExhausted, ApiError } from '../api';
@@ -106,6 +106,36 @@ function CompareView({ original, challenger, challengerModel, streaming, onKeep,
       <p className="text-[11px] leading-relaxed text-tx3 md:col-span-2">
         {t('选择保留后,另一个回复仍会作为历史版本保留,可随时用消息下方的左右箭头切换。')}
       </p>
+    </div>
+  );
+}
+
+// ---- 追加 waiting for the model (above the composer, like the queue) ----
+// Once the model reads one it leaves this strip and shows inside the reply,
+// where it was read.
+
+function InterjectionBar({ items, onWithdraw }: {
+  items: PendingInterjection[];
+  onWithdraw(id: string): void;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className="mx-auto mb-2 w-full max-w-[54rem] overflow-hidden rounded-lg border border-line bg-bg1 shadow-xs">
+      <div className="flex items-center gap-1.5 border-b border-line bg-bg2/45 px-3 py-1.5 text-[11px] font-medium text-tx2">
+        <MessageSquarePlus size={12} className="text-tx3" />
+        {t('追加 {count} 条 · 模型下一步会读到', { count: items.length })}
+      </div>
+      <div className="max-h-40 divide-y divide-line/70 overflow-y-auto">
+        {items.map((item) => (
+          <div key={item.id} className="flex items-center gap-2 px-3 py-1.5">
+            <span className="min-w-0 flex-1 truncate text-[13px] text-tx2" title={item.text}>{item.text}</span>
+            <button type="button" className="shrink-0 cursor-pointer text-[12px] text-acc hover:underline"
+              onClick={() => onWithdraw(item.id)}>
+              {t('撤回')}
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1070,7 +1100,9 @@ export default function Chat() {
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         queueStore.enqueue(target.chatId, text, []);
-        toast(e.code === 'interjection_limit' ? t('这条回复的追加已达上限,这条改为排队发送') : t('回复已经结束,这条改为排队发送'), 'info');
+        toast(e.code === 'interjection_limit' ? t('这条回复的追加已达上限,这条改为排队发送')
+          : e.code === 'interjection_unsupported' ? t('当前模型不支持追加,这条改为排队发送')
+          : t('回复已经结束,这条改为排队发送'), 'info');
         return true;
       }
       toast(errMsg(e), 'err');
@@ -1338,7 +1370,7 @@ export default function Chat() {
       recoveredDraft={recoveredDraft?.chatId === (chat?.id ?? null) ? recoveredDraft : null}
       onDraftRecovered={() => setRecoveredDraft(null)}
       onEnqueue={chat ? enqueue : undefined}
-      onInterject={chat && !modelSel?.imageGen ? interject : undefined}
+      onInterject={chat && modelSel?.interjection ? interject : undefined}
       onStop={stop}
       draftKey={draftKey}
       autoFocus
@@ -1555,8 +1587,6 @@ export default function Chat() {
                     onBookmark={!!chat && m.status !== 'streaming' && !m.id.startsWith('tmp-') ? () => void toggleBookmark(m) : undefined}
                     toolConfirm={toolConfirm && toolConfirm.messageId === m.id ? toolConfirm : null}
                     onToolDecision={toolConfirm && toolConfirm.messageId === m.id ? (d, r) => void decideTools(toolConfirm, d, r) : undefined}
-                    pendingInterjections={chat && streaming && m.id === streamMsgIdRef.current ? pendingInterjections[chat.id] : undefined}
-                    onWithdrawInterjection={streaming && m.id === streamMsgIdRef.current ? (id) => void withdrawInterjection(id) : undefined}
                   />
                 );
               })}
@@ -1580,6 +1610,10 @@ export default function Chat() {
               onSendNow={queueSendNow}
               onRemove={(item) => chat && queueStore.remove(chat.id, item.id)}
               onUpdate={(item, next) => chat && queueStore.update(chat.id, item.id, next)}
+            />
+            <InterjectionBar
+              items={chat && streaming ? pendingInterjections[chat.id] ?? [] : []}
+              onWithdraw={(id) => void withdrawInterjection(id)}
             />
             <div className="mx-auto max-w-[54rem]">{composer}</div>
             {!composerCompact && <p className="mt-2 text-center text-[11px] text-tx3">{t('内容由 AI 生成,请自行核实关键信息。')}</p>}

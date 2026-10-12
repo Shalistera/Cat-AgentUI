@@ -135,6 +135,7 @@ npx pm2 save
 | `PASSWORD_CONCURRENCY` | scrypt 同时执行数 | `2` |
 | `PASSWORD_QUEUE_MAX` | scrypt 等待队列长度 | `32` |
 | `MAX_TOOL_ITERATIONS` | 单次回复最多 MCP 工具轮数 | `10` |
+| `INTERJECTION_ANTHROPIC_HOSTS` | 除 `api.anthropic.com` 外,原样转发 Anthropic 官方接口的地址(主机名,逗号分隔)。所有线路都用这些地址的 Anthropic 服务商,同样支持在回复生成中「追加」消息(本地 Claude Code 和官方接口本来就支持,其他服务商改为排队发送) | 空 |
 | `MAX_WORKSPACE_MB` | 单个对话工作区总大小上限 | `64` |
 | `MAX_WORKSPACE_FILE_MB` | 工作区单个文件大小上限 | `8` |
 | `MAX_WORKSPACE_FILES` | 单个对话工作区文件数上限 | `500` |

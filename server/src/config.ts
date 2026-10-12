@@ -110,6 +110,10 @@ export const config = {
   passwordQueueMax: intEnv('PASSWORD_QUEUE_MAX', 32, 1, 500),
 
   maxToolIterations: intEnv('MAX_TOOL_ITERATIONS', 10, 1, 50),
+  // 追加 on anthropic-type providers: hosts besides api.anthropic.com that
+  // forward the official API unchanged (comma-separated hostnames).
+  interjectionAnthropicHosts: (env('INTERJECTION_ANTHROPIC_HOSTS') ?? '').split(',')
+    .map((h) => h.trim().toLowerCase()).filter(Boolean),
 
   // 工作区 (per-chat file directory the model edits through tools).
   maxWorkspaceBytes: intEnv('MAX_WORKSPACE_MB', 64, 1, 10_000) * MIB,

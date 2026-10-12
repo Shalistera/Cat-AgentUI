@@ -9,6 +9,29 @@ import type { AdapterMessage } from './types.js';
 /** Per reply. Past this the person can still queue an ordinary message. */
 export const MAX_INTERJECTIONS = 10;
 
+const ANTHROPIC_API_HOST = 'api.anthropic.com';
+
+/** Whether a provider's replies take 追加. The local Claude Code folds it
+ * into the running turn the way its own terminal does, and the Anthropic API
+ * documents the shape (a text block after the tool results) — on its own
+ * host, or on a gateway the operator lists as forwarding it unchanged. Other
+ * vendors and gateways are not assumed to cope with a message arriving
+ * mid-reply; their sends wait for the reply to finish instead.
+ * `baseUrls`: every line the provider may route a reply to. */
+export function interjectionSupported(type: string, baseUrls: (string | null)[], passthroughHosts: readonly string[] = []): boolean {
+  if (type === 'claude-code') return true;
+  if (type !== 'anthropic') return false;
+  return baseUrls.every((url) => {
+    if (!url?.trim()) return true; // the adapter's default host
+    try {
+      const host = new URL(url.trim()).hostname.toLowerCase();
+      return host === ANTHROPIC_API_HOST || passthroughHosts.includes(host);
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** What the model reads for one. The same text on every replay, so a cached
  * prefix that contains it stays valid. */
 export function interjectionPrompt(text: string): string {

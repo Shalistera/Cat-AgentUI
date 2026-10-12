@@ -3,6 +3,7 @@ import type { ChatAdapter, ProviderRuntimeConfig, ProviderType } from '../types.
 import { config } from '../config.js';
 import { decryptSecret } from '../crypto.js';
 import { db, schema } from '../db/index.js';
+import { interjectionSupported } from '../interjection.js';
 import { decryptSecretRecord, providerExtraHeaders } from '../secrets.js';
 import { openaiAdapter } from './openai.js';
 import { anthropicAdapter } from './anthropic.js';
@@ -97,6 +98,13 @@ function enabledEndpoints(providerId: string): EndpointRow[] {
     .where(and(eq(schema.providerEndpoints.providerId, providerId), eq(schema.providerEndpoints.enabled, 1)))
     .orderBy(asc(schema.providerEndpoints.priority), asc(schema.providerEndpoints.createdAt))
     .all();
+}
+
+/** 追加 is offered on this provider's text models: every line it may route
+ * a reply to has to take it, backups included. */
+export function providerTakesInterjections(row: { id: string; type: string; baseUrl: string | null }): boolean {
+  const urls = row.type === 'anthropic' ? [row.baseUrl, ...enabledEndpoints(row.id).map((e) => e.baseUrl)] : [];
+  return interjectionSupported(row.type, urls, config.interjectionAnthropicHosts);
 }
 
 function usesVertex(row: ProviderRow): boolean {

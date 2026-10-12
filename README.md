@@ -135,6 +135,7 @@ npx pm2 save
 | `PASSWORD_CONCURRENCY` | Number of scrypt runs at once | `2` |
 | `PASSWORD_QUEUE_MAX` | Length of the scrypt wait queue | `32` |
 | `MAX_TOOL_ITERATIONS` | Maximum MCP tool iterations for one reply | `10` |
+| `INTERJECTION_ANTHROPIC_HOSTS` | Hosts besides `api.anthropic.com` that forward the official Anthropic API unchanged (comma-separated). Anthropic providers whose every line uses one of them also take messages sent while a reply is being generated (the local Claude Code and the official API always do; other providers queue them) | empty |
 | `MAX_WORKSPACE_MB` | Total size limit of one chat's workspace | `64` |
 | `MAX_WORKSPACE_FILE_MB` | Size limit of a single workspace file | `8` |
 | `MAX_WORKSPACE_FILES` | File count limit of one chat's workspace | `500` |

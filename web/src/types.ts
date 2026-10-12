@@ -242,6 +242,8 @@ export interface ModelInfo {
   /** Admin-written blurb shown under the model name on the new-chat page. */
   description: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; nativeSearch: boolean; isDefault: boolean;
+  /** Sending during a reply goes into it (追加) instead of the queue. */
+  interjection?: boolean;
   /** Admin default for the 联网搜索 toggle on new chats with this model. */
   defaultWebSearch: boolean;
   providerId: string; providerName: string; providerType: 'openai' | 'anthropic' | 'gemini' | 'claude-code' | 'novelai';
