@@ -26,7 +26,7 @@ import { checkModelLimit, checkQuota, modelLimitBlockMessage, modelLimitReason, 
 import { OFF, effectiveLevels } from '../reasoning.js';
 import { buildProjectPrompt, projectFilesPrompt } from './projects.js';
 import { ProjectKnowledgeSession, isProjectTool } from '../knowledge.js';
-import { ProjectLibrarySession, PROJECT_LIBRARY_TOOLS, PROJECT_LIBRARY_PROMPT, isProjectLibraryTool } from '../project-library.js';
+import { ProjectLibrarySession, PROJECT_LIBRARY_TOOLS, PROJECT_LIBRARY_PROMPT, PROJECT_LIBRARY_GUIDANCE, isProjectLibraryTool } from '../project-library.js';
 import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspaceTool, removeWorkspace } from '../workspace.js';
 import { withWorkspaceScope } from '../workspace-scope.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from '../sandbox/tool.js';
@@ -1690,14 +1690,12 @@ export async function chatRoutes(app: FastifyInstance) {
       ? buildProjectPrompt(chat.projectId, user.id, { canUseTools: !!model.tools, modelId: model.modelId })
       : { block: null, tools: null, docCount: 0 };
     const projectKnowledge = new ProjectKnowledgeSession(Math.min(100_000, Math.floor(budget.textChars / 4)));
-    // Only the current human message and its interjections can authorize
-    // cross-project retrieval. History, attachments and summaries are excluded.
-    const libraryUserText = parseParts(chain[chain.length - 1].parts)
-      .filter((p) => p.type === 'text').map((p) => p.text).join('\n');
+    // Let the model interpret the human request in its existing context.
+    // Track interjection IDs only to invalidate calls planned before new input.
     const projectLibrary = agentTools && model.tools && !model.imageGen
-      ? new ProjectLibrarySession(user.id, chat.projectId, () => [libraryUserText,
-        ...live.parts.filter((p) => p.type === 'interjection').map((p) => p.text),
-        ...live.interjections.map((p) => p.text)]) : null;
+      ? new ProjectLibrarySession(user.id, chat.projectId, () => [
+        ...live.parts.filter((p) => p.type === 'interjection').map((p) => p.id),
+        ...live.interjections.map((p) => p.id)].join(',')) : null;
     // Access-checked above (docCount is 0 without access): the sandbox may mount the files.
     const sandboxProjectId = project.docCount ? chat.projectId : null;
     if (project.tools?.length) toolDefs = [...(toolDefs ?? []), ...project.tools];
@@ -2087,6 +2085,8 @@ export async function chatRoutes(app: FastifyInstance) {
         let toolCapHit = false;
         for (;;) {
           iterations++;
+          deliverInterjections();
+          projectLibrary?.beginRound();
           const messages = [...baseHistory, ...replyMessages(parts)];
           if (continuation) messages.push({ role: 'user', parts: [{ type: 'text', text:
             '上一条助手回复因传输中断尚未完成。请从中断位置直接续写剩余内容,不要重复已有文字,不要重新开头,不要解释中断。保留原有结构和代码块状态,不调用任何工具。',
@@ -2119,7 +2119,7 @@ export async function chatRoutes(app: FastifyInstance) {
               stopOnBusy: clientFallback && !parts.some((p) => !isMetaPart(p)),
             }, {
               model: model.modelId,
-              system: [systemPrompt, libraryTools.length ? PROJECT_LIBRARY_PROMPT : null].filter(Boolean).join('\n\n') || undefined,
+              system: [systemPrompt, projectLibrary ? (libraryTools.length ? PROJECT_LIBRARY_PROMPT : PROJECT_LIBRARY_GUIDANCE) : null].filter(Boolean).join('\n\n') || undefined,
               messages,
               tools: roundTools,
               webSearch: continuation ? false : nativeSearchActive,

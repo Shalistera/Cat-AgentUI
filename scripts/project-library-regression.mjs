@@ -18,19 +18,21 @@ const { sha256hex } = await import('../server/dist/crypto.js');
 const { projectRoutes } = await import('../server/dist/routes/projects.js');
 const { chatRoutes } = await import('../server/dist/routes/chats.js');
 const { getAdapter, toRuntimeConfig } = await import('../server/dist/providers/index.js');
-const { ProjectLibrarySession, projectLibraryIntent, LIBRARY_SEARCH, LIBRARY_READ } = await import('../server/dist/project-library.js');
+const { ProjectLibrarySession, LIBRARY_SEARCH, LIBRARY_READ } = await import('../server/dist/project-library.js');
 const docRef = (id) => id.replace(/-/g, '');
 const { runSubagent } = await import('../server/dist/subagent.js');
 const adapter = getAdapter('anthropic');
 const originalStream = adapter.streamChat;
+const openaiAdapter = getAdapter('openai');
+const originalOpenaiStream = openaiAdapter.streamChat;
 const app = Fastify();
 app.setErrorHandler((e, _req, reply) => reply.code(e.message === 'forbidden' ? 403 : e.message === 'unauthorized' ? 401 : 500).send({ error: e.message }));
 const request = (method, url, payload, user = 'alice') => app.inject({ method, url, payload,
   headers: { 'x-csrf': '1', cookie: `cat_session=${user}-session` } });
 const ok = (r) => { assert.equal(r.statusCode, 200, r.body); return r.json(); };
 const project = async (name, options = {}, user = 'alice') => ok(await request('POST', '/api/projects', { name, ...options }, user)).project;
-const chat = async (projectId = null) => {
-  const c = ok(await request('POST', '/api/chats', { projectId, modelId: 'model' })).chat;
+const chat = async (projectId = null, modelId = 'model') => {
+  const c = ok(await request('POST', '/api/chats', { projectId, modelId })).chat;
   ok(await request('PATCH', `/api/chats/${c.id}`, { title: 'Fixture' }));
   return c.id;
 };
@@ -49,6 +51,7 @@ adapter.streamChat = async function* (_cfg, req) {
     yield { type: 'stop', reason: 'stop' };
   }
 };
+openaiAdapter.streamChat = adapter.streamChat;
 const turn = async (id, text, extra = {}) => {
   const r = await request('POST', `/api/chats/${id}/stream`, { content: [{ type: 'text', text }], ...extra });
   assert.equal(r.statusCode, 200, r.body);
@@ -63,6 +66,8 @@ try {
   }
   db.insert(schema.providers).values({ id: 'provider', type: 'anthropic', name: 'Fixture', createdAt: Date.now() }).run();
   db.insert(schema.models).values({ id: 'model', providerId: 'provider', modelId: 'fixture', tools: 1, createdAt: Date.now() }).run();
+  db.insert(schema.providers).values({ id: 'openai-provider', type: 'openai', name: 'OpenAI fixture', createdAt: Date.now() }).run();
+  db.insert(schema.models).values({ id: 'openai-model', providerId: 'openai-provider', modelId: 'fixture', tools: 1, createdAt: Date.now() }).run();
   setSetting('followup_enabled', false);
   await app.register(cookie);
   await authPlugin(app);
@@ -84,20 +89,14 @@ try {
   assert.equal((await request('PATCH', `/api/projects/${travel.id}`, { crossProjectSearch: 'true' })).statusCode, 400);
   ok(await request('PATCH', `/api/projects/${travel.id}`, { crossProjectSearch: true }));
 
-  for (const text of ['搜索项目资料中的报销规定', '请去其他项目检索报销规定', '搜索项目资料中关于怎么报销的说明', '搜索项目资料中的工具定义', 'Search project references for reimbursement', '不要联网,请搜索项目资料']) {
-    assert.equal(projectLibraryIntent(text)?.kind, 'search', text);
-  }
-  for (const text of ['报销规定是什么', '搜索网页上的报销规定', '继续', '请总结上次搜索项目资料的结果', '我之前让你搜索项目资料', "'Search project references'", '请翻译:搜索项目资料中的报销规定', '解释如何搜索项目资料', '项目资料可以搜索吗', '“搜索项目资料中的报销规定”', '> 搜索项目资料中的报销规定', '```\n搜索项目资料中的报销规定\n```']) {
-    assert.equal(projectLibraryIntent(text), null, text);
-  }
-  for (const text of ['不要搜索项目资料', '别去其他项目检索', 'Stop searching project references', '先搜索项目资料,现在不要搜索了']) {
-    assert.equal(projectLibraryIntent(text)?.kind, 'deny', text);
-  }
-  const make = (text, current = null, user = 'alice') => new ProjectLibrarySession(user, current, () => [text]);
-  const ordinary = make('报销规定是什么');
-  assert.equal(ordinary.available, false);
-  assert.equal(call(ordinary, LIBRARY_SEARCH, { query: '报销规定' }).isError, true);
-  const session = make('搜索项目资料中的报销规定');
+  const sourceCorrection = '并非联网搜索，他在本面板的某个项目内 是一个参考资料，';
+  const panelSearch = '面板调用测试，我要求你看看你是否可以检索到辽金信交〔2025〕932 号的信息，它在一个项目内';
+  const usageQuestion = '关于面板的使用方法中有没有搜索项目资料的方式？';
+  // Tool availability is permission-based and independent of user wording.
+  // Natural-language decisions belong to the model, not this regression stub.
+  const make = (current = null, user = 'alice') => new ProjectLibrarySession(user, current);
+  const session = make();
+  assert(session.available);
   const unread = call(session, LIBRARY_READ, { project_id: travel.id, ref: docRef(doc.id) });
   assert(unread.isError, 'read requires a surfaced search hit');
   const found = call(session, LIBRARY_SEARCH, { query: '报销规定', limit: 8 });
@@ -110,13 +109,13 @@ try {
   assert(call(session, LIBRARY_SEARCH, { query: '报销规定', limit: 8 }).result.includes('本轮已返回'));
   assert(!call(session.fork(), LIBRARY_SEARCH, { query: '报销规定', limit: 8 }).result.includes('本轮已返回'), 'child contexts retrieve independently');
   assert(call(session.fork(), LIBRARY_READ, { project_id: travel.id, ref: docRef(doc.id) }).isError);
-  const named = make('请在「差旅政策」项目里搜索报销规定');
-  assert(named.available);
-  assert(!call(named, LIBRARY_SEARCH, { query: '报销规定' }).result.includes('500元'));
-  assert(call(named, LIBRARY_SEARCH, { query: '报销规定', project_id: other.id }).isError);
-  assert(!make('请在未开放资料项目里搜索报销规定').available);
-  assert(!call(make('搜索项目资料中的报销规定', travel.id), LIBRARY_SEARCH, { query: '报销规定', limit: 8 }).result.includes('300元'));
-  assert(!call(make('搜索项目资料中的报销规定', null, 'admin'), LIBRARY_SEARCH, { query: '报销规定' }).result.includes('PRIVATE_ONLY_SECRET'));
+  const named = make();
+  assert(!call(named, LIBRARY_SEARCH, { query: '报销规定', project_name: '差旅政策' }).result.includes('500元'));
+  assert(call(named, LIBRARY_SEARCH, { query: '报销规定', project_id: off.id }).isError);
+  assert(call(named, LIBRARY_SEARCH, { query: '报销规定', project_name: '未开放资料' }).isError);
+  assert(call(named, LIBRARY_SEARCH, { query: '报销规定', project_id: secret.id }).isError);
+  assert(!call(make(travel.id), LIBRARY_SEARCH, { query: '报销规定', limit: 8 }).result.includes('300元'));
+  assert(!call(make(null, 'admin'), LIBRARY_SEARCH, { query: '报销规定' }).result.includes('PRIVATE_ONLY_SECRET'));
   ok(await request('PATCH', `/api/projects/${travel.id}`, { crossProjectSearch: false }));
   assert(call(session, LIBRARY_READ, { project_id: travel.id, ref: docRef(doc.id) }).isError, 'setting revocation applies immediately');
   ok(await request('PATCH', `/api/projects/${travel.id}`, { crossProjectSearch: true }));
@@ -125,25 +124,28 @@ try {
   const resolved = ok(await request('GET', `/api/project-docs/${docRef(doc.id)}`));
   assert.equal(resolved.doc.projectId, travel.id);
   assert.equal((await request('GET', `/api/project-docs/${docRef(doc.id)}`, undefined, 'bob')).statusCode, 404);
-  const messages = ['搜索项目资料中的报销规定'];
-  const evolving = new ProjectLibrarySession('alice', null, () => messages);
+  let revision = '';
+  const evolving = new ProjectLibrarySession('alice', null, () => revision);
   const child = evolving.fork();
   assert(child.available);
-  messages.push('不要搜索项目资料');
+  revision = 'new-human-input';
   assert(!child.available && call(child, LIBRARY_SEARCH, { query: '报销规定' }).isError);
+  assert(!evolving.available && call(evolving, LIBRARY_READ, { project_id: travel.id, ref: docRef(doc.id) }).isError);
+  evolving.beginRound();
+  assert(evolving.available && !child.available, 'the parent replans; existing child tasks retain their original input revision');
+  assert(evolving.fork().available);
 
-  // Actual model turns: no automatic exposure, explicit search + bounded read,
-  // next-turn reset, regeneration/editing, and malicious unsupported tool calls.
+  // Ordinary turns receive tool descriptions and conditional usage guidance,
+  // with no automatic document retrieval. The stub models a no-search reply.
   const ordinaryChat = await chat();
   step = async (req) => {
-    assert(!offered(req));
-    assert(!req.system?.includes('300元'));
-    const r = results(req);
-    if (!r.length) return { call: LIBRARY_SEARCH, args: { query: '报销规定' } };
-    assert(r.at(-1).isError && !r.at(-1).result.includes('300元'));
-    return { text: 'No outside retrieval.' };
+    assert(offered(req));
+    assert(!req.system?.includes('300元') && !req.system?.includes('其余章节'));
+    assert(req.system.includes('普通聊天、仅提到项目、询问功能用法'));
+    assert(!results(req).length);
+    return { text: 'No outside retrieval requested.' };
   };
-  await turn(ordinaryChat, '报销规定是什么');
+  await turn(ordinaryChat, '你好');
   const explicitChat = await chat();
   let inspected = 0;
   step = async (req) => {
@@ -167,11 +169,59 @@ try {
   assert.equal(regenerate.statusCode, 200, regenerate.body);
   assert(!regenerate.body.includes('event: error'), regenerate.body);
   assert.equal(inspected, 2, 'regeneration uses its actual user parent');
-  step = async (req) => { assert(!offered(req)); return { text: 'No search this turn.' }; };
+  step = async (req) => { assert(offered(req)); return { text: 'No search needed for this follow-up.' }; };
   await turn(explicitChat, '继续解释');
   await turn(explicitChat, '只回答你好', { editMessageId: userMessage.id });
+
+  // Both adapters get the same tools for colloquial requests and source
+  // corrections. Execute real search/read calls against the fixture database;
+  // this verifies wiring, not the language understanding of a live provider.
+  await addDoc(travel, '辽金信交〔2025〕932号.md', '辽金信交〔2025〕932号:NOTICE_FIXTURE');
+  const naturalRequests = [
+    panelSearch,
+    '我有个辽金信交〔2025〕932号资料在某个项目里，你连那个资料看了后一起总结',
+    '项目里放过那份932号通知，帮我看看',
+    '上次存的932号文件在一个项目里，结合那份材料一起分析下',
+    'There is a 932 notice in one of my projects. Take a look and include it in the summary.',
+  ];
+  for (const modelId of ['model', 'openai-model']) {
+    for (const text of naturalRequests) {
+      const panelChat = await chat(null, modelId);
+      let panelRound = 0;
+      step = async (req) => {
+        assert(offered(req), `${modelId}: ${text}`);
+        assert(req.system.includes('独立于联网搜索和当前工作区'));
+        assert(req.system.includes('无需固定关键词、句式或再次确认'));
+        assert(!req.system.includes('NOTICE_FIXTURE'));
+        if (panelRound++ === 0) return { call: LIBRARY_SEARCH, args: { query: '辽金信交 932' } };
+        assert(results(req).at(-1).result.includes('NOTICE_FIXTURE'));
+        if (panelRound === 2) {
+          const ref = results(req).at(-1).result.match(/ref ([a-f0-9]{32})/)[1];
+          return { call: LIBRARY_READ, args: { project_id: travel.id, ref, max_chars: 100 } };
+        }
+        return { text: 'Found and read the project reference.' };
+      };
+      await turn(panelChat, text);
+      step = async (req) => { assert(offered(req)); return { text: 'Project source confirmed.' }; };
+      await turn(panelChat, sourceCorrection);
+      const correctionMessages = ok(await request('GET', `/api/chats/${panelChat}`)).messages;
+      const correctionAnswer = correctionMessages.findLast((m) => m.role === 'assistant');
+      const correctionUser = correctionMessages.findLast((m) => m.role === 'user');
+      const correctionRegenerate = await request('POST', `/api/chats/${panelChat}/stream`, { regenerateMessageId: correctionAnswer.id });
+      assert.equal(correctionRegenerate.statusCode, 200, correctionRegenerate.body);
+      assert(!correctionRegenerate.body.includes('event: error'), correctionRegenerate.body);
+      step = async (req) => {
+        assert(offered(req));
+        assert(req.system.includes('允许跨项目检索资料'));
+        assert(!req.system.includes('NOTICE_FIXTURE'));
+        return { text: 'Explain the project settings without retrieving documents.' };
+      };
+      await turn(panelChat, usageQuestion);
+      await turn(panelChat, '继续解释', { editMessageId: correctionUser.id });
+    }
+  }
   const currentChat = await chat(travel.id);
-  step = async (req) => { assert(!offered(req)); assert(req.tools.some((t) => t.name === 'project_search')); return { text: 'Local project tools still work.' }; };
+  step = async (req) => { assert(offered(req)); assert(req.tools.some((t) => t.name === 'project_search')); return { text: 'Local project tools still work.' }; };
   await turn(currentChat, '介绍一下报销规定');
   step = async (req) => { assert(offered(req)); return { text: 'Other project references available.' }; };
   await turn(currentChat, '搜索其他项目的报销资料');
@@ -186,7 +236,8 @@ try {
   db.update(schema.users).set({ settings: JSON.stringify({ agentTools: false }) }).where(eq(schema.users.id, 'alice')).run();
   await turn(ordinaryChat, '搜索项目资料中的报销规定');
   db.update(schema.users).set({ settings: '{}' }).where(eq(schema.users.id, 'alice')).run();
-  // Pending user revocation is enforced before the current model call executes.
+  // Any pending user input blocks an in-flight retrieval until the model has
+  // received it. The stub then follows the user's cancellation.
   const revokeChat = await chat();
   const revokeRequestId = randomUUID();
   let revokeStep = 0;
@@ -196,18 +247,21 @@ try {
       ok(await request('POST', `/api/chats/${revokeChat}/interject`, { requestId: revokeRequestId, text: '不要搜索项目资料' }));
       return { call: LIBRARY_SEARCH, args: { query: '报销规定' } };
     }
-    assert(!offered(req));
+    assert(offered(req));
     assert(results(req).at(-1).isError);
+    assert(req.messages.some((m) => m.interjection === '不要搜索项目资料'));
     return { text: 'Search cancelled.' };
   };
   await turn(revokeChat, '搜索项目资料中的报销规定', { requestId: revokeRequestId });
-  // A new explicit interjection can enable retrieval within an initially
-  // ordinary turn; the next model round receives the tools and instructions.
+  step = async (req) => { assert(offered(req)); return { text: 'Use the latest human request to decide whether to retrieve.' }; };
+  await turn(revokeChat, sourceCorrection);
+  // A new request can use the already advertised tools after the latest
+  // human input is delivered, without language-based capability filtering.
   const addChat = await chat(), addRequestId = randomUUID();
   let addStep = 0;
   step = async (req) => {
     if (addStep++ === 0) {
-      assert(!offered(req));
+      assert(offered(req));
       ok(await request('POST', `/api/chats/${addChat}/interject`, { requestId: addRequestId, text: '搜索项目资料中的报销规定' }));
       return { text: 'Received the added request.' };
     }
@@ -218,13 +272,28 @@ try {
   };
   await turn(addChat, '你好', { requestId: addRequestId });
 
+  // With every accessible outside project switched off, neither descriptions
+  // nor forced calls can expose documents. The prompt explains the setting.
+  for (const p of [travel, other]) ok(await request('PATCH', `/api/projects/${p.id}`, { crossProjectSearch: false }));
+  assert(!session.available && call(session, LIBRARY_SEARCH, { query: '报销规定' }).isError);
+  const disabledChat = await chat();
+  step = async (req) => {
+    assert(!offered(req));
+    assert(req.system.includes('当前没有可供本对话跨项目检索的已开放项目'));
+    if (!results(req).length) return { call: LIBRARY_SEARCH, args: { query: '报销规定' } };
+    assert(results(req).at(-1).isError && !results(req).at(-1).result.includes('300元'));
+    return { text: 'Explain the project setting.' };
+  };
+  await turn(disabledChat, panelSearch);
+  for (const p of [travel, other]) ok(await request('PATCH', `/api/projects/${p.id}`, { crossProjectSearch: true }));
+
   // Two projects can have document IDs sharing the old eight-character
   // handle. Full cross-project refs keep both reads and citation links exact.
   const collisionIds = ['12345678-0000-4000-8000-000000000001', '12345678-0000-4000-8000-000000000002'];
   for (const [i, p] of [travel, other].entries()) db.insert(schema.projectDocs).values({
     id: collisionIds[i], projectId: p.id, name: '同名资料.md', content: `collision-fixture version-${i}`, chars: 29, createdAt: Date.now(),
   }).run();
-  const collisionSession = make('搜索项目资料中的 collision-fixture');
+  const collisionSession = make();
   const collisionHits = call(collisionSession, LIBRARY_SEARCH, { query: 'collision-fixture' });
   for (const [i, p] of [travel, other].entries()) {
     assert(collisionHits.result.includes(docRef(collisionIds[i])));
@@ -232,8 +301,8 @@ try {
     assert.equal(ok(await request('GET', `/api/project-docs/${docRef(collisionIds[i])}`)).doc.id, collisionIds[i]);
   }
 
-  // Model-authored child task text is not authority. Inherited grants work,
-  // with independent search/read state, while no grant refuses forced calls.
+  // Child tasks inherit the parent's available library session, never obtain
+  // a session from task text alone, and retrieve their own evidence.
   const user = db.select().from(schema.users).where(eq(schema.users.id, 'alice')).get();
   const provider = db.select().from(schema.providers).get(), model = db.select().from(schema.models).get();
   const deps = { user, chatId: ordinaryChat, projectId: null, parentMessageId: answer.id,
@@ -251,9 +320,10 @@ try {
     assert.equal(r.stopped, 'done', r.error);
     assert.equal(r.text.includes('300元'), allowed);
   }
-  console.log('Project library regression passed: default/owner settings, explicit per-turn requests, quoted/negative requests, member/admin isolation, bounded cross-project search/read, live revocation, citations, deduplication, normal/project chats, regeneration/edit reset, pending interjection revocation and independent authorized subagents.');
+  console.log('Project library regression passed: owner settings, wording-independent tool availability on Anthropic/OpenAI paths, conditional retrieval guidance without automatic content injection, member/admin isolation, bounded search/read, live revocation, citations, deduplication, regeneration/editing, stale-call invalidation and independent subagents.');
 } finally {
   adapter.streamChat = originalStream;
+  openaiAdapter.streamChat = originalOpenaiStream;
   await app.close(); rawDb.close();
   fs.rmSync(temp, { recursive: true, force: true });
 }
