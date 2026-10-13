@@ -191,6 +191,7 @@ export function ProjectDocHost() {
       onSaved={(meta) => {
         const next = { ...target, doc: { ...target.doc, name: meta.name } };
         resolved.set(target.doc.id.replace(/-/g, '').slice(0, 8), Promise.resolve(next));
+        resolved.set(target.doc.id.replace(/-/g, ''), Promise.resolve(next));
       }}
       onClose={close} />
   );

@@ -155,6 +155,7 @@ export default function ProjectPage() {
   const [nameDraft, setNameDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
   const [workspaceDraft, setWorkspaceDraft] = useState(false);
+  const [crossSearchDraft, setCrossSearchDraft] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
 
   // Composer state — same defaults as a fresh chat on the chat page: last used
@@ -245,6 +246,7 @@ export default function ProjectPage() {
       const r = await api.patch<{ project: Project }>(`/api/projects/${project.id}`, {
         name: nameDraft.trim(),
         sharedWorkspace: workspaceDraft,
+        crossProjectSearch: crossSearchDraft,
         description: descDraft.trim() === '' ? null : descDraft.trim(),
       });
       setProject(r.project);
@@ -363,7 +365,7 @@ export default function ProjectPage() {
               <Users size={14} className={project.accessMode !== 'private' ? 'text-acc' : ''} />
             </Button>
             <Button variant="ghost" size="iconSm" title={t('项目设置')}
-              onClick={() => { setNameDraft(project.name); setDescDraft(project.description ?? ''); setWorkspaceDraft(project.sharedWorkspace); setEditOpen(true); }}>
+              onClick={() => { setNameDraft(project.name); setDescDraft(project.description ?? ''); setWorkspaceDraft(project.sharedWorkspace); setCrossSearchDraft(project.crossProjectSearch); setEditOpen(true); }}>
               <Pencil size={14} />
             </Button>
             <Button variant="dangerGhost" size="iconSm" title={t('删除项目')} onClick={removeProject}>
@@ -532,6 +534,9 @@ export default function ProjectPage() {
           <ToggleRow checked={workspaceDraft} onChange={setWorkspaceDraft} disabled={savingMeta}
             label={t('项目对话共享工作区')}
             desc={t('开启后,同一用户在本项目中的对话共用文件,每位成员各自独立。已有文件自动合并,同名且内容不同的文件另存保留。关闭后恢复各对话工作区,项目文件保留供下次开启。')} />
+          <ToggleRow checked={crossSearchDraft} onChange={setCrossSearchDraft} disabled={savingMeta}
+            label={t('允许跨项目检索资料')}
+            desc={t('拥有本项目访问权限的用户,可在其他对话或项目中明确要求搜索这里的参考资料。每轮单独授权,例如「搜索项目资料中的报销规定」。')} />
           <ModalActions>
             <Button variant="outline" onClick={() => setEditOpen(false)}>{t('取消')}</Button>
             <Button type="submit" variant="primary" disabled={savingMeta || !nameDraft.trim()}>

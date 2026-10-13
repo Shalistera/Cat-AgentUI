@@ -112,7 +112,7 @@ export function docRef(id: string): string {
 export const DOC_CITE_RULE = '引用资料时,在依据它的句子末尾用 Markdown 链接标注出处:[文档名](doc:ref),ref 是该文档的编号,例如「……须在 30 日内完成[合同.md](doc:1a2b3c4d)」。界面会把它显示成可点开的资料标签;只标注真正用到的资料,不要编造编号,不要在文末再罗列。';
 
 interface ProjectDocument { id: string; name: string; content: string }
-interface Hit { name: string; ref: string; offset: number; text: string; docChars: number }
+export interface ProjectSearchHit { id: string; name: string; ref: string; offset: number; text: string; docChars: number; score: number }
 
 function projectDocuments(projectId: string): ProjectDocument[] {
   return rawDb.prepare('SELECT id, name, content FROM project_docs WHERE project_id = ? ORDER BY created_at, id')
@@ -125,7 +125,7 @@ function selectDocument(docs: ProjectDocument[], args: Record<string, unknown>):
   const ref = typeof args.ref === 'string' ? args.ref.trim().toLowerCase() : '';
   const name = typeof args.name === 'string' ? args.name.trim() : '';
   if (!ref && !name) return '缺少 ref 或 name 参数';
-  const exact = ref ? docs.filter((d) => docRef(d.id).toLowerCase() === ref) : docs.filter((d) => d.name === name);
+  const exact = ref ? docs.filter((d) => docRef(d.id).toLowerCase() === ref || d.id.replace(/-/g, '').toLowerCase() === ref) : docs.filter((d) => d.name === name);
   const matches = exact.length || ref ? exact : docs.filter((d) => d.name.includes(name) || name.includes(d.name));
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) return `有多个匹配的文档,请用 ref 指定:${matches.map((d) => `${d.name}(ref ${docRef(d.id)})`).join('、')}`;
@@ -140,7 +140,7 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number):
     then by how much of the query a chunk covers. A project's corpus is capped
     at a few MB, so scoring every chunk in memory is fast and — unlike a
     trigram index — handles one- and two-character Chinese terms. */
-function searchDocs(docs: ProjectDocument[], query: string, limit: number): Hit[] {
+function searchDocs(docs: ProjectDocument[], query: string, limit: number): ProjectSearchHit[] {
   const { terms, grams } = queryTerms(query);
   if (!terms.length) return [];
   const chunks = docs.flatMap((d) => chunkDoc(d.content).map((c) => ({
@@ -191,7 +191,14 @@ function searchDocs(docs: ProjectDocument[], query: string, limit: number): Hit[
       selected.push(c);
     }
   }
-  return selected.map((c) => ({ name: c.name, ref: c.ref, offset: c.offset, text: c.text, docChars: c.docChars }));
+  return selected.map((c) => ({ id: c.id, name: c.name, ref: c.ref, offset: c.offset, text: c.text, docChars: c.docChars,
+    score: scored.find((s) => s.c === c)!.score }));
+}
+
+/** The caller supplies an access-checked project. Process one bounded project
+ * corpus at a time so a cross-project search doesn't load all documents at once. */
+export function searchProjectDocuments(projectId: string, query: string, limit: number): ProjectSearchHit[] {
+  return searchDocs(projectDocuments(projectId), query, boundedInt(limit, SEARCH_DEFAULT_LIMIT, 1, SEARCH_LIMIT));
 }
 
 // ---- tools ----
@@ -271,7 +278,8 @@ export function callProjectTool(
     const slice = doc.content.slice(offset, offset + length);
     if (!slice) return { result: `offset ${offset} 超出文档长度(共 ${doc.content.length} 字符)`, isError: true };
     const end = offset + slice.length;
-    const header = `【${doc.name} · ref ${docRef(doc.id)}】第 ${offset}–${end} 字符,共 ${doc.content.length} 字符`;
+    const ref = typeof args.ref === 'string' && args.ref.length === 32 ? doc.id.replace(/-/g, '') : docRef(doc.id);
+    const header = `【${doc.name} · ref ${ref}】第 ${offset}–${end} 字符,共 ${doc.content.length} 字符`;
     const footer = end < doc.content.length ? `\n\n(未完,继续读取请传 offset=${end})` : '\n\n(已到文档末尾)';
     return { result: `${header}\n\n${slice}${footer}`, isError: false };
   }

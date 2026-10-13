@@ -304,7 +304,7 @@ export const Markdown = memo(function Markdown({ text, streaming = false, citati
         remarkPlugins={[remarkGfm, remarkMath, remarkCjkFriendly, remarkBrToBreak]}
         rehypePlugins={[[rehypeKatex, { strict: false }]]}
         // keep our internal cite: / doc: schemes; everything else goes through the default sanitiser
-        urlTransform={(url) => (url.startsWith('cite:') || /^doc:[0-9a-f]{8}$/i.test(url) ? url : defaultUrlTransform(url))}
+        urlTransform={(url) => (url.startsWith('cite:') || /^doc:(?:[0-9a-f]{8}|[0-9a-f]{32})$/i.test(url) ? url : defaultUrlTransform(url))}
         components={{
           pre: MarkdownPre,
           a({ children, href }) {
@@ -313,7 +313,7 @@ export const Markdown = memo(function Markdown({ text, streaming = false, citati
               return Number.isInteger(n) && n > 0 ? <CiteChip n={n} citations={citations} /> : null;
             }
             // 项目资料: `[名称](doc:ref)` becomes a chip that opens the document.
-            if (typeof href === 'string' && /^doc:[0-9a-f]{8}$/i.test(href)) {
+            if (typeof href === 'string' && /^doc:(?:[0-9a-f]{8}|[0-9a-f]{32})$/i.test(href)) {
               return <ProjectDocLink refId={href.slice(4)}>{children}</ProjectDocLink>;
             }
             // MCP search: the model links the sentence to a result URL; a link

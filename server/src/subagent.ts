@@ -14,6 +14,7 @@ import { WORKSPACE_TOOL_DEFS, buildWorkspacePrompt, callWorkspaceTool, isWorkspa
 import { SKILL_TOOL_DEFS, buildSkillsPrompt, callSkillTool, isSkillTool, skillsFor } from './skills.js';
 import { CONVERT_FILE_TOOL, CONVERT_TOOL_DEF, SANDBOX_TOOL_DEFS, buildConvertPrompt, buildSandboxPrompt, callSandboxTool, convertAvailableFor, isSandboxTool, isTrustedCommand, sandboxAvailableFor, sandboxNeedsConfirm } from './sandbox/tool.js';
 import { ProjectKnowledgeSession, isProjectTool } from './knowledge.js';
+import { ProjectLibrarySession, PROJECT_LIBRARY_TOOLS, PROJECT_LIBRARY_PROMPT, isProjectLibraryTool } from './project-library.js';
 import { buildProjectPrompt, projectFilesPrompt } from './routes/projects.js';
 import { historyBudget } from './compaction.js';
 import { WEB_SEARCH_TOOL, WEB_SEARCH_TOOL_DEF, runWebSearch, webSearchToolAvailable } from './web-search.js';
@@ -72,6 +73,8 @@ export interface SubagentDeps {
   reasoning: { level: string; ratio: number } | undefined;
   webToolBudget?: WebToolBudget;
   allowAgentWebTools?: boolean;
+  /** Inherited from the human's current request; a model-written task cannot grant it. */
+  projectLibrary?: ProjectLibrarySession;
   secretValues: string[];
   signal: AbortSignal;
   /** Sandbox confirmation, routed to the parent's tab. */
@@ -144,6 +147,8 @@ async function runScopedSubagent(deps: SubagentDeps, task: string): Promise<Suba
   const projectKnowledge = new ProjectKnowledgeSession(Math.min(100_000, Math.floor(historyBudget(deps.model.modelId).textChars / 4)));
   const projectOn = !!project.tools?.length;
   if (projectOn) tools.push(...project.tools!);
+  const projectLibrary = deps.projectLibrary?.fork();
+  if (projectLibrary?.available) tools.push(...PROJECT_LIBRARY_TOOLS);
   const sandboxProjectId = project.docCount ? deps.projectId : null;
   const nativeSearchOn = webAllowed && deps.provider.type === 'gemini' && !!deps.provider.useVertex
     && supportsVertexGoogleSearch(deps.model.modelId)
@@ -191,9 +196,9 @@ async function runScopedSubagent(deps: SubagentDeps, task: string): Promise<Suba
       const redactor = new StreamingSecretRedactor(deps.secretValues);
       for await (const ev of deps.adapter.streamChat(deps.cfg, {
         model: deps.model.modelId,
-        system,
+        system: [system, projectLibrary?.available ? PROJECT_LIBRARY_PROMPT : null].filter(Boolean).join('\n\n'),
         messages: turnMessages,
-        tools: tools.filter((t) => webToolBudget.allows(t.name)),
+        tools: tools.filter((t) => webToolBudget.allows(t.name) && (!isProjectLibraryTool(t.name) || projectLibrary?.available)),
         webSearch: nativeSearchOn,
         maxTokens: Math.min(config.defaultModelOutputTokens, config.maxModelOutputTokens),
         hardMaxTokens: config.maxModelOutputTokens,
@@ -248,6 +253,8 @@ async function runScopedSubagent(deps: SubagentDeps, task: string): Promise<Suba
           ({ result, isError } = await callSandboxTool({ user, chatId: deps.chatId, messageId: deps.parentMessageId, signal, projectId: sandboxProjectId }, call.args, call.name));
         } else if (isSkillTool(call.name) && skillRows.length) {
           ({ result, isError } = callSkillTool(user, call.name, call.args));
+        } else if (isProjectLibraryTool(call.name)) {
+          ({ result, isError } = projectLibrary?.call(call.name, call.args) ?? { result: '本轮未授权子代理检索其他项目资料', isError: true });
         } else if (isProjectTool(call.name) && projectOn) {
           ({ result, isError } = projectKnowledge.call(deps.projectId!, call.name, call.args));
         } else if (call.name === WEB_FETCH_TOOL && fetchOn) {

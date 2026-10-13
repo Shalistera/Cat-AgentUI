@@ -1,6 +1,9 @@
 // App shell: sidebar, settings dialog, login, projects, bookmarks, release notes.
 // Keys are the Chinese source strings passed to t().
 export default {
+  '允许跨项目检索资料': 'Allow reference searches from other chats',
+  '拥有本项目访问权限的用户,可在其他对话或项目中明确要求搜索这里的参考资料。每轮单独授权,例如「搜索项目资料中的报销规定」。': 'People with access to this project can explicitly request its references from other chats or projects. Each turn needs a new request, for example: “Search project references for the reimbursement policy.”',
+
   "项目设置": "Project settings",
   "项目对话共享工作区": "Share a workspace across project chats",
   "开启后,同一用户在本项目中的对话共用文件,每位成员各自独立。已有文件自动合并,同名且内容不同的文件另存保留。关闭后恢复各对话工作区,项目文件保留供下次开启。": "When enabled, each user shares files across their own chats in this project. Each member has separate files. Existing files are merged automatically; files with the same name but different contents are kept as separate copies. Turning this off restores individual chat workspaces; project files remain available when it is enabled again.",

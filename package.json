@@ -31,6 +31,7 @@
     "test:provider-failover": "npm run build -w server && node scripts/provider-failover-regression.mjs",
     "test:data-comparison": "npm run build -w server && node --import tsx scripts/data-comparison-regression.mjs",
     "test:gemini-generation": "npm run build -w server && node scripts/gemini-generation-regression.mjs",
+    "test:project-library": "npm run build -w server && node scripts/project-library-regression.mjs",
     "test:project-knowledge": "npm run build -w server && node scripts/project-knowledge-regression.mjs",
     "test:compaction": "npm run build -w server && node scripts/compaction-regression.mjs",
     "test:system-model": "npm run build -w server && node scripts/system-model-regression.mjs",

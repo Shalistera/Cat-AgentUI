@@ -274,6 +274,13 @@
       "when": 1791763200000,
       "tag": "0038_project_workspace",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1791849600000,
+      "tag": "0039_cross_project_search",
+      "breakpoints": true
     }
   ]
 }

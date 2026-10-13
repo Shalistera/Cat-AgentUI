@@ -170,6 +170,8 @@ export const projects = sqliteTable('projects', {
   accessMode: text('access_mode').notNull().default('private'),
   // Share files across this user's project chats; each member has separate files.
   sharedWorkspace: integer('shared_workspace').notNull().default(0),
+  // Existing project access is still required; outside retrieval is per-request opt-in.
+  crossProjectSearch: integer('cross_project_search').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 }, (t) => [index('idx_projects_user').on(t.userId, t.updatedAt)]);

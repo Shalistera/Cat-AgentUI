@@ -149,6 +149,7 @@ export type ProjectMemberRole = 'editor' | 'viewer';
 
 export interface Project {
   sharedWorkspace: boolean;
+  crossProjectSearch: boolean;
   id: string; name: string;
   description: string | null;
   instructions: string | null;

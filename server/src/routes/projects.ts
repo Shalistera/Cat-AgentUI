@@ -38,6 +38,7 @@ function projectDto(p: typeof schema.projects.$inferSelect, role: ProjectRole) {
   return {
     id: p.id, name: p.name, description: p.description,
     sharedWorkspace: !!p.sharedWorkspace,
+    crossProjectSearch: !!p.crossProjectSearch,
     instructions: p.instructions, createdAt: p.createdAt, updatedAt: p.updatedAt,
     accessMode: p.accessMode as 'private' | 'shared' | 'restricted',
     role,
@@ -163,6 +164,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const body = z.object({
       name: z.string().trim().min(1).max(80),
       sharedWorkspace: z.boolean().optional(),
+      crossProjectSearch: z.boolean().optional(),
       description: z.string().max(300).nullish(),
       instructions: z.string().max(PROJECT_LIMITS.maxInstructionsChars).nullish(),
     }).safeParse(req.body);
@@ -172,6 +174,7 @@ export async function projectRoutes(app: FastifyInstance) {
     db.insert(schema.projects).values({
       id, userId: req.user!.id, name: body.data.name,
       sharedWorkspace: body.data.sharedWorkspace ? 1 : 0,
+      crossProjectSearch: body.data.crossProjectSearch ? 1 : 0,
       description: body.data.description ?? null,
       instructions: body.data.instructions ?? null,
       createdAt: t, updatedAt: t,
@@ -214,6 +217,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const body = z.object({
       name: z.string().trim().min(1).max(80).optional(),
       sharedWorkspace: z.boolean().optional(),
+      crossProjectSearch: z.boolean().optional(),
       description: z.string().max(300).nullish(),
       instructions: z.string().max(PROJECT_LIMITS.maxInstructionsChars).nullish(),
     }).safeParse(req.body);
@@ -223,11 +227,12 @@ export async function projectRoutes(app: FastifyInstance) {
     const d = body.data;
     // Editors may rewrite the instructions; the project's identity is the owner's.
     if (!canEditProject(access.role)) return reply.code(403).send(NO_EDIT);
-    if ((d.name !== undefined || d.description !== undefined || d.sharedWorkspace !== undefined) && access.role !== 'owner') {
+    if ((d.name !== undefined || d.description !== undefined || d.sharedWorkspace !== undefined || d.crossProjectSearch !== undefined) && access.role !== 'owner') {
       return reply.code(403).send({ error: '只有项目所有者可以修改项目设置' });
     }
     const patch: Record<string, unknown> = { updatedAt: now() };
     if (d.sharedWorkspace !== undefined) patch.sharedWorkspace = d.sharedWorkspace ? 1 : 0;
+    if (d.crossProjectSearch !== undefined) patch.crossProjectSearch = d.crossProjectSearch ? 1 : 0;
     if (d.name !== undefined) patch.name = d.name;
     if (d.description !== undefined) patch.description = d.description;
     if (d.instructions !== undefined) patch.instructions = d.instructions;
@@ -324,7 +329,7 @@ export async function projectRoutes(app: FastifyInstance) {
   app.get('/api/project-docs/:ref', async (req, reply) => {
     requireAuth(req, reply);
     const { ref } = req.params as { ref: string };
-    if (!/^[0-9a-f]{8}$/i.test(ref)) return reply.code(404).send({ error: '资料不存在' });
+    if (!/^(?:[0-9a-f]{8}|[0-9a-f]{32})$/i.test(ref)) return reply.code(404).send({ error: '资料不存在' });
     const candidates = db.select({ id: schema.projectDocs.id, projectId: schema.projectDocs.projectId, name: schema.projectDocs.name })
       .from(schema.projectDocs).where(sql`replace(${schema.projectDocs.id}, '-', '') LIKE ${`${ref.toLowerCase()}%`}`).all();
     for (const d of candidates) {
