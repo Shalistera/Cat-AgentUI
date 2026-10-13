@@ -18,6 +18,22 @@ async function collect(model, reasoning, maxTokens = 8192) {
   return { events, end };
 }
 try {
+  for (const model of ['gemini-4-argon', 'google/gemini-4-argon', 'publishers/google/models/gemini-4-argon']) {
+    for (const [level, ratio] of [['low', 0], ['medium', 0.5], ['high', 1]]) {
+      await collect(model, { level, ratio });
+      assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: level, includeThoughts: true }, `${model}: ${level}`);
+    }
+    for (const level of ['off', 'minimal']) {
+      await collect(model, { level, ratio: 0 });
+      assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'low', includeThoughts: level !== 'off' }, `${model}: ${level}`);
+    }
+    for (const [ratio, expected] of [[0, 'low'], [0.5, 'medium'], [1, 'high']]) {
+      await collect(model, { level: 'custom-effort', ratio });
+      assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: expected, includeThoughts: true });
+    }
+    await collect(model);
+    assert.equal(body.generationConfig.thinkingConfig, undefined, `${model}: preserve provider defaults when effort is unspecified`);
+  }
   for (const [level, ratio] of [['low', 0], ['medium', 0.5], ['high', 1]]) {
     const { events, end } = await collect('gemini-3.8-flash', { level, ratio });
     assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: level, includeThoughts: true });
@@ -40,5 +56,5 @@ try {
   assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingBudget: 32768, includeThoughts: true });
   await collect('gemini-3.8-flash');
   assert.equal(body.generationConfig.thinkingConfig, undefined, 'unspecified effort preserves provider default');
-  console.log('PASS: native Gemini Flash levels, legacy budgets, explicit output caps, MAX_TOKENS mapping and separate thinking/answer diagnostics.');
+  console.log('PASS: native Gemini 4 Argon and Flash levels, prefixed model IDs, minimum/custom/default effort, legacy budgets, explicit output caps, MAX_TOKENS mapping and separate thinking/answer diagnostics.');
 } finally { globalThis.fetch = originalFetch; }

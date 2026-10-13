@@ -58,9 +58,9 @@ function ladder(...values: string[]): ReasoningLevel[] {
  * First match wins, so a narrower rule goes above a broader one. An empty
  * ladder is a real answer: it says the model has no reasoning mode.
  *
- * OpenAI uses native reasoning_effort tokens; Gemini 3.7/3.8 Flash uses native
- * low/medium/high levels. Anthropic and older Gemini models budget in thinking
- * tokens and read the position on the ladder.
+ * OpenAI uses native reasoning_effort tokens; Gemini 4 Argon and 3.7/3.8 Flash
+ * use native low/medium/high levels. Anthropic and older Gemini models budget
+ * in thinking tokens and read the position on the ladder.
  */
 const RULES: Record<ProviderType, { re: RegExp; levels: ReasoningLevel[] }[]> = {
   novelai: [],

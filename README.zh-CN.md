@@ -182,7 +182,7 @@ HEALTH_URL=http://127.0.0.1:3000/api/health    # 可选:重启后检查
 
 普通对话每次模型请求使用 `min(对话 maxTokens 或 DEFAULT_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS)`。
 默认请求上限为 8192;工具会产生多轮请求,回复统计的输出 tokens 会累计各轮,并包含 Gemini 思考 tokens。
-Gemini 3.7/3.8 Flash 按原生 `thinkingLevel` 发送低/中/高档;它们不能完全关闭思考,最低档使用 low 并隐藏思考摘要。
+Gemini 4 Argon 和 3.7/3.8 Flash 按原生 `thinkingLevel` 发送低/中/高档;它们不能完全关闭思考,最低档使用 low 并隐藏思考摘要。未指定强度时保留服务商默认值(Argon 为 medium)。
 高思考档触及上限时,可按需要提高部署环境的 `DEFAULT_MODEL_OUTPUT_TOKENS`(例如 32768 或 65536),
 但实际值仍受 `MAX_MODEL_OUTPUT_TOKENS` 和服务商限制;已有对话显式保存的 `maxTokens` 优先。
 提高上限会允许更多思考和输出,不保证低延迟或低成本。图表任务默认先取数据、先出图、后写简短结论。当前用户消息明确要求图表或“对比 + 按时间展示”时,

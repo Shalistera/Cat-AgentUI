@@ -188,9 +188,9 @@ function buildChatBody(req: ChatRequest): any {
   if (req.maxTokens) generationConfig.maxOutputTokens = req.maxTokens;
   if (req.reasoning) {
     const modelId = req.model.split('/').pop() ?? req.model;
-    // These Flash models use native levels; minimal/off are not supported.
+    // Argon and these Flash models use native levels; minimal/off are not supported.
     // Keep older models on their existing budget protocol.
-    if (/^gemini-3\.[78]-flash(?:-|$)/i.test(modelId)) {
+    if (/^gemini-(?:3\.[78]-flash|4-argon)(?:-|$)/i.test(modelId)) {
       const level = req.reasoning.level.toLowerCase();
       const thinkingLevel = level === 'off' || level === 'minimal' ? 'low'
         : ['low', 'medium', 'high'].includes(level) ? level

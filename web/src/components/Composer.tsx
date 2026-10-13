@@ -528,7 +528,7 @@ export function Composer(props: ComposerProps) {
     }
   }
 
-  const minimumThinking = model?.providerType === 'gemini' && /^gemini-3\.[78]-flash(?:-|$)/i.test(model.modelId.split('/').pop() ?? '');
+  const minimumThinking = model?.providerType === 'gemini' && /^gemini-(?:3\.[78]-flash|4-argon)(?:-|$)/i.test(model.modelId.split('/').pop() ?? '');
   const efforts: ReasoningLevel[] = [minimumThinking ? { ...OFF_LEVEL, label: t('最低') } : OFF_LEVEL, ...(model?.reasoningLevels ?? [])];
   // A level the current model does not offer falls back to the off stop instead
   // of leaving the slider pointing at nothing.

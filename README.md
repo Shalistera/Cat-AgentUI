@@ -182,7 +182,7 @@ See [OpenAI's strict mode for tools](https://developers.openai.com/api/docs/guid
 
 Ordinary chat uses `min(the chat's maxTokens or DEFAULT_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS)` for every model request.
 The default request limit is 8192; tools produce several requests per turn, so the output tokens in the reply stats accumulate across them and include Gemini thinking tokens.
-Gemini 3.7/3.8 Flash send the low/medium/high tiers via the native `thinkingLevel`; they cannot turn thinking off entirely, so the lowest tier uses low and hides the thinking summary.
+Gemini 4 Argon and 3.7/3.8 Flash send the low/medium/high tiers via the native `thinkingLevel`; they cannot turn thinking off entirely, so the lowest tier uses low and hides the thinking summary. Leaving the effort unspecified preserves the provider default (medium for Argon).
 When a high thinking tier hits the limit, you can raise `DEFAULT_MODEL_OUTPUT_TOKENS` in your deployment as needed (to 32768 or 65536, for example),
 but the effective value is still bound by `MAX_MODEL_OUTPUT_TOKENS` and the provider's limits; a `maxTokens` explicitly saved on an existing chat takes precedence.
 Raising the limit allows more thinking and output; it does not guarantee low latency or low cost. Chart tasks default to fetching the data first, drawing the chart next and writing a short conclusion last. When the current user message explicitly asks for a chart or matches "comparison + shown over time",
