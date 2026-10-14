@@ -133,7 +133,7 @@ HEALTH_URL=http://127.0.0.1:3000/api/health    # 可选:重启后检查
 | `MAX_CONTEXT_IMAGES` | 上下文图片/PDF 数量预算;实际取此值与当前单次附件上限的较大值,保证一批附件可进入上下文 | `6` |
 | `MAX_CONTEXT_IMAGE_MB_PER_USER` | 单用户同时驻留的上下文图片字节预算 | `48` |
 | `MAX_CONTEXT_IMAGE_MB_GLOBAL` | 全站同时驻留的上下文图片字节预算 | `96` |
-| `DEFAULT_MODEL_OUTPUT_TOKENS` | 未单独设置时每次模型请求的输出 token 上限;Gemini 包含思考,不等于模型最大容量 | `8192` |
+| `DEFAULT_MODEL_OUTPUT_TOKENS` | 未单独设置时每次模型请求的输出 token 上限,按可见回答估算;需要思考的请求至少放宽到 32768(见下文) | `8192` |
 | `MAX_MODEL_OUTPUT_TOKENS` | 单次模型输出 token 硬上限 | `65536` |
 | `MAX_TURN_OUTPUT_CHARS` | 单轮回复累计字符硬上限(含思考和工具结果) | `500000` |
 | `CHAT_TURN_TIMEOUT_SECONDS` | 普通文本对话单轮总超时 | `900` |
@@ -182,9 +182,10 @@ HEALTH_URL=http://127.0.0.1:3000/api/health    # 可选:重启后检查
 
 普通对话每次模型请求使用 `min(对话 maxTokens 或 DEFAULT_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS)`。
 默认请求上限为 8192;工具会产生多轮请求,回复统计的输出 tokens 会累计各轮,并包含 Gemini 思考 tokens。
+Gemini 和 OpenAI 把思考 tokens 算在这个上限里,所以需要思考的请求会放宽到至少 32768(不超过 `MAX_MODEL_OUTPUT_TOKENS`):Gemini 2.5 及更新的模型,除非用零预算关闭思考;OpenAI o 系列和 GPT-5 及更新的推理模型,除非强度为 `none`。Gemini 显式的思考预算之外还会再给回答留 4096。Anthropic 适配器本来就会为思考预留空间。其他模型的输出上限未知,保持原值。
 Gemini 4 Argon 和 3.7/3.8 Flash 按原生 `thinkingLevel` 发送低/中/高档;它们不能完全关闭思考,最低档使用 low 并隐藏思考摘要。未指定强度时保留服务商默认值(Argon 为 medium)。
-高思考档触及上限时,可按需要提高部署环境的 `DEFAULT_MODEL_OUTPUT_TOKENS`(例如 32768 或 65536),
-但实际值仍受 `MAX_MODEL_OUTPUT_TOKENS` 和服务商限制;已有对话显式保存的 `maxTokens` 优先。
+提高部署环境的 `DEFAULT_MODEL_OUTPUT_TOKENS` 会提高所有请求的回答上限(已有对话显式保存的 `maxTokens` 优先),
+实际值仍受 `MAX_MODEL_OUTPUT_TOKENS` 和服务商限制。
 提高上限会允许更多思考和输出,不保证低延迟或低成本。图表任务默认先取数据、先出图、后写简短结论。当前用户消息明确要求图表或“对比 + 按时间展示”时,
 会增加简短的本轮图表意图提示;只看当前用户消息,忽略引用和代码片段,跳过明确不画图或纯翻译/编程请求。
 这个判断不另调模型,不改变 Vertex 原生搜索或其他 Agent 工具;生成后的长文也不会被再送去转换。

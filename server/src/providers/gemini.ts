@@ -8,7 +8,9 @@ import type {
 import { sseMessages, providerError, readJsonLimited, fetchRetry, isNetworkError } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
 import { PRIORITY_HEADER, vertexTarget } from './vertex.js';
+import { thinkingOutputCap } from './output-cap.js';
 import { config } from '../config.js';
+import { defaultLevels } from '../reasoning.js';
 
 const DEFAULT_STUDIO_BASE = 'https://generativelanguage.googleapis.com';
 
@@ -185,7 +187,7 @@ function buildChatBody(req: ChatRequest): any {
   if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
   const generationConfig: any = {};
   if (req.temperature !== undefined) generationConfig.temperature = req.temperature;
-  if (req.maxTokens) generationConfig.maxOutputTokens = req.maxTokens;
+  let budget: number | undefined;
   if (req.reasoning) {
     const modelId = req.model.split('/').pop() ?? req.model;
     // Argon and these Flash models use native levels; minimal/off are not supported.
@@ -199,12 +201,20 @@ function buildChatBody(req: ChatRequest): any {
     } else {
       // 0 is the only way to actually switch thinking off — omitting the config
       // leaves the model deciding for itself.
-      const budget = req.reasoning.level !== 'off'
+      budget = req.reasoning.level !== 'off'
         ? Math.round(2048 + req.reasoning.ratio * (32768 - 2048))
         : 0;
       generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: budget > 0 };
     }
   }
+  // Thinking counts against maxOutputTokens. The thinking families think
+  // unless a zero budget turns it off (the native-level models can't turn it
+  // off at all), and an explicit budget keeps 4K for the answer on top. Other
+  // models keep the exact cap: theirs may top out at 8K, and Vertex rejects a
+  // cap above a model's limit.
+  const thinks = defaultLevels('gemini', req.model).length > 0 && budget !== 0;
+  const maxOutputTokens = thinkingOutputCap(req, thinks, budget ? budget + 4096 : 0);
+  if (maxOutputTokens) generationConfig.maxOutputTokens = maxOutputTokens;
   if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
   // Both may ride together on Gemini 3.x; the caller keeps them apart for
   // 2.5 (see supportsVertexSearchWithFunctions).
@@ -272,8 +282,9 @@ export const geminiAdapter: ChatAdapter = {
   async *streamChat(cfg, req) {
     const { url, headers, gate } = await endpoint(cfg, req.model, 'streamGenerateContent?alt=sse');
     req.onServiceTier?.(gate === 'priority' ? 'priority' : 'standard');
+    const body = buildChatBody(req);
     const res = await fetchRetry(url, {
-      method: 'POST', headers, body: JSON.stringify(buildChatBody(req)), signal: req.signal,
+      method: 'POST', headers, body: JSON.stringify(body), signal: req.signal,
     }, retryReporter(req.onRetry, gate), { budgetMs: cfg.retryBudgetMs, gate, counter: cfg.busyCounter, singleAttempt: cfg.singleAttempt, stopOnBusy: cfg.stopOnBusy });
     if (!res.ok) throw await providerError('Gemini', res);
 
@@ -343,7 +354,7 @@ export const geminiAdapter: ChatAdapter = {
       if (req.signal.aborted || !confirmed || !isNetworkError(err)) throw err;
     } finally {
       req.onStreamEnd?.({
-        requestedMaxOutputTokens: req.maxTokens,
+        requestedMaxOutputTokens: body.generationConfig?.maxOutputTokens,
         thoughtTokens: usage?.thoughtsTokenCount,
         answerTokens: usage?.candidatesTokenCount,
         endpointId: cfg.endpointId ?? `${cfg.id}:primary`,

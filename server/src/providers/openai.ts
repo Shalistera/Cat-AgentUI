@@ -4,7 +4,9 @@ import type {
 } from '../types.js';
 import { sseMessages, readBodyLimited, providerError, readJsonLimited, fetchRetry } from './sse.js';
 import { isBareOrigin, stripEndpointSuffix, trimUrl } from './base-url.js';
+import { thinkingOutputCap } from './output-cap.js';
 import { config } from '../config.js';
+import { defaultLevels } from '../reasoning.js';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
 
@@ -100,6 +102,16 @@ function toChatTools(tools?: ToolDef[]) {
   }));
 }
 
+/** Reasoning tokens count inside max_completion_tokens / max_output_tokens.
+ * `off` and an unspecified effort omit the effort field, so the reasoning
+ * families still reason at their default; `none` is the tier that doesn't.
+ * Other models keep the exact cap: their output limit is unknown, and a
+ * gateway may reject a larger one. */
+function outputCap(req: ChatRequest): number | undefined {
+  const reasons = defaultLevels('openai', req.model).length > 0 && req.reasoning?.level.toLowerCase() !== 'none';
+  return thinkingOutputCap(req, reasons);
+}
+
 async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatRequest): AsyncGenerator<AdapterEvent> {
   const body: Record<string, unknown> = {
     model: req.model,
@@ -108,9 +120,10 @@ async function* streamChatCompletions(cfg: ProviderRuntimeConfig, req: ChatReque
     stream_options: { include_usage: true },
   };
   if (req.temperature !== undefined) body.temperature = req.temperature;
-  if (req.maxTokens) {
-    if (isOfficialApi(cfg)) body.max_completion_tokens = req.maxTokens;
-    else body.max_tokens = req.maxTokens;
+  const maxTokens = outputCap(req);
+  if (maxTokens) {
+    if (isOfficialApi(cfg)) body.max_completion_tokens = maxTokens;
+    else body.max_tokens = maxTokens;
   }
   // Passed through verbatim: the admin configures these using OpenAI's own
   // vocabulary, so a new tier works without a code change. `off` is our own
@@ -226,7 +239,8 @@ async function* streamResponses(cfg: ProviderRuntimeConfig, req: ChatRequest): A
   };
   if (req.system) body.instructions = req.system;
   if (req.temperature !== undefined) body.temperature = req.temperature;
-  if (req.maxTokens) body.max_output_tokens = req.maxTokens;
+  const maxTokens = outputCap(req);
+  if (maxTokens) body.max_output_tokens = maxTokens;
   if (req.reasoning && req.reasoning.level !== 'off') {
     body.reasoning = { effort: req.reasoning.level, summary: 'auto' };
   }

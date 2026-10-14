@@ -133,7 +133,7 @@ then install the helper once per instance: `sudo bash deploy/update-helper-setup
 | `MAX_CONTEXT_IMAGES` | Budget for the number of images/PDFs in the context; the larger of this value and the current per-message attachment limit is used, so one batch of attachments can always enter the context | `6` |
 | `MAX_CONTEXT_IMAGE_MB_PER_USER` | Byte budget for context images resident at once for one user | `48` |
 | `MAX_CONTEXT_IMAGE_MB_GLOBAL` | Byte budget for context images resident at once site-wide | `96` |
-| `DEFAULT_MODEL_OUTPUT_TOKENS` | Output token limit per model request when nothing else is set; for Gemini it includes thinking and is not the model's maximum capacity | `8192` |
+| `DEFAULT_MODEL_OUTPUT_TOKENS` | Output token limit per model request when nothing else is set, sized for the visible answer; requests that think get at least 32768 (see below) | `8192` |
 | `MAX_MODEL_OUTPUT_TOKENS` | Hard limit on output tokens for one model call | `65536` |
 | `MAX_TURN_OUTPUT_CHARS` | Hard limit on the accumulated characters of one turn (including thinking and tool results) | `500000` |
 | `CHAT_TURN_TIMEOUT_SECONDS` | Total timeout of one turn of ordinary text chat | `900` |
@@ -182,9 +182,10 @@ See [OpenAI's strict mode for tools](https://developers.openai.com/api/docs/guid
 
 Ordinary chat uses `min(the chat's maxTokens or DEFAULT_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS)` for every model request.
 The default request limit is 8192; tools produce several requests per turn, so the output tokens in the reply stats accumulate across them and include Gemini thinking tokens.
+Gemini and OpenAI count thinking tokens inside that limit, so a request that thinks is raised to at least 32768 (bound by `MAX_MODEL_OUTPUT_TOKENS`): Gemini 2.5 and newer unless a zero budget switches thinking off, and OpenAI o-series and GPT-5-or-newer reasoning models unless the effort is `none`. An explicit Gemini thinking budget also keeps 4096 tokens for the answer on top. The Anthropic adapter already reserves room for thinking. Other models keep the exact limit, since their maximum output is unknown.
 Gemini 4 Argon and 3.7/3.8 Flash send the low/medium/high tiers via the native `thinkingLevel`; they cannot turn thinking off entirely, so the lowest tier uses low and hides the thinking summary. Leaving the effort unspecified preserves the provider default (medium for Argon).
-When a high thinking tier hits the limit, you can raise `DEFAULT_MODEL_OUTPUT_TOKENS` in your deployment as needed (to 32768 or 65536, for example),
-but the effective value is still bound by `MAX_MODEL_OUTPUT_TOKENS` and the provider's limits; a `maxTokens` explicitly saved on an existing chat takes precedence.
+Raising `DEFAULT_MODEL_OUTPUT_TOKENS` in your deployment raises the answer limit of every request (a `maxTokens` explicitly saved on an existing chat takes precedence);
+the effective value is still bound by `MAX_MODEL_OUTPUT_TOKENS` and the provider's limits.
 Raising the limit allows more thinking and output; it does not guarantee low latency or low cost. Chart tasks default to fetching the data first, drawing the chart next and writing a short conclusion last. When the current user message explicitly asks for a chart or matches "comparison + shown over time",
 a short chart-intent hint is added for that turn; only the current user message is considered, quotes and code snippets are ignored, and requests that explicitly rule out a chart, as well as pure translation or programming requests, are skipped.
 This decision does not involve another model call and does not change Vertex native search or any other agent tool; nor is a long answer sent off for conversion after it is generated.

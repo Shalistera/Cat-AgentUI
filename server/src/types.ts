@@ -228,6 +228,7 @@ export interface ChatRequest {
   urlContext?: boolean;
   temperature?: number;
   maxTokens?: number;
+  /** Ceiling for adapters that raise maxTokens to make room for thinking. */
   hardMaxTokens?: number;
   reasoning?: ReasoningRequest;
   signal: AbortSignal;
