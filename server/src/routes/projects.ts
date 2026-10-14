@@ -195,7 +195,7 @@ export async function projectRoutes(app: FastifyInstance) {
     // Only MY chats — sharing a project shares its instructions and docs,
     // never anyone's conversations.
     const chats = db.select().from(schema.chats)
-      .where(and(eq(schema.chats.userId, req.user!.id), eq(schema.chats.projectId, id)))
+      .where(and(eq(schema.chats.userId, req.user!.id), eq(schema.chats.projectId, id), eq(schema.chats.temporary, 0)))
       .orderBy(desc(schema.chats.updatedAt)).all();
     return {
       project: projectDto(p, role),
@@ -205,7 +205,7 @@ export async function projectRoutes(app: FastifyInstance) {
       docs: docs.map(docMeta),
       limits: { ...PROJECT_LIMITS, ...injectLimits() },
       chats: chats.map((c) => ({
-        id: c.id, title: c.title, pinned: !!c.pinned, modelId: c.modelId,
+        id: c.id, title: c.title, pinned: !!c.pinned, archived: !!c.archived, modelId: c.modelId,
         projectId: c.projectId, createdAt: c.createdAt, updatedAt: c.updatedAt,
       })),
     };

@@ -344,6 +344,8 @@ export default {
   '由 {owner} 共享': 'Shared by {owner}',
   '项目内对话': 'Chats in this project',
   '还没有对话': 'No chats yet',
+  '没有未归档的对话': 'No unarchived chats',
+  '归档失败': 'Could not archive the chat',
   '在上方输入框说点什么,就会在这个项目里开启第一个对话。':
     'Say something in the composer above to start the first chat in this project.',
   '项目指令': 'Project instructions',

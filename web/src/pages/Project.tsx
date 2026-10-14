@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ChevronRight, FilePlus, FileText, FolderClosed, MessageSquarePlus, PanelLeft, Pencil, Trash2, Upload, Users, X,
+  Archive, ArchiveRestore, ChevronRight, FilePlus, FileText, FolderClosed, MessageSquarePlus, PanelLeft, Pencil,
+  Trash2, Upload, Users, X,
 } from 'lucide-react';
 import { api, fmtTime } from '../api';
 import {
@@ -147,6 +148,8 @@ export default function ProjectPage() {
   const [memberCount, setMemberCount] = useState(0);
   const [sharingOpen, setSharingOpen] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [busyChat, setBusyChat] = useState<string | null>(null);
 
   const [instrDraft, setInstrDraft] = useState('');
   const [savingInstr, setSavingInstr] = useState(false);
@@ -219,6 +222,13 @@ export default function ProjectPage() {
   const isOwner = project?.role === 'owner';
   const canEdit = project?.role === 'owner' || project?.role === 'editor';
   const isShared = project != null && (project.accessMode !== 'private' || project.role !== 'owner');
+  // The sidebar's list is the live copy, so a chat deleted, archived or renamed
+  // there changes here too; the project's own list covers the load before it.
+  const projectChats = chatsStore.loaded
+    ? chatsStore.chats.filter((c) => c.projectId === id && !c.temporary).sort((a, b) => b.updatedAt - a.updatedAt)
+    : chats;
+  const openChats = projectChats.filter((c) => !c.archived);
+  const archivedChats = projectChats.filter((c) => c.archived);
 
   function syncStore(p: Project) {
     projectsStore.upsert({ ...p, docCount: docs.length, totalChars });
@@ -315,6 +325,30 @@ export default function ProjectPage() {
     setDocDialog({ id: null });
   }
 
+  async function toggleArchive(c: ChatSummary) {
+    const archived = !c.archived;
+    setBusyChat(c.id);
+    try {
+      await api.patch(`/api/chats/${c.id}`, { archived });
+      setChats((prev) => prev.map((x) => (x.id === c.id ? { ...x, archived } : x)));
+      chatsStore.patch(c.id, { archived });
+      toast(archived ? t('已归档,可在侧栏底部或搜索 archived:true 找回') : t('已取消归档'), 'ok');
+    } catch (e) { toast(errText(e, archived ? t('归档失败') : t('取消归档失败')), 'err'); }
+    finally { setBusyChat(null); }
+  }
+
+  async function removeChat(c: ChatSummary) {
+    const ok = await confirmDialog(t('删除对话'), t('确定删除「{title}」?此操作不可恢复。', { title: c.title || t('新对话') }));
+    if (!ok) return;
+    setBusyChat(c.id);
+    try {
+      await api.del(`/api/chats/${c.id}`);
+      setChats((prev) => prev.filter((x) => x.id !== c.id));
+      chatsStore.remove(c.id);
+    } catch (e) { toast(errText(e, t('删除失败')), 'err'); }
+    finally { setBusyChat(null); }
+  }
+
   async function removeDoc(doc: ProjectDoc) {
     if (!project) return;
     const ok = await confirmDialog(t('删除文档'), t('将从项目资料中移除「{name}」。', { name: doc.name }));
@@ -324,6 +358,26 @@ export default function ProjectPage() {
       setDocs((prev) => prev.filter((d) => d.id !== doc.id));
     } catch (e) { toast(errText(e, t('删除失败')), 'err'); }
   }
+
+  // Archive and delete stay visible on every row: a hover-only menu is easy
+  // to miss, and touch screens never hover.
+  const chatRow = (c: ChatSummary) => (
+    <div key={c.id} className="flex items-center gap-0.5 pr-3 transition-colors hover:bg-bg2">
+      <Link to={`/chat/${c.id}`} className="flex min-w-0 flex-1 items-center gap-3 py-3 pl-5 pr-2">
+        <span className={`min-w-0 flex-1 truncate text-sm ${c.archived ? 'text-tx2' : 'text-tx'}`}>{c.title || t('新对话')}</span>
+        <span className="shrink-0 text-[11px] tabular-nums text-tx3">{fmtTime(c.updatedAt)}</span>
+      </Link>
+      <Button variant="ghost" size="iconSm" disabled={busyChat === c.id}
+        title={c.archived ? t('取消归档') : t('归档')} aria-label={c.archived ? t('取消归档') : t('归档')}
+        onClick={() => void toggleArchive(c)}>
+        {c.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+      </Button>
+      <Button variant="dangerGhost" size="iconSm" disabled={busyChat === c.id}
+        title={t('删除对话')} aria-label={t('删除对话')} onClick={() => void removeChat(c)}>
+        <Trash2 size={14} />
+      </Button>
+    </div>
+  );
 
   const headerLeft = !sidebarOpen && (
     <Button variant="ghost" size="icon" title={t('打开侧栏')} onClick={() => setSidebarOpen(true)}>
@@ -421,18 +475,22 @@ export default function ProjectPage() {
             />
 
             <Card title={t('项目内对话')} flush>
-              {chats.length === 0 ? (
+              {projectChats.length === 0 ? (
                 <EmptyState icon={<MessageSquarePlus size={22} />} title={t('还没有对话')}
                   hint={t('在上方输入框说点什么,就会在这个项目里开启第一个对话。')} />
               ) : (
                 <div className="divide-y divide-line">
-                  {chats.map((c) => (
-                    <Link key={c.id} to={`/chat/${c.id}`}
-                      className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-bg2">
-                      <span className="min-w-0 flex-1 truncate text-sm text-tx">{c.title || t('新对话')}</span>
-                      <span className="shrink-0 text-[11px] tabular-nums text-tx3">{fmtTime(c.updatedAt)}</span>
-                    </Link>
-                  ))}
+                  {openChats.length === 0 && <p className="px-5 py-3 text-xs text-tx3">{t('没有未归档的对话')}</p>}
+                  {openChats.map(chatRow)}
+                  {archivedChats.length > 0 && (
+                    <button type="button" aria-expanded={showArchived} onClick={() => setShowArchived((v) => !v)}
+                      title={showArchived ? t('收起归档对话') : t('展开归档对话')}
+                      className="flex w-full cursor-pointer items-center gap-1.5 px-5 py-2.5 text-left text-xs text-tx3 transition-colors hover:bg-bg2 hover:text-tx">
+                      <ChevronRight size={12} className={`transition-transform ${showArchived ? 'rotate-90' : ''}`} />
+                      {t('已归档')} <span className="tabular-nums opacity-70">{archivedChats.length}</span>
+                    </button>
+                  )}
+                  {showArchived && archivedChats.map(chatRow)}
                 </div>
               )}
             </Card>
