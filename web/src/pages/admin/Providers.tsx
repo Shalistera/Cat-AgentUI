@@ -306,7 +306,7 @@ function ProviderModal({ provider, onClose, onSaved }: {
                 <VertexLocationEditor locations={vertexLocations} onChange={setVertexLocations} />
                 <Field label="Priority PayGo" hint={vertexPriority === 'off'
                   ? t('按 token 计费、单价更高、更不容易被限流的付费方式,不用提前购买')
-                  : t('Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域,已开始输出的回复不会重放。实际请求 Priority 时,对话会展示并保留优先通道标识')}>
+                  : t('Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域,已开始输出的回复不会重放;纯文字回复中途断流时改由 Priority 续写。实际请求 Priority 时,对话会展示并保留优先通道标识')}>
                   <Select value={vertexPriority} onChange={(e) => setVertexPriority(e.target.value as AdminProvider['vertexPriority'])}>
                     <option value="off">{t('关闭 · 只用标准按量付费')}</option>
                     <option value="fallback">{t('限流时启用 · 标准请求被限流 5 次或各区域都试过后改走 Priority')}</option>

@@ -172,6 +172,22 @@ function plan(cfg: ProviderRuntimeConfig, model: string): { line: ProviderRuntim
   return ready.length ? ready : all.map((line) => ({ line, probe: false }));
 }
 
+/** Where to continue a reply whose stream broke on line `failedKey`: the
+ * other lines in order, starting after that one, with the rest as fallbacks
+ * so the continuation fails over by the usual rules. The break is that line's
+ * failure, so first-failure mode starts on Priority, and fallback mode tries
+ * the other locations before it. A provider with one line continues on it. */
+export function continuationLines(cfg: ProviderRuntimeConfig, model: string, failedKey: string): ProviderRuntimeConfig {
+  const lines = [cfg, ...(cfg.fallbacks ?? [])].filter((line) => !line.servesModel || line.servesModel(model));
+  const failed = lines.findIndex((line) => lineKey(line) === failedKey);
+  let order = [...lines.slice(failed + 1), ...lines.slice(0, Math.max(failed, 0))];
+  const priority = order.findIndex((line) => line.escalateOnFailure);
+  if (priority > 0) order = order.slice(priority);
+  if (!order.length) return { ...cfg, fallbacks: [] };
+  const [first, ...rest] = order;
+  return { ...first, fallbacks: rest, failoverThreshold: cfg.failoverThreshold, failoverCooldownMs: cfg.failoverCooldownMs };
+}
+
 export function rewriteModel(line: ProviderRuntimeConfig, model: string): string {
   let m = model;
   const strip = line.stripModelPrefix ?? '';

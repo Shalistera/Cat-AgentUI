@@ -104,6 +104,9 @@ try {
   assert(JSON.stringify(continuationBody).includes('Original beginning of the preserved answer.'));
   assert(JSON.stringify(continuationBody).includes('从中断位置'));
   assert(!continuationBody.tools?.length, 'continuation does not repeat tools or native search');
+  const continuationStatus = partial.events.filter((e) => e.type === 'retry' && e.data?.recovery === 'continuation');
+  assert(continuationStatus.length >= 2 && continuationStatus.every((e) => !e.data.priority),
+    'the continuation status names its lane once the line is chosen; a standard line is not shown as Priority');
 
   const exhausted = await recoverTurn('recovery-always');
   assert.equal(calls.get('recovery-always'), 2, 'at most one continuation');

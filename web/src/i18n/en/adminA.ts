@@ -39,8 +39,8 @@ export default {
   'OCR 工坊': 'OCR Studio',
   'OpenAI 兼容': 'OpenAI-compatible',
   'Persistent API Token': 'Persistent API token',
-  'Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域,已开始输出的回复不会重放。实际请求 Priority 时,对话会展示并保留优先通道标识':
-    'Priority costs more than standard pay-as-you-go — Google\'s pricing page is authoritative; usage is still costed with the price set on each model. It applies only to global, us and eu, and models without support (images and so on) stay on the standard channel. First-failure mode skips standard retries and the remaining regions, and a reply that already started streaming is never replayed. When a request really goes through Priority, the chat shows and keeps a priority-channel marker',
+  'Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域,已开始输出的回复不会重放;纯文字回复中途断流时改由 Priority 续写。实际请求 Priority 时,对话会展示并保留优先通道标识':
+    'Priority costs more than standard pay-as-you-go — Google\'s pricing page is authoritative; usage is still costed with the price set on each model. It applies only to global, us and eu, and models without support (images and so on) stay on the standard channel. First-failure mode skips standard retries and the remaining regions, and a reply that already started streaming is never replayed; a text-only reply that breaks off midway is continued over Priority. When a request really goes through Priority, the chat shows and keeps a priority-channel marker',
   'SQLite 在线快照,存放于 data/backups/,不影响服务运行。策略在此设置并立即生效。':
     'Online SQLite snapshots, stored in data/backups/, with no impact on the running service. The policy is set here and takes effect immediately.',
   'Service Account JSON 不是有效的 JSON,请检查是否完整复制(或直接上传文件)':

@@ -716,7 +716,7 @@ function useElapsed(since: number | undefined, ms: number): boolean {
  * limit another request already hit is not (attempt 0). */
 export function retryStatusText(r: ProviderRetry): string {
   if (r.recovery === 'empty') return r.priority ? t('正在使用优先通道恢复回复…') : t('正在自动恢复回复,请稍候…');
-  if (r.recovery === 'continuation') return t('正在自动补全回复,请稍候…');
+  if (r.recovery === 'continuation') return r.priority ? t('正在通过优先通道补全回复…') : t('正在自动补全回复,请稍候…');
   if (r.priority) {
     if (r.delayMs === 0) return t('正在通过优先通道重新请求模型…');
     const secs = Math.max(1, Math.round(r.delayMs / 1000));

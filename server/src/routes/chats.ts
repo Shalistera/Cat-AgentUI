@@ -12,6 +12,7 @@ import { activeChatStream, beginChatStream, chatStreamReceipt, endChatStream, id
 import { MAX_INTERJECTIONS, interjectionMessage, interjectionPrompt } from '../interjection.js';
 import { ProviderBusyError, isNetworkError } from '../providers/sse.js';
 import { ProviderEmptyError, ProviderInterruptedError } from '../providers/stream-integrity.js';
+import { continuationLines } from '../providers/failover.js';
 import { ATTACHMENT_COUNT_MAX, maxAttachmentsPerMessage } from '../attachment-settings.js';
 import { getAdapter, providerTakesInterjections, toRuntimeConfig } from '../providers/index.js';
 import { supportsVertexGoogleSearch, supportsVertexSearchWithFunctions } from '../providers/gemini.js';
@@ -2136,6 +2137,10 @@ export async function chatRoutes(app: FastifyInstance) {
                   parts.push({ type: 'service_tier', tier: 'priority' });
                 }
                 sse.send('service_tier', { tier });
+                // Each line the continuation tries says which lane it is on.
+                if (continuation?.state === 'running') {
+                  onRetry({ attempt: 1, maxAttempts: 1, delayMs: 0, recovery: 'continuation', priority: live.priority });
+                }
               },
               onActivity: () => { if (!controller.signal.aborted) resetProviderIdleTimer(); },
               onStreamEnd: (info) => {
@@ -2219,11 +2224,10 @@ export async function chatRoutes(app: FastifyInstance) {
               || (!roundError && stopReason === 'other'));
           if (canContinue) {
             // The old output is part of the next prompt, never discarded or
-            // replayed. Prefer another configured endpoint for the continuation.
+            // replayed. Continue on the lines after the one that broke, by
+            // the provider's failover and Priority rules.
             if (roundError instanceof ProviderInterruptedError) {
-              const candidates = [cfg, ...(cfg.fallbacks ?? [])].filter((line) => !line.servesModel || line.servesModel(model.modelId));
-              const next = candidates.find((line) => (line.endpointId ?? `${line.id}:primary`) !== roundError.endpointId);
-              if (next) continuationConfig = { ...next, fallbacks: [] };
+              continuationConfig = continuationLines(cfg, model.modelId, roundError.endpointId);
             }
             continuation = { type: 'response_recovery', kind: 'continuation', state: 'running' };
             continuationTextBefore = parts.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 0), 0);

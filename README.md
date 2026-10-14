@@ -272,7 +272,7 @@ through a separate endpoint. The background work is still bound by the original 
 
 Vertex Priority PayGo can be set to "enable on the first failure": when the first switchable error occurs before any output,
 it jumps straight to Priority, skipping the standard channel's internal retries and the other standard regions. Parameter errors, user cancellations
-and streams that have already started producing output are not replayed because of this. When Priority is actually used, "requesting via the priority channel" is shown
+and streams that have already started producing output are not replayed because of this; when a pure text reply breaks off midway, its continuation goes straight to Priority. When Priority is actually used, "requesting via the priority channel" is shown
 and the reply keeps the Priority marker; models/regions that do not support Priority do not show it.
 
 **Admin → Model settings → Model details → Automatic fallback on rate limits or an empty reply** lets you designate one
@@ -287,7 +287,8 @@ region/Priority retries. The fallback request itself still follows its own provi
 An empty chat reply (including thinking with no body) is recovered automatically once first: it switches routes if a backup route is available,
 otherwise it reconnects to the current route. If it is still empty, the configured model fallback kicks in. Thinking/signatures that have no body yet are buffered within limits,
 so failed attempts are not mixed into the final answer; the usage actually returned by each attempt is still counted. Empty replies and real stream breaks count toward route health.
-A pure text reply keeps its text after a real stream break and is continued once automatically, preferring the other configured routes; the recovery keeps the loading state,
+A pure text reply keeps its text after a real stream break and is continued once automatically: starting with the route after the one that broke, it tries the routes by the same switching and Priority rules
+("on when rate-limited" tries the other regions before Priority, "enable on the first failure" goes straight to Priority), and a provider with a single route reconnects to it; the recovery keeps the loading state,
 shows "automatically continued and recovered" on success, and only strips the longer duplicated segment where the start of the continuation exactly matches the end of the original text.
 Replies that already contain tool calls or images are not continued automatically; a user stop, a timeout, a content policy block and the output length limit do not trigger recovery.
 A connection reset after a normal end signal is no longer misread as truncation.

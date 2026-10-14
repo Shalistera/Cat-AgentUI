@@ -8,7 +8,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { withFailover, resetLineHealth, lineStatus, rewriteModel } from '../server/dist/providers/failover.js';
+import { withFailover, resetLineHealth, lineStatus, rewriteModel, continuationLines } from '../server/dist/providers/failover.js';
 import { ProviderHttpError, resetProviderBusyGates } from '../server/dist/providers/sse.js';
 import { geminiAdapter } from '../server/dist/providers/gemini.js';
 import { GoogleAuth } from 'google-auth-library';
@@ -449,6 +449,60 @@ console.log('Passed: failover unit semantics.');
     assert.equal(partial.calls.length, 1, 'first-failure mode never replays partial output');
   } finally { globalThis.fetch = savedFetch; GoogleAuth.prototype.getAccessToken = savedToken; }
   console.log('Passed: first failure immediately switches to actual Priority headers, announces the tier, and preserves no-replay/error safeguards.');
+}
+
+// A reply whose stream broke is continued by the same line and Priority rules:
+// the break counts as a failure of the line it happened on.
+{
+  const savedFetch = globalThis.fetch;
+  const savedToken = GoogleAuth.prototype.getAccessToken;
+  const vertexConfig = (firstFailure) => {
+    const primary = line('primary', 'Vertex eu', {
+      useVertex: true, baseUrl: null, vertexLocation: 'eu', vertexProject: 'test-project',
+      vertexSaJson: JSON.stringify({ project_id: 'test-project' }), retryBudgetMs: 3000,
+    });
+    primary.fallbacks = [
+      { ...primary, endpointId: 'us', vertexLocation: 'us' },
+      { ...primary, endpointId: 'priority', endpointName: 'Vertex global · Priority', vertexLocation: 'global',
+        vertexPriority: true, escalateAfterBusy: 5, escalateOnFailure: firstFailure || undefined, servesModel: (m) => !m.includes('image') },
+    ];
+    primary.failoverThreshold = 4; primary.failoverCooldownMs = 1234;
+    return primary;
+  };
+  const route = (c) => [c, ...(c.fallbacks ?? [])].map((l) => l.endpointId ?? 'primary');
+  const model = 'gemini-2.5-pro';
+  assert.deepEqual(route(continuationLines(vertexConfig(false), model, 'prov:primary')), ['us', 'priority'],
+    'fallback mode: the other locations first, then Priority');
+  assert.deepEqual(route(continuationLines(vertexConfig(true), model, 'prov:primary')), ['priority'],
+    'first-failure mode: the break is the first failure');
+  assert.deepEqual(route(continuationLines(vertexConfig(false), model, 'us')), ['priority', 'primary'],
+    'lines after the broken one come first, the earlier ones last');
+  assert.deepEqual(route(continuationLines(vertexConfig(true), model, 'priority')), ['primary', 'us'],
+    'a break on Priority continues on the standard lines');
+  assert.deepEqual(route(continuationLines(vertexConfig(true), 'gemini-2.5-flash-image', 'prov:primary')), ['us'],
+    'models Priority does not cover stay on the standard lines');
+  assert.deepEqual(route(continuationLines(line('primary', '主线路'), model, 'prov:primary')), ['primary'], 'a single line reconnects');
+  const kept = continuationLines(vertexConfig(false), model, 'prov:primary');
+  assert.equal(kept.failoverThreshold, 4); assert.equal(kept.failoverCooldownMs, 1234);
+  try {
+    GoogleAuth.prototype.getAccessToken = async () => 'mock-local-token';
+    for (const firstFailure of [false, true]) {
+      resetLineHealth(); resetProviderBusyGates();
+      const calls = [], tiers = [], notices = [];
+      globalThis.fetch = async (url, init) => {
+        calls.push(`${url.match(/locations\/([^/]+)/)[1]}|${new Headers(init.headers).get('x-vertex-ai-llm-shared-request-type')}`);
+        if (url.includes('/locations/us/')) return new Response('{}', { status: 500 });
+        return new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'continued' }] }, finishReason: 'STOP' }] })}\n\n`);
+      };
+      const output = await collect(withFailover(geminiAdapter).streamChat(continuationLines(vertexConfig(firstFailure), model, 'prov:primary'),
+        req({ model, onServiceTier: (tier) => tiers.push(tier), onFailover: (info) => notices.push(info) })));
+      assert.deepEqual(calls, firstFailure ? ['global|priority'] : ['us|null', 'global|priority']);
+      assert.deepEqual(tiers, firstFailure ? ['priority'] : ['standard', 'priority']);
+      if (!firstFailure) assert.equal(notices[0].priority, true, 'the switch to Priority is announced');
+      assert(output.some((ev) => ev.type === 'text' && ev.text === 'continued'));
+    }
+  } finally { globalThis.fetch = savedFetch; GoogleAuth.prototype.getAccessToken = savedToken; }
+  console.log('Passed: continuation after a stream break walks the remaining lines by the Priority mode, with real Priority headers.');
 }
 
 // ---- end to end: the real app, two mock OpenAI-compatible gateways ----

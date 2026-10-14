@@ -322,6 +322,7 @@ export default {
   '正在使用优先通道恢复回复…': 'Recovering the reply over the priority channel…',
   '正在自动恢复回复,请稍候…': 'Recovering the reply automatically, one moment…',
   '正在自动补全回复,请稍候…': 'Finishing the reply automatically, one moment…',
+  '正在通过优先通道补全回复…': 'Finishing the reply over the priority channel…',
   '正在通过优先通道重新请求模型…': 'Requesting the model again over the priority channel…',
   '优先通道也在限流，约 {secs} 秒后自动重试…': 'The priority channel is rate-limited too — retrying in about {secs}s…',
   '正在重新请求模型…': 'Requesting the model again…',
