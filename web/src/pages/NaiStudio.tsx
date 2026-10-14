@@ -473,7 +473,7 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
         const imgs = st.images ?? [];
         addImages(imgs);
         if (imgs[0]) setFocus((f) => (f === 'pending' || f === null ? imgs[0].id : f));
-        tabAlert();
+        tabAlert('done', t('NAI 创作完成'));
         notifyDone(t('NAI 创作完成'), t('新图片已生成'), '/images/nai');
         return;
       }
@@ -483,7 +483,7 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
       // landed. A reported failure was rolled back, so anything new is not ours.
       if (err instanceof JobFailed || !(await recover(j.startedAt))) {
         if (aliveRef.current) { setError(msg); setFocus((f) => (f === 'pending' ? null : f)); }
-        tabAlert();
+        tabAlert('error', t('NAI 创作失败'));
         notifyDone(t('NAI 创作失败'), msg, '/images/nai');
       }
     } finally {

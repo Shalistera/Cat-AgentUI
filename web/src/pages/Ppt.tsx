@@ -310,7 +310,7 @@ export default function Ppt() {
           setTotal((t) => t + 1);
           setPreview(deck);
           toast(t('已生成「{title}」,共 {n} 页', { title: deck.title, n: deck.slideCount }), 'ok');
-          tabAlert();
+          tabAlert('done', t('PPT 生成完成'));
           notifyDone(t('PPT 生成完成'), t('「{title}」共 {n} 页', { title: deck.title, n: deck.slideCount }), '/ppt');
           return;
         }
@@ -319,13 +319,13 @@ export default function Ppt() {
       const recovered = await recoverFromLibrary(startedAt);
       if (recovered > 0) {
         toast(t('生成完成(已从列表找回)'), 'ok');
-        tabAlert();
+        tabAlert('done', t('PPT 生成完成'));
         return;
       }
       const msg = err instanceof Error ? err.message : t('生成失败');
       if (aliveRef.current) setGenError(msg);
       toast(msg, 'err');
-      tabAlert();
+      tabAlert('error', t('PPT 生成失败'));
       notifyDone(t('PPT 生成失败'), msg, '/ppt');
     } finally {
       jobRef.current = null;

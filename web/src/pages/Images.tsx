@@ -336,7 +336,7 @@ function ImagesInner() {
             }
             const said = t('{model}:模型回复了文字,请选择方案或继续对话', { model: modelLabel(job.modelId) });
             toast(said, 'ok');
-            tabAlert();
+            tabAlert('confirm', t('等你回复'));
             notifyDone(t('绘图工坊'), said, '/images');
             return;
           }
@@ -350,7 +350,7 @@ function ImagesInner() {
           // the same inputs is the common case.
           const made = t('{model}:已生成 {n} 张图片', { model: modelLabel(job.modelId), n: imgs.length });
           toast(made, 'ok');
-          tabAlert();
+          tabAlert('done', t('绘图完成'));
           notifyDone(t('绘图完成'), made, '/images');
           return;
         }
@@ -359,13 +359,13 @@ function ImagesInner() {
       const recovered = await recoverFromGallery(startedAt);
       if (recovered > 0) {
         toast(t('已生成 {n} 张图片(已从作品库找回)', { n: recovered }), 'ok');
-        tabAlert();
+        tabAlert('done', t('绘图完成'));
         return;
       }
       const msg = err instanceof Error ? err.message : t('生成失败');
       if (aliveRef.current) setGenError({ label: modelLabel(job.modelId), message: msg, request: job.request, busy: providerBusy });
       if (!providerBusy) toast(msg, 'err');
-      tabAlert();
+      tabAlert('error', t('绘图失败'));
       notifyDone(t('绘图失败'), `${modelLabel(job.modelId)}:${msg}`, '/images');
     } finally {
       trackedRef.current.delete(jobId);
@@ -435,7 +435,7 @@ function ImagesInner() {
       const msg = err instanceof Error ? err.message : t('生成失败');
       setGenError({ label: modelLabel(mid), message: msg });
       toast(msg, 'err');
-      tabAlert();
+      tabAlert('error', t('绘图失败'));
       return false;
     } finally {
       setSubmitting((prev) => prev.filter((x) => x !== mid));

@@ -5,7 +5,7 @@ import {
   ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
   MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson, ChevronsUpDown,
   LayoutGrid,
-  Users,
+  Users, Smartphone, MonitorDown,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { adminReturn } from '../pages/admin/Admin';
@@ -15,6 +15,7 @@ import { Button, Input, Modal, ModalActions, Popover, confirmDialog, toast } fro
 import { CreateProjectModal } from './CreateProjectModal';
 import { ReleaseNotesButton } from './ReleaseNotes';
 import { WORKSHOPS, pinnedWorkshops } from '../workshops';
+import { useInstall, useInstallPlatform } from '../pwa';
 import type { ChatSummary, SearchResult, User } from '../types';
 import { t } from '../i18n';
 
@@ -327,6 +328,13 @@ export function Sidebar() {
   const [creatingProject, setCreatingProject] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const menuItem = 'flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-tx2 transition-colors hover:bg-bg2 hover:text-tx';
+  // 添加到桌面 stays reachable here after the phone card is dismissed.
+  const platform = useInstallPlatform();
+  const installLabel = platform === 'installed' || platform === 'desktop-other' ? null
+    : platform === 'desktop-prompt' ? t('安装为应用')
+    : platform === 'desktop-safari' ? t('添加到程序坞')
+    : platform === 'ios-safari' || platform === 'ios-other' ? t('添加到主屏幕')
+    : platform === 'in-app' ? t('在浏览器中打开') : t('添加到桌面');
 
   useEffect(() => { if (user && !loaded) load().catch(() => toast(t('加载对话列表失败'), 'err')); }, [user, loaded, load]);
   useEffect(() => {
@@ -634,6 +642,11 @@ export function Sidebar() {
               {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
               {theme === 'dark' ? t('切换到浅色主题') : t('切换到深色主题')}
             </button>
+            {installLabel && (
+              <button className={menuItem} onClick={() => { setAccountOpen(false); useInstall.getState().openGuide(); }}>
+                {platform.startsWith('desktop') ? <MonitorDown size={13} /> : <Smartphone size={13} />}{installLabel}
+              </button>
+            )}
             <div className="my-1 border-t border-line" />
             <button className={menuItem} onClick={async () => { setAccountOpen(false); await logout(); nav('/login'); }}>
               <LogOut size={13} />{t('退出登录')}

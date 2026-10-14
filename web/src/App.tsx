@@ -1,17 +1,19 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Megaphone, X } from 'lucide-react';
+import { BellRing, Megaphone, X } from 'lucide-react';
 import { useAnnouncement, useAuth, useHtmlPreview, useUi, useWorkspacePanel } from './store';
 import { t } from './i18n';
 import { onUnauthorized } from './api';
 import { startRealtime, stopRealtime } from './realtime';
-import { Toaster, ConfirmHost, Spinner } from './components/ui';
+import { Button, Toaster, ConfirmHost, Spinner, toast } from './components/ui';
 import { Sidebar } from './components/Sidebar';
 import { HtmlPreviewPanel } from './components/HtmlPreviewPanel';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { LightboxHost } from './components/Lightbox';
 import { ProjectDocHost } from './components/ProjectDocDialog';
-import { notifyNavigate } from './notify';
+import { notifyNavigate, notifyPermission, setNotifyEnabled, useNotifyNudge } from './notify';
+import { registerServiceWorker, takeInstallLinkFlag, useInstall } from './pwa';
+import { InstallGuideHost, InstallNudge } from './components/InstallGuide';
 import type { SettingsTab } from './store';
 import Login from './pages/Login';
 import ErrorReset from './pages/ErrorReset';
@@ -47,6 +49,33 @@ function AnnouncementBanner() {
   );
 }
 
+// Notifications are shown through the worker; a click on one routes the open tab.
+registerServiceWorker((path) => notifyNavigate.handler?.(path));
+
+// Offered right after work finished unseen (notify.ts decides when).
+function NotifyNudge() {
+  const { show, dismiss } = useNotifyNudge();
+  if (!show) return null;
+  async function enable() {
+    const on = await setNotifyEnabled(true);
+    useNotifyNudge.setState({ show: false });
+    if (on) toast(t('已开启:切到别的页面时,完成后会弹系统通知'), 'ok');
+    else toast(notifyPermission() === 'denied'
+      ? t('浏览器拒绝了通知权限;以后可以在地址栏左侧的站点设置里重新允许')
+      : t('未获得通知权限'), 'err');
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-acc/10 px-4 py-2 text-[13px] text-tx">
+      <BellRing size={15} className="shrink-0 text-acc" />
+      <p className="min-w-0 flex-1 leading-relaxed">{t('刚才的任务完成时你不在这个页面。开启系统通知,下次完成时会直接提醒你。')}</p>
+      <div className="flex shrink-0 gap-2">
+        <Button variant="ghost" size="xs" onClick={dismiss}>{t('不用了')}</Button>
+        <Button variant="primary" size="xs" onClick={() => void enable()}>{t('开启通知')}</Button>
+      </div>
+    </div>
+  );
+}
+
 function Shell() {
   const { user, loaded } = useAuth();
   const sidebarOpen = useUi((s) => s.sidebarOpen);
@@ -60,6 +89,17 @@ function Shell() {
     notifyNavigate.handler = (path) => nav(path);
     return () => { notifyNavigate.handler = null; };
   }, [nav]);
+
+  // A shared 添加到桌面 link (/?install) opens the guide — after login too.
+  useEffect(() => {
+    if (!user || !takeInstallLinkFlag()) return;
+    useInstall.getState().openGuide();
+    const q = new URLSearchParams(window.location.search);
+    if (!q.has('install')) return;
+    q.delete('install');
+    const rest = q.toString();
+    nav({ pathname: window.location.pathname, search: rest ? `?${rest}` : '' }, { replace: true });
+  }, [user, nav]);
 
   // A popped-out HTML preview belongs to the page it came from.
   useEffect(() => { closePreview(); }, [loc.pathname, closePreview]);
@@ -91,6 +131,7 @@ function Shell() {
       {/* Content sits on the raised white surface; the grey canvas stays behind
           the rail, which is what separates navigation from work. */}
       <main className="relative flex min-w-0 flex-1 flex-col bg-bg1">
+        <NotifyNudge />
         <AnnouncementBanner />
         <Outlet />
       </main>
@@ -99,6 +140,8 @@ function Shell() {
       <SettingsDialog />
       <LightboxHost />
       <ProjectDocHost />
+      <InstallGuideHost />
+      <InstallNudge />
     </div>
   );
 }

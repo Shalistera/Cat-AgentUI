@@ -2,10 +2,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
-  ArrowUpDown, BarChart3, Check, HardDrive, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, Trash2, UserRound, X,
+  ArrowUpDown, BarChart3, BellRing, Check, HardDrive, LogOut, MessageSquareText, Monitor, Palette, Smartphone, Tablet, Trash2, UserRound, X,
 } from 'lucide-react';
 import { api, fmtBytes, fmtCost, fmtDate, fmtModelName, fmtTime, fmtTokens } from '../api';
-import { notifyEnabled, notifyPermission, setNotifyEnabled } from '../notify';
+import { notifyEnabled, notifyPermission, notifyTest, setNotifyEnabled } from '../notify';
+import { isIOS, isMobile } from '../pwa';
 import { useAuth, useChats, useUi, type SettingsTab } from '../store';
 import { Badge, Button, Field, Input, Spinner, Stat, Textarea, ToggleRow, confirmDialog, toast } from './ui';
 import { TokensBarChart } from './TokensBarChart';
@@ -231,14 +232,33 @@ function ChatSection() {
         <ToggleRow
           label={t('切到别的标签页或窗口时,完成后弹系统通知')}
           desc={perm === 'unsupported'
-            ? t('当前浏览器不支持系统通知')
+            ? (isIOS() ? t('iPhone / iPad 上的 Safari 网页不支持系统通知') : t('当前浏览器不支持系统通知'))
             : perm === 'denied'
               ? t('浏览器已拒绝本站的通知权限,需要在站点设置中重新允许')
-              : t('回复生成、批量绘图、PPT 生成完成时通知;点击通知直接回到对应页面。标签页标题上的 ● 提示不受影响')}
+              : t('回复生成、批量绘图、PPT 生成完成时通知;点击通知直接回到对应页面。标签页标题和图标上的完成标记不受影响')}
           checked={notify}
           disabled={perm === 'unsupported' || perm === 'denied'}
           onChange={(v) => void toggleNotify(v)}
         />
+        {perm === 'denied' && (
+          <p className="mt-2 rounded-lg bg-bg0 px-3.5 py-2.5 text-xs leading-relaxed text-tx2">
+            {t('重新允许:电脑上点地址栏左侧的站点信息图标 →「通知」改为「允许」,再刷新页面;手机 Chrome:右上角 ⋮ →「设置」→「网站设置」→「通知」。')}
+          </p>
+        )}
+        {notify && (
+          <div className="mt-2 flex items-center justify-between gap-3 px-1 text-xs leading-relaxed text-tx3">
+            <span>
+              {isMobile()
+                ? t('手机上切到别的 App 后,浏览器可能暂停页面,提醒不一定及时。')
+                : t('没看到通知?检查系统的勿扰模式和浏览器的通知设置。')}
+            </span>
+            <Button variant="outline" size="xs" onClick={() => {
+              notifyTest(t('测试通知'), t('通知已开启,回复完成时会这样提醒你。')).catch(() => toast(t('发送失败'), 'err'));
+            }}>
+              <BellRing size={12} />{t('发送测试通知')}
+            </Button>
+          </div>
+        )}
       </Section>
     </>
   );

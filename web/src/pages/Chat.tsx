@@ -776,7 +776,7 @@ export default function Chat() {
       planUsageAfterReply();
       // "stopped" is always user-initiated from this tab — no need to flag it.
       if (status !== 'stopped') {
-        tabAlert();
+        tabAlert(status === 'error' ? 'error' : 'done', status === 'error' ? t('回复出错') : t('回复完成'));
         const target = chatRef.current;
         const reply = messagesRef.current.find((m) => m.id === streamMsgIdRef.current);
         const preview = reply ? partsPreview(reply.parts) : '';
@@ -852,7 +852,7 @@ export default function Chat() {
         // The person has to see the question — pull the view down to it and
         // flag the tab if they are elsewhere.
         setStick(true);
-        tabAlert();
+        tabAlert('confirm', t('等你确认'));
         notifyDone(t('需要你确认工具调用'), d.calls.map((c) => c.name.split('__').pop()).join(t('、')), `/chat/${chatId}`);
       },
       onGrounding(d) { flush(); applyToAssistant((m) => ({ ...m, parts: [...m.parts, d] })); },

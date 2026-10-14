@@ -183,8 +183,31 @@ export default {
   '浏览器已拒绝本站的通知权限,请在地址栏的站点设置里重新允许':
     'Your browser blocked notifications for this site. Allow them again from the site settings in the address bar.',
   '未获得通知权限': 'Notification permission was not granted',
-  '回复生成、批量绘图、PPT 生成完成时通知;点击通知直接回到对应页面。标签页标题上的 ● 提示不受影响':
-    'Notifies you when a reply, a batch of images or a deck is done; clicking the notification takes you straight back. The ● marker in the tab title is unaffected.',
+  '回复生成、批量绘图、PPT 生成完成时通知;点击通知直接回到对应页面。标签页标题和图标上的完成标记不受影响':
+    'Notifies you when a reply, a batch of images or a deck is done; clicking the notification takes you straight back. The marker on the tab title and icon works either way.',
+  'iPhone / iPad 上的 Safari 网页不支持系统通知': 'Safari on iPhone / iPad does not support system notifications for websites',
+  '重新允许:电脑上点地址栏左侧的站点信息图标 →「通知」改为「允许」,再刷新页面;手机 Chrome:右上角 ⋮ →「设置」→「网站设置」→「通知」。':
+    'To allow them again: on a computer, click the site info icon at the left of the address bar → set Notifications to Allow, then reload. In Chrome on a phone: ⋮ at the top right → Settings → Site settings → Notifications.',
+  '手机上切到别的 App 后,浏览器可能暂停页面,提醒不一定及时。':
+    'On a phone, the browser may pause the page once you switch to another app, so notifications can arrive late.',
+  '没看到通知?检查系统的勿扰模式和浏览器的通知设置。': 'No notification? Check Do Not Disturb and your browser’s notification settings.',
+  '测试通知': 'Test notification',
+  '通知已开启,回复完成时会这样提醒你。': 'Notifications are on. This is how you will hear about finished replies.',
+  '发送测试通知': 'Send a test notification',
+
+  // ---- finished-work markers & the 开启通知 banner ----
+  '回复完成': 'Reply finished',
+  '等你确认': 'Waiting for you',
+  '等你回复': 'Waiting for your reply',
+  '出错了': 'Something failed',
+  '已完成': 'Done',
+  '刚才的任务完成时你不在这个页面。开启系统通知,下次完成时会直接提醒你。':
+    'Something finished while you were away from this page. Turn on system notifications to be told next time.',
+  '不用了': 'No thanks',
+  '开启通知': 'Turn on notifications',
+  '已开启:切到别的页面时,完成后会弹系统通知': 'Turned on: you will get a system notification when work finishes while you are elsewhere',
+  '浏览器拒绝了通知权限;以后可以在地址栏左侧的站点设置里重新允许':
+    'The browser blocked notifications; you can allow them again later from the site settings at the left of the address bar',
 
   // ---- settings: appearance ----
   '主题': 'Theme',
@@ -436,4 +459,76 @@ export default {
   '项目「{project}」的参考资料(只读)': 'Reference file in the project "{project}" (read-only)',
   '项目「{project}」的参考资料,保存后新的回答会按修改后的内容来':
     'Reference file in the project "{project}" — once saved, new answers use the updated content',
+
+  // ---- 添加到桌面 (install guide, phone card, in-app browser hint) ----
+  '添加到桌面': 'Add to home screen',
+  '添加到主屏幕': 'Add to Home Screen',
+  '添加到程序坞': 'Add to Dock',
+  '安装为应用': 'Install as app',
+  '安装应用': 'Install app',
+  '在浏览器中打开': 'Open in a browser',
+  '先在浏览器中打开': 'Open in a browser first',
+  '分享': 'Share',
+  '独立窗口打开,不和其他网页标签混在一起;任务栏 / 程序坞图标上会显示完成数量。':
+    'Opens in its own window, apart from your other tabs; the taskbar / Dock icon shows how many things have finished.',
+  '从桌面图标一点就开,全屏显示,不用在浏览器标签里找。':
+    'Opens full-screen from an icon on your home screen, with no hunting through browser tabs.',
+  '点浏览器里的{share}按钮(找不到的话,换 Safari 打开本页)':
+    'Tap the browser’s {share} button (can’t find it? Open this page in Safari instead)',
+  '选{add}': 'Choose {add}',
+  '点右上角{add}': 'Tap {add} at the top right',
+  '点地址栏旁边的{more}(工具栏上直接有分享按钮的话跳过这步)':
+    'Tap {more} next to the address bar (skip this if the toolbar already shows a Share button)',
+  '点{share}': 'Tap {share}',
+  '往下滑,点{add}': 'Scroll down and tap {add}',
+  '确认「作为网页 App 打开」是打开的,点右上角{add}': 'Make sure “Open as Web App” is on, then tap {add} at the top right',
+  '点{share}按钮(iPhone 在屏幕底部,iPad 在右上角)': 'Tap the {share} button (at the bottom on iPhone, top right on iPad)',
+  '企业微信': 'WeCom',
+  '钉钉': 'DingTalk',
+  '飞书': 'Feishu',
+  '微博': 'Weibo',
+  '当前 App': 'this app',
+  '「{app}」里打开的网页不能添加到桌面,先换到手机自带的浏览器:':
+    'Pages opened inside {app} cannot be added to the home screen. Switch to your phone’s own browser first:',
+  '点右上角的{more}': 'Tap {more} at the top right',
+  '选{open}': 'Choose {open}',
+  '在 Safari 中打开': 'Open in Safari',
+  '在浏览器打开': 'Open in Browser',
+  '(各 App 的叫法略有不同)': ' (the wording varies by app)',
+  '在浏览器里登录后,再按提示添加到桌面': 'Sign in there, then follow the prompt to add it to your home screen',
+  '打开浏览器菜单(右上角{dots}或底部{menu})': 'Open the browser menu ({dots} at the top right or {menu} at the bottom)',
+  // Chinese browsers name the item three ways; English ones say one of two.
+  '找{desktop}、{home}或{install}': 'Look for {desktop} or {install}',
+  '如果提示没有权限,到手机设置里允许浏览器「创建桌面快捷方式」':
+    'If it says permission is missing, allow the browser to create home screen shortcuts in your phone’s settings',
+  '用 Chrome 或 Edge 打开本站可以一键安装;华为、小米等手机自带的浏览器入口名称略有不同。':
+    'Chrome and Edge install it in one tap; the built-in browsers on Huawei, Xiaomi and other phones name the menu item slightly differently.',
+  '当前环境不支持复制,请手动复制地址栏里的链接': 'Copying is not available here; copy the link from the address bar instead',
+  '复制失败,请手动复制地址栏里的链接': 'Could not copy; copy the link from the address bar instead',
+  '复制链接': 'Copy link',
+  '已添加到桌面': 'Added to your home screen',
+  '现在就是以 App 方式打开的,不需要再添加。': 'You are already using it as an app; there is nothing to add.',
+  '这台设备已经添加过了,从桌面或应用列表里的图标打开即可。':
+    'Already added on this device; open it from the icon on your home screen or in your app list.',
+  '点下面的按钮,在弹出的窗口里确认即可。装好后会出现在桌面和应用列表里。':
+    'Tap the button below and confirm in the window that pops up. It then appears on your home screen and in your app list.',
+  '点下面的按钮,在浏览器弹出的窗口里确认即可。': 'Click the button below and confirm in the window your browser shows.',
+  '点屏幕顶部菜单栏的{file}': 'Click {file} in the menu bar at the top of the screen',
+  '选{dock},再点{add}': 'Choose {dock}, then click {add}',
+  '当前浏览器不支持安装。用 Chrome 或 Edge 打开本站,地址栏右侧会出现安装图标。':
+    'This browser cannot install sites. Open it in Chrome or Edge and an install icon appears at the right of the address bar.',
+  '在手机上用:把链接发到手机,打开就能看到添加步骤': 'On your phone: send yourself this link; opening it shows the steps',
+  '把这份引导发给同事': 'Share these steps with a colleague',
+  '在浏览器中打开,体验更完整': 'Open it in a browser for the full experience',
+  '添加到主屏幕,用起来像 App': 'Add it to your Home Screen and use it like an app',
+  '添加到桌面,用起来像 App': 'Add it to your home screen and use it like an app',
+  '现在是 App 里自带的浏览器,不能添加到桌面。': 'This is an app’s built-in browser, which cannot add sites to the home screen.',
+  '以后再说': 'Not now',
+  '怎么打开': 'Show me how',
+  '看看怎么添加': 'Show me how',
+  '建议先点右上角「···」,选「在 Safari 中打开」,再登录。之后可以把本站添加到主屏幕。':
+    'Tip: tap “···” at the top right and choose “Open in Safari” before signing in. Then you can add the site to your Home Screen.',
+  '建议先点右上角「···」,选「在浏览器打开」,再登录。之后可以把本站添加到桌面。':
+    'Tip: tap “···” at the top right and choose “Open in Browser” before signing in. Then you can add the site to your home screen.',
+  '知道了': 'Got it',
 } satisfies Record<string, string>;

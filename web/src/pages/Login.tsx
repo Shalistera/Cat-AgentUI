@@ -7,6 +7,7 @@ import { appVersionLabel } from '../version';
 import { Button, Input, Field, toast } from '../components/ui';
 import type { User } from '../types';
 import { t } from '../i18n';
+import { InAppBrowserHint } from '../components/InstallGuide';
 
 export default function Login() {
   const nav = useNavigate();
@@ -50,6 +51,7 @@ export default function Login() {
 
   return (
     <div className="flex h-full bg-bg1">
+      <InAppBrowserHint />
       {/* A deliberately quiet brand rail: this is an internal sign-in screen,
           not a product landing page. */}
       <aside className="relative hidden w-[36%] max-w-sm shrink-0 flex-col justify-between overflow-hidden bg-brand p-8 lg:flex">

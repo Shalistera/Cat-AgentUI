@@ -27,6 +27,19 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-10-14',
+    items: [
+      {
+        zh: '完成提醒更醒目：标签页图标会出现彩色圆点，标题直接写「回复完成」「回复出错」或「等你确认」；离开时错过一次完成，回来会问你要不要开启系统通知，安卓 Chrome 现在也能弹出通知。',
+        en: 'Finished work is easier to spot: the tab icon gets a coloured dot and the title says “Reply finished”, “Reply failed” or “Waiting for you”. If something finishes while you are away, you are asked whether to turn on system notifications, which now also work in Chrome on Android.',
+      },
+      {
+        zh: '手机上可以把本站添加到桌面，像 App 一样全屏打开：安卓 Chrome / Edge 一键添加，iPhone 有分步说明，在微信里打开会先提示换到浏览器；入口在账号菜单里。',
+        en: 'Add the site to your phone’s home screen and open it full-screen like an app: one tap in Chrome or Edge on Android, step-by-step instructions on iPhone, and a pointer to a real browser first when you open it inside WeChat. It is in the account menu.',
+      },
+    ],
+  },
+  {
     date: '2026-10-09',
     items: [
       {
