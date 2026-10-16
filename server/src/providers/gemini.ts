@@ -71,6 +71,21 @@ async function endpoint(cfg: ProviderRuntimeConfig, model: string, verb: string)
   return { url: `${studioOrigin(cfg)}/v1beta/models/${model}:${verb}`, headers: h };
 }
 
+/** Prove a Vertex line can call `model` in its own project. countTokens is
+ * free, and fails the way generation would on a disabled API, a missing role
+ * or a model the project does not have. */
+export async function vertexCountTokens(cfg: ProviderRuntimeConfig, model: string): Promise<number> {
+  const { url, headers } = await endpoint(cfg, model, 'countTokens');
+  const res = await fetch(url, {
+    method: 'POST', headers,
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }] }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) throw await providerError('Gemini', res);
+  const j = await readJsonLimited(res, 64 * 1024);
+  return Number(j?.totalTokens) || 0;
+}
+
 /** Tag retry progress on Priority PayGo requests, so the user can tell the
  * premium lane is busy too. */
 function retryReporter(onRetry: ChatRequest['onRetry'], gate: string | undefined): ChatRequest['onRetry'] {

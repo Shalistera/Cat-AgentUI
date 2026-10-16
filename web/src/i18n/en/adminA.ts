@@ -39,15 +39,27 @@ export default {
   'OCR 工坊': 'OCR Studio',
   'OpenAI 兼容': 'OpenAI-compatible',
   'Persistent API Token': 'Persistent API token',
-  'Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域,已开始输出的回复不会重放;纯文字回复中途断流时改由 Priority 续写。实际请求 Priority 时,对话会展示并保留优先通道标识':
-    'Priority costs more than standard pay-as-you-go — Google\'s pricing page is authoritative; usage is still costed with the price set on each model. It applies only to global, us and eu, and models without support (images and so on) stay on the standard channel. First-failure mode skips standard retries and the remaining regions, and a reply that already started streaming is never replayed; a text-only reply that breaks off midway is continued over Priority. When a request really goes through Priority, the chat shows and keeps a priority-channel marker',
+  'Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域(备用账号仍会各试一次),已开始输出的回复不会重放;纯文字回复中途断流时改由 Priority 续写。实际请求 Priority 时,对话会展示并保留优先通道标识':
+    'Priority costs more than standard pay-as-you-go — Google\'s pricing page is authoritative; usage is still costed with the price set on each model. It applies only to global, us and eu, and models without support (images and so on) stay on the standard channel. First-failure mode skips standard retries and the remaining regions (each backup account still gets one try), and a reply that already started streaming is never replayed; a text-only reply that breaks off midway is continued over Priority. When a request really goes through Priority, the chat shows and keeps a priority-channel marker',
   'SQLite 在线快照,存放于 data/backups/,不影响服务运行。策略在此设置并立即生效。':
     'Online SQLite snapshots, stored in data/backups/, with no impact on the running service. The policy is set here and takes effect immediately.',
   'Service Account JSON 不是有效的 JSON,请检查是否完整复制(或直接上传文件)':
     'That service account JSON is not valid JSON — check that you copied all of it, or just upload the file',
   'Vertex 区域(按优先级)': 'Vertex regions (in priority order)',
-  'Vertex 的区域顺序和 Priority PayGo 在「编辑」里设置。': 'Vertex region order and Priority PayGo are set under "Edit".',
+  'Vertex 的区域顺序、备用账号和 Priority PayGo 在「编辑」里设置。': 'Vertex region order, backup accounts and Priority PayGo are set under "Edit".',
   'Vertex 项目 ID': 'Vertex project ID',
+  '备用账号': 'Backup accounts',
+  '账号 {n}': 'Account {n}',
+  '添加备用账号': 'Add backup account',
+  '已添加备用账号 {project}': 'Backup account {project} added',
+  '删除备用账号': 'Delete backup account',
+  '确定删除账号 {n}({project})?': 'Delete account {n} ({project})?',
+  '测试通过,可以调用 {model}': 'Test passed — {model} can be called',
+  '粘贴另一个项目的服务账号 JSON': 'Paste the service account JSON of another project',
+  '其他 Google Cloud 账号的服务账号,各自计费、各自限流(同一组织下的项目共用限流,加了不起作用)。主线路被限流或出故障时,先按顺序换到这些账号(都用 {location}),再换其他区域和 Priority;只在失败时切换,不轮流分摊。添加、开关和删除都立即生效。':
+    'Service accounts of other Google Cloud accounts, each billed and rate-limited on its own (projects in one organization share their limits, so adding one of those does nothing). When the primary endpoint is rate-limited or failing, requests move to these accounts in order (all on {location}), then to the other regions and Priority. They are used only on failure, never to spread load. Adding, switching and deleting take effect immediately.',
+  '保存后可以再添加备用账号(其他项目的服务账号 JSON),主账号被限流时自动换用。':
+    'After saving you can add backup accounts (service account JSONs of other projects), used automatically when the main account is rate-limited.',
   'web_search 本月已用 {used} 次(不含 Gemini 对话自带的原生搜索,两者共用 Google 的免费额度)。Gemini 3.x 每月共享 5000 次免费,超出约 $14 / 1000 次;一次提问常会搜 2–3 次。到达上限后只用备用搜索源;0 为不限。':
     'web_search has run {used} times this month (not counting the native search built into Gemini chats — both draw on the same Google free allowance). Gemini 3.x shares 5,000 free calls a month and costs about $14 per 1,000 after that; one question often runs 2–3 searches. Past the limit only the backup search source is used; 0 = unlimited.',
   '{count} 个对话有文件': '{count} chats have files',

@@ -111,6 +111,9 @@ export interface ProviderRuntimeConfig {
   escalateAfterBusy?: number;
   /** First fallback-worthy failure jumps directly to this Priority line. */
   escalateOnFailure?: boolean;
+  /** A Vertex backup account: another project with its own rate limits.
+   * Skipping ahead to the Priority line never skips one of these. */
+  backupAccount?: boolean;
   /** Do not retry inside a standard line before escalating to Priority. */
   singleAttempt?: boolean;
   /** A client with a configured fallback model: never wait out a busy

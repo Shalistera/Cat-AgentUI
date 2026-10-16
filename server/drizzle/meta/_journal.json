@@ -281,6 +281,13 @@
       "when": 1791849600000,
       "tag": "0039_cross_project_search",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1792195200000,
+      "tag": "0040_vertex_accounts",
+      "breakpoints": true
     }
   ]
 }

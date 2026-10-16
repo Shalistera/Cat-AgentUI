@@ -175,14 +175,15 @@ function plan(cfg: ProviderRuntimeConfig, model: string): { line: ProviderRuntim
 /** Where to continue a reply whose stream broke on line `failedKey`: the
  * other lines in order, starting after that one, with the rest as fallbacks
  * so the continuation fails over by the usual rules. The break is that line's
- * failure, so first-failure mode starts on Priority, and fallback mode tries
- * the other locations before it. A provider with one line continues on it. */
+ * failure, so first-failure mode goes on to Priority (after the Vertex backup
+ * accounts, which have rate limits of their own), and fallback mode tries the
+ * other locations before it. A provider with one line continues on it. */
 export function continuationLines(cfg: ProviderRuntimeConfig, model: string, failedKey: string): ProviderRuntimeConfig {
   const lines = [cfg, ...(cfg.fallbacks ?? [])].filter((line) => !line.servesModel || line.servesModel(model));
   const failed = lines.findIndex((line) => lineKey(line) === failedKey);
   let order = [...lines.slice(failed + 1), ...lines.slice(0, Math.max(failed, 0))];
   const priority = order.findIndex((line) => line.escalateOnFailure);
-  if (priority > 0) order = order.slice(priority);
+  if (priority > 0) order = [...order.slice(0, priority).filter((line) => line.backupAccount), ...order.slice(priority)];
   if (!order.length) return { ...cfg, fallbacks: [] };
   const [first, ...rest] = order;
   return { ...first, fallbacks: rest, failoverThreshold: cfg.failoverThreshold, failoverCooldownMs: cfg.failoverCooldownMs };
@@ -218,7 +219,8 @@ async function* runLines<T>(
   let lineErr: unknown = null;
   // Standard lines share one tally of busy rejections; once it fills up the
   // request skips ahead to the Priority PayGo retry instead of waiting out
-  // every remaining location.
+  // every remaining location. Vertex backup accounts are never skipped: each
+  // is rate limited on its own, at the standard price.
   const escalation = order.findIndex((o) => o.line.escalateAfterBusy);
   const immediatePriority = escalation > 0 && !!order[escalation].line.escalateOnFailure;
   const counter: BusyCounter | undefined = escalation > 0
@@ -273,7 +275,11 @@ async function* runLines<T>(
       }
       const skip = !quickBusy && i < escalation - 1 && (immediatePriority
         || (kind === 'line' && !!counter && counter.busy >= counter.limit));
-      let nextIndex = skip ? escalation : i + 1;
+      let nextIndex = i + 1;
+      if (skip) {
+        const account = order.findIndex((o, j) => j > i && j < escalation && o.line.backupAccount);
+        nextIndex = account >= 0 ? account : escalation;
+      }
       if (quickBusy && nextIndex === escalation) nextIndex++;
       const next = order[nextIndex];
       const from = line.endpointName ?? '主线路';

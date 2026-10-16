@@ -11,12 +11,15 @@ import {
 import { KeyValueEditor, pairsToObject, type KVPair } from '../../components/KeyValueEditor';
 import { ProviderAvatar } from '../../components/ModelAvatar';
 import { locale, t, tServer } from '../../i18n';
-import type { AdminModel, AdminProvider, AdminProviderEndpoint, AdminVertexLine, LineHealth } from '../../types';
+import type {
+  AdminModel, AdminProvider, AdminProviderEndpoint, AdminVertexAccount, AdminVertexLine, LineHealth,
+} from '../../types';
 import { DEFAULT_URLS, TYPE_LABELS, type ProviderType } from './provider-common';
 
 // ---------- Vertex locations ----------
 const PRESET_LOCATIONS = ['global', 'us', 'eu'];
 const MAX_LOCATIONS = 6;
+const MAX_ACCOUNTS = 5;
 
 function locationLabel(loc: string): string {
   if (loc === 'global') return t('全球 · 按空闲容量调度,容量最大');
@@ -88,6 +91,124 @@ function VertexLocationEditor({ locations, onChange }: { locations: string[]; on
       </div>
       <div className="mt-1.5 text-xs leading-relaxed text-tx3">
         {t('从第一个开始用;被限流或出故障时,同一次请求内自动换下一个。global 会把请求调度到当时有空闲的区域,容量最大,Google 推荐优先用它减少 429;us、eu 只在对应地区内处理,容量是 global 的一部分。')}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Vertex backup accounts ----------
+// Saved as soon as they are added, toggled or removed, like the editor's
+// 清除 buttons: a JSON is write-only, so there is nothing to stage for 保存.
+// The modal's provider is a snapshot, so the list lives in local state.
+function VertexAccountsEditor({ provider, onChanged }: { provider: AdminProvider; onChanged(): Promise<void> }) {
+  const [accounts, setAccounts] = useState<AdminVertexAccount[]>(provider.vertexAccounts);
+  const [json, setJson] = useState('');
+  // Which action is in flight: 'add', 'order', or an account id.
+  const [busy, setBusy] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const firstLocation = parseLocations(provider.vertexLocation)[0] ?? 'global';
+  const full = accounts.length >= MAX_ACCOUNTS;
+
+  async function run(key: string, fn: () => Promise<void>) {
+    if (busy) return;
+    setBusy(key);
+    try { await fn(); await onChanged(); } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(null); }
+  }
+
+  function add(text: string) {
+    let saJson: string;
+    try { saJson = JSON.stringify(JSON.parse(text)); } catch {
+      toast(t('Service Account JSON 不是有效的 JSON,请检查是否完整复制(或直接上传文件)'), 'err');
+      return;
+    }
+    run('add', async () => {
+      const a = await api.post<AdminVertexAccount>(`/api/admin/providers/${provider.id}/vertex-accounts`, { saJson });
+      setAccounts((list) => [...list, a]);
+      setJson('');
+      toast(t('已添加备用账号 {project}', { project: a.projectId }), 'ok');
+    });
+  }
+
+  async function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (f) add(await f.text());
+  }
+
+  function move(i: number, delta: number) {
+    const next = [...accounts];
+    [next[i], next[i + delta]] = [next[i + delta], next[i]];
+    run('order', async () => {
+      await api.put(`/api/admin/providers/${provider.id}/vertex-accounts/order`, { ids: next.map((a) => a.id) });
+      setAccounts(next);
+    });
+  }
+
+  function setEnabled(a: AdminVertexAccount, enabled: boolean) {
+    run(a.id, async () => {
+      const updated = await api.patch<AdminVertexAccount>(`/api/admin/provider-vertex-accounts/${a.id}`, { enabled });
+      setAccounts((list) => list.map((x) => (x.id === a.id ? updated : x)));
+    });
+  }
+
+  async function test(a: AdminVertexAccount) {
+    if (busy) return;
+    setBusy(a.id);
+    try {
+      const r = await api.post<{ ok: boolean; model: string; error?: string }>(`/api/admin/provider-vertex-accounts/${a.id}/test`);
+      if (r.ok) toast(t('测试通过,可以调用 {model}', { model: r.model }), 'ok');
+      else toast(r.error ? tServer(r.error) : t('连接失败'), 'err');
+    } catch (e) { toast(errMsg(e), 'err'); }
+    finally { setBusy(null); }
+  }
+
+  async function remove(a: AdminVertexAccount, n: number) {
+    if (!(await confirmDialog(t('删除备用账号'), t('确定删除账号 {n}({project})?', { n, project: a.projectId })))) return;
+    run(a.id, async () => {
+      await api.del(`/api/admin/provider-vertex-accounts/${a.id}`);
+      setAccounts((list) => list.filter((x) => x.id !== a.id));
+      toast(t('已删除'), 'ok');
+    });
+  }
+
+  return (
+    <div>
+      <div className="mb-1.5 text-[13px] font-medium text-tx">{t('备用账号')}</div>
+      {accounts.length > 0 && (
+        <div className="mb-1.5 space-y-1.5">
+          {accounts.map((a, i) => (
+            <div key={a.id} className="flex items-center gap-2 rounded-md border border-line bg-bg1 px-2.5 py-1.5">
+              <span className="shrink-0 text-[11px] tabular-nums text-tx3">{t('账号 {n}', { n: i + 2 })}</span>
+              <span className={`min-w-0 flex-1 truncate font-mono text-xs ${a.enabled ? 'text-tx' : 'text-tx3 line-through'}`}>{a.projectId}</span>
+              <Button variant="ghost" size="iconXs" title={t('提前')} disabled={!!busy || i === 0} onClick={() => move(i, -1)}><ArrowUp size={12} /></Button>
+              <Button variant="ghost" size="iconXs" title={t('延后')} disabled={!!busy || i === accounts.length - 1} onClick={() => move(i, 1)}><ArrowDown size={12} /></Button>
+              <Button variant="ghost" size="iconXs" title={t('测试')} disabled={!!busy} onClick={() => test(a)}>
+                {busy === a.id ? <Spinner className="h-3 w-3" /> : <FlaskConical size={12} />}
+              </Button>
+              <Toggle checked={a.enabled} disabled={!!busy} onChange={(v) => setEnabled(a, v)} />
+              <Button variant="dangerGhost" size="iconXs" title={t('删除')} disabled={!!busy} onClick={() => remove(a, i + 2)}><Trash2 size={12} /></Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {!full && (
+        <>
+          <Textarea rows={3} value={json} onChange={(e) => setJson(e.target.value)} className="font-mono text-xs"
+            placeholder={t('粘贴另一个项目的服务账号 JSON')} />
+          <div className="mt-1.5 flex gap-2">
+            <Button variant="outline" size="sm" disabled={!!busy} onClick={() => fileRef.current?.click()}>
+              <Upload size={13} />{t('上传 JSON 文件')}
+            </Button>
+            <Button variant="outline" size="sm" disabled={!!busy || !json.trim()} onClick={() => add(json)}>
+              {busy === 'add' ? <Spinner className="h-3.5 w-3.5" /> : <Plus size={13} />}{t('添加备用账号')}
+            </Button>
+          </div>
+          <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={pickFile} />
+        </>
+      )}
+      <div className="mt-1.5 text-xs leading-relaxed text-tx3">
+        {t('其他 Google Cloud 账号的服务账号,各自计费、各自限流(同一组织下的项目共用限流,加了不起作用)。主线路被限流或出故障时,先按顺序换到这些账号(都用 {location}),再换其他区域和 Priority;只在失败时切换,不轮流分摊。添加、开关和删除都立即生效。', { location: firstLocation })}
       </div>
     </div>
   );
@@ -303,10 +424,13 @@ function ProviderModal({ provider, onClose, onSaved }: {
                 <Field label={t('Vertex 项目 ID')} hint={t('留空自动使用 JSON 中的 project_id')}>
                   <Input value={vertexProject} onChange={(e) => setVertexProject(e.target.value)} placeholder={t('留空自动读取')} />
                 </Field>
+                {isEdit
+                  ? <VertexAccountsEditor provider={provider} onChanged={onSaved} />
+                  : <p className="text-xs leading-relaxed text-tx3">{t('保存后可以再添加备用账号(其他项目的服务账号 JSON),主账号被限流时自动换用。')}</p>}
                 <VertexLocationEditor locations={vertexLocations} onChange={setVertexLocations} />
                 <Field label="Priority PayGo" hint={vertexPriority === 'off'
                   ? t('按 token 计费、单价更高、更不容易被限流的付费方式,不用提前购买')
-                  : t('Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域,已开始输出的回复不会重放;纯文字回复中途断流时改由 Priority 续写。实际请求 Priority 时,对话会展示并保留优先通道标识')}>
+                  : t('Priority 单价高于标准按量付费,以 Google 定价页为准;用量统计仍按模型设置的单价计算。只在 global、us、eu 上生效,图像等不支持的模型仍走标准通道。首次失败模式会跳过标准重试和后续区域(备用账号仍会各试一次),已开始输出的回复不会重放;纯文字回复中途断流时改由 Priority 续写。实际请求 Priority 时,对话会展示并保留优先通道标识')}>
                   <Select value={vertexPriority} onChange={(e) => setVertexPriority(e.target.value as AdminProvider['vertexPriority'])}>
                     <option value="off">{t('关闭 · 只用标准按量付费')}</option>
                     <option value="fallback">{t('限流时启用 · 标准请求被限流 5 次或各区域都试过后改走 Priority')}</option>
@@ -574,16 +698,21 @@ function EndpointRow({ endpoint, provider, index, count, position, reload, onEdi
   );
 }
 
-// Built-in Vertex lines (other locations, the Priority fallback): state only —
-// their order and presence are set in the provider editor.
+// Built-in Vertex lines (backup accounts, other locations, the Priority
+// fallback): state only — their order and presence are set in the provider
+// editor.
 function VertexLineRow({ line, position }: { line: AdminVertexLine; position: number }) {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line px-2.5 py-2">
       <span className="w-5 shrink-0 text-center text-[11px] tabular-nums text-tx3">{position}</span>
       <StatusDot tone={line.health.state === 'ok' ? 'ok' : line.health.state === 'open' ? 'err' : 'warn'} />
-      <span className="text-xs font-medium text-tx">{line.name}</span>
+      <span className="text-xs font-medium text-tx">{tServer(line.name)}</span>
       {line.priority && <Badge tone="warn">{t('加价')}</Badge>}
-      <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block">{vertexHost(line.location)}</span>
+      {/* A backup account goes to the same host as the provider's line; its
+          project is what tells the accounts apart. */}
+      <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block">
+        {line.projectId ?? vertexHost(line.location)}
+      </span>
       <HealthBadge health={line.health} />
       {(line.health.lastError || line.health.missingModels.length > 0) && (
         <p className="basis-full pl-7 text-[11px] text-tx3">{healthDetail(line.health)}</p>
@@ -650,7 +779,7 @@ function BackupLines({ provider, reload }: { provider: AdminProvider; reload(): 
           position={i + 2 + provider.vertexLines.length} reload={reload} onEdit={() => setEditing(e)} />
       ))}
       {usesVertex && (
-        <p className="px-1 text-[11px] text-tx3">{t('Vertex 的区域顺序和 Priority PayGo 在「编辑」里设置。')}</p>
+        <p className="px-1 text-[11px] text-tx3">{t('Vertex 的区域顺序、备用账号和 Priority PayGo 在「编辑」里设置。')}</p>
       )}
       {provider.endpoints.length === 0 && (
         <p className="px-1 text-[11px] text-tx3">

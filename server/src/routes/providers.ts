@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { and, asc, eq } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
-import { encryptSecret, newId } from '../crypto.js';
+import { decryptSecret, encryptSecret, newId } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import {
   allConfiguredSecretValues, decryptSecretRecord, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
@@ -13,12 +13,15 @@ import { checkModelLimit, hasModelLimit, parseLimitPeriod } from '../quota.js';
 import { broadcast } from './events.js';
 import { configuredModelFallback, setModelFallback } from '../model-fallback.js';
 import {
-  endpointRuntimeConfig, getRawAdapter, primaryLineKey, providerTakesInterjections, toPrimaryRuntimeConfig, type EndpointRow,
+  endpointRuntimeConfig, getRawAdapter, primaryLineKey, providerTakesInterjections, toPrimaryRuntimeConfig, vertexAccountsOf,
+  type EndpointRow, type VertexAccountRow,
 } from '../providers/index.js';
 import { lineStatus, resetLineHealth } from '../providers/failover.js';
 import { planUsage } from '../providers/claude-code.js';
-import { supportsVertexGoogleSearch } from '../providers/gemini.js';
-import { normalizeVertexLocations, parsePriorityMode, vertexLines } from '../providers/vertex.js';
+import { supportsVertexGoogleSearch, vertexCountTokens } from '../providers/gemini.js';
+import {
+  MAX_VERTEX_ACCOUNTS, normalizeVertexLocations, parsePriorityMode, priorityModel, vertexAccountLineKey, vertexLines,
+} from '../providers/vertex.js';
 import {
   MAX_LEVELS, defaultLevels, effectiveLevels, normalizeLevels, parseLevels, parseMode,
 } from '../reasoning.js';
@@ -108,12 +111,15 @@ function endpointsOf(providerId: string): EndpointRow[] {
     .all();
 }
 
-/** A Vertex provider's lines after its own (other locations, the Priority
- * fallback), each with its breaker state — built-in, so not editable rows. */
-function publicVertexLines(p: ProviderRow) {
+/** A Vertex provider's lines after its own (backup accounts, other
+ * locations, the Priority fallback), each with its breaker state — set in the
+ * provider editor, so not editable rows. */
+function publicVertexLines(p: ProviderRow, accounts: VertexAccountRow[]) {
   if (p.type !== 'gemini' || !p.useVertex) return [];
-  return vertexLines(p).slice(1).map((v) => ({
+  const projects = new Map(accounts.map((a) => [a.id, a.projectId]));
+  return vertexLines(p, accounts).slice(1).map((v) => ({
     key: v.key, location: v.location, priority: v.priority, name: v.name, health: publicHealth(v.key),
+    ...(v.account ? { projectId: projects.get(v.account) ?? null } : {}),
   }));
 }
 
@@ -121,13 +127,19 @@ function publicVertexLines(p: ProviderRow) {
 function providerLineKeys(p: ProviderRow, endpointRows?: EndpointRow[]): string[] {
   return [
     primaryLineKey(p.id),
-    ...(p.type === 'gemini' && p.useVertex ? vertexLines(p).slice(1).map((v) => v.key) : []),
+    ...(p.type === 'gemini' && p.useVertex ? vertexLines(p, vertexAccountsOf(p.id)).slice(1).map((v) => v.key) : []),
     ...(endpointRows ?? endpointsOf(p.id)).map((e) => e.id),
   ];
 }
 
+// SECURITY: the service account JSON is write-only; only its project shows.
+function publicVertexAccount(a: VertexAccountRow) {
+  return { id: a.id, projectId: a.projectId, enabled: !!a.enabled };
+}
+
 // SECURITY: API keys, Vertex SA JSON, and custom header values are write-only.
-function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: EndpointRow[]) {
+function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: EndpointRow[], accountRows?: VertexAccountRow[]) {
+  const accounts = accountRows ?? (p.type === 'gemini' ? vertexAccountsOf(p.id) : []);
   let extraHeaderKeys: string[] = [];
   try { extraHeaderKeys = Object.keys(providerExtraHeaders(p)); } catch { /* keep editor usable */ }
   return {
@@ -156,8 +168,9 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: E
     addModelPrefix: p.addModelPrefix,
     health: publicHealth(primaryLineKey(p.id)),
     // What notices and the lines panel call the provider's own line.
-    primaryLineName: p.type === 'gemini' && p.useVertex ? vertexLines(p)[0].name : p.primaryName || '主线路',
-    vertexLines: publicVertexLines(p),
+    primaryLineName: p.type === 'gemini' && p.useVertex ? vertexLines(p, accounts)[0].name : p.primaryName || '主线路',
+    vertexLines: publicVertexLines(p, accounts),
+    vertexAccounts: accounts.map(publicVertexAccount),
     endpoints: (endpointRows ?? endpointsOf(p.id)).map(publicEndpoint),
     ...(modelRows ? { models: modelRows.map((m) => publicModel(m, p.type as ProviderType)) } : {}),
   };
@@ -265,6 +278,9 @@ const endpointPatchSchema = endpointCreateSchema.partial().extend({
   preserveExtraHeaderKeys: z.array(z.string().max(200)).max(200).optional(),
 });
 
+const vertexAccountCreateSchema = z.object({ saJson: z.string().min(2).max(20000) });
+const vertexAccountPatchSchema = z.object({ enabled: z.boolean() });
+
 const modelsAddSchema = z.object({
   providerId: z.string().min(1),
   models: z.array(z.object({
@@ -344,7 +360,15 @@ export async function providerRoutes(app: FastifyInstance) {
       const list = endpointsBy.get(e.providerId);
       if (list) list.push(e); else endpointsBy.set(e.providerId, [e]);
     }
-    return provRows.map((p) => publicProvider(p, byProvider.get(p.id) ?? [], endpointsBy.get(p.id) ?? []));
+    const accountsBy = new Map<string, VertexAccountRow[]>();
+    for (const a of db.select().from(schema.providerVertexAccounts)
+      .orderBy(asc(schema.providerVertexAccounts.priority), asc(schema.providerVertexAccounts.createdAt)).all()) {
+      const list = accountsBy.get(a.providerId);
+      if (list) list.push(a); else accountsBy.set(a.providerId, [a]);
+    }
+    return provRows.map((p) => publicProvider(
+      p, byProvider.get(p.id) ?? [], endpointsBy.get(p.id) ?? [], accountsBy.get(p.id) ?? [],
+    ));
   });
 
   app.post('/api/admin/providers', async (req, reply) => {
@@ -630,6 +654,120 @@ export async function providerRoutes(app: FastifyInstance) {
       return { ok: true, modelCount: list.length };
     } catch (err) {
       return { ok: false, error: redactSensitiveText(errMessage(err), allConfiguredSecretValues()) };
+    }
+  });
+
+  // --- admin: backup Vertex accounts ---
+
+  function getVertexAccount(id: string): VertexAccountRow | undefined {
+    return db.select().from(schema.providerVertexAccounts).where(eq(schema.providerVertexAccounts.id, id)).get();
+  }
+
+  /** The project the provider's own line bills: the explicit setting, else its JSON's. */
+  function primaryProject(p: ProviderRow): string | null {
+    if (p.vertexProject?.trim()) return p.vertexProject.trim();
+    if (!p.vertexSaJsonEnc) return null;
+    try { return String(JSON.parse(decryptSecret(p.vertexSaJsonEnc)).project_id ?? '').trim() || null; } catch { return null; }
+  }
+
+  app.post('/api/admin/providers/:id/vertex-accounts', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const provider = getProvider(id);
+    if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
+    if (provider.type !== 'gemini') return reply.code(400).send({ error: '只有 Gemini 的 Vertex AI 模式可以添加备用账号' });
+    const body = vertexAccountCreateSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    let sa: Record<string, unknown>;
+    try { sa = JSON.parse(body.data.saJson); } catch {
+      return reply.code(400).send({ error: 'Service Account JSON 无效' });
+    }
+    // The project comes from the JSON itself, so it has to be a complete key.
+    const projectId = typeof sa?.project_id === 'string' ? sa.project_id.trim() : '';
+    if (!projectId || typeof sa.client_email !== 'string' || typeof sa.private_key !== 'string') {
+      return reply.code(400).send({ error: '备用账号需要完整的服务账号 JSON(包含 project_id、client_email 和 private_key)' });
+    }
+    const existing = vertexAccountsOf(id);
+    if (existing.length >= MAX_VERTEX_ACCOUNTS) return reply.code(400).send({ error: `备用账号最多 ${MAX_VERTEX_ACCOUNTS} 个` });
+    // Limits belong to the project: a second key for it would add nothing.
+    if (projectId === primaryProject(provider) || existing.some((a) => a.projectId === projectId)) {
+      return reply.code(400).send({ error: '这个项目已经在用了;同一个项目共用限流,备用账号要用另一个项目的服务账号' });
+    }
+    const aid = newId();
+    db.insert(schema.providerVertexAccounts).values({
+      id: aid,
+      providerId: id,
+      saJsonEnc: encryptSecret(JSON.stringify(sa)),
+      projectId,
+      priority: existing.length ? Math.max(...existing.map((a) => a.priority)) + 1 : 0,
+      createdAt: now(),
+    }).run();
+    return publicVertexAccount(getVertexAccount(aid)!);
+  });
+
+  app.patch('/api/admin/provider-vertex-accounts/:id', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const row = getVertexAccount(id);
+    if (!row) return reply.code(404).send({ error: '备用账号不存在' });
+    const body = vertexAccountPatchSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    db.update(schema.providerVertexAccounts).set({ enabled: body.data.enabled ? 1 : 0 })
+      .where(eq(schema.providerVertexAccounts.id, id)).run();
+    resetLineHealth(vertexAccountLineKey(row.providerId, row.id));
+    return publicVertexAccount(getVertexAccount(id)!);
+  });
+
+  app.delete('/api/admin/provider-vertex-accounts/:id', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const row = getVertexAccount(id);
+    if (!row) return reply.code(404).send({ error: '备用账号不存在' });
+    db.delete(schema.providerVertexAccounts).where(eq(schema.providerVertexAccounts.id, id)).run();
+    resetLineHealth(vertexAccountLineKey(row.providerId, row.id));
+    return { ok: true };
+  });
+
+  // Order among the backup accounts, first tried first.
+  app.put('/api/admin/providers/:id/vertex-accounts/order', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    if (!getProvider(id)) return reply.code(404).send({ error: 'Provider 不存在' });
+    const body = orderSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    const mine = new Set(vertexAccountsOf(id).map((a) => a.id));
+    db.transaction(() => {
+      let i = 0;
+      for (const aid of body.data.ids) {
+        if (!mine.has(aid)) continue;
+        db.update(schema.providerVertexAccounts).set({ priority: i++ }).where(eq(schema.providerVertexAccounts.id, aid)).run();
+      }
+    });
+    return { ok: true };
+  });
+
+  // One free countTokens call on the provider's first location, with the
+  // provider's first text model: the credentials, the project's Vertex AI API
+  // and the service account's role all have to be in order for it to pass.
+  app.post('/api/admin/provider-vertex-accounts/:id/test', async (req, reply) => {
+    requireAdmin(req, reply);
+    const { id } = req.params as { id: string };
+    const row = getVertexAccount(id);
+    if (!row) return reply.code(404).send({ error: '备用账号不存在' });
+    const provider = getProvider(row.providerId);
+    if (!provider) return reply.code(404).send({ error: 'Provider 不存在' });
+    const model = db.select({ modelId: schema.models.modelId }).from(schema.models)
+      .where(and(eq(schema.models.providerId, provider.id), eq(schema.models.enabled, 1)))
+      .orderBy(asc(schema.models.sortOrder), asc(schema.models.modelId)).all()
+      .map((m) => m.modelId).find(priorityModel) ?? 'gemini-2.5-flash';
+    try {
+      await vertexCountTokens({
+        ...toPrimaryRuntimeConfig(provider, []),
+        useVertex: true, vertexSaJson: decryptSecret(row.saJsonEnc), vertexProject: null, vertexPriority: false,
+      }, model);
+      return { ok: true, model };
+    } catch (err) {
+      return { ok: false, model, error: redactSensitiveText(errMessage(err), allConfiguredSecretValues()) };
     }
   });
 

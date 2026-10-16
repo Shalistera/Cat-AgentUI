@@ -16,6 +16,7 @@
 - **多模型对话**:OpenAI 兼容 API(可选新版 Responses API)、Anthropic、Gemini(可选 Vertex AI),每个 Provider 均可自定义 API 地址(Base URL)与自定义 Header,适配各类中转/网关
 - **备用线路(故障切换)**:一个 Provider 下可挂多条同类型网关(如主用 OpenRouter、备用 LiteLLM),共用同一份模型列表、权限与用量;按优先级顺序使用而非负载均衡(保住提示缓存),主线路在返回内容前失败即在同一请求内改走下一条(该线路没有此模型也算,但不计入熔断),连续失败达到阈值后熔断一段时间再单次试探,恢复即切回;支持按线路改写模型名前缀、单独开关 Responses API,管理后台可看各线路状态、手动重置,并可把备用线路一键设为主线路(整体对调)
 - **Vertex 多区域与 Priority PayGo**:Vertex 模式可按优先级排列多个区域(如 global → us → eu,us/eu 自动使用多区域专用地址),某个区域被限流或出故障时同一请求内自动换下一个区域,熔断与切换提示同备用线路;可选 Priority PayGo(单价更高、更不易被限流):关闭、限流时启用(标准请求累计被限流 5 次或各区域都试过后改走 Priority,并在对话里提示正在使用优先通道),或始终使用;某条线路没有该模型时记住一小时,期间该模型直接跳过这条线路
+- **Vertex 备用账号**:可再上传最多 5 个其他 Google Cloud 项目的服务账号 JSON。Standard PayGo 的吞吐额度按组织计算(同一组织下的项目共用),不在同一组织的账号各自限流,所以主线路被限流或出故障时先按顺序换到这些账号(都用第一个区域、标准价),再换其他区域,最后才是 Priority;只在失败时切换,不轮流分摊,隐式缓存和消费层级都留在主账号上。每个账号用自己 JSON 里的 project_id,可单独停用、排序,「测试」会用免费的 countTokens 以该账号实际调用一次模型
 - **限流兜底换模型**:模型提供方持续限流时,重试等待超过 10 秒或最终报错后,回复里会推荐一个其他服务商的模型(按个人模型排序取第一个,跳过图像模型、对话里有图片时不支持识图的、用到工具时不支持工具的和额度已用完的),一键改用它重新生成这条回复,之后的对话也改用它
 - **流式输出**:SSE 流式回复、思考过程(reasoning)展示、随时停止
 - **每条回复的透明统计**:耗时、首字延迟、输入/输出 tokens、tokens/s
@@ -140,7 +141,7 @@ HEALTH_URL=http://127.0.0.1:3000/api/health    # 可选:重启后检查
 | `CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS` | Provider 流连续无事件的空闲超时 | `120` |
 | `PROVIDER_RETRY_MAX_WAIT_SECONDS` | 上游 429/503/529 限流时单次请求最多等待重试的总时长 | `60` |
 | `FAILOVER_RETRY_WAIT_SECONDS` | 配置了备用线路时,前面的线路被限流最多等多久就改走下一条 | `10` |
-| `VERTEX_REGION_RETRY_WAIT_SECONDS` | Vertex 某个区域被限流时最多等多久就换下一个区域(或 Priority 重试) | `3` |
+| `VERTEX_REGION_RETRY_WAIT_SECONDS` | Vertex 某个区域或账号被限流时最多等多久就换下一个区域、备用账号(或 Priority 重试) | `3` |
 | `VERTEX_PRIORITY_AFTER_RETRIES` | Priority PayGo 设为「限流时启用」时,一次请求里标准请求累计被限流几次就改走 Priority | `5` |
 | `MAX_USER_UPLOAD_MB` | 单用户附件存储配额默认值;管理员可在「管理后台 → 存储空间」覆盖,保存后立即生效;用户在「设置 → 附件存储」能看到自己的占用并删除附件 | `512` |
 | `MAX_USER_IMAGE_MB` | 单用户生成图片存储配额 | `1024` |
@@ -248,7 +249,7 @@ npm run test:project-library # 明确请求、项目开关与权限、有限检�
 npm run test:project-workspace # 同用户项目共享、隔离、开关、并发锁、额度与删除清理
 npm run test:system-model # 仅系统模型隐藏、直接调用拦截、自动兜底与管理员指定任务
 npm run test:response-integrity # 空回自动换线路、思考缓冲、恢复上限、续写去重和结束确认
-npm run test:provider-failover # 备用线路:优先级切换、熔断阈值与冷却试探、不重放已开始的流;Vertex 区域顺序与 Priority
+npm run test:provider-failover # 备用线路:优先级切换、熔断阈值与冷却试探、不重放已开始的流;Vertex 区域顺序、备用账号与 Priority
 npm run test:data-comparison # 图表对比:输入校验、权限、次数、消息持久化与旧实验设置清理
 npm run test:model-fallback   # 持续限流时推荐换用的模型:其他服务商、按个人排序、能力与额度
 node scripts/mock-openai.mjs   # 本地假 OpenAI(:4141/v1),无需真实 Key 即可联调
@@ -272,8 +273,9 @@ Gemini / Vertex 流结束时,服务端输出 `Provider stream ended` 结构化�
 取消生成。后台仍受原有总时限限制,不带 `requestId` 的旧客户端保留断线取消行为。
 
 Vertex Priority PayGo 可选择「首次失败即启用」:首次可切换线路的错误发生在输出前时,
-直接跳到 Priority,跳过标准通道内部重试和其他标准区域。参数错误、用户取消和
-已开始输出的流不会因此重放;纯文字回复中途断流时,续写直接走 Priority。实际使用 Priority 时显示「正在使用优先通道请求」,
+直接跳到 Priority,跳过标准通道内部重试和其他标准区域;配置了备用账号时,先让每个账号各试一次
+(同样不等待),都失败才上 Priority。参数错误、用户取消和
+已开始输出的流不会因此重放;纯文字回复中途断流时,续写先换其他备用账号,再走 Priority。实际使用 Priority 时显示「正在使用优先通道请求」,
 回复保留 Priority 标识;不支持 Priority 的模型/区域不会显示该标识。
 
 「管理后台 → 模型设置 → 模型详情 → 限流或空回时自动兜底」可给每个对话模型指定一个

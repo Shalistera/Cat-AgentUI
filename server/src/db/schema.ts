@@ -94,6 +94,23 @@ export const providerEndpoints = sqliteTable('provider_endpoints', {
   createdAt: integer('created_at').notNull(),
 }, (t) => [index('idx_provider_endpoints_provider').on(t.providerId, t.priority)]);
 
+// Extra Vertex service accounts for a Gemini provider in Vertex mode: other
+// Google Cloud projects (and billing accounts) serving the same models.
+// Outside the main account's organization each is rate limited on its own,
+// so it is tried right after the provider's own line — before the other
+// locations and the paid Priority retry. See vertex.ts.
+export const providerVertexAccounts = sqliteTable('provider_vertex_accounts', {
+  id: text('id').primaryKey(),
+  providerId: text('provider_id').notNull().references(() => providers.id, { onDelete: 'cascade' }),
+  saJsonEnc: text('sa_json_enc').notNull(), // encrypted service account JSON
+  // The JSON's project_id, kept readable for the admin list and for refusing
+  // a second account on a project already in use.
+  projectId: text('project_id').notNull(),
+  priority: integer('priority').notNull().default(0),
+  enabled: integer('enabled').notNull().default(1),
+  createdAt: integer('created_at').notNull(),
+}, (t) => [index('idx_provider_vertex_accounts_provider').on(t.providerId, t.priority)]);
+
 export const models = sqliteTable('models', {
   id: text('id').primaryKey(),
   providerId: text('provider_id').notNull().references(() => providers.id, { onDelete: 'cascade' }),

@@ -34,6 +34,7 @@ const serverPatterns: [RegExp, string][] = [
     'Endpoint "$1" is temporarily unavailable ($2) — switched to "$3".'],
   [/^图片生成线路「(.+?)」暂时不可用\((.+?)\),已切换到「(.+?)」$/,
     'Image endpoint "$1" is temporarily unavailable ($2) — switched to "$3".'],
+  [/^Vertex (\S+) · 账号 (\d+)( · Priority)?$/, 'Vertex $1 · account $2$3'],
   [/^MCP 服务器「(.+?)」连接失败: (.+)$/, 'Couldn\'t connect to MCP server "$1": $2'],
   [/^Provider「(.+?)」不支持图像生成$/, 'Provider "$1" doesn\'t support image generation'],
 

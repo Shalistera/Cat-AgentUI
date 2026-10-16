@@ -7,7 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { withFailover, resetLineHealth, lineStatus, rewriteModel, continuationLines } from '../server/dist/providers/failover.js';
 import { ProviderHttpError, resetProviderBusyGates } from '../server/dist/providers/sse.js';
 import { geminiAdapter } from '../server/dist/providers/gemini.js';
@@ -280,6 +281,22 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
   assert.deepEqual(plan({ vertexLocation: 'global,us-central1', vertexPriority: 'always', primaryName: 'GCP' }), [
     'g:primary|global|true|GCP', 'g:vertex:us-central1|us-central1|false|Vertex us-central1',
   ]);
+
+  // Backup accounts: right after the provider's own line, on its first
+  // location; numbered by their place in the list, switched-off ones included.
+  const withAccounts = (p, accounts) => vertexLines({ id: 'g', vertexLocation: null, ...p }, accounts)
+    .map((l) => `${l.key}|${l.location}|${l.priority}|${l.name}|${l.account ?? ''}`);
+  const accounts = [{ id: 'a', enabled: 1 }, { id: 'b', enabled: 0 }, { id: 'c', enabled: true }];
+  assert.deepEqual(withAccounts({ vertexLocation: 'global,us,eu', vertexPriority: 'first_failure' }, accounts), [
+    'g:primary|global|false|Vertex global|', 'g:vertex-account:a|global|false|Vertex global · 账号 2|a',
+    'g:vertex-account:c|global|false|Vertex global · 账号 4|c', 'g:vertex:us|us|false|Vertex us|',
+    'g:vertex:eu|eu|false|Vertex eu|', 'g:vertex:global:priority|global|true|Vertex global · Priority|',
+  ]);
+  assert.deepEqual(withAccounts({ vertexLocation: 'us', vertexPriority: 'always' }, [{ id: 'a', enabled: 1 }]), [
+    'g:primary|us|true|Vertex us · Priority|', 'g:vertex-account:a|us|true|Vertex us · 账号 2 · Priority|a',
+  ], "'always' puts the accounts on Priority too");
+  assert.deepEqual(withAccounts({}, [{ id: 'b', enabled: 0 }]), ['g:primary|global|false|主线路|'],
+    'only switched-off accounts: still a single line');
 }
 
 // 11. model-specific lines are skipped, and whichever line is tried last
@@ -368,6 +385,87 @@ const req = (extra = {}) => ({ model: 'openai/gpt-4o', messages: [], signal: new
   const down = fake({ primary: [httpErr(500)], b0: [httpErr(500)] });
   await collect(down.adapter.streamChat(lines(), req()));
   assert.deepEqual(down.calls.map((c) => c.key), ['primary', 'b0', 'b1'], 'an outage still escalates to Priority');
+}
+
+// 13. Vertex backup accounts are rate limited on their own: skipping ahead to
+//     the paid Priority line passes over the other locations, never them
+{
+  const lines = ({ firstFailure = false, stopOnBusy = false } = {}) => {
+    const primary = line('primary', 'Vertex global', { retryBudgetMs: 3000 });
+    primary.fallbacks = [
+      line('acct2', 'Vertex global · 账号 2', { retryBudgetMs: 3000, backupAccount: true }),
+      line('acct3', 'Vertex global · 账号 3', { retryBudgetMs: 3000, backupAccount: true }),
+      line('g:vertex:us', 'Vertex us', { retryBudgetMs: 3000 }),
+      line('g:vertex:eu', 'Vertex eu', { retryBudgetMs: 3000 }),
+      line('g:vertex:global:priority', 'Vertex global · Priority', {
+        escalateAfterBusy: 5, escalateOnFailure: firstFailure || undefined, servesModel: (m) => !m.includes('image'),
+      }),
+    ];
+    primary.failoverThreshold = 5; primary.failoverCooldownMs = 300;
+    if (stopOnBusy) primary.stopOnBusy = true;
+    return primary;
+  };
+  const model = 'gemini-3.7-flash';
+
+  // First-failure mode: one attempt per account, no waiting, then Priority.
+  resetLineHealth();
+  const tried = [];
+  const firstFailure = withFailover({
+    async *streamChat(c) {
+      const key = c.endpointId ?? 'primary';
+      tried.push([key, !!c.singleAttempt]);
+      if (c.escalateAfterBusy) { yield { type: 'text', text: 'priority-hi' }; return; }
+      throw httpErr(429);
+    },
+    async listModels() { return []; },
+  });
+  const notices = [];
+  let out = await collect(firstFailure.streamChat(lines({ firstFailure: true }), req({ model, onFailover: (i) => notices.push(i) })));
+  assert.equal(out[0].text, 'priority-hi');
+  assert.deepEqual(tried, [['primary', true], ['acct2', true], ['acct3', true], ['g:vertex:global:priority', false]],
+    'each account once, the other locations skipped');
+  assert.deepEqual(notices.map((n) => [n.to, !!n.priority]),
+    [['Vertex global · 账号 2', false], ['Vertex global · 账号 3', false], ['Vertex global · Priority', true]]);
+  // An account that answers ends it there, at the standard price.
+  resetLineHealth();
+  const answered = fake({ primary: [httpErr(429)] });
+  out = await collect(answered.adapter.streamChat(lines({ firstFailure: true }), req({ model })));
+  assert.deepEqual(answered.calls.map((c) => c.key), ['primary', 'acct2']);
+  assert.equal(out[0].text, 'acct2-hi');
+
+  // Fallback mode: a full busy tally skips ahead to the next account, and
+  // only past the last one to Priority.
+  resetLineHealth();
+  const tally = [];
+  const escalating = withFailover({
+    async *streamChat(c) {
+      tally.push(c.endpointId ?? 'primary');
+      if (c.escalateAfterBusy) { yield { type: 'text', text: 'priority-hi' }; return; }
+      c.busyCounter.busy += 3; // e.g. three 429s inside fetchRetry
+      throw httpErr(429);
+    },
+    async listModels() { return []; },
+  });
+  out = await collect(escalating.streamChat(lines(), req({ model })));
+  assert.equal(out[0].text, 'priority-hi');
+  assert.deepEqual(tally, ['primary', 'acct2', 'acct3', 'g:vertex:global:priority'], 'us and eu skipped, no account skipped');
+
+  // A model fallback waiting: every standard line once, accounts included, never Priority.
+  resetLineHealth();
+  const quick = fake({ primary: [httpErr(429)], acct2: [httpErr(429)], acct3: [httpErr(429)], 'g:vertex:us': [httpErr(429)], 'g:vertex:eu': [httpErr(429)] });
+  await assert.rejects(collect(quick.adapter.streamChat(lines({ stopOnBusy: true }), req({ model }))), { status: 429 });
+  assert.deepEqual(quick.calls.map((c) => c.key), ['primary', 'acct2', 'acct3', 'g:vertex:us', 'g:vertex:eu']);
+
+  // A broken stream continues on the other accounts before Priority.
+  const route = (c) => [c, ...(c.fallbacks ?? [])].map((l) => l.endpointId ?? 'primary');
+  assert.deepEqual(route(continuationLines(lines({ firstFailure: true }), model, 'prov:primary')),
+    ['acct2', 'acct3', 'g:vertex:global:priority'], 'first-failure: the accounts, then Priority');
+  assert.deepEqual(route(continuationLines(lines({ firstFailure: true }), model, 'acct2')),
+    ['acct3', 'g:vertex:global:priority', 'primary']);
+  assert.deepEqual(route(continuationLines(lines(), model, 'prov:primary')),
+    ['acct2', 'acct3', 'g:vertex:us', 'g:vertex:eu', 'g:vertex:global:priority'], 'fallback mode walks everything');
+  assert.deepEqual(route(continuationLines(lines({ firstFailure: true }), 'gemini-3.1-flash-image', 'prov:primary')),
+    ['acct2', 'acct3', 'g:vertex:us', 'g:vertex:eu'], 'no Priority for an image model: every standard line');
 }
 
 assert.equal(rewriteModel({ stripModelPrefix: 'openai/', addModelPrefix: 'azure/' }, 'openai/gpt-4o'), 'azure/gpt-4o');
@@ -505,9 +603,18 @@ console.log('Passed: failover unit semantics.');
   console.log('Passed: continuation after a stream break walks the remaining lines by the Priority mode, with real Priority headers.');
 }
 
-// ---- end to end: the real app, two mock OpenAI-compatible gateways ----
+// ---- end to end: the real app, two mock OpenAI-compatible gateways and a mock Vertex ----
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-agentui-failover-'));
+// The app mints Vertex tokens through google-auth-library; this preload makes
+// each token name the service account's project, so no request reaches Google
+// and the mock can tell which account called.
+const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-agentui-auth-stub-'));
+const authStub = path.join(stubDir, 'google-auth-stub.mjs');
+fs.writeFileSync(authStub, `import { createRequire } from 'node:module';
+const { GoogleAuth } = createRequire(import.meta.url)(${JSON.stringify(createRequire(path.join(root, 'server', 'package.json')).resolve('google-auth-library'))});
+GoogleAuth.prototype.getAccessToken = async function () { return 'token-' + (this.jsonContent?.project_id ?? 'none'); };
+`);
 const backupSecret = 'sk-backup-line-private-key-9f8e7d';
 const seen = { primary: [], backup: [] };
 let primaryMode = 'down'; // 'down' → 500, 'up' → answers
@@ -537,6 +644,31 @@ function gateway(name) {
     res.end(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`);
   });
 }
+// Vertex behind the provider's custom base URL. `vertexScript[project]` lists
+// the statuses to answer with, in order; otherwise it answers, naming the
+// project in capitals (as written, a project ID is redacted like any part of
+// a service account JSON).
+const vertexHits = [];
+let vertexScript = {};
+const vertexServer = http.createServer(async (req, res) => {
+  for await (const _ of req) { /* drain */ }
+  const m = req.url.match(/^\/v1\/projects\/([^/]+)\/locations\/([^/]+)\/publishers\/google\/models\/([^:]+):(\w+)/);
+  if (!m) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{}'); return; }
+  const [, project, location, , verb] = m;
+  vertexHits.push({ project, location, verb, auth: req.headers.authorization, priority: req.headers['x-vertex-ai-llm-shared-request-type'] ?? null });
+  const status = vertexScript[project]?.shift();
+  if (status) {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: `mock ${status} for ${project}` } }));
+    return;
+  }
+  if (verb === 'countTokens') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ totalTokens: 1 })); return; }
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  res.end(`data: ${JSON.stringify({
+    candidates: [{ content: { role: 'model', parts: [{ text: `answer from ${project.toUpperCase()}` }] }, finishReason: 'STOP' }],
+    usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+  })}\n\n`);
+});
 async function listen(server) {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   return server.address().port;
@@ -558,9 +690,10 @@ const events = (text) => [...text.matchAll(/event: ([^\n]+)\ndata: ([^\n]+)/g)].
 const primaryServer = gateway('primary'); const backupServer = gateway('backup');
 try {
   const primaryPort = await listen(primaryServer); const backupPort = await listen(backupServer);
+  const vertexPort = await listen(vertexServer);
   const probe = http.createServer(); const port = await listen(probe); await new Promise((r) => probe.close(r));
   base = `http://127.0.0.1:${port}`;
-  app = spawn(process.execPath, ['server/dist/index.js'], {
+  app = spawn(process.execPath, ['--import', pathToFileURL(authStub).href, 'server/dist/index.js'], {
     cwd: root, env: { ...process.env, DATA_DIR: dataDir, SECRET_KEY: 'failover-test-database-secret', HOST: '127.0.0.1', PORT: String(port), COOKIE_SECURE: 'false' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -596,12 +729,12 @@ try {
   assert.equal(listed.health.state, 'ok');
 
   const modelDbId = listed.models[0].id;
-  async function turn() {
-    const chat = (await request('POST', '/api/chats', { modelId: modelDbId })).json.chat;
+  async function turn(model = modelDbId) {
+    const chat = (await request('POST', '/api/chats', { modelId: model })).json.chat;
     await request('PATCH', `/api/chats/${chat.id}`, { title: 'Failover regression' }); // no auto-title request
     const res = await fetch(`${base}/api/chats/${chat.id}/stream`, {
       method: 'POST', headers: { cookie: admin, 'x-csrf': '1', 'content-type': 'application/json' },
-      body: JSON.stringify({ modelId: modelDbId, content: [{ type: 'text', text: 'hello' }] }),
+      body: JSON.stringify({ modelId: model, content: [{ type: 'text', text: 'hello' }] }),
     });
     assert.equal(res.status, 200);
     return events(await res.text());
@@ -677,9 +810,86 @@ try {
   assert.equal((await request('PATCH', `/api/admin/providers/${g.id}`, { vertexPriority: 'sometimes' })).status, 400);
   assert.equal((await request('POST', `/api/admin/providers/${g.id}/health/reset`)).status, 200);
   console.log('Passed: Vertex location validation, stored order, and built-in lines in the admin API.');
+
+  // Vertex backup accounts: other projects' service accounts, tried right
+  // after the provider's own line, on its first location, as themselves.
+  const keyOf = (project) => `-----BEGIN PRIVATE KEY-----\nMIIE-${project}-private-key-material\n-----END PRIVATE KEY-----\n`;
+  const sa = (project) => JSON.stringify({
+    type: 'service_account', project_id: project, client_email: `bot@${project}.iam.gserviceaccount.com`, private_key: keyOf(project),
+  });
+  const vx = (await request('POST', '/api/admin/providers', {
+    name: 'Vertex', type: 'gemini', useVertex: true, baseUrl: `http://127.0.0.1:${vertexPort}`,
+    vertexLocation: 'global,us', vertexPriority: 'first_failure', vertexProject: 'main-proj', vertexSaJson: sa('main-proj'),
+  })).json;
+  await request('POST', '/api/admin/models', { providerId: vx.id, models: [{ modelId: 'gemini-2.5-pro', tools: false }] });
+  const addAccount = (providerId, saJson) => request('POST', `/api/admin/providers/${providerId}/vertex-accounts`, { saJson });
+  assert.match((await addAccount(provider.id, sa('backup-b'))).json.error, /只有 Gemini/);
+  assert.equal((await addAccount(vx.id, '{not json')).status, 400);
+  assert.match((await addAccount(vx.id, JSON.stringify({ project_id: 'half' }))).json.error, /完整的服务账号/);
+  assert.match((await addAccount(vx.id, sa('main-proj'))).json.error, /已经在用/, "the provider's own project");
+  const acctB = (await addAccount(vx.id, sa('backup-b'))).json;
+  assert.deepEqual(acctB, { id: acctB.id, projectId: 'backup-b', enabled: true });
+  assert.match((await addAccount(vx.id, sa('backup-b'))).json.error, /已经在用/, 'a project already added');
+  const acctC = (await addAccount(vx.id, sa('backup-c'))).json;
+  const vxListed = async () => (await request('GET', '/api/admin/providers')).json.find((p) => p.id === vx.id);
+  let vxl = await vxListed();
+  assert.deepEqual(vxl.vertexAccounts.map((a) => a.projectId), ['backup-b', 'backup-c']);
+  assert.equal(vxl.primaryLineName, 'Vertex global');
+  assert.deepEqual(vxl.vertexLines.map((l) => [l.name, l.projectId ?? null]), [
+    ['Vertex global · 账号 2', 'backup-b'], ['Vertex global · 账号 3', 'backup-c'], ['Vertex us', null], ['Vertex global · Priority', null],
+  ]);
+  assert(!JSON.stringify(vxl).includes('private-key-material'), 'account JSON is write-only');
+
+  // First-failure mode: the provider's project, then each account once (its
+  // own project and token, the provider's project ID setting not applied),
+  // before any paid Priority attempt; the other location is skipped.
+  const vxModel = vxl.models[0].id;
+  const hits = () => vertexHits.map((h) => `${h.project}|${h.location}|${h.auth}|${h.priority}`);
+  vertexScript = { 'main-proj': [429], 'backup-b': [429] };
+  evs = await turn(vxModel);
+  assert.equal(evs.find((e) => e.type === 'done').data.status, 'done');
+  assert(evs.some((e) => e.type === 'delta' && e.data.text.includes('answer from BACKUP-C')));
+  assert.deepEqual(hits(), [
+    'main-proj|global|Bearer token-main-proj|null', 'backup-b|global|Bearer token-backup-b|null', 'backup-c|global|Bearer token-backup-c|null',
+  ]);
+  const switched = evs.filter((e) => e.type === 'notice' && /切换到/.test(e.data.message)).map((e) => e.data.message);
+  assert.equal(switched.length, 2); assert.match(switched[1], /「Vertex global · 账号 3」/);
+  vertexHits.length = 0;
+  vertexScript = { 'main-proj': [429], 'backup-b': [429], 'backup-c': [429] };
+  evs = await turn(vxModel);
+  assert(evs.some((e) => e.type === 'delta' && e.data.text.includes('answer from MAIN-PROJ')));
+  assert.deepEqual(hits().map((h) => h.replace(/\|Bearer [^|]+/, '')), [
+    'main-proj|global|null', 'backup-b|global|null', 'backup-c|global|null', 'main-proj|global|priority',
+  ], 'Priority only once every account is busy');
+
+  // Switch one off, reorder, test, delete.
+  await request('PATCH', `/api/admin/provider-vertex-accounts/${acctB.id}`, { enabled: false });
+  vxl = await vxListed();
+  assert.deepEqual(vxl.vertexLines.map((l) => l.name), ['Vertex global · 账号 3', 'Vertex us', 'Vertex global · Priority'],
+    'a switched-off account leaves the others their numbers');
+  await request('PUT', `/api/admin/providers/${vx.id}/vertex-accounts/order`, { ids: [acctC.id, acctB.id] });
+  vxl = await vxListed();
+  assert.deepEqual(vxl.vertexAccounts.map((a) => [a.projectId, a.enabled]), [['backup-c', true], ['backup-b', false]]);
+  assert.equal(vxl.vertexLines[0].name, 'Vertex global · 账号 2');
+  vertexHits.length = 0;
+  assert.deepEqual((await request('POST', `/api/admin/provider-vertex-accounts/${acctC.id}/test`)).json, { ok: true, model: 'gemini-2.5-pro' });
+  assert.deepEqual(vertexHits.map((h) => `${h.project}|${h.location}|${h.verb}|${h.auth}`), ['backup-c|global|countTokens|Bearer token-backup-c']);
+  vertexScript = { 'backup-b': [403] };
+  const failedTest = (await request('POST', `/api/admin/provider-vertex-accounts/${acctB.id}/test`)).json;
+  assert.equal(failedTest.ok, false); assert.match(failedTest.error, /403/);
+  assert(!failedTest.error.includes('backup-b'), 'test errors are redacted like any provider error');
+  for (const project of ['backup-d', 'backup-e', 'backup-f']) assert.equal((await addAccount(vx.id, sa(project))).status, 200);
+  assert.match((await addAccount(vx.id, sa('backup-g'))).json.error, /最多 5 个/);
+  assert.equal((await request('DELETE', `/api/admin/provider-vertex-accounts/${acctB.id}`)).status, 200);
+  vxl = await vxListed();
+  assert.deepEqual(vxl.vertexAccounts.map((a) => a.projectId), ['backup-c', 'backup-d', 'backup-e', 'backup-f']);
+  assert.equal((await request('DELETE', `/api/admin/provider-vertex-accounts/${acctB.id}`)).status, 404);
+  assert(!appLogs.includes('private-key-material'), 'no account secrets in server logs');
+  console.log('Passed: Vertex backup accounts — validation, write-only JSON, order before Priority, own project and token, switch-off, reorder, test, delete.');
   console.log('provider-failover regression: OK');
 } finally {
   app?.kill();
-  primaryServer.close(); backupServer.close();
+  primaryServer.close(); backupServer.close(); vertexServer.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
+  fs.rmSync(stubDir, { recursive: true, force: true });
 }

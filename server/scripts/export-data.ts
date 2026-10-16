@@ -12,6 +12,7 @@ const tables = {
   sessions: schema.sessions,
   providers: schema.providers,
   providerEndpoints: schema.providerEndpoints,
+  providerVertexAccounts: schema.providerVertexAccounts,
   models: schema.models,
   chats: schema.chats,
   messages: schema.messages,

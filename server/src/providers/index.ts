@@ -67,6 +67,7 @@ export interface ProviderRow {
 }
 
 export type EndpointRow = typeof schema.providerEndpoints.$inferSelect;
+export type VertexAccountRow = typeof schema.providerVertexAccounts.$inferSelect;
 
 export function primaryLineKey(providerId: string): string {
   return `${providerId}:primary`;
@@ -111,10 +112,19 @@ function usesVertex(row: ProviderRow): boolean {
   return row.type === 'gemini' && !!row.useVertex;
 }
 
+/** A provider's backup Vertex accounts in the admin's order, disabled ones
+ * included (they keep their place in the line names). */
+export function vertexAccountsOf(providerId: string): VertexAccountRow[] {
+  return db.select().from(schema.providerVertexAccounts)
+    .where(eq(schema.providerVertexAccounts.providerId, providerId))
+    .orderBy(asc(schema.providerVertexAccounts.priority), asc(schema.providerVertexAccounts.createdAt))
+    .all();
+}
+
 /** The provider's own line only — what the admin "test" and model listing use.
  * For Vertex that is the first location in the admin's order. */
-export function toPrimaryRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
-  const vertex = usesVertex(row) ? vertexLines(row)[0] : null;
+export function toPrimaryRuntimeConfig(row: ProviderRow, accounts?: VertexAccountRow[]): ProviderRuntimeConfig {
+  const vertex = usesVertex(row) ? vertexLines(row, accounts ?? vertexAccountsOf(row.id))[0] : null;
   return {
     id: row.id,
     type: row.type as ProviderType,
@@ -133,32 +143,47 @@ export function toPrimaryRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig 
   };
 }
 
-/** The Vertex locations after the first, plus the Priority fallback: same
- * credentials and model ids, another capacity pool. */
-function vertexFallbacks(row: ProviderRow, primary: ProviderRuntimeConfig): ProviderRuntimeConfig[] {
+/** The backup accounts, the Vertex locations after the first and the
+ * Priority fallback: same model ids, another capacity pool. */
+function vertexFallbacks(row: ProviderRow, primary: ProviderRuntimeConfig, accounts: VertexAccountRow[]): ProviderRuntimeConfig[] {
   if (!usesVertex(row)) return [];
-  return vertexLines(row).slice(1).map((v) => ({
-    ...primary,
-    vertexLocation: v.location,
-    vertexPriority: v.priority,
-    endpointId: v.key,
-    endpointName: v.name,
-    servesModel: v.onlyPriorityModels ? priorityModel : undefined,
-    escalateAfterBusy: v.onlyPriorityModels ? config.vertexPriorityAfterBusy : undefined,
-    escalateOnFailure: v.onlyPriorityModels && row.vertexPriority === 'first_failure' || undefined,
-  }));
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  return vertexLines(row, accounts).slice(1).flatMap((v): ProviderRuntimeConfig[] => {
+    let account: Partial<ProviderRuntimeConfig> = {};
+    if (v.account) {
+      // Its own credentials and the project in its own JSON: the provider's
+      // project ID setting belongs to the provider's service account.
+      try {
+        account = { vertexSaJson: decryptSecret(byId.get(v.account)!.saJsonEnc), vertexProject: null, backupAccount: true };
+      } catch {
+        return []; // unusable secret: leave the line out rather than fail every request
+      }
+    }
+    return [{
+      ...primary,
+      ...account,
+      vertexLocation: v.location,
+      vertexPriority: v.priority,
+      endpointId: v.key,
+      endpointName: v.name,
+      servesModel: v.onlyPriorityModels ? priorityModel : undefined,
+      escalateAfterBusy: v.onlyPriorityModels ? config.vertexPriorityAfterBusy : undefined,
+      escalateOnFailure: v.onlyPriorityModels && row.vertexPriority === 'first_failure' || undefined,
+    }];
+  });
 }
 
 /** The provider's line plus its enabled backups, ready for getAdapter(). With
  * a backup behind it, a line's busy-retry wait is capped so the user is not
  * left staring at a countdown while a working line sits idle; the last line
  * tried keeps the full budget since nothing comes after it (see failover.ts).
- * Hopping between Vertex locations is cheaper still — same account, same
- * model — so those lines give up sooner. */
+ * Hopping between Vertex lines (locations, backup accounts) is cheaper
+ * still — same model, no gateway in between — so those lines give up sooner. */
 export function toRuntimeConfig(row: ProviderRow): ProviderRuntimeConfig {
-  const primary = toPrimaryRuntimeConfig(row);
+  const accounts = usesVertex(row) ? vertexAccountsOf(row.id) : [];
+  const primary = toPrimaryRuntimeConfig(row, accounts);
   const backups = [
-    ...vertexFallbacks(row, primary),
+    ...vertexFallbacks(row, primary, accounts),
     ...enabledEndpoints(row.id).map((e) => endpointRuntimeConfig(primary, e)),
   ];
   if (!backups.length) return primary;

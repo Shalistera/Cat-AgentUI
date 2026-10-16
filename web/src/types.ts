@@ -486,15 +486,23 @@ export interface AdminProvider {
   health: LineHealth;
   primaryLineName: string;
   vertexLines: AdminVertexLine[];
+  vertexAccounts: AdminVertexAccount[];
   endpoints: AdminProviderEndpoint[];
   models: AdminModel[];
 }
 
-// A Vertex provider's built-in lines after its own: the other locations in
-// priority order and the Priority PayGo fallback.
+// A Vertex provider's built-in lines after its own, in the order tried: the
+// backup accounts, the other locations and the Priority PayGo fallback.
 export interface AdminVertexLine {
   key: string; location: string; priority: boolean; name: string;
+  /** Only on a backup account's line. */
+  projectId?: string | null;
   health: LineHealth;
+}
+
+// Another Google Cloud project's service account; the JSON is write-only.
+export interface AdminVertexAccount {
+  id: string; projectId: string; enabled: boolean;
 }
 
 // env/headers 为敏感信息,后端只返回是否已配置及键名,不返回值。
