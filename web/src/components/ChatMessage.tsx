@@ -1,7 +1,8 @@
-import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  BarChart3, Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileText, FolderOpen, GitBranch, Globe, Terminal,
+  BarChart3, Bot, BrainCircuit, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, FileText, FolderOpen, GitBranch, Globe, Terminal,
   Info, ImagePlus, MessageSquarePlus, Pencil, RefreshCw, Search, ShieldQuestion, Shuffle, Trash2, Wrench, CircleAlert, Ban, Volume2, VolumeX, TriangleAlert,
+  type LucideIcon,
 } from 'lucide-react';
 import type { Message, MessagePart, ModelInfo, ProviderRetry, ToolConfirmRequest } from '../types';
 import { useLightbox } from './Lightbox';
@@ -10,8 +11,10 @@ import { speak, stopSpeaking, ttsSupported } from '../speech';
 import { useModels, useSubagentProgress } from '../store';
 import { ComparisonChart } from './ComparisonChart';
 import { Markdown } from './Markdown';
+import { ProjectDocLink } from './ProjectDocDialog';
 import { WorkspaceFileLink } from './WorkspaceFileLink';
 import { normalizeWorkspacePath } from '../workspaceLinks';
+import { DOC_READ_TOOLS, DOC_SEARCH_TOOLS, docHits, docKey, docNamesIn, docRead, isNoHits, type DocMention, type DocRead } from '../projectDocTools';
 import { injectCitations } from '../citations';
 import { ModelAvatar } from './ModelAvatar';
 import { Button, Popover, Spinner } from './ui';
@@ -245,10 +248,11 @@ function SiblingSwitch({ info, onPrev, onNext }: {
   );
 }
 
-/** Shared shell for the collapsible reasoning / tool panels. */
-function Disclosure({ open, onToggle, icon, label, meta, children }: {
+/** Shared shell for the collapsible activity / search panels. `peek` stays
+    under the header while collapsed. */
+function Disclosure({ open, onToggle, icon, label, peek, children }: {
   open: boolean; onToggle(): void; icon: React.ReactNode; label: React.ReactNode;
-  meta?: React.ReactNode; children?: React.ReactNode;
+  peek?: React.ReactNode; children?: React.ReactNode;
 }) {
   return (
     <div className="my-2.5 overflow-hidden rounded-lg border border-line bg-bg2/40">
@@ -258,32 +262,58 @@ function Disclosure({ open, onToggle, icon, label, meta, children }: {
       >
         {icon}
         {label}
-        {meta}
         <button type="button" className="ml-auto flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-tx3 hover:text-tx"
           aria-label={open ? t('收起详情') : t('展开详情')} aria-expanded={open}
           onClick={(e) => { e.stopPropagation(); onToggle(); }}>
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
       </div>
-      {open && children}
+      {open ? children : peek}
     </div>
   );
 }
 
-function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean }) {
-  const [open, setOpen] = useState(false);
-  const show = open || streaming;
+const TAIL_FADE = 'linear-gradient(to bottom, transparent, #000 2.5em)';
+
+/** The newest lines of reasoning that is still streaming, pinned to the
+    bottom; once older lines are cut off they fade out at the top. */
+function ReasoningTail({ text, className }: { text: string; className: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [clipped, setClipped] = useState(false);
+  useLayoutEffect(() => {
+    const inner = box.current?.firstElementChild as HTMLElement | null | undefined;
+    if (box.current && inner) setClipped(inner.offsetHeight > box.current.clientHeight);
+  });
   return (
-    <Disclosure
-      open={show}
-      onToggle={() => setOpen(!show)}
-      icon={<BrainCircuit size={13} className={streaming ? 'animate-pulse text-acc' : 'text-tx3'} />}
-      label={<span className="font-medium text-tx2">{streaming ? t('正在推理…') : t('推理过程')}</span>}
-    >
-      <div className="max-h-64 overflow-y-auto whitespace-pre-wrap wrap-anywhere border-t border-line bg-bg1 px-3.5 py-2.5 text-[13px] leading-relaxed text-tx2">
-        {text}
-      </div>
-    </Disclosure>
+    <div ref={box} className={`flex flex-col justify-end overflow-hidden ${className}`}
+      style={clipped ? { maskImage: TAIL_FADE, WebkitMaskImage: TAIL_FADE } : undefined}>
+      <p className="whitespace-pre-wrap wrap-anywhere">{text.slice(-1500)}</p>
+    </div>
+  );
+}
+
+/** One burst of reasoning in an expanded activity block. Among other steps it
+    shows three lines until clicked; on its own it shows in full. */
+function ReasoningEntry({ text, live, clamp }: { text: string; live: boolean; clamp: boolean }) {
+  const [full, setFull] = useState(false);
+  // Selecting text to copy it is a click too.
+  const toggle = () => { if (!window.getSelection()?.toString()) setFull(!full); };
+  return (
+    <div className="flex items-start gap-2 px-3.5 py-2 text-[13px] leading-relaxed text-tx2">
+      <BrainCircuit size={13} className={`mt-1 shrink-0 ${live ? 'animate-pulse text-acc' : 'text-tx3'}`} />
+      {live ? (
+        <ReasoningTail text={text} className="max-h-40 min-w-0 flex-1" />
+      ) : clamp && !full ? (
+        <div className="line-clamp-3 min-w-0 flex-1 cursor-pointer whitespace-pre-wrap wrap-anywhere" title={t('点击展开全部')} onClick={toggle}>
+          {text.replace(/\n{2,}/g, '\n')}
+        </div>
+      ) : (
+        <div className={`max-h-64 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap wrap-anywhere ${clamp ? 'cursor-pointer' : ''}`}
+          title={clamp ? t('点击收起') : undefined} onClick={clamp ? toggle : undefined}>
+          {text}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -402,169 +432,345 @@ function queryOf(call: ToolCallPart): string {
   } catch { return ''; }
 }
 
-// One compact status line for a whole run of consecutive tool calls. Users see
-// what the model is doing, never how (no raw params/results) — expanding shows
-// one row per call, and error text only when a call actually failed.
-function ToolRun({ calls, results, organizing, chatId }: {
-  calls: ToolCallPart[];
+const DOC_REF = /^(?:[0-9a-f]{8}|[0-9a-f]{32})$/i;
+
+/** Project and range of a read, e.g. "第 0–4,000 字,共 9,275 字". */
+function readNote(d: DocRead): string {
+  const n = (v: number) => v.toLocaleString(locale);
+  const range = !d.range ? ''
+    : d.range.start === 0 && d.range.end >= d.range.total ? t('全文 {total} 字', { total: n(d.range.total) })
+    : t('第 {start}–{end} 字,共 {total} 字', { start: n(d.range.start), end: n(d.range.end), total: n(d.range.total) });
+  return [d.project, range].filter(Boolean).join(' · ');
+}
+
+const docLinkClass = 'min-w-0 cursor-pointer truncate text-acc underline decoration-acc/40 underline-offset-2 hover:decoration-acc disabled:cursor-default';
+
+/** A document name in an activity row; opens the document when it can. */
+function DocName({ doc }: { doc: DocMention }) {
+  const text = t('「{text}」', { text: doc.name || doc.ref });
+  return DOC_REF.test(doc.ref)
+    ? <ProjectDocLink refId={doc.ref} className={docLinkClass}>{text}</ProjectDocLink>
+    : <span className="min-w-0 truncate text-tx3">{text}</span>;
+}
+
+// ---- activity summaries ----
+
+type ToolKind = 'files' | 'image' | 'subagent' | 'command' | 'compare' | 'docRead' | 'docSearch' | 'web' | 'other';
+
+function toolKind(name: string): ToolKind {
+  if (DOC_READ_TOOLS.has(name)) return 'docRead';
+  if (DOC_SEARCH_TOOLS.has(name)) return 'docSearch';
+  if (name === COMPARE_DATA) return 'compare';
+  if (name === GENERATE_IMAGE) return 'image';
+  if (name === SPAWN_SUBAGENT) return 'subagent';
+  if (name === RUN_COMMAND) return 'command';
+  if (isWorkspaceTool(name)) return 'files';
+  if (name === WEB_FETCH || isSearchTool(name)) return 'web';
+  return 'other';
+}
+
+const KIND_ICON: Record<ToolKind, LucideIcon> = {
+  files: FolderOpen, image: ImagePlus, subagent: Bot, command: Terminal, compare: BarChart3,
+  docRead: FileText, docSearch: FileSearch, web: Globe, other: Wrench,
+};
+
+/** Summary order: what the person gets (files, images, subtasks) first, then
+    what was looked up, then plumbing such as raw commands. */
+const KIND_RANK: Record<ToolKind, number> = {
+  files: 0, image: 1, subagent: 2, docRead: 3, docSearch: 4, web: 5, command: 6, compare: 7, other: 9,
+};
+
+const isFileLookup = (c: ToolCallPart) => c.name === 'workspace_read' || c.name === 'workspace_list';
+
+function kindRank(kind: ToolKind, calls: ToolCallPart[]): number {
+  // Workspace reads on their own are just lookups.
+  return kind === 'files' && calls.every(isFileLookup) ? 8 : KIND_RANK[kind];
+}
+
+/** What one kind of finished call did. `solo` = nothing else is in the
+    summary, so a single call can read "搜索完成" rather than "已搜索 1 次". */
+function kindPhrase(kind: ToolKind, calls: ToolCallPart[], results: Map<string, ToolResultPart>, solo: boolean,
+  chatId: string | undefined, docNames: Map<string, string>): ReactNode {
+  const failed = calls.filter((c) => results.get(c.id)?.isError).length;
+  const withFailures = (label: ReactNode, suffix = t(',{count} 次失败', { count: failed })) => failed ? <>{label}{suffix}</> : label;
+  switch (kind) {
+    case 'compare': {
+      const ok = calls.some((c) => { const r = results.get(c.id); return r && !r.isError; });
+      return !ok && failed ? t('数据对比未完成') : t('数据对比完成');
+    }
+    case 'image':
+      return failed ? t('图片生成结束,部分调用未成功') : t('图片生成完成');
+    case 'subagent':
+      return withFailures(calls.length === 1
+        ? t('子代理完成了「{title}」', { title: subagentTitle(calls[0]) })
+        : t('{count} 个子任务已完成', { count: calls.length }), t(',{count} 个失败', { count: failed }));
+    case 'command':
+      return withFailures(calls.length === 1
+        ? t('执行了「{command}」', { command: commandSummary(commandOf(calls[0])) })
+        : t('执行了 {count} 条命令', { count: calls.length }), t(',{count} 条失败', { count: failed }));
+    case 'files': {
+      // Files written/changed are what the person cares about; reads fold away.
+      const writes = calls.filter((c) => !isFileLookup(c));
+      const shown = writes.length ? writes : calls;
+      const names = [...new Set(shown.map((c) => pathOf(c)).filter(Boolean))];
+      return withFailures(shown.length === 1
+        ? workspaceLabel(shown[0], true, chatId, results.get(shown[0].id))
+        : names.length
+          ? <>{WORKSPACE_VERBS[shown[shown.length - 1].name].done}{names.slice(0, 3).map((name) => {
+            const call = shown.filter((c) => pathOf(c) === name).at(-1)!;
+            return <Fragment key={name}>{workspaceFileName(call, chatId, results.get(call.id))}</Fragment>;
+          })}{names.length > 3 ? t(' 等 {count} 个文件', { count: names.length }) : ''}</>
+          : t('操作了工作区 {count} 次', { count: calls.length }));
+    }
+    case 'docRead': {
+      const docs = new Map<string, string>();
+      for (const c of calls) {
+        const r = results.get(c.id);
+        if (r?.isError) continue;
+        const d = docRead(c, r, docNames);
+        const key = d.ref ? docKey(d.ref) : d.name;
+        if (key && !docs.has(key)) docs.set(key, d.name || d.ref);
+      }
+      const names = [...docs.values()];
+      if (!names.length) return failed ? t('资料读取失败') : t('读取了 {count} 份资料', { count: calls.length });
+      return withFailures(names.length === 1
+        ? t('读取了资料「{name}」', { name: names[0] })
+        : t('读取了 {count} 份资料', { count: names.length }));
+    }
+    case 'docSearch': {
+      const query = calls.length === 1 ? queryOf(calls[0]) : '';
+      return withFailures(calls.length > 1 ? t('检索了 {count} 次资料', { count: calls.length })
+        : query ? t('检索了资料「{query}」', { query }) : t('检索了资料'));
+    }
+    case 'web': {
+      const fetches = calls.filter((c) => c.name === WEB_FETCH);
+      const searches = calls.length - fetches.length;
+      if (!fetches.length) {
+        if (failed) return t('已搜索 {total} 次,{failed} 次失败', { total: calls.length, failed });
+        return solo && calls.length === 1 ? t('搜索完成') : t('已搜索 {total} 次', { total: calls.length });
+      }
+      const label = searches
+        ? t('已搜索 {searches} 次,阅读了 {count} 个网页', { searches, count: fetches.length })
+        : fetches.length === 1 && fetchHost(fetches[0])
+          ? t('阅读了「{host}」', { host: fetchHost(fetches[0]) })
+          : t('阅读了 {count} 个网页', { count: fetches.length });
+      const failedFetches = fetches.filter((c) => results.get(c.id)?.isError).length;
+      return withFailures(label, failedFetches === failed ? t(',{count} 个打不开', { count: failed }) : undefined);
+    }
+    default:
+      if (failed) return t('已调用工具 {total} 次,{failed} 次失败', { total: calls.length, failed });
+      return solo && calls.length === 1 ? t('调用工具完成') : t('已调用工具 {total} 次', { total: calls.length });
+  }
+}
+
+/** Finished calls as one phrase per kind of work, most relevant first. */
+function summarizeCalls(calls: ToolCallPart[], results: Map<string, ToolResultPart>, chatId: string | undefined,
+  docNames: Map<string, string>): { phrases: ReactNode[]; Icon: LucideIcon; failed: boolean } {
+  const groups = new Map<ToolKind, ToolCallPart[]>();
+  for (const c of calls) {
+    const kind = toolKind(c.name);
+    const group = groups.get(kind);
+    if (group) group.push(c);
+    else groups.set(kind, [c]);
+  }
+  const kinds = [...groups.keys()].sort((a, b) => kindRank(a, groups.get(a)!) - kindRank(b, groups.get(b)!));
+  const ok = (c: ToolCallPart) => { const r = results.get(c.id); return !!r && !r.isError; };
+  return {
+    phrases: kinds.map((k) => kindPhrase(k, groups.get(k)!, results, kinds.length === 1, chatId, docNames)),
+    Icon: KIND_ICON[kinds[0]],
+    // A chart that came out counts as done even if an attempt failed on the way.
+    failed: calls.some((c) => results.get(c.id)?.isError) && !(kinds.length === 1 && kinds[0] === 'compare' && calls.some(ok)),
+  };
+}
+
+function joinDots(nodes: ReactNode[]): ReactNode {
+  return nodes.map((n, i) => <Fragment key={i}>{i > 0 && ' · '}{n}</Fragment>);
+}
+
+/** The call the model is waiting on right now. */
+function activeLabel(call: ToolCallPart, docNames: Map<string, string>): ReactNode {
+  switch (toolKind(call.name)) {
+    case 'docRead': {
+      const { name } = docRead(call, undefined, docNames);
+      return name ? t('正在读取资料「{name}」…', { name }) : t('正在读取资料…');
+    }
+    case 'docSearch': {
+      const query = queryOf(call);
+      return query ? t('正在检索资料「{query}」…', { query }) : t('正在检索资料…');
+    }
+    case 'compare': return t('正在对比数据…');
+    case 'image': return t('正在生成图片…');
+    case 'subagent': return t('子代理正在处理「{title}」…', { title: subagentTitle(call) });
+    case 'command': return t('正在执行「{command}」…', { command: commandSummary(commandOf(call)) });
+    case 'files': return <>{workspaceLabel(call, false)}…</>;
+    case 'web': {
+      if (call.name === WEB_FETCH) {
+        const host = fetchHost(call);
+        return host ? t('正在阅读「{host}」…', { host }) : t('正在阅读网页…');
+      }
+      const query = queryOf(call);
+      return query ? t('正在搜索「{query}」…', { query }) : t('正在搜索…');
+    }
+    default: {
+      const query = queryOf(call);
+      return query ? t('正在调用工具「{query}」…', { query }) : t('正在调用工具…');
+    }
+  }
+}
+
+/** Every call of the latest batch answered; the model is reading the results. */
+function organizingLabel(batch: ToolCallPart[], results: Map<string, ToolResultPart>): string {
+  const kinds = new Set(batch.map((c) => toolKind(c.name)));
+  const only = (...allowed: ToolKind[]) => [...kinds].every((k) => allowed.includes(k));
+  if (only('compare')) {
+    return batch.some((c) => !results.get(c.id)?.isError) ? t('数据对比完成,正在整理结论…') : t('数据对比未完成');
+  }
+  if (only('web')) return batch.every((c) => c.name === WEB_FETCH) ? t('阅读完成,正在整理结果…') : t('搜索完成,正在整理结果…');
+  if (only('docRead', 'docSearch')) return t('查阅资料完成,正在整理结果…');
+  return t('调用工具完成,正在整理结果…');
+}
+
+function rowVerb(name: string): string {
+  if (DOC_READ_TOOLS.has(name)) return t('读取资料');
+  if (DOC_SEARCH_TOOLS.has(name)) return t('检索资料');
+  if (name === WEB_FETCH) return t('阅读');
+  if (isSearchTool(name)) return t('搜索');
+  if (name === COMPARE_DATA) return t('数据对比');
+  if (name === GENERATE_IMAGE) return t('生成图片');
+  if (name === RUN_COMMAND) return t('执行');
+  if (name === SPAWN_SUBAGENT) return t('子代理');
+  if (isWorkspaceTool(name)) return WORKSPACE_VERBS[name].done;
+  return toolShortName(name);
+}
+
+/** One call in an expanded activity block: what it did and what it was about
+    (file, document, query, site). Users see what the model did, not how — raw
+    output only for commands and subagents, error text only on failure. */
+function ToolCallRow({ call: c, result: r, chatId, docNames }: {
+  call: ToolCallPart; result?: ToolResultPart; chatId?: string; docNames: Map<string, string>;
+}) {
+  const q = queryOf(c);
+  const read = DOC_READ_TOOLS.has(c.name) ? docRead(c, r, docNames) : null;
+  const note = read ? readNote(read) : '';
+  const hits = DOC_SEARCH_TOOLS.has(c.name) && r && !r.isError ? docHits(r) : null;
+  const showHits = !!hits && (hits.length > 0 || isNoHits(r!));
+  return (
+    <div className="px-3.5 py-2 text-xs">
+      <div className="flex items-center gap-2">
+        {/* Spinner inherits currentColor; without this it would pick up
+            body ink instead of the muted in-progress grey. */}
+        {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
+          : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
+          : <Check size={13} className="shrink-0 text-ok" />}
+        <span className="shrink-0 text-tx2">{rowVerb(c.name)}</span>
+        {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">{t('「{text}」', { text: subagentTitle(c) })}</span>}
+        {q && <span className="truncate text-tx3">{t('「{text}」', { text: q })}</span>}
+        {c.name === WEB_FETCH && fetchHost(c) && <span className="truncate text-tx3">{t('「{text}」', { text: fetchHost(c) })}</span>}
+        {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">{workspaceFileName(c, chatId, r)}</span>}
+        {read && (read.name || read.ref) && <DocName doc={read} />}
+        {note && <span className="ml-auto hidden max-w-[50%] shrink-0 truncate pl-1 text-[11px] tabular-nums text-tx3 sm:block">{note}</span>}
+      </div>
+      {/* Phones: the document name gets the whole row, the range goes below. */}
+      {note && <div className="mt-0.5 truncate pl-[21px] text-[11px] tabular-nums text-tx3 sm:hidden">{note}</div>}
+      {showHits && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-[21px] text-[11px] text-tx3">
+          {hits.length ? <>{t('结果来自')}{hits.map((h) => <DocName key={h.ref} doc={h} />)}</> : t('没有找到相关内容')}
+        </div>
+      )}
+      {c.name === SPAWN_SUBAGENT && (
+        <>
+          <details className="mt-1.5 text-[11px] text-tx3">
+            <summary className="cursor-pointer select-none hover:text-tx">{t('任务说明')}</summary>
+            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg2 px-2 py-1.5 font-mono leading-relaxed text-tx2">{subagentTask(c)}</pre>
+          </details>
+          <SubagentProgress callId={c.id} done={!!r} />
+          {r && (
+            <pre className={`mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border px-2 py-1.5 text-[11px] leading-relaxed ${r.isError ? 'border-err/30 bg-err/10 text-err' : 'border-line bg-bg1 text-tx2'}`}>{r.result.slice(0, 6000)}</pre>
+          )}
+        </>
+      )}
+      {c.name === RUN_COMMAND && (
+        <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg2 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-tx">{commandOf(c)}</pre>
+      )}
+      {c.name === RUN_COMMAND && r && (
+        <pre className={`mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border px-2 py-1.5 font-mono text-[11px] leading-relaxed ${r.isError ? 'border-err/30 bg-err/10 text-err' : 'border-line bg-bg1 text-tx2'}`}>{r.result.slice(0, 6000)}</pre>
+      )}
+      {c.name !== RUN_COMMAND && c.name !== SPAWN_SUBAGENT && r?.isError && (
+        <div className="mt-1.5 whitespace-pre-wrap break-words rounded-md border border-err/30 bg-err/10 px-2 py-1.5 text-[11px] leading-relaxed text-err">
+          {r.result.slice(0, 500)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ActivityItem = { kind: 'reasoning'; text: string } | { kind: 'tools'; calls: ToolCallPart[] };
+
+// One block for a whole stretch of model work between two pieces of the
+// answer, instead of a panel per reasoning burst and per tool batch. The
+// header says what is happening now, or sums up what was done; expanding
+// lists the reasoning and the calls in the order they happened.
+function ActivityBlock({ items, results, chatId, docNames, reasoningLive, organizing }: {
+  items: ActivityItem[];
   results: Map<string, ToolResultPart>;
   chatId?: string;
-  /** All calls answered but the model hasn't produced anything after them yet. */
+  docNames: Map<string, string>;
+  /** The last item is reasoning that is still streaming. */
+  reasoningLive: boolean;
+  /** Every call answered but the model hasn't produced anything after them yet. */
   organizing: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const last = items[items.length - 1];
+  const calls = items.flatMap((it) => (it.kind === 'tools' ? it.calls : []));
+  const batch = last.kind === 'tools' ? last.calls : [];
   const pending = calls.filter((c) => !results.has(c.id));
-  const failed = calls.filter((c) => results.get(c.id)?.isError);
-  const comparisonOnly = calls.every((c) => c.name === COMPARE_DATA);
-  const comparisonDone = comparisonOnly && calls.some((c) => {
-    const result = results.get(c.id);
-    return result && !result.isError;
-  });
-  const searching = calls.some((c) => isSearchTool(c.name));
-  const fetches = calls.filter((c) => c.name === WEB_FETCH);
-  const fetchOnly = fetches.length === calls.length;
-  const workspaceOnly = calls.every((c) => isWorkspaceTool(c.name) || c.name === RUN_COMMAND || c.name === SPAWN_SUBAGENT || c.name === GENERATE_IMAGE);
-  const hasCommand = calls.some((c) => c.name === RUN_COMMAND);
-  const hasSubagent = calls.some((c) => c.name === SPAWN_SUBAGENT);
-  const hasImageGeneration = calls.some((c) => c.name === GENERATE_IMAGE);
-  const active = pending.length > 0;
-  const busy = active || organizing;
-  const kind = searching ? 'search' : fetchOnly ? 'fetch' : 'tool';
+  const hasReasoning = items.some((it) => it.kind === 'reasoning');
+  const busy = reasoningLive || pending.length > 0 || organizing;
 
+  let icon: ReactNode;
   let label: ReactNode;
-  const lastPending = pending[pending.length - 1];
-  if (active && lastPending.name === WEB_FETCH) {
-    const host = fetchHost(lastPending);
-    label = host ? t('正在阅读「{host}」…', { host }) : t('正在阅读网页…');
-  } else if ((fetchOnly || (searching && fetches.length)) && !active && !organizing) {
-    const failedFetches = fetches.filter((c) => results.get(c.id)?.isError).length;
-    const searches = calls.length - fetches.length;
-    label = fetchOnly
-      ? fetches.length === 1 && fetchHost(fetches[0])
-        ? t('阅读了「{host}」', { host: fetchHost(fetches[0]) })
-        : t('阅读了 {count} 个网页', { count: fetches.length })
-      : t('已搜索 {searches} 次,阅读了 {count} 个网页', { searches, count: fetches.length });
-    if (failed.length) label += failedFetches === failed.length
-      ? t(',{count} 个打不开', { count: failedFetches })
-      : t(',{count} 次失败', { count: failed.length });
-  } else if (active && lastPending.name === COMPARE_DATA) {
-    label = t('正在对比数据…');
-  } else if (comparisonOnly) {
-    label = !comparisonDone && failed.length ? t('数据对比未完成') : organizing ? t('数据对比完成,正在整理结论…') : t('数据对比完成');
-  } else if (workspaceOnly && active && lastPending.name === GENERATE_IMAGE) {
-    label = t('正在生成图片…');
-  } else if (hasImageGeneration && !active && !organizing) {
-    label = failed.length ? t('图片生成结束,部分调用未成功') : t('图片生成完成');
-  } else if (workspaceOnly && active && lastPending.name === SPAWN_SUBAGENT) {
-    label = t('子代理正在处理「{title}」…', { title: subagentTitle(lastPending) });
-  } else if (workspaceOnly && active && lastPending.name === RUN_COMMAND) {
-    label = t('正在执行「{command}」…', { command: commandSummary(commandOf(lastPending)) });
-  } else if (hasSubagent && !active && !organizing) {
-    const subs = calls.filter((c) => c.name === SPAWN_SUBAGENT);
-    const failedSubs = subs.filter((c) => results.get(c.id)?.isError).length;
-    label = subs.length === 1
-      ? t('子代理完成了「{title}」', { title: subagentTitle(subs[0]) })
-      : t('{count} 个子任务已完成', { count: subs.length });
-    if (failedSubs) label += t(',{count} 个失败', { count: failedSubs });
-  } else if (workspaceOnly && active) {
-    label = <>{workspaceLabel(lastPending, false)}…</>;
-  } else if (hasCommand && !organizing) {
-    const cmds = calls.filter((c) => c.name === RUN_COMMAND);
-    const failedCmds = cmds.filter((c) => results.get(c.id)?.isError).length;
-    label = cmds.length === 1
-      ? t('执行了「{command}」', { command: commandSummary(commandOf(cmds[0])) })
-      : t('执行了 {count} 条命令', { count: cmds.length });
-    if (failedCmds) label += t(',{count} 条失败', { count: failedCmds });
-  } else if (workspaceOnly && !organizing) {
-    // Files written/changed are what the person cares about; reads fold away.
-    const writes = calls.filter((c) => c.name !== 'workspace_read' && c.name !== 'workspace_list');
-    const shown = writes.length ? writes : calls;
-    const names = [...new Set(shown.map((c) => pathOf(c)).filter(Boolean))];
-    label = shown.length === 1
-      ? workspaceLabel(shown[0], true, chatId, results.get(shown[0].id))
-      : names.length
-        ? <>{WORKSPACE_VERBS[shown[shown.length - 1].name].done}{names.slice(0, 3).map((name) => {
-          const call = shown.filter((c) => pathOf(c) === name).at(-1)!;
-          return <Fragment key={name}>{workspaceFileName(call, chatId, results.get(call.id))}</Fragment>;
-        })}{names.length > 3 ? t(' 等 {count} 个文件', { count: names.length }) : ''}</>
-        : t('操作了工作区 {count} 次', { count: calls.length });
-    if (failed.length) label = <>{label}{t(',{count} 次失败', { count: failed.length })}</>;
-  } else if (active) {
-    const q = queryOf(pending[pending.length - 1]);
-    label = q
-      ? t(kind === 'search' ? '正在搜索「{query}」…' : kind === 'fetch' ? '正在阅读「{query}」…' : '正在调用工具「{query}」…', { query: q })
-      : t(kind === 'search' ? '正在搜索…' : kind === 'fetch' ? '正在阅读…' : '正在调用工具…');
-  } else if (organizing) {
-    label = t(kind === 'search' ? '搜索完成,正在整理结果…'
-      : kind === 'fetch' ? '阅读完成,正在整理结果…' : '调用工具完成,正在整理结果…');
-  } else if (failed.length) {
-    label = t(searching ? '已搜索 {total} 次,{failed} 次失败' : '已调用工具 {total} 次,{failed} 次失败',
-      { total: calls.length, failed: failed.length });
+  let meta: ReactNode = null;
+  if (busy) {
+    // While working, the header follows the current step; earlier work in
+    // the stretch rides along as a muted summary.
+    const earlier = calls.filter((c) => !batch.includes(c));
+    if (earlier.length) meta = joinDots(summarizeCalls(earlier, results, chatId, docNames).phrases);
+    if (reasoningLive) {
+      icon = <BrainCircuit size={13} className="shrink-0 animate-pulse text-acc" />;
+      label = t('正在推理…');
+    } else {
+      icon = <Spinner className="h-3.5 w-3.5 shrink-0 text-acc" />;
+      label = pending.length ? activeLabel(pending[pending.length - 1], docNames) : organizingLabel(batch, results);
+    }
   } else {
-    label = calls.length === 1
-      ? t(kind === 'search' ? '搜索完成' : kind === 'fetch' ? '阅读完成' : '调用工具完成')
-      : t(searching ? '已搜索 {total} 次' : '已调用工具 {total} 次', { total: calls.length });
+    const summary = calls.length ? summarizeCalls(calls, results, chatId, docNames) : null;
+    const Icon = hasReasoning || !summary ? BrainCircuit : summary.Icon;
+    icon = <Icon size={13} className={`shrink-0 ${summary?.failed ? 'text-err' : 'text-tx3'}`} />;
+    label = joinDots([...(hasReasoning ? [t('推理过程')] : []), ...(summary?.phrases ?? [])]);
   }
-
-  const Icon = calls.every((c) => c.name === COMPARE_DATA) ? BarChart3 : searching || fetches.length ? Globe : hasImageGeneration ? ImagePlus : hasSubagent ? Bot : hasCommand ? Terminal : workspaceOnly ? FolderOpen : Wrench;
 
   return (
     <Disclosure
       open={open}
       onToggle={() => setOpen(!open)}
-      icon={busy
-        ? <Spinner className="h-3.5 w-3.5 shrink-0 text-acc" />
-        : <Icon size={13} className={`shrink-0 ${failed.length && !comparisonDone ? 'text-err' : 'text-tx3'}`} />}
+      icon={icon}
       label={
-        <span className={`truncate font-medium ${busy ? 'animate-pulse text-acc' : 'text-tx2'}`}>
-          {label}
+        <span className="min-w-0 truncate">
+          <span className={`font-medium ${busy ? 'animate-pulse text-acc' : 'text-tx2'}`}>{label}</span>
+          {meta && <span className="text-tx3">{' · '}{meta}</span>}
         </span>
       }
+      peek={reasoningLive && last.kind === 'reasoning' && (
+        <div className="border-t border-line bg-bg1 px-3.5 py-2">
+          <ReasoningTail text={last.text} className="max-h-20 text-xs leading-relaxed text-tx3" />
+        </div>
+      )}
     >
       <div className="divide-y divide-line/70 border-t border-line bg-bg1">
-        {calls.map((c) => {
-          const r = results.get(c.id);
-          const q = queryOf(c);
-          return (
-            <div key={c.id} className="px-3.5 py-2 text-xs">
-              <div className="flex items-center gap-2">
-                {/* Spinner inherits currentColor; without this it would pick up
-                    body ink instead of the muted in-progress grey. */}
-                {!r ? <Spinner className="h-3 w-3 shrink-0 text-tx3" />
-                  : r.isError ? <CircleAlert size={13} className="shrink-0 text-err" />
-                  : <Check size={13} className="shrink-0 text-ok" />}
-                <span className="shrink-0 text-tx2">{c.name === WEB_FETCH ? t('阅读') : isSearchTool(c.name) ? t('搜索') : c.name === COMPARE_DATA ? t('数据对比') : c.name === GENERATE_IMAGE ? t('生成图片') : c.name === RUN_COMMAND ? t('执行') : c.name === SPAWN_SUBAGENT ? t('子代理') : isWorkspaceTool(c.name) ? WORKSPACE_VERBS[c.name].done : toolShortName(c.name)}</span>
-                {c.name === SPAWN_SUBAGENT && <span className="truncate text-tx3">{t('「{text}」', { text: subagentTitle(c) })}</span>}
-                {q && <span className="truncate text-tx3">{t('「{text}」', { text: q })}</span>}
-                {c.name === WEB_FETCH && fetchHost(c) && <span className="truncate text-tx3">{t('「{text}」', { text: fetchHost(c) })}</span>}
-                {isWorkspaceTool(c.name) && pathOf(c) && <span className="truncate text-tx3">{workspaceFileName(c, chatId, r)}</span>}
-              </div>
-              {c.name === SPAWN_SUBAGENT && (
-                <>
-                  <details className="mt-1.5 text-[11px] text-tx3">
-                    <summary className="cursor-pointer select-none hover:text-tx">{t('任务说明')}</summary>
-                    <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg2 px-2 py-1.5 font-mono leading-relaxed text-tx2">{subagentTask(c)}</pre>
-                  </details>
-                  <SubagentProgress callId={c.id} done={!!r} />
-                  {r && (
-                    <pre className={`mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border px-2 py-1.5 text-[11px] leading-relaxed ${r.isError ? 'border-err/30 bg-err/10 text-err' : 'border-line bg-bg1 text-tx2'}`}>{r.result.slice(0, 6000)}</pre>
-                  )}
-                </>
-              )}
-              {c.name === RUN_COMMAND && (
-                <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg2 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-tx">{commandOf(c)}</pre>
-              )}
-              {c.name === RUN_COMMAND && r && (
-                <pre className={`mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border px-2 py-1.5 font-mono text-[11px] leading-relaxed ${r.isError ? 'border-err/30 bg-err/10 text-err' : 'border-line bg-bg1 text-tx2'}`}>{r.result.slice(0, 6000)}</pre>
-              )}
-              {c.name !== RUN_COMMAND && c.name !== SPAWN_SUBAGENT && r?.isError && (
-                <div className="mt-1.5 whitespace-pre-wrap break-words rounded-md border border-err/30 bg-err/10 px-2 py-1.5 text-[11px] leading-relaxed text-err">
-                  {r.result.slice(0, 500)}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {items.flatMap((it, n) => it.kind === 'reasoning'
+          ? [<ReasoningEntry key={`r${n}`} text={it.text} live={reasoningLive && n === items.length - 1} clamp={items.length > 1} />]
+          : it.calls.map((c) => <ToolCallRow key={c.id} call={c} result={results.get(c.id)} chatId={chatId} docNames={docNames} />))}
       </div>
     </Disclosure>
   );
@@ -811,8 +1017,8 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
     );
   }
 
-  // assistant — render parts in order, folding each run of consecutive tool
-  // activity into a single status line
+  // assistant — render parts in order, folding each stretch of reasoning and
+  // tool calls between pieces of the answer into one activity block.
   // Presentation only: keep persisted/history parts in their original order.
   // A chart remains the first answer content even if a model wrote a preamble.
   const rendered: React.ReactNode[] = msg.parts.flatMap((p, i) => p.type === 'data_comparison'
@@ -826,12 +1032,47 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
   const groundingPart = msg.parts.find((p): p is GroundingPart => p.type === 'grounding');
   const citations = groundingPart?.sources;
   const supports = groundingPart?.supports;
+  const docNames = docNamesIn(msg.parts);
+  // An activity block spans reasoning and tool traffic, plus whatever never
+  // renders in place: blank text between calls, bookkeeping parts. Blank text
+  // still streaming at the end is the answer starting, so it shows the cursor.
+  const inActivity = (idx: number) => {
+    const ap = msg.parts[idx];
+    if (ap.type === 'text') return !ap.text.trim() && !(isStreaming && idx === msg.parts.length - 1);
+    return ap.type !== 'image' && ap.type !== 'interjection' && ap.type !== 'grounding';
+  };
 
   for (let i = 0; i < msg.parts.length; i++) {
     const p = msg.parts[i];
-    if (p.type === 'reasoning') {
-      const isLast = i === msg.parts.length - 1;
-      rendered.push(<ReasoningBlock key={i} text={p.text} streaming={isStreaming && isLast} />);
+    if (inActivity(i)) {
+      const start = i;
+      const items: ActivityItem[] = [];
+      let lastReasoning = -1;
+      let end = i;
+      for (; end < msg.parts.length && inActivity(end); end++) {
+        const ap = msg.parts[end];
+        const prev = items[items.length - 1];
+        if (ap.type === 'reasoning' && ap.text.trim()) {
+          if (prev?.kind === 'reasoning') prev.text += `\n\n${ap.text}`;
+          else items.push({ kind: 'reasoning', text: ap.text });
+          lastReasoning = end;
+        } else if (ap.type === 'tool_call') {
+          if (prev?.kind === 'tools') prev.calls.push(ap);
+          else items.push({ kind: 'tools', calls: [ap] });
+        }
+      }
+      i = end - 1;
+      const last = items[items.length - 1];
+      if (!last) continue;
+      // "Organizing": every call answered, nothing after the block yet (a 追加
+      // delivered with the results aside), still streaming — the model is
+      // reading results, tell the user so.
+      const trailing = msg.parts.slice(end).every((tp) => tp.type === 'interjection');
+      rendered.push(
+        <ActivityBlock key={start} items={items} results={resultsByCallId} chatId={workspaceChatId} docNames={docNames}
+          reasoningLive={isStreaming && last.kind === 'reasoning' && lastReasoning === msg.parts.length - 1}
+          organizing={isStreaming && trailing && last.kind === 'tools' && last.calls.every((c) => resultsByCallId.has(c.id))} />,
+      );
     } else if (p.type === 'text') {
       const streamingThis = isStreaming && i === lastTextIdx && i === msg.parts.length - 1;
       const shown = streamingThis ? p.text : injectCitations(p.text, supports);
@@ -840,28 +1081,6 @@ export const ChatMessage = memo(function ChatMessage({ msg, workspaceChatId, isS
           <Markdown text={shown} streaming={streamingThis} citations={citations} workspaceChatId={workspaceChatId} />
         </div>,
       );
-    } else if (p.type === 'tool_call' || p.type === 'tool_result') {
-      const start = i;
-      const calls: ToolCallPart[] = [];
-      let end = i;
-      while (end < msg.parts.length) {
-        const tp = msg.parts[end];
-        if (tp.type !== 'tool_call' && tp.type !== 'tool_result') break;
-        if (tp.type === 'tool_call') calls.push(tp);
-        end++;
-      }
-      i = end - 1;
-      if (calls.length) {
-        // "Organizing": every call answered, nothing after the run yet (a 追加
-        // delivered with the results aside), still streaming — the model is
-        // reading results, tell the user so.
-        const trailing = msg.parts.slice(end).every((tp) => tp.type === 'interjection');
-        const allDone = calls.every((c) => resultsByCallId.has(c.id));
-        rendered.push(
-          <ToolRun key={start} calls={calls} results={resultsByCallId} chatId={workspaceChatId}
-            organizing={isStreaming && trailing && allDone} />,
-        );
-      }
     } else if (p.type === 'interjection') {
       rendered.push(<InterjectionBubble key={i} text={p.text} />);
     } else if (p.type === 'grounding') {

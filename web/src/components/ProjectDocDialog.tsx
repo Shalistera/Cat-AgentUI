@@ -153,8 +153,9 @@ const useDocDialog = create<{ target: ResolvedDoc | null; open(t: ResolvedDoc): 
   close() { set({ target: null }); },
 }));
 
-/** `[名称](doc:ref)` in a reply: a chip that opens the cited document. */
-export function ProjectDocLink({ refId, children }: { refId: string; children: ReactNode }) {
+/** `[名称](doc:ref)` in a reply: a chip that opens the cited document. A
+    `className` replaces the chip look, e.g. a plain link in a tool row. */
+export function ProjectDocLink({ refId, children, className }: { refId: string; children: ReactNode; className?: string }) {
   const [doc, setDoc] = useState<ResolvedDoc | null | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
@@ -162,17 +163,20 @@ export function ProjectDocLink({ refId, children }: { refId: string; children: R
     return () => { cancelled = true; };
   }, [refId]);
   if (doc === null) {
-    return <span className="doc-chip doc-chip-missing" title={t('这份资料已删除,或你没有该项目的访问权限')}><FileText size={11} />{children}</span>;
+    const missing = t('这份资料已删除,或你没有该项目的访问权限');
+    return className
+      ? <span className="min-w-0 truncate" title={missing}>{children}</span>
+      : <span className="doc-chip doc-chip-missing" title={missing}><FileText size={11} />{children}</span>;
   }
   return (
-    <button type="button" className="doc-chip" disabled={!doc}
+    <button type="button" className={className ?? 'doc-chip'} disabled={!doc}
       title={doc
         ? (doc.canEdit
           ? t('打开「{project}」的资料「{doc}」,可修改', { project: doc.project.name, doc: doc.doc.name })
           : t('打开「{project}」的资料「{doc}」', { project: doc.project.name, doc: doc.doc.name }))
         : undefined}
       onClick={() => doc && useDocDialog.getState().open(doc)}>
-      <FileText size={11} />{children}
+      {!className && <FileText size={11} />}{children}
     </button>
   );
 }

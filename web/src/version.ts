@@ -27,6 +27,15 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-10-18',
+    items: [
+      {
+        zh: '模型干活的过程不再刷屏：两段回答之间的推理和工具调用合成一行，正在做什么、做完了什么一眼就能看到，点开按顺序列出每一步；读项目资料时会写明读了哪份文件、读到第几个字，点文件名就能打开。',
+        en: 'The model’s working steps take far less room: reasoning and tool calls between two parts of an answer fold into one line that says what it is doing or what it did, and opening it lists every step in order. When it reads project files, each file is named along with how much of it was read; click a name to open the file.',
+      },
+    ],
+  },
+  {
     date: '2026-10-14',
     items: [
       {
