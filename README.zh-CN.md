@@ -347,6 +347,18 @@ server/  Fastify 5 + better-sqlite3 + Drizzle(TypeScript, ESM)
   └─ routes/      auth · chats(SSE)· images · uploads · mcp · admin · providers
 ```
 
+## 安全
+
+Cat-AgentUI 面向自托管部署。下面这些控制都实现在本仓库里。
+
+- **会话。** 会话 Cookie 为 HttpOnly 且 `SameSite=Lax`,令牌只以 SHA-256 哈希存储。会改变状态的请求必须带 `x-csrf: 1`,若请求带有 `Origin`,则必须与 Host 一致。登录、注册和修改密码有速率限制。密码使用 scrypt,经有界队列计算。
+- **密钥。** Provider API Key、Vertex 服务账号 JSON、自定义请求头和 MCP 凭据以 AES-256-GCM 加密存储,不返回给浏览器。已配置的密钥会从流式回复、错误信息和工具结果中隐去。
+- **MCP 工具。** 每个服务器要么全员共享,要么只授权给指定用户,调用工具时会再次检查。管理员可要求某个服务器的工具在执行前确认;用户也可以要求每次 MCP 工具调用都先确认。
+- **沙盒。** `run_command` 通过 bubblewrap 使用独立的挂载、PID、网络、IPC、UTS 与用户命名空间(无网络),`/usr` 只读,并且只把当前对话的工作区以可写方式挂入。在 x64 与 arm64 上,seccomp 禁止创建符号链接、FIFO 与设备节点、挂载,以及进一步的命名空间操作。宿主机的 systemd 用户实例可用时,每条命令还有 cgroup 内存、CPU、进程数和运行时间限额。
+- **工作区文件。** 路径从已打开的目录描述符逐级打开,并使用 `O_NOFOLLOW`,不跟随符号链接。宿主侧写入与沙盒运行共用一把锁,命令前后会清除非常规文件。当前项目的资料工具只在本轮访问检查通过后才会提供。跨项目检索在每次调用时重新检查访问权限和该项目的开关。
+
+报告漏洞请按 [SECURITY.md](SECURITY.md) 私下进行,不要开公开 issue。
+
 ## License
 
 MIT
