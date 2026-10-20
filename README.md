@@ -345,6 +345,18 @@ server/  Fastify 5 + better-sqlite3 + Drizzle (TypeScript, ESM)
   └─ routes/      auth · chats (SSE) · images · uploads · mcp · admin · providers
 ```
 
+## Security
+
+Cat-AgentUI is self-hosted. The controls below are implemented in this repository.
+
+- **Sessions.** The session cookie is HttpOnly and `SameSite=Lax`, and the token is stored only as a SHA-256 hash. State-changing requests must send `x-csrf: 1`, and a present `Origin` must match the host. Login, registration, and password changes are rate-limited. Passwords are hashed with scrypt on a bounded queue.
+- **Secrets.** Provider API keys, Vertex service-account JSON, custom provider headers, and MCP credentials are encrypted at rest with AES-256-GCM and are not returned to the browser. Configured secret values are redacted from streamed replies, errors, and tool results.
+- **MCP tools.** A server is either shared or granted to specific users, and that check runs again when a tool is called. Administrators can require confirmation before a server's tools run; a user can require confirmation for every MCP tool call.
+- **Sandbox.** `run_command` uses bubblewrap with separate mount, PID, network, IPC, UTS, and user namespaces (no network), a read-only `/usr`, and only that chat's workspace mounted read-write. On x64 and arm64, seccomp blocks symlink creation, FIFOs and device nodes, mounts, and further namespace changes. When the host systemd user instance is available, each command also gets cgroup memory, CPU, process-count, and runtime limits.
+- **Workspace files.** Paths are opened one component at a time from a directory descriptor with `O_NOFOLLOW`. Symlinks are not followed. Host writes and sandbox runs share a lock, and non-regular files are removed before and after a command. Tools for the current project's documents are offered only after that turn's access check succeeds. Cross-project search re-checks access and the project's opt-in on each call.
+
+To report a vulnerability, follow [SECURITY.md](SECURITY.md). Please use a private report rather than a public issue.
+
 ## License
 
 MIT
