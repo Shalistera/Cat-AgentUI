@@ -66,6 +66,28 @@ export async function uploadWorkspaceFile(chatId: string, file: File, dir?: stri
   return json;
 }
 
+/** Zip several workspace files/folders on the server and save the result. */
+export async function downloadWorkspaceZip(chatId: string, paths: string[], filename: string, scopeKey?: string): Promise<void> {
+  const res = await fetch(`/api/chats/${chatId}/workspace/zip${scopeKey ? `?scope=${encodeURIComponent(scopeKey)}` : ''}`, {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'x-csrf': '1', 'content-type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  });
+  if (res.status === 401) onUnauthorized.handler?.();
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, json.error ? tServer(json.error) : t('下载失败'), undefined, json.error);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 export interface StreamPayload {
   requestId?: string;
   fallbackModelId?: string;

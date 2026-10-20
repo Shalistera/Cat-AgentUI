@@ -27,6 +27,15 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-10-21',
+    items: [
+      {
+        zh: '工作区可以自己整理了：新建文件夹、点进文件夹浏览；勾选多个文件后可以一起移动到某个文件夹、打包下载或删除，也可以直接把文件拖到文件夹上；文件和文件夹都能重命名。',
+        en: 'You can now organize the workspace yourself: create folders and browse into them, tick several files to move them into a folder, download them as a zip or delete them together, or simply drag files onto a folder. Files and folders can also be renamed.',
+      },
+    ],
+  },
+  {
     date: '2026-10-18',
     items: [
       {

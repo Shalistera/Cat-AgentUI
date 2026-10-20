@@ -49,6 +49,8 @@ export interface WorkspaceEntry {
 
 export interface WorkspaceListing {
   files: WorkspaceEntry[];
+  /** Every visible folder, including empty ones, so the panel can show them. */
+  dirs: string[];
   bytes: number;
   truncated: boolean;
 }
@@ -156,7 +158,12 @@ export function workspaceExists(chatId: string): boolean {
 
 // ---- listing & accounting ----
 
-interface WalkVisit { file(dirFd: number, name: string, rel: string, st: fs.Stats): void; other?(dirFd: number, name: string, rel: string): void }
+interface WalkVisit {
+  file(dirFd: number, name: string, rel: string, st: fs.Stats): void;
+  other?(dirFd: number, name: string, rel: string): void;
+  /** Called before descending; returning false skips the subtree. */
+  dir?(rel: string): boolean | void;
+}
 
 /** Depth-first walk anchored on descriptors; symlinks and other irregular
     entries are reported to `other` (if given) and never followed. */
@@ -169,6 +176,7 @@ function walk(dirFd: number, relDir: string, depth: number, visit: WalkVisit, st
     let st: fs.Stats;
     try { st = fs.lstatSync(fdPath(dirFd, e.name)); } catch (err) { if (strict) throw err; continue; }
     if (st.isDirectory()) {
+      if (visit.dir?.(rel) === false) continue;
       if (depth >= MAX_DEPTH + 2) {
         if (strict) throw new WorkspaceError(`目录层级不能超过 ${MAX_DEPTH} 层`);
         continue;
@@ -186,9 +194,10 @@ function walk(dirFd: number, relDir: string, depth: number, visit: WalkVisit, st
 
 export function listWorkspace(chatId: string, limit = Number.MAX_SAFE_INTEGER): WorkspaceListing {
   const files: WorkspaceEntry[] = [];
+  const dirs: string[] = [];
   let bytes = 0;
   let truncated = false;
-  if (!workspaceExists(chatId)) return { files, bytes, truncated };
+  if (!workspaceExists(chatId)) return { files, dirs, bytes, truncated };
   withDir(chatId, [], false, (root) => walk(root, '', 0, {
     file(_fd, name, rel, st) {
       if (name.startsWith('.')) return;
@@ -196,8 +205,14 @@ export function listWorkspace(chatId: string, limit = Number.MAX_SAFE_INTEGER): 
       if (files.length < limit) files.push({ path: rel, size: st.size, mtime: st.mtimeMs });
       else truncated = true;
     },
+    // Hidden folders are unreachable through resolveSafe, so their contents
+    // are left out of the listing too (accounting still counts them).
+    dir(rel) {
+      if (rel.split('/').pop()!.startsWith('.')) return false;
+      if (dirs.length < limit) dirs.push(rel);
+    },
   }));
-  return { files, bytes, truncated };
+  return { files, dirs, bytes, truncated };
 }
 
 export function workspaceBytes(chatId: string): number {
@@ -644,19 +659,174 @@ function deleteWorkspacePathLocked(chatId: string, rel: string): { rel: string; 
 }
 
 export function renameWorkspacePath(chatId: string, from: string, to: string): Promise<{ from: string; to: string }> {
-  return withChatLock(chatId, () => {
-    const src = split(chatId, from);
-    const dst = split(chatId, to);
-    return withDir(chatId, src.dirs, false, (srcFd) => withDir(chatId, dst.dirs, true, (dstFd) => {
-      let st: fs.Stats;
-      try { st = fs.lstatSync(fdPath(srcFd, src.name)); } catch (err) { translate(err, src.rel); }
-      if (!st.isFile() && !st.isDirectory()) throw new WorkspaceError(`不是普通文件:${src.rel}`);
+  return withChatLock(chatId, () => renameLocked(chatId, from, to));
+}
+
+/** Deepest path below a directory, in segments (an empty folder is 0). */
+function treeDepth(parentFd: number, name: string, depth: number): number {
+  if (depth > MAX_DEPTH + 2) return depth;
+  const fd = fs.openSync(fdPath(parentFd, name), DIR_FLAGS);
+  try {
+    let deepest = 0;
+    for (const e of fs.readdirSync(fdPath(fd), { withFileTypes: true })) {
+      const st = fs.lstatSync(fdPath(fd, e.name));
+      deepest = Math.max(deepest, 1 + (st.isDirectory() ? treeDepth(fd, e.name, depth + 1) : 0));
+    }
+    return deepest;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function renameLocked(chatId: string, from: string, to: string): { from: string; to: string } {
+  const src = split(chatId, from);
+  const dst = split(chatId, to);
+  if (dst.rel === src.rel) return { from: src.rel, to: dst.rel };
+  if (dst.rel.startsWith(`${src.rel}/`)) throw new WorkspaceError(`不能把「${src.rel}」移动到它自己里面`);
+  return withDir(chatId, src.dirs, false, (srcFd) => {
+    let st: fs.Stats;
+    try { st = fs.lstatSync(fdPath(srcFd, src.name)); } catch (err) { translate(err, src.rel); }
+    if (!st.isFile() && !st.isDirectory()) throw new WorkspaceError(`不是普通文件:${src.rel}`);
+    // Contents pushed past MAX_DEPTH would be unreachable through resolveSafe.
+    if (st.isDirectory() && dst.dirs.length + 1 + treeDepth(srcFd, src.name, 0) > MAX_DEPTH) {
+      throw new WorkspaceError(`目录层级不能超过 ${MAX_DEPTH} 层`);
+    }
+    return withDir(chatId, dst.dirs, true, (dstFd) => {
       try { fs.lstatSync(fdPath(dstFd, dst.name)); throw new WorkspaceError(`目标已存在:${dst.rel}`, 409); }
       catch (err) { if (err instanceof WorkspaceError) throw err; }
       try { fs.renameSync(fdPath(srcFd, src.name), fdPath(dstFd, dst.name)); } catch (err) { translate(err, src.rel); }
       return { from: src.rel, to: dst.rel };
-    }));
+    });
   });
+}
+
+/** Clean a batch of paths and drop any that sit inside another one: acting
+    on the folder already covers them. */
+function topLevelPaths(chatId: string, paths: string[]): string[] {
+  const cleaned = [...new Set(paths.map((p) => resolveSafe(chatId, p).rel))];
+  return cleaned.filter((p) => !cleaned.some((q) => p.startsWith(`${q}/`)));
+}
+
+const basename = (rel: string) => rel.slice(rel.lastIndexOf('/') + 1);
+
+export interface BatchFailure { path: string; error: string }
+
+function batchFailure(path: string, err: unknown): BatchFailure {
+  if (err instanceof WorkspaceError) return { path, error: err.message };
+  console.warn(`[workspace] batch operation on ${path} failed: ${(err as Error).message}`);
+  return { path, error: '操作失败' };
+}
+
+export function makeWorkspaceDir(chatId: string, rel: string): Promise<{ rel: string }> {
+  return withChatLock(chatId, () => {
+    const { dirs, name, rel: cleaned } = split(chatId, rel);
+    let count = 0;
+    withDir(chatId, [], true, (root) => walk(root, '', 0, { file() { /* files have their own budget */ }, dir() { count += 1; } }));
+    if (count + dirs.length + 1 > config.maxWorkspaceFiles) {
+      throw new WorkspaceError(`工作区文件夹数不能超过 ${config.maxWorkspaceFiles} 个`, 413);
+    }
+    return withDir(chatId, dirs, true, (dirFd) => {
+      try {
+        const st = fs.lstatSync(fdPath(dirFd, name));
+        throw new WorkspaceError(st.isDirectory() ? `文件夹已存在:${cleaned}` : `已有同名文件:${cleaned}`, 409);
+      } catch (err) { if (err instanceof WorkspaceError) throw err; }
+      fs.mkdirSync(fdPath(dirFd, name), 0o700);
+      return { rel: cleaned };
+    });
+  });
+}
+
+/** Move entries into `toDir` ('' is the root), keeping their names. Each
+    entry succeeds or fails on its own; the folder itself must already exist. */
+export function moveWorkspacePaths(chatId: string, paths: string[], toDir: string): Promise<{
+  moved: { from: string; to: string }[]; failed: BatchFailure[];
+}> {
+  return withChatLock(chatId, () => {
+    const dest = toDir ? resolveSafe(chatId, toDir) : null;
+    if (dest) {
+      withDir(chatId, dest.segments.slice(0, -1), false, (dirFd) => {
+        let st: fs.Stats | null = null;
+        try { st = fs.lstatSync(fdPath(dirFd, dest.segments[dest.segments.length - 1])); } catch { /* reported below */ }
+        if (!st?.isDirectory()) throw new WorkspaceError(`目标文件夹不存在:${dest.rel}`, 404);
+      });
+    }
+    const moved: { from: string; to: string }[] = [];
+    const failed: BatchFailure[] = [];
+    for (const from of topLevelPaths(chatId, paths)) {
+      const to = dest ? `${dest.rel}/${basename(from)}` : basename(from);
+      if (to === from) continue;
+      try { moved.push(renameLocked(chatId, from, to)); } catch (err) { failed.push(batchFailure(from, err)); }
+    }
+    return { moved, failed };
+  });
+}
+
+export function deleteWorkspacePaths(chatId: string, paths: string[]): Promise<{
+  deleted: string[]; removed: number; failed: BatchFailure[];
+}> {
+  return withChatLock(chatId, () => {
+    const deleted: string[] = [];
+    const failed: BatchFailure[] = [];
+    let removed = 0;
+    for (const rel of topLevelPaths(chatId, paths)) {
+      try {
+        removed += deleteWorkspacePathLocked(chatId, rel).removed;
+        deleted.push(rel);
+      } catch (err) {
+        // Already gone is what the person wanted.
+        if (err instanceof WorkspaceError && err.statusCode === 404) deleted.push(rel);
+        else failed.push(batchFailure(rel, err));
+      }
+    }
+    return { deleted, removed, failed };
+  });
+}
+
+/** Zip the chosen files and folders, each named relative to its own parent.
+    Reads follow the same descriptor chain as everything else; hidden names
+    are left out like in the listing. */
+export async function zipWorkspacePaths(chatId: string, paths: string[]): Promise<Buffer> {
+  const JSZip = (await import('jszip')).default;
+  const zip = new JSZip();
+  let total = 0;
+  const add = (zipName: string, fd: number) => {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) return;
+    total += st.size;
+    if (total > config.maxWorkspaceBytes) {
+      throw new WorkspaceError(`所选内容超过 ${Math.round(config.maxWorkspaceBytes / 1048576)} MB,请分批下载`, 413);
+    }
+    zip.file(zipName, fs.readFileSync(fd), { date: new Date(st.mtimeMs) });
+  };
+  for (const rel of topLevelPaths(chatId, paths)) {
+    const { dirs, name } = split(chatId, rel);
+    withDir(chatId, dirs, false, (dirFd) => {
+      let st: fs.Stats;
+      try { st = fs.lstatSync(fdPath(dirFd, name)); } catch (err) { translate(err, rel); }
+      if (st.isDirectory()) {
+        zip.folder(name);
+        const fd = fs.openSync(fdPath(dirFd, name), DIR_FLAGS);
+        try {
+          walk(fd, name, dirs.length + 1, {
+            file(parent, fileName, fileRel) {
+              if (fileName.startsWith('.')) return;
+              const f = fs.openSync(fdPath(parent, fileName), FILE_READ_FLAGS);
+              try { add(fileRel, f); } finally { fs.closeSync(f); }
+            },
+            dir(dirRel) {
+              if (basename(dirRel).startsWith('.')) return false;
+              zip.folder(dirRel);
+            },
+          });
+        } finally { fs.closeSync(fd); }
+      } else {
+        let fd: number;
+        try { fd = fs.openSync(fdPath(dirFd, name), FILE_READ_FLAGS); } catch (err) { translate(err, rel); }
+        try { add(name, fd); } finally { fs.closeSync(fd); }
+      }
+    });
+  }
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 }
 
 /** Remove the whole directory (chat deleted / swept). fs.rm never follows

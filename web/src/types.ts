@@ -574,6 +574,8 @@ export interface WorkspaceListing {
   scopeKey: string;
   enabled: boolean;
   files: WorkspaceFile[];
+  /** Every folder, including empty ones. */
+  dirs: string[];
   bytes: number;
   limits: { bytes: number; files: number; fileBytes: number };
 }

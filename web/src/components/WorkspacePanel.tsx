@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react';
 import { withCanvasCsp } from '../sandboxedHtml';
 import {
-  ChevronLeft, Copy, Download, FileCode, FileImage, FileText, File as FileIcon, FolderOpen, Pencil,
-  RefreshCw, Save, Trash2, Upload, X,
+  ChevronLeft, ChevronRight, Copy, CornerLeftUp, Download, FileCode, FileImage, FileText, File as FileIcon, Folder,
+  FolderInput, FolderOpen, FolderPlus, Pencil, PencilLine, RefreshCw, Save, Trash2, Upload, X,
 } from 'lucide-react';
-import { api, errMsg, uploadWorkspaceFile } from '../api';
+import { api, downloadWorkspaceZip, errMsg, uploadWorkspaceFile } from '../api';
 import { useComposerInsert, useWorkspacePanel } from '../store';
 import { Markdown } from './Markdown';
-import { Spinner, confirmDialog, toast } from './ui';
+import { Button, Input, Modal, ModalActions, Spinner, confirmDialog, toast } from './ui';
 import type { WorkspaceFile, WorkspaceListing } from '../types';
-import { locale, t } from '../i18n';
+import { locale, t, tServer } from '../i18n';
 
 const headBtn = 'flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-tx2 transition-colors hover:bg-bg3 hover:text-tx disabled:opacity-40 disabled:pointer-events-none';
 
@@ -212,6 +212,172 @@ function Starters({ compact = false }: { compact?: boolean }) {
   );
 }
 
+
+// ---- folders, selection and batch operations ----
+
+const rowBtn = 'flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-tx3 transition-colors hover:bg-bg3 hover:text-tx disabled:opacity-40 disabled:pointer-events-none';
+const barBtn = 'flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[12px] text-tx2 transition-colors hover:bg-bg3 hover:text-tx disabled:opacity-40 disabled:pointer-events-none';
+/** Marks a drag that started on a row, as opposed to files from the desktop. */
+const DRAG_TYPE = 'application/x-caui-workspace';
+
+const parentOf = (p: string) => { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); };
+const baseOf = (p: string) => p.slice(p.lastIndexOf('/') + 1);
+const joinPath = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
+/** Would moving `path` into `dir` put it inside itself? */
+const intoItself = (path: string, dir: string) => dir === path || dir.startsWith(`${path}/`);
+const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, locale, { numeric: true });
+
+function nameProblem(name: string): string | null {
+  const n = name.trim();
+  if (!n) return t('名称不能为空');
+  if (/[\\/]/.test(n)) return t('名称里不能有 / 或 \\');
+  if (n.startsWith('.')) return t('名称不能以 . 开头');
+  return null;
+}
+
+type Entry =
+  | { kind: 'dir'; path: string; name: string; items: number; size: number }
+  | { kind: 'file'; path: string; name: string; file: WorkspaceFile };
+
+interface BatchFailure { path: string; error: string }
+
+function reportFailures(failed: BatchFailure[]) {
+  if (!failed.length) return;
+  const first = `${baseOf(failed[0].path)}:${tServer(failed[0].error)}`;
+  toast(failed.length === 1 ? first : t('{first}(另有 {count} 项失败)', { first, count: failed.length - 1 }), 'err');
+}
+
+function NameDialog({ title, initial = '', selectStem = false, confirm, onSubmit, onClose }: {
+  title: string; initial?: string; selectStem?: boolean; confirm: string;
+  onSubmit(name: string): Promise<void>; onClose(): void;
+}) {
+  const [value, setValue] = useState(initial);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    // Like a file manager: renaming selects the name but not the extension.
+    const dot = selectStem ? initial.lastIndexOf('.') : -1;
+    el.setSelectionRange(0, dot > 0 ? dot : initial.length);
+  }, [initial, selectStem]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    const problem = nameProblem(value);
+    if (problem) { setError(problem); return; }
+    setBusy(true);
+    try { await onSubmit(value.trim()); onClose(); }
+    catch (err) { setError(errMsg(err)); setBusy(false); }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={title}>
+      <form onSubmit={submit}>
+        <Input ref={inputRef} value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} maxLength={120} />
+        {error && <p className="mt-2 text-[12px] text-err">{error}</p>}
+        <ModalActions>
+          <Button variant="outline" onClick={onClose}>{t('取消')}</Button>
+          <Button type="submit" variant="primary" disabled={busy}>{busy ? <Spinner className="h-3.5 w-3.5" /> : confirm}</Button>
+        </ModalActions>
+      </form>
+    </Modal>
+  );
+}
+
+function MoveDialog({ paths, dirs, onMove, onMkdir, onClose }: {
+  paths: string[]; dirs: Set<string>;
+  onMove(to: string): Promise<void>; onMkdir(path: string): Promise<void>; onClose(): void;
+}) {
+  const [target, setTarget] = useState<string | null>(null);
+  // Folders made from this dialog show up before the list reloads.
+  const [made, setMade] = useState<string[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const rows = useMemo(() => {
+    const all = new Set([...dirs, ...made]);
+    const out: { path: string; name: string; depth: number }[] = [{ path: '', name: t('全部文件'), depth: 0 }];
+    const visit = (parent: string, depth: number) => {
+      const kids = [...all].filter((d) => parentOf(d) === parent).map((d) => ({ path: d, name: baseOf(d) })).sort(byName);
+      for (const k of kids) { out.push({ ...k, depth }); visit(k.path, depth + 1); }
+    };
+    visit('', 1);
+    return out;
+  }, [dirs, made]);
+
+  const isHere = (dir: string) => paths.every((p) => parentOf(p) === dir);
+  const blocked = (dir: string) => isHere(dir) || paths.some((p) => intoItself(p, dir));
+
+  async function mkdir(e: FormEvent) {
+    e.preventDefault();
+    const problem = nameProblem(name);
+    if (problem) { setError(problem); return; }
+    const path = joinPath(target ?? '', name.trim());
+    setBusy(true);
+    try {
+      await onMkdir(path);
+      setMade((m) => [...m, path]);
+      setTarget(path);
+      setCreating(false);
+      setName('');
+      setError(null);
+    } catch (err) { setError(errMsg(err)); } finally { setBusy(false); }
+  }
+
+  async function submit() {
+    if (target === null) return;
+    setBusy(true);
+    try { await onMove(target); onClose(); }
+    catch (err) { setError(errMsg(err)); setBusy(false); }
+  }
+
+  const where = target === null || target === '' ? t('全部文件') : baseOf(target);
+  return (
+    <Modal open onClose={onClose} title={t('移动 {count} 项', { count: paths.length })}
+      desc={paths.length === 1 ? t('把「{name}」移动到选中的文件夹', { name: baseOf(paths[0]) }) : t('把选中的项目移动到选中的文件夹')}>
+      <div className="max-h-72 overflow-y-auto rounded-lg border border-line py-1">
+        {rows.map((r) => (
+          <button key={r.path || '/'} type="button" disabled={blocked(r.path)} onClick={() => { setTarget(r.path); setError(null); }}
+            style={{ paddingLeft: 10 + r.depth * 16 }}
+            className={`flex w-full cursor-pointer items-center gap-2 py-1.5 pr-3 text-left text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${target === r.path ? 'bg-acc/10 text-acc' : 'text-tx hover:bg-bg2'}`}>
+            {r.path ? <Folder size={14} className="shrink-0" /> : <FolderOpen size={14} className="shrink-0" />}
+            <span className="min-w-0 truncate">{r.name}</span>
+            {isHere(r.path) && <span className="ml-auto shrink-0 text-[11px] text-tx3">{t('当前位置')}</span>}
+          </button>
+        ))}
+      </div>
+      {creating ? (
+        <form className="mt-3 flex items-center gap-2" onSubmit={mkdir}>
+          <Input uiSize="sm" autoFocus value={name} maxLength={120} placeholder={t('在「{name}」里新建文件夹', { name: where })}
+            onChange={(e) => { setName(e.target.value); setError(null); }} />
+          <Button type="submit" size="sm" variant="primary" disabled={busy}>{t('创建')}</Button>
+          <Button size="sm" variant="ghost" onClick={() => { setCreating(false); setError(null); }}>{t('取消')}</Button>
+        </form>
+      ) : (
+        <button type="button" className="mt-3 flex cursor-pointer items-center gap-1.5 text-[12px] text-acc hover:underline" onClick={() => setCreating(true)}>
+          <FolderPlus size={13} /> {t('在「{name}」里新建文件夹', { name: where })}
+        </button>
+      )}
+      {error && <p className="mt-2 text-[12px] text-err">{error}</p>}
+      <ModalActions>
+        <Button variant="outline" onClick={onClose}>{t('取消')}</Button>
+        <Button variant="primary" disabled={target === null || busy} onClick={submit}>{t('移动到这里')}</Button>
+      </ModalActions>
+    </Modal>
+  );
+}
+
+type Dialog =
+  | { kind: 'mkdir' }
+  | { kind: 'rename'; entry: Entry }
+  | { kind: 'move'; paths: string[] };
+
 // ---- the panel ----
 
 export function WorkspacePanel() {
@@ -234,6 +400,14 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
   const dragDepth = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const requestId = useRef(0);
+  const [cwd, setCwd] = useState('');
+  const [checked, setChecked] = useState<Set<string>>(() => new Set());
+  const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Row drag: the paths being dragged and the folder currently under the pointer.
+  const dragPaths = useRef<string[]>([]);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const allRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => {
     if (!chatId) return;
@@ -260,26 +434,180 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
 
   const selectedFile = useMemo(() => data?.files.find((f) => f.path === selected) ?? null, [data, selected]);
 
-  async function uploadFiles(files: FileList | File[] | null) {
+  // Folders that exist, explicit (possibly empty) or implied by a file path.
+  const allDirs = useMemo(() => {
+    const set = new Set<string>(data?.dirs ?? []);
+    for (const f of data?.files ?? []) for (let d = parentOf(f.path); d; d = parentOf(d)) set.add(d);
+    return set;
+  }, [data]);
+
+  const entries = useMemo<Entry[]>(() => {
+    if (!data) return [];
+    const dirs = [...allDirs].filter((d) => parentOf(d) === cwd).map((d) => {
+      let items = 0;
+      let size = 0;
+      for (const x of allDirs) if (parentOf(x) === d) items += 1;
+      for (const f of data.files) {
+        if (parentOf(f.path) === d) items += 1;
+        if (f.path.startsWith(`${d}/`)) size += f.size;
+      }
+      return { kind: 'dir' as const, path: d, name: baseOf(d), items, size };
+    }).sort(byName);
+    const files = data.files.filter((f) => parentOf(f.path) === cwd)
+      .map((f) => ({ kind: 'file' as const, path: f.path, name: baseOf(f.path), file: f })).sort(byName);
+    return [...dirs, ...files];
+  }, [data, allDirs, cwd]);
+
+  // Opening a file (also from a chat link) lands back in its folder.
+  useEffect(() => { if (selected) setCwd(parentOf(selected)); }, [selected]);
+  // The folder vanished (deleted, moved, renamed): climb to what still exists.
+  useEffect(() => {
+    if (!data || !cwd || allDirs.has(cwd)) return;
+    let d = cwd;
+    while (d && !allDirs.has(d)) d = parentOf(d);
+    setCwd(d);
+  }, [data, allDirs, cwd]);
+  useEffect(() => { setChecked(new Set()); }, [cwd]);
+  // Drop picks that no longer exist after a refresh.
+  useEffect(() => {
+    setChecked((prev) => {
+      if (!prev.size) return prev;
+      const live = new Set(entries.map((e) => e.path));
+      const next = new Set([...prev].filter((p) => live.has(p)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [entries]);
+
+  const allChecked = entries.length > 0 && entries.every((e) => checked.has(e.path));
+  useEffect(() => {
+    if (allRef.current) allRef.current.indeterminate = checked.size > 0 && !allChecked;
+  }, [checked, allChecked]);
+
+  const scopeQ = data ? `?scope=${encodeURIComponent(data.scopeKey)}` : '';
+
+  function toggle(path: string) {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  }
+
+  async function uploadFiles(files: FileList | File[] | null, dir = cwd) {
     if (!chatId || !data || !files || !files.length) return;
     setUploading(true);
     let ok = 0;
     for (const f of Array.from(files)) {
-      try { await uploadWorkspaceFile(chatId, f, undefined, data.scopeKey); ok += 1; }
+      try { await uploadWorkspaceFile(chatId, f, dir || undefined, data.scopeKey); ok += 1; }
       catch (e) { toast(`${f.name}:${errMsg(e)}`, 'err'); }
     }
     setUploading(false);
     if (ok) { toast(t('已上传 {count} 个文件', { count: ok }), 'ok'); bump(); }
   }
 
-  async function remove(f: WorkspaceFile) {
-    if (!chatId) return;
-    if (!(await confirmDialog(t('删除文件'), t('确定删除「{path}」?此操作不可恢复。', { path: f.path })))) return;
-    try {
-      await api.del(`${fileUrl(chatId, f.path, false, data?.scopeKey)}`);
-      bump();
-    } catch (e) { toast(errMsg(e), 'err'); }
+  async function mkdir(path: string) {
+    await api.post(`/api/chats/${chatId}/workspace/mkdir${scopeQ}`, { path });
+    bump();
   }
+
+  async function rename(entry: Entry, name: string) {
+    const to = joinPath(parentOf(entry.path), name);
+    if (to === entry.path) return;
+    await api.post(`/api/chats/${chatId}/workspace/rename${scopeQ}`, { from: entry.path, to });
+    bump();
+  }
+
+  /** Throws only when the request as a whole fails; per-item failures toast. */
+  async function move(paths: string[], to: string) {
+    const r = await api.post<{ moved: { from: string; to: string }[]; failed: BatchFailure[] }>(
+      `/api/chats/${chatId}/workspace/move${scopeQ}`, { paths, to });
+    if (r.moved.length) toast(t('已移动 {count} 项到「{dir}」', { count: r.moved.length, dir: to || t('全部文件') }), 'ok');
+    reportFailures(r.failed);
+    setChecked(new Set());
+    bump();
+  }
+
+  async function dropMove(paths: string[], to: string) {
+    try { await move(paths, to); } catch (e) { toast(errMsg(e), 'err'); }
+  }
+
+  async function removeEntries(paths: string[]) {
+    if (!chatId || !paths.length) return;
+    const picked = entries.filter((e) => paths.includes(e.path));
+    const dirs = picked.filter((e) => e.kind === 'dir');
+    const filesInside = (dir: string) => data?.files.filter((f) => f.path.startsWith(`${dir}/`)).length ?? 0;
+    let body: string;
+    if (paths.length === 1 && dirs.length === 1) {
+      body = t('确定删除文件夹「{path}」及其中的 {count} 个文件?此操作不可恢复。', { path: baseOf(paths[0]), count: filesInside(paths[0]) });
+    } else if (paths.length === 1) {
+      body = t('确定删除「{path}」?此操作不可恢复。', { path: baseOf(paths[0]) });
+    } else if (dirs.length) {
+      body = t('确定删除选中的 {count} 项?其中的文件夹会连同里面的文件一起删除,此操作不可恢复。', { count: paths.length });
+    } else {
+      body = t('确定删除选中的 {count} 项?此操作不可恢复。', { count: paths.length });
+    }
+    if (!(await confirmDialog(paths.length === 1 && !dirs.length ? t('删除文件') : t('删除'), body))) return;
+    setBusy(true);
+    try {
+      const r = await api.post<{ deleted: string[]; failed: BatchFailure[] }>(`/api/chats/${chatId}/workspace/delete${scopeQ}`, { paths });
+      if (r.deleted.length > 1) toast(t('已删除 {count} 项', { count: r.deleted.length }), 'ok');
+      reportFailures(r.failed);
+      setChecked(new Set());
+      bump();
+    } catch (e) { toast(errMsg(e), 'err'); } finally { setBusy(false); }
+  }
+
+  async function downloadZip(paths: string[]) {
+    if (!chatId || !data || !paths.length) return;
+    const name = paths.length === 1 ? baseOf(paths[0]) : cwd ? baseOf(cwd) : t('工作区');
+    setBusy(true);
+    try { await downloadWorkspaceZip(chatId, paths, `${name}.zip`, data.scopeKey); }
+    catch (e) { toast(errMsg(e), 'err'); } finally { setBusy(false); }
+  }
+
+  /** Drag targets: folders take rows dragged from the list (move) and files
+      dragged from the desktop (upload into that folder). */
+  function dropProps(dir: string) {
+    return {
+      onDragOver(e: DragEvent) {
+        const types = e.dataTransfer.types;
+        if (types.includes(DRAG_TYPE)) {
+          const paths = dragPaths.current;
+          if (!paths.length || paths.every((p) => parentOf(p) === dir) || paths.some((p) => intoItself(p, dir))) return;
+          e.dataTransfer.dropEffect = 'move';
+        } else if (!types.includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (dropTarget !== dir) setDropTarget(dir);
+      },
+      onDragLeave(e: DragEvent) {
+        if (!(e.currentTarget as Node).contains(e.relatedTarget as Node | null)) setDropTarget((d) => (d === dir ? null : d));
+      },
+      onDrop(e: DragEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        setDropTarget(null);
+        dragDepth.current = 0;
+        setDragging(false);
+        if (e.dataTransfer.types.includes(DRAG_TYPE)) {
+          const paths = dragPaths.current;
+          dragPaths.current = [];
+          if (paths.length) dropMove(paths, dir);
+        } else {
+          uploadFiles(e.dataTransfer.files, dir);
+        }
+      },
+    };
+  }
+
+  function dragStart(e: DragEvent, path: string) {
+    const paths = checked.has(path) ? [...checked] : [path];
+    dragPaths.current = paths;
+    e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(paths));
+    e.dataTransfer.effectAllowed = 'move';
+  }
+
+  const hasFiles = (e: DragEvent) => e.dataTransfer.types.includes('Files');
 
   // Home (no chat yet): guidance only; uploads need a chat and appear once
   // the first message creates one.
@@ -302,13 +630,17 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
     );
   }
 
+  const crumbs = cwd ? ['', ...cwd.split('/').map((_, i, segs) => segs.slice(0, i + 1).join('/'))] : [];
+  const uploadDir = dropTarget ?? cwd;
+  const workspaceEmpty = !!data && data.files.length === 0 && allDirs.size === 0;
+
   return (
     <aside
       className="fixed inset-0 z-40 flex flex-col bg-bg1 md:static md:relative md:z-auto md:w-[clamp(22rem,38vw,40rem)] md:shrink-0 md:border-l md:border-line"
-      onDragEnter={(e) => { e.preventDefault(); dragDepth.current += 1; setDragging(true); }}
-      onDragOver={(e) => { e.preventDefault(); }}
-      onDragLeave={() => { dragDepth.current -= 1; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }}
-      onDrop={(e) => { e.preventDefault(); dragDepth.current = 0; setDragging(false); uploadFiles(e.dataTransfer.files); }}
+      onDragEnter={(e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current += 1; setDragging(true); }}
+      onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
+      onDragLeave={(e) => { if (!hasFiles(e)) return; dragDepth.current -= 1; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); setDropTarget(null); } }}
+      onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current = 0; setDragging(false); setDropTarget(null); uploadFiles(e.dataTransfer.files); }}
     >
       {selectedFile ? (
         <FileView key={`${chatId}:${selectedFile.path}`} chatId={chatId} file={selectedFile} scopeKey={data!.scopeKey} onBack={() => setSelected(null)} onChanged={bump} />
@@ -321,7 +653,12 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
             </span>
             <div className="flex items-center gap-1">
               <input ref={fileRef} type="file" multiple hidden onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
-              <button className={headBtn} title={t('上传文件到工作区')} onClick={() => fileRef.current?.click()} disabled={uploading || !data}>
+              <button className={headBtn} title={cwd ? t('在「{name}」里新建文件夹', { name: baseOf(cwd) }) : t('新建文件夹')}
+                onClick={() => setDialog({ kind: 'mkdir' })} disabled={!data || !!selected}>
+                <FolderPlus size={14} />
+              </button>
+              <button className={headBtn} title={cwd ? t('上传文件到「{name}」', { name: baseOf(cwd) }) : t('上传文件到工作区')}
+                onClick={() => fileRef.current?.click()} disabled={uploading || !data}>
                 {uploading ? <Spinner className="h-3.5 w-3.5" /> : <Upload size={14} />}
               </button>
               <button className={headBtn} title={t('刷新')} onClick={reload}><RefreshCw size={13} /></button>
@@ -332,6 +669,27 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
           {data?.scope === 'project' && <p className="border-b border-line px-4 py-2 text-[11px] text-tx3">
             {t('你的项目对话共用这些文件,其他成员各自独立。')}
           </p>}
+
+          {data && !selected && cwd && (
+            <div className="flex items-center gap-0.5 border-b border-line px-2 py-1 text-[12px]">
+              <button className={`${headBtn} shrink-0 ${dropTarget === parentOf(cwd) ? 'bg-acc/10 text-acc' : ''}`} title={t('返回上一级')}
+                onClick={() => setCwd(parentOf(cwd))} {...dropProps(parentOf(cwd))}>
+                <CornerLeftUp size={14} />
+              </button>
+              <nav className="flex min-w-0 flex-1 items-center overflow-x-auto" aria-label={t('当前文件夹')}>
+                {crumbs.map((c, i) => (
+                  <Fragment key={c || '/'}>
+                    {i > 0 && <ChevronRight size={12} className="shrink-0 text-tx3" />}
+                    <button type="button" onClick={() => setCwd(c)} {...(c === cwd ? {} : dropProps(c))} title={c || t('全部文件')}
+                      className={`max-w-[11rem] shrink-0 cursor-pointer truncate rounded px-1.5 py-0.5 transition-colors ${c === cwd ? 'font-medium text-tx' : 'text-tx2 hover:bg-bg3 hover:text-tx'} ${dropTarget === c && c !== cwd ? 'bg-acc/10 text-acc ring-1 ring-inset ring-acc' : ''}`}>
+                      {c ? baseOf(c) : t('全部文件')}
+                    </button>
+                  </Fragment>
+                ))}
+              </nav>
+            </div>
+          )}
+
           <div className="min-h-0 flex-1 overflow-y-auto">
             {error ? (
               <p className="p-4 text-sm text-err">{error}</p>
@@ -342,7 +700,7 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
                 <p className="break-words">{t('无法打开「{path}」：文件不存在或已被删除。', { path: selected })}</p>
                 <button className="mt-3 cursor-pointer text-acc hover:underline" onClick={() => setSelected(null)}>{t('返回文件列表')}</button>
               </div>
-            ) : data.files.length === 0 ? (
+            ) : workspaceEmpty ? (
               <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-sm text-tx3">
                 <FolderOpen size={26} className="text-tx3/70" />
                 <div className="text-tx2">{t('工作区还是空的')}</div>
@@ -351,26 +709,77 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
                 </div>
                 <Starters compact />
               </div>
+            ) : entries.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 px-6 py-10 text-center text-sm text-tx3">
+                <Folder size={26} className="text-tx3/70" />
+                <div className="text-tx2">{t('这个文件夹是空的')}</div>
+                <div className="text-xs leading-relaxed">{t('把文件拖到这里,或点上方的上传按钮放进这个文件夹。')}</div>
+              </div>
             ) : (
-              <ul className="divide-y divide-line/60">
-                {data.files.map((f) => (
-                  <li key={f.path} className="group flex items-center gap-2.5 px-3 py-2 transition-colors hover:bg-bg2">
-                    <button className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left" onClick={() => setSelected(f.path)} title={f.path}>
-                      <FileGlyph path={f.path} size={15} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] text-tx">{f.path}</span>
-                        <span className="block text-[11px] tabular-nums text-tx3">{fmtBytes(f.size)} · {fmtWhen(f.mtime)}</span>
-                      </span>
-                    </button>
-                    <a className={`${headBtn} opacity-0 group-hover:opacity-100 max-md:opacity-100`} title={t('下载')} href={fileUrl(chatId, f.path, true, data?.scopeKey)}>
-                      <Download size={13} />
-                    </a>
-                    <button className={`${headBtn} opacity-0 hover:!text-err group-hover:opacity-100 max-md:opacity-100`} title={t('删除')} onClick={() => remove(f)}>
-                      <Trash2 size={13} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <div className="sticky top-0 z-[1] flex min-h-9 items-center gap-2 border-b border-line bg-bg1/95 px-3 py-1 backdrop-blur">
+                  <input ref={allRef} type="checkbox" className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-acc" checked={allChecked}
+                    title={t('全选')} aria-label={t('全选')}
+                    onChange={() => setChecked(allChecked ? new Set() : new Set(entries.map((e) => e.path)))} />
+                  {checked.size ? (
+                    <>
+                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-tx">{t('已选 {count} 项', { count: checked.size })}</span>
+                      <button className={barBtn} disabled={busy} onClick={() => setDialog({ kind: 'move', paths: [...checked] })}>
+                        <FolderInput size={13} /> {t('移动到')}
+                      </button>
+                      <button className={barBtn} disabled={busy} onClick={() => downloadZip([...checked])}>
+                        {busy ? <Spinner className="h-3 w-3" /> : <Download size={13} />} {t('下载')}
+                      </button>
+                      <button className={`${barBtn} hover:!text-err`} disabled={busy} onClick={() => removeEntries([...checked])}>
+                        <Trash2 size={13} /> {t('删除')}
+                      </button>
+                      <button className={rowBtn} title={t('取消选择')} onClick={() => setChecked(new Set())}><X size={14} /></button>
+                    </>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-tx3">
+                      {t('{count} 项', { count: entries.length })} · {t('勾选后可以批量移动、下载或删除')}
+                    </span>
+                  )}
+                </div>
+                <ul className="divide-y divide-line/60">
+                  {entries.map((e) => {
+                    const isChecked = checked.has(e.path);
+                    return (
+                      <li key={e.path} draggable
+                        onDragStart={(ev) => dragStart(ev, e.path)}
+                        onDragEnd={() => { dragPaths.current = []; setDropTarget(null); }}
+                        {...(e.kind === 'dir' ? dropProps(e.path) : {})}
+                        className={`group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-bg2 ${isChecked ? 'bg-acc/5' : ''} ${dropTarget === e.path ? 'bg-acc/10 ring-1 ring-inset ring-acc' : ''}`}>
+                        <input type="checkbox" className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-acc" checked={isChecked}
+                          onChange={() => toggle(e.path)} aria-label={t('选择「{name}」', { name: e.name })} />
+                        <button className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left" title={e.path}
+                          onClick={() => (e.kind === 'dir' ? setCwd(e.path) : setSelected(e.path))}>
+                          {e.kind === 'dir' ? <Folder size={15} className="shrink-0 text-acc" /> : <FileGlyph path={e.path} size={15} />}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] text-tx">{e.name}</span>
+                            <span className="block text-[11px] tabular-nums text-tx3">
+                              {e.kind === 'dir'
+                                ? `${t('{count} 项', { count: e.items })}${e.size ? ` · ${fmtBytes(e.size)}` : ''}`
+                                : `${fmtBytes(e.file.size)} · ${fmtWhen(e.file.mtime)}`}
+                            </span>
+                          </span>
+                        </button>
+                        <button className={rowBtn} title={t('重命名')} onClick={() => setDialog({ kind: 'rename', entry: e })}>
+                          <PencilLine size={13} />
+                        </button>
+                        {e.kind === 'file' ? (
+                          <a className={rowBtn} title={t('下载')} href={fileUrl(chatId, e.path, true, data.scopeKey)}><Download size={13} /></a>
+                        ) : (
+                          <button className={rowBtn} title={t('打包下载')} disabled={busy} onClick={() => downloadZip([e.path])}><Download size={13} /></button>
+                        )}
+                        <button className={`${rowBtn} hover:!text-err`} title={t('删除')} disabled={busy} onClick={() => removeEntries([e.path])}>
+                          <Trash2 size={13} />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
             )}
           </div>
 
@@ -385,8 +794,22 @@ function WorkspacePanelContent({ chatId }: { chatId: string | null }) {
 
       {dragging && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-acc bg-acc/10 text-sm font-medium text-acc">
-          {t('松开以上传到工作区')}
+          {uploadDir ? t('松开以上传到「{name}」', { name: baseOf(uploadDir) }) : t('松开以上传到工作区')}
         </div>
+      )}
+
+      {dialog?.kind === 'mkdir' && (
+        <NameDialog title={cwd ? t('在「{name}」里新建文件夹', { name: baseOf(cwd) }) : t('新建文件夹')} confirm={t('创建')}
+          onSubmit={(name) => mkdir(joinPath(cwd, name))} onClose={() => setDialog(null)} />
+      )}
+      {dialog?.kind === 'rename' && (
+        <NameDialog title={dialog.entry.kind === 'dir' ? t('重命名文件夹') : t('重命名文件')} confirm={t('重命名')}
+          initial={dialog.entry.name} selectStem={dialog.entry.kind === 'file'}
+          onSubmit={(name) => rename(dialog.entry, name)} onClose={() => setDialog(null)} />
+      )}
+      {dialog?.kind === 'move' && (
+        <MoveDialog paths={dialog.paths} dirs={allDirs} onMkdir={mkdir}
+          onMove={(to) => move(dialog.paths, to)} onClose={() => setDialog(null)} />
       )}
     </aside>
   );

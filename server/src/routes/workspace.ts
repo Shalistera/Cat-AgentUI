@@ -1,6 +1,7 @@
 // 工作区 HTTP surface — the browser side of the per-chat file directory:
 // listing for the panel, preview/download, drag-and-drop upload, delete,
-// rename, and "copy this chat attachment into the workspace".
+// rename, folders and batch move/delete/zip, and "copy this chat attachment
+// into the workspace".
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,8 +15,9 @@ import { requireAuth } from '../auth.js';
 import { config } from '../config.js';
 import { getAgentSettings, policyAllows, userWantsAgentTools } from '../agent-settings.js';
 import {
-  WorkspaceError, deleteWorkspacePath, extOf, isTextPath, listWorkspace, openRegular, readWorkspaceText,
-  renameWorkspacePath, resolveSafe, writeWorkspaceFile,
+  WorkspaceError, deleteWorkspacePath, deleteWorkspacePaths, extOf, isTextPath, listWorkspace, makeWorkspaceDir,
+  moveWorkspacePaths, openRegular, readWorkspaceText, renameWorkspacePath, resolveSafe, writeWorkspaceFile,
+  zipWorkspacePaths,
 } from '../workspace.js';
 
 import { withWorkspaceScope, workspaceScope } from '../workspace-scope.js';
@@ -71,6 +73,7 @@ function scoped(handler: (req: FastifyRequest, reply: FastifyReply, id: string) 
 }
 
 const pathQuery = z.object({ path: z.string().min(1).max(300) });
+const pathList = z.array(z.string().min(1).max(300)).min(1).max(1000);
 
 export async function workspaceRoutes(app: FastifyInstance) {
   await app.register(multipart, { limits: { fileSize: config.maxWorkspaceFileBytes, files: 1 } });
@@ -83,6 +86,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
       enabled: userWantsAgentTools(req.user!.settings) && policyAllows(getAgentSettings().workspace, req.user!),
       scope: workspaceScope(id).kind, scopeKey: workspaceScope(id).key,
       files: listing.files,
+      dirs: listing.dirs,
       bytes: listing.bytes,
       limits: { bytes: config.maxWorkspaceBytes, files: config.maxWorkspaceFiles, fileBytes: config.maxWorkspaceFileBytes },
     };
@@ -191,6 +195,49 @@ export async function workspaceRoutes(app: FastifyInstance) {
       const r = await renameWorkspacePath(id, body.data.from, body.data.to);
       touchChat(id);
       return { ok: true, ...r };
+    } catch (err) { return sendError(reply, err); }
+  }));
+
+  app.post('/api/chats/:id/workspace/mkdir', scoped(async (req, reply, id) => {
+    const body = pathQuery.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    try {
+      const r = await makeWorkspaceDir(id, body.data.path);
+      touchChat(id);
+      return { ok: true, path: r.rel };
+    } catch (err) { return sendError(reply, err); }
+  }));
+
+  // Batch operations report per-entry failures instead of stopping halfway.
+  app.post('/api/chats/:id/workspace/move', scoped(async (req, reply, id) => {
+    const body = z.object({ paths: pathList, to: z.string().max(300) }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    try {
+      const r = await moveWorkspacePaths(id, body.data.paths, body.data.to);
+      if (r.moved.length) touchChat(id);
+      return { ok: true, ...r };
+    } catch (err) { return sendError(reply, err); }
+  }));
+
+  app.post('/api/chats/:id/workspace/delete', scoped(async (req, reply, id) => {
+    const body = z.object({ paths: pathList }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    try {
+      const r = await deleteWorkspacePaths(id, body.data.paths);
+      if (r.deleted.length) touchChat(id);
+      return { ok: true, ...r };
+    } catch (err) { return sendError(reply, err); }
+  }));
+
+  app.post('/api/chats/:id/workspace/zip', scoped(async (req, reply, id) => {
+    const body = z.object({ paths: pathList }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    try {
+      const buf = await zipWorkspacePaths(id, body.data.paths);
+      reply.header('content-type', 'application/zip');
+      reply.header('content-disposition', 'attachment; filename="workspace.zip"');
+      reply.header('cache-control', 'private, no-store');
+      return reply.send(buf);
     } catch (err) { return sendError(reply, err); }
   }));
 
