@@ -137,7 +137,7 @@ HEALTH_URL=http://127.0.0.1:3000/api/health    # 可选:重启后检查
 | `DEFAULT_MODEL_OUTPUT_TOKENS` | 未单独设置时每次模型请求的输出 token 上限,按可见回答估算;需要思考的请求至少放宽到 32768(见下文) | `8192` |
 | `MAX_MODEL_OUTPUT_TOKENS` | 单次模型输出 token 硬上限 | `65536` |
 | `MAX_TURN_OUTPUT_CHARS` | 单轮回复累计字符硬上限(含思考和工具结果) | `500000` |
-| `CHAT_TURN_TIMEOUT_SECONDS` | 普通文本对话单轮总超时 | `900` |
+| `CHAT_TURN_TIMEOUT_SECONDS` | 普通文本对话单轮总超时,含工具调用(最大 21600) | `3600` |
 | `CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS` | Provider 流连续无事件的空闲超时 | `120` |
 | `PROVIDER_RETRY_MAX_WAIT_SECONDS` | 上游 429/503/529 限流时单次请求最多等待重试的总时长 | `60` |
 | `FAILOVER_RETRY_WAIT_SECONDS` | 配置了备用线路时,前面的线路被限流最多等多久就改走下一条 | `10` |

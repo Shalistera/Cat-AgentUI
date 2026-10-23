@@ -27,6 +27,15 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-10-23',
+    items: [
+      {
+        zh: '一次回复最长可以跑 60 分钟了（原来是 15 分钟），开最高思考档做深度研究、连续查很多资料时，不会再中途被截断。',
+        en: 'A single reply can now run for up to 60 minutes instead of 15, so deep research at the highest reasoning level, with many lookups along the way, is no longer cut off halfway.',
+      },
+    ],
+  },
+  {
     date: '2026-10-21',
     items: [
       {

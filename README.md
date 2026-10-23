@@ -137,7 +137,7 @@ then install the helper once per instance: `sudo bash deploy/update-helper-setup
 | `DEFAULT_MODEL_OUTPUT_TOKENS` | Output token limit per model request when nothing else is set, sized for the visible answer; requests that think get at least 32768 (see below) | `8192` |
 | `MAX_MODEL_OUTPUT_TOKENS` | Hard limit on output tokens for one model call | `65536` |
 | `MAX_TURN_OUTPUT_CHARS` | Hard limit on the accumulated characters of one turn (including thinking and tool results) | `500000` |
-| `CHAT_TURN_TIMEOUT_SECONDS` | Total timeout of one turn of ordinary text chat | `900` |
+| `CHAT_TURN_TIMEOUT_SECONDS` | Total timeout of one turn of ordinary text chat, tool calls included (at most 21600) | `3600` |
 | `CHAT_PROVIDER_IDLE_TIMEOUT_SECONDS` | Idle timeout for a provider stream with no events | `120` |
 | `PROVIDER_RETRY_MAX_WAIT_SECONDS` | Maximum total wait for retries within one request when the upstream returns 429/503/529 | `60` |
 | `FAILOVER_RETRY_WAIT_SECONDS` | With backup routes configured, how long a rate-limited earlier route is waited on before moving to the next one | `10` |
