@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, Copy, Dices, Download, FileText, Images as ImagesIcon, Languages, Lock, LockOpen,
+  ArrowLeft, BrushCleaning, Copy, Dices, Download, FileText, Images as ImagesIcon, Languages, Lock, LockOpen,
   Maximize2, Palette, PanelLeft, RefreshCw, RotateCcw, Sparkles, Tags, Trash2,
 } from 'lucide-react';
 import { useAuth, useUi } from '../store';
@@ -13,6 +13,7 @@ import {
   Button, EmptyState, Field, Input, PageHeader, SegmentedControl, Select, Spinner, Toggle, btnClass, confirmDialog, toast,
 } from '../components/ui';
 import { useLightbox } from '../components/Lightbox';
+import { ImageCleanupDialog } from '../components/ImageStorage';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import { CharacterList, Collapsible, PanelSection, Slider, StylePicker, styleSummary } from '../components/NaiControls';
 import { NaiTagContext, TagTextarea, type NaiTagEnv } from '../components/NaiTagEditor';
@@ -28,7 +29,7 @@ type Subscription = { available: boolean; active: boolean; opus: boolean; percen
 type Prepared = { basePrompt: string; negativePrompt: string; characters: { prompt: string; negativePrompt: string }[] };
 type Job = { id: string; modelId: string; startedAt: number; size: string; cancelling?: boolean };
 type ActiveJobs = { jobs?: { jobId: string; modelId: string; createdAt: number; request?: { size?: string } }[] };
-type JobStatus = { status: string; images?: ImageRecord[]; error?: string };
+type JobStatus = { status: string; images?: ImageRecord[]; trimmed?: string[]; error?: string };
 /** previewing = translating for a look only; preparing/submitting lead to a generation. */
 type Phase = 'idle' | 'previewing' | 'preparing' | 'submitting';
 
@@ -107,6 +108,10 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
   const [job, setJob] = useState<Job | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState('');
+  // The text of a "storage full" refusal: while it is the error on screen, the
+  // generate bar offers 清理空间. Any newer message replaces it naturally.
+  const [quotaError, setQuotaError] = useState('');
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const [storageWarning, setStorageWarning] = useState(false);
   const [negOpen, setNegOpen] = useState(() => !!(draft.options.negativeDescription || draft.options.negativePrompt));
   const [advOpen, setAdvOpen] = useState(false);
@@ -405,7 +410,11 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
         throw err;
       }
     } catch (e) {
-      if (!c.signal.aborted && aliveRef.current) setError(errText(e, t('生成失败')));
+      if (!c.signal.aborted && aliveRef.current) {
+        const msg = errText(e, t('生成失败'));
+        setError(msg);
+        if (e instanceof ApiError && e.code === 'image_quota') setQuotaError(msg);
+      }
     } finally {
       if (prepAbort.current === c) prepAbort.current = null;
       if (aliveRef.current) setPhase('idle');
@@ -424,6 +433,31 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
     if (!added.length) return;
     setHistory((prev) => [...added.filter((i) => !prev.some((p) => p.id === i.id)), ...prev]);
     setHistoryTotal((t) => t + added.length);
+  }
+
+  // 自动清理 deleted old pictures to make room: forget them here too. The
+  // strip's total counts NAI pictures only, so re-read it instead of guessing.
+  function dropTrimmed(ids: string[]) {
+    const gone = new Set(ids);
+    setHistory((prev) => prev.filter((x) => !gone.has(x.id)));
+    setExtra((x) => (x && gone.has(x.id) ? null : x));
+    setFocus((f) => (f && gone.has(f) ? null : f));
+    api.get<{ total: number }>('/api/images?kind=novelai&limit=1&offset=0')
+      .then((r) => { if (aliveRef.current) setHistoryTotal(r.total ?? 0); })
+      .catch(() => { /* the count corrects itself on the next load */ });
+    toast(t('为腾出空间,已自动删除 {n} 张最早的图片', { n: ids.length }), 'info');
+  }
+
+  // After 清理空间: pictures anywhere in the strip may be gone.
+  function reloadHistory() {
+    setError((e) => (e && e === quotaError ? '' : e));
+    api.get<{ images: ImageRecord[]; total: number }>(`/api/images?kind=novelai&limit=${HISTORY_PAGE}&offset=0`)
+      .then((r) => {
+        if (!aliveRef.current) return;
+        setHistory(r.images ?? []);
+        setHistoryTotal(r.total ?? 0);
+      })
+      .catch((e) => toast(errText(e, t('加载作品失败')), 'err'));
   }
 
   async function recover(since: number): Promise<boolean> {
@@ -472,6 +506,7 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
         if (st.status === 'error') throw new JobFailed(st.error ? tServer(st.error) : t('生成失败'));
         const imgs = st.images ?? [];
         addImages(imgs);
+        if (st.trimmed?.length) dropTrimmed(st.trimmed);
         if (imgs[0]) setFocus((f) => (f === 'pending' || f === null ? imgs[0].id : f));
         tabAlert('done', t('NAI 创作完成'));
         notifyDone(t('NAI 创作完成'), t('新图片已生成'), '/images/nai');
@@ -763,6 +798,11 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
             <div className="sticky bottom-0 z-10 border-t border-line bg-bg1 px-4 py-3 sm:px-5">
               <div className="mx-auto max-w-2xl space-y-2 @4xl/studio:max-w-none">
               {error && <p role="alert" className="text-xs leading-relaxed text-err">{error}</p>}
+              {error && error === quotaError && (
+                <Button size="xs" variant="outline" onClick={() => setCleanupOpen(true)}>
+                  <BrushCleaning size={13} />{t('清理空间')}
+                </Button>
+              )}
               {!error && sub && !sub.available && sub.reason && <p className="text-xs leading-relaxed text-warn">{tServer(sub.reason)}</p>}
               {storageWarning && <p className="text-xs text-warn">{t('浏览器没能保存草稿，请先别关闭页面。')}</p>}
               {o.seed !== null && (
@@ -905,6 +945,7 @@ function Studio({ userId, allowModels }: { userId: string; allowModels: boolean 
           </nav>
         </div>
       </div>
+      <ImageCleanupDialog open={cleanupOpen} onClose={() => setCleanupOpen(false)} onChanged={reloadHistory} />
     </div>
   );
 }

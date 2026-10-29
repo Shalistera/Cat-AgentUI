@@ -267,6 +267,14 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: '参数错误' });
       }
     }
+    // imageAutoClean lets image generation delete the user's oldest workshop
+    // pictures (see image-cleanup.ts) — a destructive opt-in, so strictly boolean.
+    {
+      const v = body.data.settings?.imageAutoClean;
+      if (v !== undefined && v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: '参数错误' });
+      }
+    }
     const patch: Record<string, unknown> = {};
     if (body.data.displayName !== undefined) patch.displayName = body.data.displayName;
     if (body.data.settings !== undefined) {

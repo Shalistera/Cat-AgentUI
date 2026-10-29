@@ -3,6 +3,13 @@ export default {
   '请求失败 ({status})': 'Request failed ({status})',
   '上传失败': 'Upload failed',
   '保存失败': 'Failed to save',
+  // Pager (ui.tsx): "跳至 [ 7 ] 页 前往"
+  '分页': 'Pagination',
+  '选择页码': 'Choose page',
+  '跳至': 'Go to page',
+  '页码': 'Page number',
+  '页': '',
+  '前往': 'Go',
   '语言': 'Language',
   '跟随浏览器': 'Follow browser',
   '当前浏览器为{lang}': 'Browser is set to {lang}',

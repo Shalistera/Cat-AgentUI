@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Image as ImageIcon, ListChecks, Sparkles, Trash2,
+  ArrowLeft, BrushCleaning, PanelLeft, Image as ImageIcon, ListChecks, Sparkles, Trash2,
 } from 'lucide-react';
 import { useUi, useAuth } from '../store';
 import { api } from '../api';
-import { Button, EmptyState, PageHeader, Spinner, btnClass, confirmDialog, toast } from '../components/ui';
+import {
+  Button, EmptyState, PageHeader, Pager, SegmentedControl, Spinner, btnClass, confirmDialog, toast,
+} from '../components/ui';
 import { ImageLightbox, ImageTile } from '../components/ImageGallery';
+import { ImageCleanupDialog, ImageStorageMeter } from '../components/ImageStorage';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import { t, locale } from '../i18n';
-import type { ImageRecord } from '../types';
+import type { ImageRecord, ImageStorageInfo } from '../types';
 
 const PAGE_SIZE = 24;
+
+type Sort = 'newest' | 'oldest';
 
 // The full archive of generated images — the workshop page only previews the
 // most recent handful and links here. Paged, so a huge archive never puts
@@ -26,13 +31,22 @@ function GalleryInner() {
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const setSidebarOpen = useUi((s) => s.setSidebarOpen);
 
+  // Page and order live in the URL, so a reload or the back button keeps your
+  // place. ?cleanup=1 (from a "storage full" prompt elsewhere) opens 清理空间.
+  const [search, setSearch] = useSearchParams();
+  const sort: Sort = search.get('sort') === 'oldest' ? 'oldest' : 'newest';
+  const page = Math.max(0, Math.floor(Number(search.get('page')) || 1) - 1);
+
   const [list, setList] = useState<ImageRecord[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(0);
+  const [storage, setStorage] = useState<ImageStorageInfo | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
   const [lightbox, setLightbox] = useState<ImageRecord | null>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(() => search.get('cleanup') === '1');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const shownRef = useRef<string | null>(null);
 
   // ---- manage (batch select) mode ----
   // Selection is keyed by id and survives page flips, so you can pick across
@@ -43,32 +57,55 @@ function GalleryInner() {
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  async function fetchPage(p: number) {
+  function goTo(next: { page?: number; sort?: Sort }) {
+    const params = new URLSearchParams();
+    const s = next.sort ?? sort;
+    const p = next.page ?? page;
+    if (s === 'oldest') params.set('sort', 'oldest');
+    if (p > 0) params.set('page', String(p + 1));
+    setSearch(params, { replace: true });
+  }
+
+  // The dialog is already open; drop ?cleanup=1 so a reload doesn't reopen it.
+  useEffect(() => {
+    if (search.get('cleanup') === '1') goTo({});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let current = true;
+    let redirected = false;
     setLoading(true);
-    try {
-      const r = await api.get<{ images: ImageRecord[]; total: number }>(
-        `/api/images?limit=${PAGE_SIZE}&offset=${p * PAGE_SIZE}`,
-      );
-      setList(r.images ?? []);
-      setTotal(r.total ?? 0);
-      setPage(p);
-      scrollRef.current?.scrollTo({ top: 0 });
-    } catch (err) {
-      toast(err instanceof Error ? err.message : t('加载图片失败'), 'err');
-    } finally {
-      setLoaded(true);
-      setLoading(false);
-    }
-  }
+    api.get<{ images: ImageRecord[]; total: number; storage?: ImageStorageInfo }>(
+      `/api/images?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&sort=${sort}`,
+    )
+      .then((r) => {
+        if (!current) return;
+        const images = r.images ?? [];
+        // Past the end (after deletions, or a stale link): land on the last
+        // page, still "loading" so no empty state flashes in between.
+        if (!images.length && r.total > 0 && page > 0) {
+          redirected = true;
+          goTo({ page: Math.ceil(r.total / PAGE_SIZE) - 1 });
+          return;
+        }
+        setList(images);
+        setTotal(r.total ?? 0);
+        setStorage(r.storage ?? null);
+        // Only a real page/order change scrolls back up — not a refresh after a delete.
+        const key = `${sort}:${page}`;
+        if (shownRef.current !== null && shownRef.current !== key) scrollRef.current?.scrollTo({ top: 0 });
+        shownRef.current = key;
+      })
+      .catch((err) => { if (current) toast(err instanceof Error ? err.message : t('加载图片失败'), 'err'); })
+      .finally(() => {
+        if (!current || redirected) return;
+        setLoaded(true);
+        setLoading(false);
+      });
+    return () => { current = false; };
+  }, [page, sort, reloadTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { void fetchPage(0); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // After deletions the tail of the archive shifts — re-pull the current page
-  // (clamped, in case the last page just vanished).
-  function refreshAfterDelete(removed: number) {
-    const lastPage = Math.max(0, Math.ceil(Math.max(0, total - removed) / PAGE_SIZE) - 1);
-    void fetchPage(Math.min(page, lastPage));
-  }
+  const reload = () => setReloadTick((n) => n + 1);
 
   function toggleSel(id: string) {
     setSel((prev) => {
@@ -87,7 +124,7 @@ function GalleryInner() {
       const r = await api.post<{ deleted: number }>('/api/images/batch-delete', { ids: [...sel] });
       setSel(new Set());
       toast(t('已删除 {n} 张图片', { n: r.deleted }), 'ok');
-      refreshAfterDelete(r.deleted);
+      reload();
     } catch (err) {
       toast(err instanceof Error ? err.message : t('删除失败'), 'err');
     } finally {
@@ -135,33 +172,44 @@ function GalleryInner() {
             </div>
           ) : (
             <>
+              {storage && (
+                <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-lg border border-line bg-bg1 px-3.5 py-2.5 shadow-xs">
+                  <div className="min-w-[14rem] flex-1"><ImageStorageMeter info={storage} /></div>
+                  <Button variant="outline" size="sm" onClick={() => setCleanupOpen(true)}>
+                    <BrushCleaning size={14} />{t('清理空间')}
+                  </Button>
+                </div>
+              )}
               <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
+                <SegmentedControl<Sort>
+                  value={sort}
+                  onChange={(s) => goTo({ sort: s, page: 0 })}
+                  options={[{ value: 'newest', label: t('最新在前') }, { value: 'oldest', label: t('最早在前') }]}
+                />
                 {manage ? (
-                  <>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <span className="text-[13px] tabular-nums text-tx2">{t('已选 {n} 张', { n: sel.size })}</span>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant="outline" size="sm"
-                        onClick={() => setSel((prev) => {
-                          const next = new Set(prev);
-                          if (pageAllSelected) list.forEach((x) => next.delete(x.id));
-                          else list.forEach((x) => next.add(x.id));
-                          return next;
-                        })}
-                      >
-                        {pageAllSelected ? t('取消本页全选') : t('全选本页')}
-                      </Button>
-                      <Button variant="dangerSolid" size="sm" disabled={!sel.size || deleting} onClick={deleteSelected}>
-                        {deleting ? <Spinner className="h-3.5 w-3.5" /> : <Trash2 size={14} />}
-                        {t('删除所选')}{sel.size > 0 && ` (${sel.size})`}
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => { setManage(false); setSel(new Set()); }}>
-                        {t('完成')}
-                      </Button>
-                    </div>
-                  </>
+                    <Button
+                      variant="outline" size="sm"
+                      onClick={() => setSel((prev) => {
+                        const next = new Set(prev);
+                        if (pageAllSelected) list.forEach((x) => next.delete(x.id));
+                        else list.forEach((x) => next.add(x.id));
+                        return next;
+                      })}
+                    >
+                      {pageAllSelected ? t('取消本页全选') : t('全选本页')}
+                    </Button>
+                    <Button variant="dangerSolid" size="sm" disabled={!sel.size || deleting} onClick={deleteSelected}>
+                      {deleting ? <Spinner className="h-3.5 w-3.5" /> : <Trash2 size={14} />}
+                      {t('删除所选')}{sel.size > 0 && ` (${sel.size})`}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => { setManage(false); setSel(new Set()); }}>
+                      {t('完成')}
+                    </Button>
+                  </div>
                 ) : (
-                  <Button variant="outline" size="sm" className="ml-auto" onClick={() => setManage(true)}>
+                  <Button variant="outline" size="sm" onClick={() => setManage(true)}>
                     <ListChecks size={14} />{t('批量管理')}
                   </Button>
                 )}
@@ -177,27 +225,9 @@ function GalleryInner() {
                   />
                 ))}
               </div>
-              {pages > 1 && (
-                <div className="mt-5 flex items-center justify-center gap-3">
-                  <Button
-                    variant="outline" size="sm"
-                    disabled={page === 0 || loading}
-                    onClick={() => fetchPage(page - 1)}
-                  >
-                    <ChevronLeft size={14} />{t('上一页')}
-                  </Button>
-                  <span className="text-[13px] tabular-nums text-tx2">
-                    {t('第 {page} / {pages} 页', { page: page + 1, pages })}
-                  </span>
-                  <Button
-                    variant="outline" size="sm"
-                    disabled={page >= pages - 1 || loading}
-                    onClick={() => fetchPage(page + 1)}
-                  >
-                    {t('下一页')}<ChevronRight size={14} />
-                  </Button>
-                </div>
-              )}
+              <div className="mt-5">
+                <Pager page={page} pages={pages} disabled={loading} onChange={(p) => goTo({ page: p })} />
+              </div>
             </>
           )}
         </div>
@@ -214,8 +244,14 @@ function GalleryInner() {
             return next;
           });
           setLightbox(null);
-          refreshAfterDelete(1);
+          reload();
         }}
+      />
+
+      <ImageCleanupDialog
+        open={cleanupOpen}
+        onClose={() => setCleanupOpen(false)}
+        onChanged={() => { setSel(new Set()); reload(); }}
       />
     </div>
   );

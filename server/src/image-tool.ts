@@ -8,7 +8,7 @@ import { config } from './config.js';
 import { getAdapter, toRuntimeConfig } from './providers/index.js';
 import { tryAcquireImageJob } from './admission.js';
 import { checkModelLimit, checkQuota, modelLimitReason, quotaBlockMessage } from './quota.js';
-import { quotaErrorMessage, tryReserveStorage } from './storage.js';
+import { imageQuotaError, trimImagesToQuota, tryReserveImageStorage } from './image-cleanup.js';
 import { saveGeneratedImage } from './routes/images.js';
 import { recordUsage } from './usage.js';
 import { allConfiguredSecretValues, redactSensitiveText } from './secrets.js';
@@ -95,8 +95,8 @@ export async function callImageTool(ctx: {
   if (!limit.ok) return fail(modelLimitReason(model, limit));
   const admission = tryAcquireImageJob(user.id, model.id);
   if (!admission.ok) return fail(admission.reason === 'model-busy' ? '该图片模型正在生成中,请等待完成' : '图片生成并发数已达上限');
-  const reserved = tryReserveStorage(user.id, 'image', config.maxGeneratedImageBytes);
-  if (!reserved.ok) { admission.lease.release(); return fail(quotaErrorMessage('image', reserved.reason)); }
+  const reserved = tryReserveImageStorage(user.id, config.maxGeneratedImageBytes);
+  if (!reserved.ok) { admission.lease.release(); return fail(imageQuotaError(user.id, reserved.reason).error); }
 
   const t0 = Date.now();
   const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(300_000)]);
@@ -134,6 +134,8 @@ export async function callImageTool(ctx: {
       prompt: parsed.data.prompt, size: parsed.data.size ?? null, durationMs: Date.now() - t0, img, source: 'chat',
     });
     images.push({ type: 'image', imageId: saved.id, mime: img.mime });
+    try { trimImagesToQuota(user.id, reserved.reservation.createdAt); }
+    catch (err) { console.log(`[image-tool] auto-clean failed: ${err instanceof Error ? err.message : String(err)}`); }
     return { result: `已生成 1 张图片,已在当前对话中展示。图片地址:/api/images/${saved.id}/file${generated.text ? `\n图片模型说明:${redactSensitiveText(generated.text, secrets)}` : ''}`, isError: false, images };
   } catch (err) {
     const message = ctx.signal.aborted ? '图片生成已停止'

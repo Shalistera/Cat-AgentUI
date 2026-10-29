@@ -27,6 +27,19 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-10-29',
+    items: [
+      {
+        zh: '作品集可以直接跳到任意一页，也能切换成「最早在前」；页面上方会显示图片空间用了多少。',
+        en: 'The Gallery can now jump straight to any page and switch to oldest first, and it shows how much of your image storage is used.',
+      },
+      {
+        zh: '图片空间满了不用再一张张挑着删：「清理空间」可以一次删掉最早的若干张，或某一天之前的全部，删之前能看到会删哪些、腾出多少空间；也可以开启「空间不够时自动删除最早的图片」，对话里生成的图片不会被自动删除。',
+        en: 'A full image storage no longer means picking images to delete one by one: “Free up space” deletes the oldest few, or everything before a date, and shows exactly what goes and how much room it frees first. You can also turn on deleting the oldest images automatically when space runs out; images generated in chats are never deleted automatically.',
+      },
+    ],
+  },
+  {
     date: '2026-10-23',
     items: [
       {

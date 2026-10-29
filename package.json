@@ -19,6 +19,7 @@
     "test:translate-settings": "npm run build -w server && node scripts/translate-settings-regression.mjs",
     "test:image-tool": "npm run build -w server && node scripts/image-tool-regression.mjs",
     "test:openai-image-settings": "npm run build -w server && node scripts/openai-image-settings-regression.mjs",
+    "test:image-cleanup": "npm run build -w server && node scripts/image-cleanup-regression.mjs",
     "test:novelai": "npm run build -w server && node scripts/novelai-regression.mjs",
     "test:nai-tags": "node --import tsx scripts/nai-tags-regression.mjs",
     "test:signatures": "npm run build -w server && node scripts/thought-signature-regression.mjs",

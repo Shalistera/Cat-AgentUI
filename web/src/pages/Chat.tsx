@@ -954,7 +954,12 @@ export default function Chat() {
           setLeafId((l) => (l === 'tmp-a' || l === 'tmp-u' ? previousLeafId : l));
           setStreaming(false);
           sendingRef.current = false;
-          toast(e.message, 'err');
+          // Image storage full: the message alone leaves people stuck, so
+          // offer the gallery's 清理空间 directly (it needs workshop access).
+          if (e.code === 'image_quota' && useAuth.getState().user?.allowImages) {
+            void confirmDialog(t('图片存储空间不足'), t('这次没能生成图片。到作品集删掉一些旧图片,或开启「空间不够时自动删除最早的图片」后再试。现在去作品集吗?'), false)
+              .then((go) => { if (go) nav('/images/gallery?cleanup=1'); });
+          } else toast(e.message, 'err');
           acknowledge(false);
           if (e.code === 'chat_busy') void followStream(chatId, {});
           return;

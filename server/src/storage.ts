@@ -24,6 +24,8 @@ let untrackedStorageBytes = 0;
 export interface StorageReservation {
   readonly bytes: number;
   readonly kind: StorageKind;
+  /** When the reservation was taken — 自动清理 only trims images older than this. */
+  readonly createdAt: number;
   release(): void;
 }
 
@@ -37,7 +39,7 @@ function sumUploads(userId?: string): number {
   return (userId ? q.where(eq(schema.uploads.userId, userId)).get() : q.get())?.n ?? 0;
 }
 
-function sumImages(userId?: string): number {
+export function sumImages(userId?: string): number {
   const q = db.select({ n: sql<number>`coalesce(sum(${schema.images.byteSize}), 0)` })
     .from(schema.images);
   return (userId ? q.where(eq(schema.images.userId, userId)).get() : q.get())?.n ?? 0;
@@ -56,11 +58,14 @@ function reservedBytes(kind?: StorageKind, userId?: string): number {
 /**
  * Reserve worst-case bytes before an async upload/provider call. Reservations
  * close the check-then-write race between concurrent requests in this process.
+ * `userAllowance` lets the per-user check count bytes the caller has promised
+ * to reclaim afterwards (自动清理, see image-cleanup.ts); the global cap never
+ * bends.
  */
-export function tryReserveStorage(userId: string, kind: StorageKind, bytes: number): ReserveResult {
+export function tryReserveStorage(userId: string, kind: StorageKind, bytes: number, userAllowance = 0): ReserveResult {
   const perUserLimit = kind === 'upload' ? maxUserUploadMb() * MIB : config.maxUserImageBytes;
   const perUserStored = kind === 'upload' ? sumUploads(userId) : sumImages(userId);
-  if (perUserStored + reservedBytes(kind, userId) + bytes > perUserLimit) {
+  if (perUserStored + reservedBytes(kind, userId) + bytes > perUserLimit + userAllowance) {
     return { ok: false, reason: 'user' };
   }
 
@@ -77,6 +82,7 @@ export function tryReserveStorage(userId: string, kind: StorageKind, bytes: numb
     reservation: {
       bytes,
       kind,
+      createdAt: Date.now(),
       release() {
         if (released) return;
         released = true;
@@ -90,7 +96,7 @@ export function quotaErrorMessage(kind: StorageKind, reason: 'user' | 'global'):
   if (reason === 'global') return '服务器存储空间配额已满,请联系管理员清理文件';
   return kind === 'upload'
     ? '你的附件存储配额已满,请删除不再需要的附件'
-    : '你的生成图片存储配额已满,请先在画廊中删除部分图片';
+    : '图片存储空间不足,请到作品集「清理空间」删除旧图,或开启自动清理';
 }
 
 export const MIME_BY_EXT: Record<string, string> = {

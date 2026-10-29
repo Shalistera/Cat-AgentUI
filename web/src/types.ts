@@ -27,6 +27,8 @@ export interface User {
     agentTools?: boolean;
     /** 全局自定义指令 — prepended to every chat's system prompt (max 1500 chars). */
     customInstructions?: string | null;
+    /** 自动清理: new images may delete the oldest workshop images to fit the quota. */
+    imageAutoClean?: boolean | null;
   };
 }
 
@@ -315,6 +317,26 @@ export interface ImageRecord {
   generationSettings?: string | null;
   id: string; model: string | null; prompt: string; size: string | null;
   durationMs: number | null; createdAt: number; tokens?: number | null;
+}
+
+/** The user's generated-image quota (GET /api/images/storage). */
+export interface ImageStorageInfo {
+  used: number; limit: number; count: number;
+  /** Chat-born share — 自动清理 never deletes these. */
+  chat: { count: number; bytes: number };
+  oldestAt: number | null;
+  /** Free space one new image needs before generation may start. */
+  reservePerImage: number;
+  autoClean: boolean;
+  /** The 清理空间 dialog's default count (GET /api/images/storage only). */
+  suggestedCount?: number;
+}
+
+/** POST /api/images/cleanup with dryRun. */
+export interface ImageCleanupPreview {
+  count: number; bytes: number; chat: number;
+  from: number | null; to: number | null;
+  samples: { id: string; prompt: string; createdAt: number }[];
 }
 
 // ---- PPT 工坊 ----

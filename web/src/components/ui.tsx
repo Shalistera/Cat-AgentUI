@@ -5,7 +5,7 @@ import {
   type SelectHTMLAttributes, type ThHTMLAttributes, type TdHTMLAttributes,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { X, CircleCheck, CircleAlert, Info } from 'lucide-react';
+import { X, CircleCheck, CircleAlert, Info, ChevronLeft, ChevronRight } from 'lucide-react';
 import { t } from '../i18n';
 
 /* ---------------------------------------------------------------------------
@@ -270,6 +270,92 @@ export function EmptyState({ icon, title, hint, action }: {
       </div>
       {action}
     </div>
+  );
+}
+
+// ---------- Pager ----------
+/** Page numbers to show (0-based): first, last, the current page ±1, and a
+    steady run of five near either end. null marks a gap ("…"); a gap that
+    would hide a single page shows that page instead. */
+function pageItems(page: number, pages: number): (number | null)[] {
+  const keep = new Set([0, pages - 1, page - 1, page, page + 1]);
+  if (page < 4) for (let i = 0; i < 5; i++) keep.add(i);
+  if (page > pages - 5) for (let i = pages - 5; i < pages; i++) keep.add(i);
+  const items: (number | null)[] = [];
+  let prev = -1;
+  for (let i = 0; i < pages; i++) {
+    if (!keep.has(i)) continue;
+    if (i - prev === 2) items.push(prev + 1);
+    else if (i - prev > 2) items.push(null);
+    items.push(i);
+    prev = i;
+  }
+  return items;
+}
+
+/** Numbered pagination with a jump box; `page` is 0-based. Phones get a
+    native page picker in place of the number row. */
+export function Pager({ page, pages, onChange, disabled }: {
+  page: number; pages: number; onChange(page: number): void; disabled?: boolean;
+}) {
+  const [jump, setJump] = useState('');
+  if (pages <= 1) return null;
+  const go = (p: number) => { if (p >= 0 && p < pages && p !== page) onChange(p); };
+  function submitJump() {
+    const n = Math.round(Number(jump));
+    setJump('');
+    if (jump.trim() && Number.isFinite(n)) go(Math.min(pages, Math.max(1, n)) - 1);
+  }
+  return (
+    <nav aria-label={t('分页')} className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+      <div className="flex items-center gap-1">
+        <Button variant="outline" size="sm" title={t('上一页')} disabled={disabled || page === 0} onClick={() => go(page - 1)}>
+          <ChevronLeft size={14} /><span className="hidden sm:inline">{t('上一页')}</span>
+        </Button>
+        <select
+          value={page} disabled={disabled} aria-label={t('选择页码')}
+          onChange={(e) => go(Number(e.target.value))}
+          className="h-8 cursor-pointer rounded-md border border-field bg-bg1 px-2 text-center text-[13px] tabular-nums text-tx transition-colors hover:border-tx3 disabled:opacity-40 sm:hidden"
+        >
+          {Array.from({ length: pages }, (_, i) => (
+            <option key={i} value={i}>{t('第 {page} / {pages} 页', { page: i + 1, pages })}</option>
+          ))}
+        </select>
+        <div className="hidden items-center gap-1 sm:flex">
+          {pageItems(page, pages).map((p, i) => (p === null ? (
+            <span key={`gap-${i}`} className="w-6 text-center text-tx3">…</span>
+          ) : (
+            <button
+              key={p} type="button" disabled={disabled} onClick={() => go(p)}
+              aria-current={p === page ? 'page' : undefined}
+              className={`h-8 min-w-8 cursor-pointer rounded-md px-2 text-[13px] tabular-nums transition-colors disabled:pointer-events-none disabled:opacity-40 ${
+                p === page ? 'border border-acc/50 bg-acc/10 font-semibold text-acc' : 'text-tx2 hover:bg-bg2 hover:text-tx'}`}
+            >
+              {p + 1}
+            </button>
+          )))}
+        </div>
+        <Button variant="outline" size="sm" title={t('下一页')} disabled={disabled || page >= pages - 1} onClick={() => go(page + 1)}>
+          <span className="hidden sm:inline">{t('下一页')}</span><ChevronRight size={14} />
+        </Button>
+      </div>
+      <form
+        className="hidden items-center gap-1.5 text-[13px] text-tx2 sm:flex"
+        onSubmit={(e) => { e.preventDefault(); submitJump(); }}
+      >
+        {t('跳至')}
+        {/* Width lives on a wrapper: Input's own w-full outranks a w-* class. */}
+        <div className="w-16">
+          <Input
+            uiSize="sm" type="number" min={1} max={pages} value={jump} disabled={disabled}
+            aria-label={t('页码')} placeholder={String(page + 1)}
+            onChange={(e) => setJump(e.target.value)} className="text-center tabular-nums"
+          />
+        </div>
+        {t('页')}
+        <Button type="submit" variant="outline" size="sm" disabled={disabled || !jump.trim()}>{t('前往')}</Button>
+      </form>
+    </nav>
   );
 }
 

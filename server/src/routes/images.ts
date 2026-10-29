@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import { db, schema, now } from '../db/index.js';
 import { newId } from '../crypto.js';
 import { config } from '../config.js';
@@ -18,8 +18,12 @@ import { ProviderBusyError } from '../providers/sse.js';
 import { tryAcquireImageJob } from '../admission.js';
 import {
   decodeGeneratedImage, extForMime, getOwnedUploadMedia,
-  MIME_BY_EXT, quotaErrorMessage, readMediaBase64, tryReserveStorage,
+  MIME_BY_EXT, readMediaBase64,
 } from '../storage.js';
+import {
+  cleanupSchema, imageQuotaError, imageStorageSummary, previewCleanup, runCleanup,
+  suggestedCleanupCount, trimImagesToQuota, tryReserveImageStorage,
+} from '../image-cleanup.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
 import { novelaiSchema, NAI_MODELS } from '../novelai.js';
 import { openaiImageSettingsSchema } from '../openai-image-settings.js';
@@ -69,6 +73,8 @@ interface ImageJob {
   retry?: ProviderRetry | null;
   request: z.infer<typeof generateSchema>;
   images?: SavedImage[];
+  /** Old images 自动清理 deleted to make room — the client drops them from view. */
+  trimmed?: string[];
   /** The model answered in words instead of (or besides) pictures. */
   reply?: string;
   /** Whole exchange so far, prompt included — the client continues from it. */
@@ -244,12 +250,10 @@ export async function imageRoutes(app: FastifyInstance) {
     }
     const imageLease = admission.lease;
     const requestedN = n ?? 1;
-    const reserved = tryReserveStorage(
-      req.user!.id, 'image', requestedN * config.maxGeneratedImageBytes,
-    );
+    const reserved = tryReserveImageStorage(req.user!.id, requestedN * config.maxGeneratedImageBytes);
     if (!reserved.ok) {
       imageLease.release();
-      return reply.code(413).send({ error: quotaErrorMessage('image', reserved.reason) });
+      return reply.code(413).send(imageQuotaError(req.user!.id, reserved.reason));
     }
 
     const reservation = reserved.reservation;
@@ -358,6 +362,15 @@ export async function imageRoutes(app: FastifyInstance) {
             durationMs,
           });
 
+          // Pictures are committed; make room for them now (自动清理). Only a new
+          // picture triggers it, and a failure must not roll the pictures back.
+          if (saved.length) {
+            try {
+              job.trimmed = trimImagesToQuota(userId, reservation.createdAt);
+            } catch (err) {
+              console.log(`[img] job ${job.id}: auto-clean failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
           job.images = saved;
           if (result.text) {
             job.reply = redactSensitiveText(result.text, secretValues);
@@ -415,7 +428,7 @@ export async function imageRoutes(app: FastifyInstance) {
     if (!job || job.userId !== req.user!.id) {
       return reply.code(404).send({ error: '任务不存在(服务可能已重启)' });
     }
-    return { status: job.status, images: job.images, reply: job.reply, turns: job.turns, error: job.error, errorCode: job.errorCode, retry: job.retry };
+    return { status: job.status, images: job.images, trimmed: job.trimmed, reply: job.reply, turns: job.turns, error: job.error, errorCode: job.errorCode, retry: job.retry };
   });
 
   app.post('/api/images/jobs/:id/cancel', async (req, reply) => {
@@ -428,7 +441,7 @@ export async function imageRoutes(app: FastifyInstance) {
 
   app.get('/api/images', async (req, reply) => {
     requireWorkshop(req, reply);
-    const q = req.query as { limit?: string; offset?: string; kind?: string };
+    const q = req.query as { limit?: string; offset?: string; kind?: string; sort?: string };
     const limit = Math.min(Math.max(Number(q.limit) || 40, 1), 100);
     const offset = Math.max(Number(q.offset) || 0, 0);
     // kind=novelai: the NAI studio's own history strip. V5 model ids only
@@ -436,13 +449,34 @@ export async function imageRoutes(app: FastifyInstance) {
     const where = q.kind === 'novelai'
       ? and(eq(schema.images.userId, req.user!.id), inArray(schema.images.model, [...NAI_MODELS]))
       : eq(schema.images.userId, req.user!.id);
+    // The id tiebreak keeps pages stable when two pictures share a timestamp.
+    const order = q.sort === 'oldest'
+      ? [asc(schema.images.createdAt), asc(schema.images.id)]
+      : [desc(schema.images.createdAt), desc(schema.images.id)];
     const rows = db.select().from(schema.images)
       .where(where)
-      .orderBy(desc(schema.images.createdAt))
+      .orderBy(...order)
       .limit(limit).offset(offset).all();
     const total = db.select({ c: sql<number>`count(*)` }).from(schema.images)
       .where(where).get()?.c ?? 0;
-    return { images: rows, total };
+    return { images: rows, total, storage: imageStorageSummary(req.user!.id) };
+  });
+
+  // What the 清理空间 dialog opens with: the summary plus its default count.
+  app.get('/api/images/storage', async (req, reply) => {
+    requireWorkshop(req, reply);
+    const summary = imageStorageSummary(req.user!.id);
+    return { ...summary, suggestedCount: suggestedCleanupCount(req.user!.id, summary) };
+  });
+
+  // 清理空间: delete the oldest N, or everything before a date. dryRun is the
+  // preview — same selection, so what the dialog shows is what goes.
+  app.post('/api/images/cleanup', async (req, reply) => {
+    requireWorkshop(req, reply);
+    const body = cleanupSchema.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: '参数错误' });
+    if (body.data.dryRun) return previewCleanup(req.user!.id, body.data);
+    return { ok: true, ...(await runCleanup(req.user!.id, body.data)) };
   });
 
   app.get('/api/images/:id/file', async (req, reply) => {

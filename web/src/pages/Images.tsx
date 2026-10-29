@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import {
   PanelLeft, ImagePlus, Sparkles, X, Download, Trash2, Image as ImageIcon,
-  History, Settings2, Plus, ZoomIn, ArrowRight, MessageSquare, Send, Palette,
+  History, Settings2, Plus, ZoomIn, ArrowRight, MessageSquare, Send, Palette, BrushCleaning,
 } from 'lucide-react';
 import { useUi, useAuth } from '../store';
-import { api, ApiError, uploadFile } from '../api';
+import { api, ApiError, fmtBytes, uploadFile } from '../api';
 import { tabAlert } from '../tabAlert';
 import { notifyDone } from '../notify';
 import {
@@ -13,6 +13,7 @@ import {
   toast, EmptyState, btnClass,
 } from '../components/ui';
 import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGallery';
+import { ImageCleanupDialog, imageStorageTight } from '../components/ImageStorage';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
 import { DEFAULT_OPENAI_IMAGE_OPTIONS, OpenAIImageSettings, openaiImageSize, openaiImageSizeError } from '../components/OpenAIImageSettings';
 import type { OpenAIImageOptions } from '../components/OpenAIImageSettings';
@@ -20,7 +21,7 @@ import { Markdown } from '../components/Markdown';
 import { retryStatusText } from '../components/ChatMessage';
 import { t, tServer, locale } from '../i18n';
 import type { NaiOptions } from '../novelai';
-import type { ImageModel, ImageRecord, ProviderRetry } from '../types';
+import type { ImageModel, ImageRecord, ImageStorageInfo, ProviderRetry } from '../types';
 
 const PAGE_SIZE = 24;
 const MAX_REFS = 3;
@@ -37,7 +38,8 @@ const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: t('去背景'), prompt: t
 type ImageRequest = { modelId: string; prompt: string; n?: number; size?: string; quality?: string; inputUploadIds?: string[]; history?: ConvoTurn[]; novelai?: NaiOptions };
 type RunningJob = { id: string; modelId: string; prompt: string; startedAt: number; request?: ImageRequest; retry?: ProviderRetry | null; cancelling?: boolean };
 type ActiveJobs = { jobs?: { jobId: string; modelId: string; prompt: string; createdAt: number; request?: ImageRequest; retry?: ProviderRetry | null }[] };
-type JobStatus = { status: string; images?: ImageRecord[]; reply?: string; turns?: ConvoTurn[]; error?: string; errorCode?: 'provider_busy'; retry?: ProviderRetry | null };
+type JobStatus = { status: string; images?: ImageRecord[]; trimmed?: string[]; reply?: string; turns?: ConvoTurn[]; error?: string; errorCode?: 'provider_busy'; retry?: ProviderRetry | null };
+type GalleryPage = { images: ImageRecord[]; total: number; storage?: ImageStorageInfo };
 
 // Conversational image models (Gemini) sometimes answer in words instead of
 // pictures — "here are two options, which one?". The exchange is kept here so
@@ -105,7 +107,8 @@ function ImagesInner() {
   // time, so picking another model lets the user start a second one right away.
   const [running, setRunning] = useState<RunningJob[]>([]);
   const [submitting, setSubmitting] = useState<string[]>([]);
-  const [genError, setGenError] = useState<{ label: string; message: string; request?: ImageRequest; busy?: boolean } | null>(null);
+  // quota: the storage was full — the box offers 清理空间 right there.
+  const [genError, setGenError] = useState<{ label: string; message: string; request?: ImageRequest; busy?: boolean; quota?: boolean } | null>(null);
   const [convo, setConvo] = useState<Convo | null>(null);
   const [replyText, setReplyText] = useState('');
   // One ticker drives every job's elapsed counter.
@@ -135,6 +138,8 @@ function ImagesInner() {
   const [list, setList] = useState<ImageRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [galleryLoaded, setGalleryLoaded] = useState(false);
+  const [storage, setStorage] = useState<ImageStorageInfo | null>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const [lightbox, setLightbox] = useState<ImageRecord | null>(null);
   // Which reference slot is open in the zoom preview (index into refSlots).
   const [refPreview, setRefPreview] = useState<number | null>(null);
@@ -205,13 +210,24 @@ function ImagesInner() {
         setModels([]);
         toast(err instanceof Error ? err.message : t('加载模型失败'), 'err');
       });
-    api.get<{ images: ImageRecord[]; total: number }>(`/api/images?limit=${PAGE_SIZE}&offset=0`)
-      .then((r) => { setList(r.images ?? []); setTotal(r.total ?? 0); setGalleryLoaded(true); })
-      .catch((err) => {
-        setGalleryLoaded(true);
-        toast(err instanceof Error ? err.message : t('加载图片失败'), 'err');
-      });
-  }, []);
+    void reloadGallery();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // First page of the gallery plus the storage summary. Also run after a
+  // cleanup, which may have removed pictures this page is showing.
+  async function reloadGallery() {
+    try {
+      const r = await api.get<GalleryPage>(`/api/images?limit=${PAGE_SIZE}&offset=0`);
+      if (!aliveRef.current) return;
+      setList(r.images ?? []);
+      setTotal(r.total ?? 0);
+      setStorage(r.storage ?? null);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : t('加载图片失败'), 'err');
+    } finally {
+      if (aliveRef.current) setGalleryLoaded(true);
+    }
+  }
 
   // Bulk entry (drag-drop / paste): fill empty slots in order, positions of
   // already-filled slots untouched.
@@ -281,6 +297,12 @@ function ImagesInner() {
     try { localStorage.setItem(quickKey, JSON.stringify(next)); } catch { /* ignore */ }
   }
 
+  function refreshStorage() {
+    api.get<ImageStorageInfo>('/api/images/storage')
+      .then((s) => { if (aliveRef.current) setStorage(s); })
+      .catch(() => { /* the meter just stays a little stale */ });
+  }
+
   // Last-resort recovery: the job result may have landed in the gallery even
   // when we lost track of the job itself. Returns how many fresh images were
   // pulled in.
@@ -344,14 +366,19 @@ function ImagesInner() {
             return;
           }
           if (aliveRef.current) setConvo((c) => (c?.modelId === job.modelId ? null : c));
+          // 自动清理 may have deleted old pictures to make room; drop them too.
+          const gone = new Set(st.trimmed ?? []);
           setList((prev) => {
             const have = new Set(prev.map((x) => x.id));
-            return [...imgs.filter((i) => !have.has(i.id)), ...prev];
+            return [...imgs.filter((i) => !have.has(i.id)), ...prev.filter((x) => !gone.has(x.id))];
           });
-          setTotal((t) => t + imgs.length);
+          setTotal((n) => Math.max(0, n + imgs.length - gone.size));
+          refreshStorage();
           // Prompt and reference images stay put on purpose — iterating on
           // the same inputs is the common case.
-          const made = t('{model}:已生成 {n} 张图片', { model: modelLabel(job.modelId), n: imgs.length });
+          const made = gone.size
+            ? t('{model}:已生成 {n} 张图片,为腾出空间自动删除了 {m} 张最早的图片', { model: modelLabel(job.modelId), n: imgs.length, m: gone.size })
+            : t('{model}:已生成 {n} 张图片', { model: modelLabel(job.modelId), n: imgs.length });
           toast(made, 'ok');
           tabAlert('done', t('绘图完成'));
           notifyDone(t('绘图完成'), made, '/images');
@@ -443,7 +470,9 @@ function ImagesInner() {
       // the connection) and one of the jobs above is probably ours.
       if (!(err instanceof ApiError) && untracked.some((j) => j.modelId === mid)) return true;
       const msg = err instanceof Error ? err.message : t('生成失败');
-      setGenError({ label: modelLabel(mid), message: msg });
+      const quota = err instanceof ApiError && err.code === 'image_quota';
+      setGenError({ label: modelLabel(mid), message: msg, quota });
+      if (quota) refreshStorage();
       toast(msg, 'err');
       tabAlert('error', t('绘图失败'));
       return false;
@@ -468,6 +497,7 @@ function ImagesInner() {
     return last ? detectOptions(last.text) : [];
   }, [convo]);
   const canGenerate = !!prompt.trim() && !!model && !uploading && !busyModels.has(model.id);
+  const storageTight = !!storage && imageStorageTight(storage);
 
   // NovelAI is the only image model this user has: the studio is their workshop.
   if (genericModels?.length === 0 && hasNai) return <Navigate to="/images/nai" replace />;
@@ -684,6 +714,12 @@ function ImagesInner() {
                       <Button size="xs" variant="outline" disabled={busyModels.has(genError.request.modelId) || uploading}
                         onClick={() => { const r = genError.request!; void submit(r.modelId, r.prompt, r.history, r); }}>{t('重试')}</Button>
                     </div>}
+                    {genError.quota && <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs text-tx3">{t('提示词和参考图都还在,腾出空间后再点一次生成就行。')}</span>
+                      <Button size="xs" variant="outline" onClick={() => setCleanupOpen(true)}>
+                        <BrushCleaning size={13} />{t('清理空间')}
+                      </Button>
+                    </div>}
                   </div>
                 )}
 
@@ -808,6 +844,21 @@ function ImagesInner() {
                 </Link>
               )}
             </div>
+            {/* Warn before the wall, not only at it. With 自动清理 on there is
+                nothing for the user to do, so it stays quiet. */}
+            {storage && !storage.autoClean && (storageTight || storage.used >= storage.limit * 0.9) && (
+              <div className={`mb-2.5 flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs leading-relaxed ${
+                storageTight ? 'border-err/30 bg-err/5 text-err' : 'border-warn/30 bg-warn/5 text-warn'}`}>
+                <span>
+                  {storageTight
+                    ? t('图片空间不够生成新图片了:已用 {used} / {limit}', { used: fmtBytes(storage.used), limit: fmtBytes(storage.limit) })
+                    : t('图片空间快满了:已用 {used} / {limit}', { used: fmtBytes(storage.used), limit: fmtBytes(storage.limit) })}
+                </span>
+                <Button size="xs" variant="outline" onClick={() => setCleanupOpen(true)}>
+                  <BrushCleaning size={13} />{t('清理空间')}
+                </Button>
+              </div>
+            )}
             {!galleryLoaded ? (
               <div className="flex justify-center py-16 text-tx3"><Spinner className="h-5 w-5" /></div>
             ) : list.length === 0 ? (
@@ -977,6 +1028,16 @@ function ImagesInner() {
           setList((prev) => prev.filter((x) => x.id !== img.id));
           setTotal((t) => Math.max(0, t - 1));
           setLightbox(null);
+          refreshStorage();
+        }}
+      />
+
+      <ImageCleanupDialog
+        open={cleanupOpen}
+        onClose={() => setCleanupOpen(false)}
+        onChanged={() => {
+          setGenError((e) => (e?.quota ? null : e));
+          void reloadGallery();
         }}
       />
     </div>

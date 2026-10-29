@@ -31,6 +31,9 @@ export default {
   '附件存储配额已满': 'Attachment storage is full',
   '「{name}」无法上传。到「设置 › 附件存储」查看占用并删除不再需要的附件?':
     '"{name}" could not be uploaded. Open Settings › Attachment storage to review what is stored and delete what you no longer need?',
+  '图片存储空间不足': 'Image storage is full',
+  '这次没能生成图片。到作品集删掉一些旧图片,或开启「空间不够时自动删除最早的图片」后再试。现在去作品集吗?':
+    'The image could not be generated. Delete some old images in the Gallery, or turn on “Delete the oldest images automatically when space runs out”, then try again. Go to the Gallery now?',
   '清理附件失败': 'Failed to clean up the attachment',
   '松开鼠标，添加参考图': 'Drop to add a reference image',
   '松开鼠标，附件将随消息发送': 'Drop to attach to your message',

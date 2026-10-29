@@ -51,9 +51,10 @@ import {
   tryAcquireChatTurn, tryAcquireImageJob, tryReserveContextImageBytes, type AdmissionLease,
 } from '../admission.js';
 import {
-  getOwnedImageMedia, getOwnedUploadMedia, isTextDocMime, quotaErrorMessage, readMediaBase64,
-  cleanupUnreferencedUploads, tryReserveStorage, uploadIdsFromPartsJson,
+  getOwnedImageMedia, getOwnedUploadMedia, isTextDocMime, readMediaBase64,
+  cleanupUnreferencedUploads, uploadIdsFromPartsJson,
   type OwnedMedia, type StorageReservation, hasCompanionText } from '../storage.js';
+import { imageQuotaError, trimImagesToQuota, tryReserveImageStorage } from '../image-cleanup.js';
 import { extractDocText, wrapDocAttachment } from '../doc-text.js';
 import {
   allConfiguredSecretValues, redactSensitiveText, redactSensitiveValue, StreamingSecretRedactor,
@@ -1504,9 +1505,9 @@ export async function chatRoutes(app: FastifyInstance) {
         });
       }
       imageLease = admission.lease;
-      const reserved = tryReserveStorage(user.id, 'image', config.maxGeneratedImageBytes);
+      const reserved = tryReserveImageStorage(user.id, config.maxGeneratedImageBytes);
       if (!reserved.ok) {
-        return reply.code(413).send({ error: quotaErrorMessage('image', reserved.reason) });
+        return reply.code(413).send(imageQuotaError(user.id, reserved.reason));
       }
       imageReservation = reserved.reservation;
     }
@@ -2054,6 +2055,12 @@ export async function chatRoutes(app: FastifyInstance) {
           };
           parts.push(part);
           sse.send('image', part);
+        }
+        // 自动清理 makes room for the new picture by dropping the oldest
+        // workshop images; it never touches chat-born ones.
+        if (generated.length && imageReservation) {
+          try { trimImagesToQuota(user.id, imageReservation.createdAt); }
+          catch (err) { req.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Image auto-clean failed'); }
         }
         if (result.text) {
           consumeOutput(result.text.length);

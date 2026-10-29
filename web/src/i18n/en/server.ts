@@ -224,7 +224,10 @@ export default {
   'Provider 返回的图片类型与内容不一致': 'The image type the provider reported doesn\'t match its content',
   '服务器存储空间配额已满,请联系管理员清理文件': 'Server storage is full — ask an admin to free up space',
   '你的附件存储配额已满,请删除不再需要的附件': 'Your attachment storage is full — delete attachments you no longer need',
-  '你的生成图片存储配额已满,请先在画廊中删除部分图片': 'Your generated-image storage is full — delete some images in the Gallery first',
+  '图片存储空间不足,请到作品集「清理空间」删除旧图,或开启自动清理':
+    'Not enough image storage — use “Free up space” in the Gallery to delete old images, or turn on auto-cleanup',
+  '图片存储空间不足,自动清理也腾不出足够空间(对话里生成的图片不会被自动删除),请到作品集手动清理':
+    'Not enough image storage, and auto-cleanup can’t free enough (images generated in chats are never deleted automatically) — free up space in the Gallery',
 
   // ---- workspace ----
   '无效的对话': 'Invalid chat',
