@@ -22,6 +22,7 @@ import {
 } from '../storage.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
 import { novelaiSchema, NAI_MODELS } from '../novelai.js';
+import { openaiImageSettingsSchema } from '../openai-image-settings.js';
 
 const MAX_HISTORY_TURNS = 12;
 type ConvoTurn = { role: 'user' | 'assistant'; text: string };
@@ -161,6 +162,7 @@ export async function imageRoutes(app: FastifyInstance) {
       accessMode: schema.models.accessMode,
       providerName: schema.providers.name,
       providerType: schema.providers.type,
+      openaiImageSettings: schema.models.openaiImageSettings,
     }).from(schema.models)
       .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
       .where(and(
@@ -170,7 +172,9 @@ export async function imageRoutes(app: FastifyInstance) {
       ))
       .orderBy(schema.models.sortOrder)
       .all();
-    return accessibleOnly(rows, req.user!).filter(m => m.providerType !== 'novelai' || NAI_MODELS.includes(m.modelId as typeof NAI_MODELS[number])).map(({ accessMode: _, ...m }) => m);
+    return accessibleOnly(rows, req.user!).filter(m => m.providerType !== 'novelai' || NAI_MODELS.includes(m.modelId as typeof NAI_MODELS[number])).map(({ accessMode: _, ...m }) => ({
+      ...m, openaiImageSettings: m.providerType === 'openai' && !!m.openaiImageSettings,
+    }));
   });
 
   app.post('/api/images/generate', async (req, reply) => {
@@ -180,7 +184,8 @@ export async function imageRoutes(app: FastifyInstance) {
     }
     const body = generateSchema.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: '参数错误' });
-    const { modelId, prompt, size, quality, n, inputUploadIds, history = [] } = body.data;
+    const { modelId, prompt, n, inputUploadIds, history = [] } = body.data;
+    let { size, quality } = body.data;
     const attachmentLimit = maxAttachmentsPerMessage();
     if ((inputUploadIds?.length ?? 0) > attachmentLimit) {
       return reply.code(413).send({ error: `每次最多添加 ${attachmentLimit} 个附件` });
@@ -205,6 +210,18 @@ export async function imageRoutes(app: FastifyInstance) {
     } else if (body.data.novelai) return reply.code(400).send({ error: '该模型不支持 NAI 参数' });
     if (!canUseModel(req.user!, model.id)) {
       return reply.code(403).send({ error: '该模型未对你开放' });
+    }
+    if (provider.type === 'openai') {
+      if (model.openaiImageSettings) {
+        const settings = openaiImageSettingsSchema.safeParse({ size, quality });
+        if (!settings.success) {
+          return reply.code(400).send({ error: 'OpenAI 图像质量须为 low、medium 或 high,分辨率须符合 GPT Image 2.5 的尺寸限制' });
+        }
+        ({ size, quality } = settings.data);
+        Object.assign(body.data, settings.data);
+      } else if (size !== undefined || quality !== undefined) {
+        return reply.code(400).send({ error: '请先在模型详情中开启 OpenAI 质量/分辨率设置' });
+      }
     }
     // Image generation has no cheaper fallback, so over-quota always refuses.
     const quota = checkQuota(req.user!.id);

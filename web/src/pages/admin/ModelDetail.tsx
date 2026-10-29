@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronDown, ChevronUp, Plus, Upload, X } from 'lucide-react';
 import { api, errMsg } from '../../api';
 import {
-  Badge, Button, Card, EmptyState, Field, Input, Select, SegmentedControl, Spinner, Textarea, toast,
+  Badge, Button, Card, EmptyState, Field, Input, Select, SegmentedControl, Spinner, Textarea, ToggleRow, toast,
 } from '../../components/ui';
 import { ProviderAvatar } from '../../components/ModelAvatar';
 import { t } from '../../i18n';
@@ -17,6 +17,26 @@ import { adminModelLabel } from './settings-common';
 
 const MODE_LABELS: Record<ReasoningMode, string> = { auto: t('默认'), custom: t('自定义'), off: t('关闭@@off') };
 const DESCRIPTION_MAX = 500;
+
+function OpenAIImageCard({ model, reload }: { model: AdminModel; reload(): Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  async function save(enabled: boolean) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.patch(`/api/admin/models/${model.id}`, { openaiImageSettings: enabled });
+      await reload();
+      toast(t('已更新图像设置'), 'ok');
+    } catch (err) { toast(errMsg(err), 'err'); }
+    finally { setBusy(false); }
+  }
+  return <Card title={t('OpenAI 质量/分辨率设置')}
+    desc={t('按 GPT Image 2.5 Flare / Sunburst 规格设置,适用于支持这些参数的 OpenAI 兼容图像模型。')}>
+    <ToggleRow label={t('在绘图工坊中启用质量和分辨率')}
+      desc={t('开启后可选择 low、medium、high 质量和常用或自定义分辨率,质量最高为 high。')}
+      checked={!!model.openaiImageSettings} disabled={busy} onChange={save} />
+  </Card>;
+}
 
 function FallbackCard({ model, providers, reload }: { model: AdminModel; providers: AdminProvider[]; reload(): Promise<void> }) {
   const [selected, setSelected] = useState(model.fallbackModelId ?? '');
@@ -530,6 +550,7 @@ export default function ModelDetail() {
 
       <IconCard provider={provider} model={model} reload={load} />
       <DescriptionCard model={model} reload={load} />
+      {model.imageGen && provider.type === 'openai' && <OpenAIImageCard key={model.id} model={model} reload={load} />}
       {!model.imageGen && <FallbackCard key={`${model.id}:${model.fallbackModelId ?? ''}`} model={model} providers={allProviders} reload={load} />}
       <PricingCard model={model} reload={load} />
       <UsageLimitCard model={model} reload={load} />

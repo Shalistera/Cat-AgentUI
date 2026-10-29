@@ -308,6 +308,7 @@ export interface McpServerInfo {
 export interface ImageModel {
   id: string; modelId: string; displayName: string | null;
   providerName: string; providerType: string;
+  openaiImageSettings: boolean;
 }
 
 export interface ImageRecord {
@@ -426,6 +427,7 @@ export interface AdminModel {
   /** Content-addressed URL of the model's custom icon; null = provider avatar / brand mark. */
   avatarUrl: string | null;
   vision: boolean; tools: boolean; imageGen: boolean; enabled: boolean;
+  openaiImageSettings: boolean;
   isDefault: boolean; sortOrder: number;
   defaultWebSearch: boolean;
   accessMode: ModelAccessMode;

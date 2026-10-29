@@ -126,6 +126,7 @@ export const models = sqliteTable('models', {
   vision: integer('vision').notNull().default(1),
   tools: integer('tools').notNull().default(1),
   imageGen: integer('image_gen').notNull().default(0),
+  openaiImageSettings: integer('openai_image_settings').notNull().default(0),
   // Where the reasoning ladder comes from: 'auto' derives the vendor's common
   // tiers from the model id, 'custom' uses reasoningLevels verbatim, 'off' says
   // the model has no reasoning mode so the control is hidden. See reasoning.ts.

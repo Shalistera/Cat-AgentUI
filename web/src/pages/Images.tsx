@@ -14,6 +14,8 @@ import {
 } from '../components/ui';
 import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGallery';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
+import { DEFAULT_OPENAI_IMAGE_OPTIONS, OpenAIImageSettings, openaiImageSize, openaiImageSizeError } from '../components/OpenAIImageSettings';
+import type { OpenAIImageOptions } from '../components/OpenAIImageSettings';
 import { Markdown } from '../components/Markdown';
 import { retryStatusText } from '../components/ChatMessage';
 import { t, tServer, locale } from '../i18n';
@@ -93,6 +95,7 @@ function ImagesInner() {
   const [modelId, setModelId] = useState('');
   const [prompt, setPrompt] = useState('');
   const [n, setN] = useState(1);
+  const [imageOptions, setImageOptions] = useState<Record<string, OpenAIImageOptions>>({});
   // Fixed reference slots: 图1/图2/图3 are stable positions — uploading or
   // removing one never shifts the others.
   const [refSlots, setRefSlots] = useState<(string | null)[]>(Array(MAX_REFS).fill(null));
@@ -404,6 +407,12 @@ function ImagesInner() {
 
   async function submit(mid: string, p: string, history?: ConvoTurn[], retryRequest?: ImageRequest): Promise<boolean> {
     if (uploading || busyModels.has(mid)) return false;
+    const enabled = models?.some((m) => m.id === mid && m.providerType === 'openai' && m.openaiImageSettings);
+    const options = imageOptions[mid] ?? DEFAULT_OPENAI_IMAGE_OPTIONS;
+    if (enabled && !retryRequest) {
+      const error = openaiImageSizeError(options);
+      if (error) { toast(error, 'err'); return false; }
+    }
     const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
     if ((retryRequest ? retryRequest.inputUploadIds ?? [] : refSlots.filter(Boolean)).length > limit) {
       toast(t('参考图最多 {limit} 张,请移除多余附件', { limit }), 'err'); return false;
@@ -414,6 +423,7 @@ function ImagesInner() {
     try {
       const body: ImageRequest = retryRequest ?? {
         modelId: mid, prompt: p, n, history,
+        ...(enabled ? { quality: options.quality, size: openaiImageSize(options) } : {}),
         inputUploadIds: refSlots.filter((x): x is string => !!x),
       };
       const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
@@ -522,6 +532,11 @@ function ImagesInner() {
                     </Select>
                   </Field>
                 </div>
+
+                {model?.providerType === 'openai' && model.openaiImageSettings && <OpenAIImageSettings
+                  value={imageOptions[model.id] ?? DEFAULT_OPENAI_IMAGE_OPTIONS}
+                  onChange={(value) => setImageOptions((prev) => ({ ...prev, [model.id]: value }))}
+                />}
 
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">

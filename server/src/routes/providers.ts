@@ -48,6 +48,7 @@ function publicModel(m: ModelRow, type: ProviderType, allowedUserIds?: string[])
     vision: !!m.vision,
     tools: !!m.tools,
     imageGen: !!m.imageGen,
+    openaiImageSettings: type === 'openai' && !!m.imageGen && !!m.openaiImageSettings,
     // Like the provider avatar, only the content-addressed URL is inlined.
     avatarUrl: m.avatar ? modelAvatarUrl(m.id, m.avatar) : null,
     accessMode: m.accessMode === 'system' ? 'system' : m.accessMode === 'restricted' ? 'restricted' : 'shared',
@@ -299,6 +300,7 @@ const modelPatchSchema = z.object({
   vision: z.boolean().optional(),
   tools: z.boolean().optional(),
   imageGen: z.boolean().optional(),
+  openaiImageSettings: z.boolean().optional(),
   reasoningMode: z.enum(['auto', 'custom', 'off']).optional(),
   // Blank rows and duplicates are tolerated and stripped below — rejecting them
   // would 400 a whole ladder because of one half-typed line.
@@ -1040,6 +1042,12 @@ export async function providerRoutes(app: FastifyInstance) {
     if (d.vision !== undefined) patch.vision = d.vision ? 1 : 0;
     if (d.tools !== undefined) patch.tools = d.tools ? 1 : 0;
     if (d.imageGen !== undefined) patch.imageGen = d.imageGen ? 1 : 0;
+    if (d.openaiImageSettings === true
+      && (getProvider(row.providerId)?.type !== 'openai' || !(d.imageGen ?? !!row.imageGen))) {
+      return reply.code(400).send({ error: 'OpenAI 质量/分辨率设置仅适用于 OpenAI 图像模型' });
+    }
+    if (d.openaiImageSettings !== undefined) patch.openaiImageSettings = d.openaiImageSettings ? 1 : 0;
+    if (d.imageGen === false) patch.openaiImageSettings = 0;
     if (d.reasoningLevels !== undefined) {
       patch.reasoningLevels = JSON.stringify(normalizeLevels(d.reasoningLevels));
     }

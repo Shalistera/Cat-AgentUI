@@ -288,6 +288,13 @@
       "when": 1792195200000,
       "tag": "0040_vertex_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1793232000000,
+      "tag": "0041_openai_image_settings",
+      "breakpoints": true
     }
   ]
 }
