@@ -23,10 +23,13 @@ const adapter = getAdapter('openai');
 const originalStream = adapter.streamChat;
 let calls = [];
 let failFirst = false;
+let lastRequest = null;
+let reply = ['译文'];
 adapter.streamChat = async function* (_cfg, request) {
   calls.push({ model: request.model, reasoning: request.reasoning });
+  lastRequest = request;
   if (failFirst && calls.length === 1) throw new Error('fixture unavailable');
-  yield { type: 'text', text: '译文' };
+  for (const text of reply) yield { type: 'text', text };
 };
 const request = (method, url, payload, user = 'admin') => app.inject({ method, url, payload,
   headers: { 'x-csrf': '1', cookie: `cat_session=${user}-session` } });
@@ -149,7 +152,40 @@ try {
   assert.equal((await save({ translateDefaultModels: [], translateFastModels: [entry('a', 'fast')] })).statusCode, 200);
   assert.equal((await request('GET', '/api/translate/config', undefined, 'alice')).json().default, false, 'explicitly empty default chain does not fall back to fast');
   assert.equal((await request('POST', '/api/translate/stream', { text: 'text', source: 'en', target: 'zh-CN', mode: 'default' }, 'alice')).statusCode, 400);
-  console.log('PASS: explicit fast/think override presets, default mode isolation, translation defaults, native tiers, fallback isolation, legacy compatibility, validation and admin authorization.');
+
+  // Prompt shape: the text is fenced in the user turn with the task restated
+  // after it. With 自动检测 the model's `#lang:<source>><target>` line (or a
+  // bare `#lang:xx`) becomes the detected event and never reaches the result.
+  const streamed = async (source, chunks) => {
+    reply = chunks;
+    const res = await request('POST', '/api/translate/stream', { text: '爪が出っぱなし', source, target: 'zh-CN', mode: 'fast' }, 'alice');
+    assert.equal(res.statusCode, 200, res.body);
+    const evs = res.body.split('\n\n').filter((b) => b.startsWith('event:')).map((b) => {
+      const [ev, data] = b.split('\n');
+      return { event: ev.slice(7), data: JSON.parse(data.slice(6)) };
+    });
+    return {
+      text: evs.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''),
+      detected: evs.find((e) => e.event === 'detected')?.data.lang ?? null,
+      user: lastRequest.messages[0].parts[0].text,
+      system: lastRequest.system,
+    };
+  };
+  for (const [chunks, lang] of [[['#lang:ja', '>zh-CN\n', '译文'], 'ja'], [['#lang: ko -> zh-CN\n译文'], 'ko'], [['#lang:zh-TW->zh-CN\n译文'], 'zh-tw'], [['#lang:en\n译文'], 'en'], [['译文'], null]]) {
+    const r = await streamed('auto', chunks);
+    assert.equal(r.text, '译文', JSON.stringify(chunks));
+    assert.equal(r.detected, lang, JSON.stringify(chunks));
+    assert(r.user.startsWith('<source>\n爪が出っぱなし\n</source>\n\n'), r.user);
+    assert.match(r.user, /翻译成简体中文。第一行写 #lang:源语言代码>zh-CN,从第二行起只写简体中文译文。$/);
+    assert.match(r.system, /第一行只输出 `#lang:源语言代码>zh-CN`/);
+  }
+  const fixed = await streamed('ja', ['#lang:ja>zh-CN\n译文']);
+  assert.equal(fixed.text, '#lang:ja>zh-CN\n译文', 'a chosen source language has no marker to strip');
+  assert.equal(fixed.detected, null);
+  assert.match(fixed.user, /翻译成简体中文。只写译文。$/);
+  assert.doesNotMatch(fixed.system, /#lang/);
+  assert.match(fixed.system, /从日语翻译成简体中文/);
+  console.log('PASS: explicit fast/think override presets, default mode isolation, translation defaults, native tiers, fallback isolation, legacy compatibility, validation, admin authorization and prompt shape.');
 } finally {
   adapter.streamChat = originalStream;
   await app.close();
