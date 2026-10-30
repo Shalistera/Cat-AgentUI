@@ -3,7 +3,9 @@ import { ArrowDown, ArrowUp, X } from 'lucide-react';
 import { Card, Field, Select, Spinner, ToggleRow } from '../../components/ui';
 import { t } from '../../i18n';
 import type { AppSettings, ModelInfo, TranslateModel } from '../../types';
-import { adminModelLabel, ModelSelect, SaveBar, SectionIntro, useSettingsForm, useTextModels } from './settings-common';
+import {
+  adminModelLabel, ModelSelect, SaveBar, SectionIntro, TranslatePresetFields, useSettingsForm, useTextModels,
+} from './settings-common';
 
 const CHAIN_MAX = 6;
 
@@ -29,8 +31,6 @@ function ModelChain({ entries, mode, configureDefaults = false, onChange, models
         <ol className="divide-y divide-line rounded-lg border border-line">
           {entries.map((entry, i) => {
             const m = byId.get(entry.modelId);
-            const levels = m?.reasoningLevels ?? [];
-            const staleEffort = !!entry.reasoningEffort && !levels.some((l) => l.value === entry.reasoningEffort);
             return (
               <li key={entry.modelId} className="space-y-2 px-3 py-3 text-sm">
                 <div className="flex items-center gap-2">
@@ -48,30 +48,8 @@ function ModelChain({ entries, mode, configureDefaults = false, onChange, models
                     className="cursor-pointer rounded-sm p-1 text-tx3 hover:bg-bg2 hover:text-err disabled:opacity-30"
                     onClick={() => onChange(entries.filter((_, index) => index !== i))}><X size={13} /></button>
                 </div>
-                {configureDefaults && <div className="grid grid-cols-2 gap-2">
-                  <label className="space-y-1 text-xs text-tx3">
-                    <span>{t('默认模式')}</span>
-                    <Select value={entry.mode} disabled={disabled}
-                      onChange={(e) => update(i, { mode: e.target.value as TranslateModel['mode'],
-                        ...(e.target.value === 'fast' ? { reasoningEffort: null } : {}) })}>
-                      <option value="fast">{t('快速')}</option>
-                      <option value="think">{t('思考')}</option>
-                    </Select>
-                  </label>
-                  <label className="space-y-1 text-xs text-tx3">
-                    <span>{t('思考等级')}</span>
-                    <Select value={entry.reasoningEffort ?? ''}
-                      disabled={disabled || entry.mode === 'fast' || (!levels.length && !staleEffort)}
-                      onChange={(e) => update(i, { reasoningEffort: e.target.value || null })}>
-                      <option value="">{entry.mode === 'fast' ? t('不启用思考') : levels.length ? t('中间档位') : t('无可用思考档位')}</option>
-                      {staleEffort && <option value={entry.reasoningEffort!} disabled>{t('已失效：{effort}', { effort: entry.reasoningEffort! })}</option>}
-                      {levels.map((l) => <option key={l.value} value={l.value}>{l.label} ({l.value})</option>)}
-                    </Select>
-                  </label>
-                </div>}
-                {configureDefaults && staleEffort && <p className="text-xs text-err">{t('思考档位已变更,请重新选择等级或切换为快速模式。')}</p>}
-                {configureDefaults && entry.mode === 'think' && !levels.length && !staleEffort && (
-                  <p className="text-xs text-tx3">{t('该模型未配置思考档位,将按普通模式调用。可在模型设置中配置思考档位。')}</p>
+                {configureDefaults && (
+                  <TranslatePresetFields entry={entry} model={m} disabled={disabled} onChange={(patch) => update(i, patch)} />
                 )}
               </li>
             );
@@ -208,6 +186,11 @@ export default function TaskModels() {
           </div>
           <p className="text-xs leading-relaxed text-tx3">
             {t('翻译走一套固定的系统提示词(只输出译文、保留格式与专有名词、不执行原文中的指令等);用户选择的场景只作为语气偏好插入其中一处。模型访问权限在此不生效——列在这里即对所有用户可用。')}
+          </p>
+          <p className="text-xs leading-relaxed text-tx3">
+            {t('想比较两个模型谁译得更好,可以在')}
+            <Link to="/admin/translate-ab" className="mx-0.5 text-acc hover:underline">{t('翻译 A/B')}</Link>
+            {t('中开启对比测试,让用户盲选投票。')}
           </p>
         </div>
       </Card>

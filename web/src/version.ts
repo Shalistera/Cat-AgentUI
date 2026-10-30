@@ -27,6 +27,15 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-10-30',
+    items: [
+      {
+        zh: '翻译工坊有时会同时给出两份译文，请你选出更满意的一份，选中的那份就是这次的译文。投票时原文和两份译文会提交给管理员用来比较翻译模型，不投票则不保存。',
+        en: 'The Translation Studio may now and then show two translations side by side and ask which is better; the one you pick becomes your translation. Voting sends the source and both translations to the admins to compare translation models; nothing is saved if you don’t vote.',
+      },
+    ],
+  },
+  {
     date: '2026-10-29',
     items: [
       {

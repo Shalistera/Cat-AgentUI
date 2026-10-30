@@ -314,4 +314,10 @@ export default {
   '已取消更新': 'Update cancelled',
   '服务在等待期间被重启,已让更新助手完成切换': 'The service was restarted while waiting; the update helper was told to finish switching over',
   '任务进行中服务被重启或中断,已让更新助手回滚': 'The service was restarted or stopped while the job was running; the update helper was told to roll back',
+  '开启 A/B 对比前,请选好模型 A 和模型 B': 'Pick model A and model B before turning on A/B comparison',
+  'A/B 对比的两个模型不能相同': 'The two A/B models must be different',
+  '这次对比已失效,请重新翻译': 'This comparison has expired — translate again',
+  '这次对比已经投过票了': 'This comparison already has a vote',
+  '模型没有返回译文': 'The model returned no translation',
+  '记录不存在': 'Record not found',
 } satisfies Record<string, string>;

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api, errMsg } from '../../api';
 import { Button, Select, Spinner, confirmDialog, toast } from '../../components/ui';
 import { t } from '../../i18n';
-import type { AppSettings, ModelInfo } from '../../types';
+import type { AppSettings, ModelInfo, TranslateModel } from '../../types';
 
 /* Shared plumbing for the admin pages carved out of the old 站点设置 page
    (通用 / 任务模型 / 存储空间). They all edit slices of the same
@@ -112,6 +112,44 @@ export function ModelSelect({ value, onChange, models, emptyLabel, disabled }: {
       )}
       {list.map((m) => <option key={m.id} value={m.id}>{adminModelLabel(m)}</option>)}
     </Select>
+  );
+}
+
+/** 默认模式 + 思考等级 for one translation model — a default-chain entry or an
+    A/B slot. Only the user's 「默认」 consults it. */
+export function TranslatePresetFields({ entry, model, disabled, onChange }: {
+  entry: TranslateModel; model: ModelInfo | undefined; disabled?: boolean; onChange(patch: Partial<TranslateModel>): void;
+}) {
+  const levels = model?.reasoningLevels ?? [];
+  const staleEffort = !!entry.reasoningEffort && !levels.some((l) => l.value === entry.reasoningEffort);
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="space-y-1 text-xs text-tx3">
+          <span>{t('默认模式')}</span>
+          <Select value={entry.mode} disabled={disabled}
+            onChange={(e) => onChange({ mode: e.target.value as TranslateModel['mode'],
+              ...(e.target.value === 'fast' ? { reasoningEffort: null } : {}) })}>
+            <option value="fast">{t('快速')}</option>
+            <option value="think">{t('思考')}</option>
+          </Select>
+        </label>
+        <label className="space-y-1 text-xs text-tx3">
+          <span>{t('思考等级')}</span>
+          <Select value={entry.reasoningEffort ?? ''}
+            disabled={disabled || entry.mode === 'fast' || (!levels.length && !staleEffort)}
+            onChange={(e) => onChange({ reasoningEffort: e.target.value || null })}>
+            <option value="">{entry.mode === 'fast' ? t('不启用思考') : levels.length ? t('中间档位') : t('无可用思考档位')}</option>
+            {staleEffort && <option value={entry.reasoningEffort!} disabled>{t('已失效：{effort}', { effort: entry.reasoningEffort! })}</option>}
+            {levels.map((l) => <option key={l.value} value={l.value}>{l.label} ({l.value})</option>)}
+          </Select>
+        </label>
+      </div>
+      {staleEffort && <p className="text-xs text-err">{t('思考档位已变更,请重新选择等级或切换为快速模式。')}</p>}
+      {entry.mode === 'think' && !levels.length && !staleEffort && (
+        <p className="text-xs text-tx3">{t('该模型未配置思考档位,将按普通模式调用。可在模型设置中配置思考档位。')}</p>
+      )}
+    </>
   );
 }
 

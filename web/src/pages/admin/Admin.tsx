@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowUpDown, BarChart3, Bot, Boxes, CircleFadingArrowUp, DatabaseBackup, HardDrive, Plug, Settings2, ShieldCheck, Sparkles, Terminal,
+  ArrowUpDown, BarChart3, Bot, Boxes, CircleFadingArrowUp, DatabaseBackup, HardDrive, Plug, Scale, Settings2, ShieldCheck, Sparkles, Terminal,
   Users as UsersIcon, Workflow, Wrench, X,
 } from 'lucide-react';
 import { Button, useConfirm } from '../../components/ui';
@@ -18,6 +18,7 @@ import ModelOrder from './ModelOrder';
 import Mcp from './Mcp';
 import GeneralSettings from './GeneralSettings';
 import TaskModels from './TaskModels';
+import TranslateAb from './TranslateAb';
 import Storage from './Storage';
 import Backup from './Backup';
 import Sandbox from './Sandbox';
@@ -39,6 +40,7 @@ const SECTIONS: { to: string; label: string; icon: typeof BarChart3; end?: boole
   { to: '/admin/models', label: t('模型设置'), icon: Boxes },
   { to: '/admin/model-order', label: t('模型排序'), icon: ArrowUpDown },
   { to: '/admin/task-models', label: t('任务模型'), icon: Workflow },
+  { to: '/admin/translate-ab', label: t('翻译 A/B'), icon: Scale },
   { to: '/admin/agent', label: t('总控'), icon: Bot, group: t('Agent 能力') },
   { to: '/admin/mcp', label: 'MCP', icon: Wrench },
   { to: '/admin/sandbox', label: t('沙盒'), icon: Terminal },
@@ -145,6 +147,7 @@ export default function Admin() {
                 <Route path="skills" element={<Skills />} />
                 <Route path="agent" element={<AgentSettingsPage />} />
                 <Route path="task-models" element={<TaskModels />} />
+                <Route path="translate-ab" element={<TranslateAb />} />
                 <Route path="settings" element={<GeneralSettings />} />
                 <Route path="storage" element={<Storage />} />
                 <Route path="backup" element={<Backup />} />

@@ -295,6 +295,13 @@
       "when": 1793232000000,
       "tag": "0041_openai_image_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1793318400000,
+      "tag": "0042_translate_ab",
+      "breakpoints": true
     }
   ]
 }

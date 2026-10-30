@@ -29,7 +29,10 @@ import {
   MAX_USER_UPLOAD_MB, MAX_USER_UPLOAD_MB_KEY, maxUserUploadMb,
   removeOrphanFiles, removeUnreferencedUploads, storageOverview, unlinkStoredFiles,
 } from '../storage.js';
-import { readTranslateChain, translateModelSchema, TRANSLATE_CHAIN_MAX, TRANSLATE_DEFAULT_KEY, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel } from '../translate-settings.js';
+import {
+  readTranslateAb, readTranslateChain, translateAbSchema, translateModelSchema, TRANSLATE_AB_KEY, TRANSLATE_CHAIN_MAX,
+  TRANSLATE_DEFAULT_KEY, TRANSLATE_FAST_KEY, TRANSLATE_THINK_KEY, type TranslateModel,
+} from '../translate-settings.js';
 import { effectiveLevels } from '../reasoning.js';
 import { COMPACTION_MODEL_KEY, COMPACTION_FALLBACK_KEY } from '../compaction.js';
 import type { ProviderType } from '../types.js';
@@ -187,7 +190,22 @@ const settingsSchema = z.object({
   translateThinkModels: z.array(translateModelSchema).max(TRANSLATE_CHAIN_MAX).optional(),
   translateFastModelIds: z.array(z.string().max(64)).max(TRANSLATE_CHAIN_MAX).optional(),
   translateThinkModelIds: z.array(z.string().max(64)).max(TRANSLATE_CHAIN_MAX).optional(),
+  translateAb: translateAbSchema.optional(), // 翻译 A/B 对比:两个模型 + 出现率
 });
+
+/** Why a translation model entry can't be saved, or null when it can. */
+function translateEntryError(entry: TranslateModel): string | null {
+  const row = db.select().from(schema.models)
+    .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
+    .where(eq(schema.models.id, entry.modelId)).get();
+  if (!row || row.models.imageGen) return '翻译模型无效,请选择文本模型';
+  const levels = effectiveLevels(row.models.reasoningMode, row.models.reasoningLevels,
+    row.providers.type as ProviderType, row.models.modelId);
+  if (entry.reasoningEffort !== null && !levels.some((l) => l.value === entry.reasoningEffort)) {
+    return `翻译模型「${row.models.displayName || row.models.modelId}」不支持所选思考等级,请重新选择`;
+  }
+  return null;
+}
 
 const ANNOUNCEMENT_KEY = 'announcement';
 const ANNOUNCEMENT_AT_KEY = 'announcement_updated_at';
@@ -538,6 +556,7 @@ export async function adminRoutes(app: FastifyInstance) {
       translateThinkModels: readTranslateChain(TRANSLATE_THINK_KEY),
       translateFastModelIds: readTranslateChain(TRANSLATE_FAST_KEY).map((m) => m.modelId),
       translateThinkModelIds: readTranslateChain(TRANSLATE_THINK_KEY).map((m) => m.modelId),
+      translateAb: readTranslateAb(),
     };
   };
 
@@ -572,17 +591,19 @@ export async function adminRoutes(app: FastifyInstance) {
       if (entries === undefined) continue;
       const unique = [...new Map(entries.map((m) => [m.modelId, m])).values()];
       for (const entry of unique) {
-        const row = db.select().from(schema.models)
-          .innerJoin(schema.providers, eq(schema.models.providerId, schema.providers.id))
-          .where(eq(schema.models.id, entry.modelId)).get();
-        if (!row || row.models.imageGen) return reply.code(400).send({ error: '翻译模型无效,请选择文本模型' });
-        const levels = effectiveLevels(row.models.reasoningMode, row.models.reasoningLevels,
-          row.providers.type as ProviderType, row.models.modelId);
-        if (entry.reasoningEffort !== null && !levels.some((l) => l.value === entry.reasoningEffort)) {
-          return reply.code(400).send({ error: `翻译模型「${row.models.displayName || row.models.modelId}」不支持所选思考等级,请重新选择` });
-        }
+        const error = translateEntryError(entry);
+        if (error) return reply.code(400).send({ error });
       }
       translateUpdates.push([key, unique]);
+    }
+    const ab = body.data.translateAb;
+    if (ab) {
+      if (ab.enabled && (!ab.a || !ab.b)) return reply.code(400).send({ error: '开启 A/B 对比前,请选好模型 A 和模型 B' });
+      if (ab.a && ab.b && ab.a.modelId === ab.b.modelId) return reply.code(400).send({ error: 'A/B 对比的两个模型不能相同' });
+      for (const entry of [ab.a, ab.b]) {
+        const error = entry && translateEntryError(entry);
+        if (error) return reply.code(400).send({ error });
+      }
     }
     if (body.data.signupEnabled !== undefined) setSetting('signup_enabled', body.data.signupEnabled);
     if (body.data.brand !== undefined) setSetting('brand', body.data.brand);
@@ -635,6 +656,7 @@ export async function adminRoutes(app: FastifyInstance) {
     }
     db.transaction(() => {
       for (const [key, entries] of translateUpdates) setSetting(key, entries);
+      if (ab) setSetting(TRANSLATE_AB_KEY, ab);
       if (body.data.compactionModelId !== undefined) setSetting(COMPACTION_MODEL_KEY, body.data.compactionModelId ?? '');
       if (body.data.compactionFallbackToChat !== undefined) setSetting(COMPACTION_FALLBACK_KEY, body.data.compactionFallbackToChat);
     });

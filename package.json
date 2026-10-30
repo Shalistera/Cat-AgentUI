@@ -17,6 +17,7 @@
     "test:workspace-organize": "npm run build -w server && node scripts/workspace-organize-regression.mjs",
     "test:model-fallback": "node --import tsx scripts/model-fallback-regression.mjs",
     "test:translate-settings": "npm run build -w server && node scripts/translate-settings-regression.mjs",
+    "test:translate-ab": "npm run build -w server && node scripts/translate-ab-regression.mjs",
     "test:image-tool": "npm run build -w server && node scripts/image-tool-regression.mjs",
     "test:openai-image-settings": "npm run build -w server && node scripts/openai-image-settings-regression.mjs",
     "test:image-cleanup": "npm run build -w server && node scripts/image-cleanup-regression.mjs",

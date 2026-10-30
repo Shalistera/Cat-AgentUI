@@ -588,6 +588,59 @@ export interface AppSettings {
   translateThinkModels: TranslateModel[];
   translateFastModelIds: string[];
   translateThinkModelIds: string[];
+  /** 翻译 A/B 对比:rate% 的翻译同时调用模型 A 与 B,由用户盲选。 */
+  translateAb: TranslateAb;
+}
+
+export interface TranslateAb {
+  enabled: boolean;
+  /** Percent of translations, 1–100. */
+  rate: number;
+  a: TranslateModel | null;
+  b: TranslateModel | null;
+}
+
+/** /api/admin/translate-ab/summary — one entry per model pair ever compared. */
+export interface TranslateAbPair {
+  modelA: string; modelB: string;
+  labelA: string; labelB: string;
+  /** The model has since been deleted; the label is the one recorded. */
+  removedA: boolean; removedB: boolean;
+  shown: number; voted: number;
+  winsA: number; winsB: number; ties: number;
+  /** Votes for whichever translation was shown first. */
+  firstPicked: number;
+  avgDurationA: number; avgDurationB: number;
+  avgTokensA: number; avgTokensB: number;
+  firstAt: number; lastAt: number;
+}
+
+export type TranslateAbVote = 'a' | 'b' | 'tie';
+
+export interface TranslateAbTrialRow {
+  id: string;
+  user: { id: string; username: string; displayName: string | null };
+  modelA: string; modelB: string;
+  labelA: string; labelB: string;
+  /** 'off', a native effort, or null for a model without a reasoning ladder. */
+  reasoningA: string | null; reasoningB: string | null;
+  /** Model B was shown first. */
+  swapped: boolean;
+  mode: 'default' | 'fast' | 'think';
+  sourceLang: string; targetLang: string;
+  sourceChars: number;
+  vote: TranslateAbVote | null;
+  preview: string | null;
+  createdAt: number; votedAt: number | null;
+}
+
+export interface TranslateAbTrial extends Omit<TranslateAbTrialRow, 'preview'> {
+  tokensA: number; tokensB: number;
+  durationA: number; durationB: number;
+  scene: string | null;
+  sourceText: string | null;
+  outputA: string | null;
+  outputB: string | null;
 }
 
 /** One file in a chat's 工作区. */

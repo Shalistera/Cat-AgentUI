@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PanelLeft, Languages, ArrowRightLeft, Copy, Check, X, Square, Pencil, Plus, Zap, Brain,
-  BookOpenText, Columns2,
+  BookOpenText, Columns2, Scale, Equal, ThumbsUp, ChevronRight,
 } from 'lucide-react';
 import { api, streamSse, fmtDuration, fmtTokens } from '../api';
 import { useAuth, useUi } from '../store';
@@ -42,6 +42,21 @@ const BUILTIN_SCENES: { id: string; name: string; text: string }[] = [
   { id: 'tech', name: t('技术文档'), text: t('技术文档:面向开发者,术语按行业惯例翻译或保留英文原文,代码、命令、参数名一律不译,表述精确简洁。') },
   { id: 'business', name: t('商务邮件'), text: t('商务邮件:礼貌、专业、简洁,符合目标语言的商务书信惯例与敬语习惯。') },
 ];
+
+/* A/B 对比: when the admin has it on, the server may answer a translation with
+   two — one per model, in random order — and ask which is better. The page
+   only ever knows them as 译文 1 / 译文 2; the vote, sent as a position, is
+   mapped back to a model server-side. Whichever the person picks becomes the
+   ordinary 译文, so voting is also simply choosing. */
+interface AbSide { text: string; thinking: boolean; stats: { totalTokens: number; durationMs: number } | null }
+type AbChoice = 'first' | 'second' | 'tie';
+interface AbState {
+  sides: [AbSide, AbSide];
+  /** Set once both translations finished and the comparison was recorded. */
+  id: string | null;
+  voting: AbChoice | null;
+}
+const emptySide = (): AbSide => ({ text: '', thinking: false, stats: null });
 
 /** Model-reported ISO code → a code in our language list, when it has one. */
 function normalizeDetected(code: string, languages: Record<string, string>, target: string): string {
@@ -162,6 +177,7 @@ export default function Translate() {
   const [copied, setCopied] = useState(false);
   // 对照阅读 is opt-in per result: never remembered, reset by every new run.
   const [compare, setCompare] = useState(false);
+  const [ab, setAb] = useState<AbState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -170,6 +186,7 @@ export default function Translate() {
   const run = useCallback(async (input: string) => {
     const body = input.trim();
     abortRef.current?.abort();
+    setAb(null);
     if (!body || !cfg) { setResult(''); setDetected(null); setError(null); setStats(null); return; }
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -177,11 +194,40 @@ export default function Translate() {
     try {
       let out = '';
       let status = 'done';
+      // A/B: events tagged with `side` fill the two columns — until `ab-void`
+      // names a survivor, whose stream then fills the ordinary 译文 pane.
+      let sides: [AbSide, AbSide] | null = null;
+      let keep: number | null = null;
+      const patchSide = (i: number, p: Partial<AbSide>) => {
+        if (!sides) return;
+        const next: [AbSide, AbSide] = [...sides];
+        next[i] = { ...next[i], ...p };
+        sides = next;
+        setAb((cur) => cur && { ...cur, sides: next });
+      };
       await streamSse('/api/translate/stream', {
         text: body, source: prefs.source, target: prefs.target,
         mode: prefs.mode, level: prefs.level, scene: activeScene.text,
       }, (event, data) => {
-        if (event === 'delta') { out += data.text ?? ''; setResult(out); }
+        const side = data.side === 0 || data.side === 1 ? data.side as number : null;
+        if (side !== null && sides && keep === null) {
+          if (event === 'delta') patchSide(side, { text: sides[side].text + (data.text ?? '') });
+          else if (event === 'thinking') patchSide(side, { thinking: true });
+          else if (event === 'usage') patchSide(side, { stats: { totalTokens: data.totalTokens ?? 0, durationMs: data.durationMs ?? 0 } });
+          return;
+        }
+        if (side !== null && side !== keep) return;
+        if (event === 'ab') {
+          sides = [emptySide(), emptySide()];
+          setAb({ sides, id: null, voting: null });
+        } else if (event === 'ab-void') {
+          keep = data.keep === 1 ? 1 : 0;
+          const survivor = sides?.[keep] ?? emptySide();
+          sides = null;
+          out = survivor.text;
+          setResult(out); setThinking(survivor.thinking); setStats(survivor.stats); setAb(null);
+        } else if (event === 'ab-ready') setAb((cur) => cur && { ...cur, id: String(data.id ?? '') || null });
+        else if (event === 'delta') { out += data.text ?? ''; setResult(out); }
         else if (event === 'detected') setDetected(String(data.lang ?? ''));
         else if (event === 'thinking') setThinking(true);
         else if (event === 'usage') setStats({ totalTokens: data.totalTokens ?? 0, durationMs: data.durationMs ?? 0 });
@@ -197,6 +243,27 @@ export default function Translate() {
   }, [cfg, prefs.source, prefs.target, prefs.mode, prefs.level, activeScene.text]);
 
   function stop() { abortRef.current?.abort(); setRunning(false); abortRef.current = null; }
+
+  /** Leave the comparison with one side as the 译文 — chosen, or by default. */
+  function adopt(side: 0 | 1) {
+    const s = ab?.sides[side];
+    setAb(null);
+    if (!s) return;
+    setResult(s.text); setStats(s.stats); setThinking(false);
+  }
+
+  async function vote(choice: AbChoice) {
+    if (!ab?.id || ab.voting) return;
+    setAb({ ...ab, voting: choice });
+    try {
+      await api.post(`/api/translate/ab/${ab.id}/vote`, { choice });
+      toast(t('已记下你的选择,谢谢'), 'ok');
+    } catch (e) {
+      // The translation they picked is still theirs; only the vote is lost.
+      toast(e instanceof Error ? tServer(e.message) : t('投票失败'), 'err');
+    }
+    adopt(choice === 'second' ? 1 : 0);
+  }
 
   function swap() {
     const detectedCode = detected ? normalizeDetected(detected, languages, prefs.target) : null;
@@ -358,10 +425,18 @@ export default function Translate() {
                 </div>
               </div>
 
+              {ab && (
+                <AbCompare
+                  ab={ab} source={text} running={running}
+                  sourceLabel={detectedLabel && prefs.source === 'auto' ? t('原文 · {lang}', { lang: detectedLabel }) : t('原文')}
+                  onVote={(c) => void vote(c)} onAdopt={adopt} onStop={stop}
+                />
+              )}
+
               {/* panes — on desktop both sides share one fixed height (each
                   scrolls itself), so a long 译文 never towers over the 原文.
                   Phones keep the stacked, auto-growing layout. */}
-              <div className={`grid gap-4 md:grid-cols-2 ${showCompare ? 'md:hidden' : ''}`}>
+              <div className={`grid gap-4 md:grid-cols-2 ${ab ? 'hidden' : showCompare ? 'md:hidden' : ''}`}>
                 <Card
                   title={t('原文')}
                   flush
@@ -432,7 +507,7 @@ export default function Translate() {
 
               {/* 对照阅读 — desktop only; paragraph i of the 原文 sits beside
                   paragraph i of the 译文, hover highlights the pair. */}
-              {showCompare && (
+              {showCompare && !ab && (
                 <Card
                   title={t('对照阅读')}
                   desc={detectedLabel && prefs.source === 'auto' ? t('检测到源语言:{lang}', { lang: detectedLabel }) : undefined}
@@ -509,6 +584,133 @@ export default function Translate() {
           </form>
         )}
       </Modal>
+    </div>
+  );
+}
+
+// Fixed column height on desktop (each column scrolls itself, like the panes
+// above); phones grow with the text.
+const AB_PANE = 'min-h-[8rem] md:h-[calc(100dvh-34rem)] md:min-h-[14rem] md:overflow-y-auto';
+
+/** The blind comparison: 原文 beside 译文 1 and 译文 2 on wide screens, folded
+    above them on narrow ones. */
+function AbCompare({ ab, source, sourceLabel, running, onVote, onAdopt, onStop }: {
+  ab: AbState; source: string; sourceLabel: string; running: boolean;
+  onVote(choice: AbChoice): void; onAdopt(side: 0 | 1): void; onStop(): void;
+}) {
+  const ready = !!ab.id;
+  // Finished without a recorded comparison (stopped, or cut short): nothing
+  // to vote on, but either translation can still be kept.
+  const unvotable = !running && !ready;
+  return (
+    <section className="fade-up overflow-hidden rounded-xl border border-line bg-bg1 shadow-xs">
+      <div className="flex items-start gap-3 border-b border-line px-5 py-3.5">
+        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-acc/10 text-acc">
+          <Scale size={14} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[13px] font-semibold tracking-tight text-tx">{t('哪一份译文更好?')}</h2>
+          <p className="mt-0.5 text-xs leading-relaxed text-tx3">
+            {unvotable
+              ? t('这次对比没有完成,不计入投票。可以任选一份继续使用。')
+              : t('这次请两个模型各译了一份,左右顺序随机。选出你更满意的那份,它就是这次的译文。')}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {running ? (
+            <Button variant="outline" size="sm" onClick={onStop}><Square size={11} fill="currentColor" />{t('停止')}</Button>
+          ) : !unvotable && (
+            <Button variant="ghost" size="sm" disabled={!!ab.voting} title={t('不投票,直接用译文 1')} onClick={() => onAdopt(0)}>
+              {t('跳过@@ab')}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <details className="group border-b border-line lg:hidden">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 px-5 py-2.5 text-xs font-medium text-tx2 hover:text-tx [&::-webkit-details-marker]:hidden">
+          <ChevronRight size={13} className="transition-transform group-open:rotate-90" />{sourceLabel}
+        </summary>
+        <div className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words px-5 pb-3 text-[14px] leading-relaxed text-tx2">{source}</div>
+      </details>
+
+      <div className="grid md:grid-cols-2 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="hidden min-w-0 flex-col bg-bg0/60 lg:flex">
+          <div className="flex h-10 items-center px-4 text-xs font-medium text-tx3">{sourceLabel}</div>
+          <div className={`${AB_PANE} whitespace-pre-wrap break-words px-4 pb-3 text-[15px] leading-relaxed text-tx2`}>{source}</div>
+        </div>
+        {ab.sides.map((side, i) => (
+          <AbColumn key={i} index={i as 0 | 1} side={side} running={running} ready={ready}
+            voting={ab.voting} unvotable={unvotable} onVote={onVote} onAdopt={onAdopt} />
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-2.5 border-t border-line px-5 py-3 sm:flex-row sm:items-center">
+        <p className="min-w-0 flex-1 text-xs leading-relaxed text-tx3">
+          {t('投票时,原文和两份译文会一并提交给管理员,用于比较翻译模型;不投票则不保存内容。')}
+        </p>
+        {!unvotable && (
+          <Button variant="outline" size="sm" disabled={!ready || !!ab.voting} onClick={() => onVote('tie')}
+            title={t('两份质量相当,用译文 1 继续')}>
+            {ab.voting === 'tie' ? <Spinner className="h-3.5 w-3.5" /> : <Equal size={13} />}{t('差不多')}
+          </Button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AbColumn({ index, side, running, ready, voting, unvotable, onVote, onAdopt }: {
+  index: 0 | 1; side: AbSide; running: boolean; ready: boolean; voting: AbChoice | null; unvotable: boolean;
+  onVote(choice: AbChoice): void; onAdopt(side: 0 | 1): void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const choice: AbChoice = index === 0 ? 'first' : 'second';
+  const chosen = voting === choice;
+  // A side is finished once its usage arrived; the other may still be going.
+  const finished = !!side.stats || !running;
+  async function copy() {
+    await navigator.clipboard.writeText(side.text);
+    setCopied(true); setTimeout(() => setCopied(false), 1500);
+  }
+  return (
+    <div className={`flex min-w-0 flex-col transition-[background-color,opacity] duration-150 ${
+      index === 0 ? 'lg:border-l' : 'border-t md:border-l md:border-t-0'} border-line ${
+      chosen ? 'bg-acc/[0.06]' : 'has-[.ab-pick:hover]:bg-acc/[0.04]'} ${voting && !chosen && voting !== 'tie' ? 'opacity-55' : ''}`}>
+      <div className="flex h-10 items-center gap-2 px-4">
+        <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold tabular-nums ${
+          chosen ? 'bg-acc text-accfg' : 'bg-bg3 text-tx2'}`}>{index + 1}</span>
+        <span className="text-xs font-medium text-tx2">{t('译文 {n}', { n: index + 1 })}</span>
+        {side.text && finished && (
+          <Button variant="ghost" size="iconSm" className="ml-auto" title={t('复制这份译文')} onClick={copy}>
+            {copied ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
+          </Button>
+        )}
+      </div>
+      <div className={`${AB_PANE} px-4 pb-3`}>
+        {side.text ? (
+          <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-tx">{side.text}</div>
+        ) : running ? (
+          // Same words for both sides: "思考中" would hint which model is which.
+          <div className="flex items-center gap-2 py-0.5 text-sm text-tx3"><Spinner className="h-4 w-4" />{t('翻译中…')}</div>
+        ) : (
+          <p className="py-0.5 text-sm text-tx3">{t('没有内容')}</p>
+        )}
+      </div>
+      <div className="border-t border-line px-4 py-2.5">
+        {unvotable ? (
+          <Button variant="outline" size="sm" className="w-full" disabled={!side.text} onClick={() => onAdopt(index)}>
+            {t('用这份')}
+          </Button>
+        ) : (
+          <Button variant={chosen ? 'primary' : 'outline'} size="sm" className="ab-pick w-full"
+            disabled={!ready || !!voting} onClick={() => onVote(choice)}
+            title={ready ? undefined : t('两份都译完后就可以选')}>
+            {chosen ? <Spinner className="h-3.5 w-3.5" /> : <ThumbsUp size={13} />}
+            {!ready && side.stats ? t('等另一份译完…') : t('这份更好')}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -42,6 +42,24 @@ export function readTranslateChain(key: string): TranslateModel[] {
   return entries;
 }
 
+// A/B 对比: with probability rate% a translation runs on two fixed models
+// side by side and the person picks the better one. Each slot carries the
+// same preset as a default-chain entry, so translateReasoning() treats it
+// exactly like one.
+export const TRANSLATE_AB_KEY = 'translate_ab';
+export const translateAbSchema = z.object({
+  enabled: z.boolean(),
+  rate: z.number().int().min(1).max(100), // percent of translations
+  a: translateModelSchema.nullable(),
+  b: translateModelSchema.nullable(),
+});
+export type TranslateAb = z.infer<typeof translateAbSchema>;
+
+export function readTranslateAb(): TranslateAb {
+  const parsed = translateAbSchema.safeParse(getSetting<unknown>(TRANSLATE_AB_KEY, null));
+  return parsed.success ? parsed.data : { enabled: false, rate: 20, a: null, b: null };
+}
+
 /** Only 'default' consults admin presets. Explicit user choices always win. */
 export function translateReasoning(
   entry: TranslateModel, mode: TranslateMode, userLevel: number,

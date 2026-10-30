@@ -460,3 +460,8 @@ html.dark .hljs-meta, html.dark .hljs-link { color: #7fc4f0; }
   --comparison-3: #34d399; --comparison-4: #facc15;
   --comparison-5: #f472b6; --comparison-6: #a78bfa;
 }
+
+/* 翻译 A/B: model A / model B poles plus a neutral tie (validated for CVD
+   separation on both surfaces). */
+.ab-palette { --ab-a: #2563eb; --ab-b: #ea580c; --ab-tie: var(--color-line2); }
+.dark .ab-palette { --ab-a: #4a8ef7; --ab-b: #e0661a; }

@@ -437,6 +437,43 @@ export const sandboxRuns = sqliteTable('sandbox_runs', {
   createdAt: integer('created_at').notNull(),
 }, (t) => [index('idx_sandbox_runs_created').on(t.createdAt)]);
 
+// 翻译工坊 A/B 对比: one row per comparison the server ran (both models
+// finished). Model "a"/"b" are the admin's configured slots; `swapped` says
+// whether model b was shown first, so votes can be checked for position bias.
+// The texts stay empty until the person votes — an ignored comparison keeps
+// only its metadata (see translate-ab.ts).
+export const translateAbTrials = sqliteTable('translate_ab_trials', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  modelA: text('model_a').notNull(), // models.id
+  modelB: text('model_b').notNull(),
+  labelA: text('label_a').notNull(), // display name at the time, survives model deletion
+  labelB: text('label_b').notNull(),
+  // Reasoning level actually sent: 'off', a native effort, or null when the
+  // model has no reasoning ladder.
+  reasoningA: text('reasoning_a'),
+  reasoningB: text('reasoning_b'),
+  swapped: integer('swapped').notNull().default(0),
+  mode: text('mode').notNull(), // the user's 'default' | 'fast' | 'think'
+  sourceLang: text('source_lang').notNull(),
+  targetLang: text('target_lang').notNull(),
+  sourceChars: integer('source_chars').notNull().default(0),
+  tokensA: integer('tokens_a').notNull().default(0),
+  tokensB: integer('tokens_b').notNull().default(0),
+  durationA: integer('duration_a').notNull().default(0),
+  durationB: integer('duration_b').notNull().default(0),
+  vote: text('vote'), // null = not voted, 'a' | 'b' | 'tie'
+  scene: text('scene'),
+  sourceText: text('source_text'),
+  outputA: text('output_a'),
+  outputB: text('output_b'),
+  createdAt: integer('created_at').notNull(),
+  votedAt: integer('voted_at'),
+}, (t) => [
+  index('idx_translate_ab_created').on(t.createdAt),
+  index('idx_translate_ab_pair').on(t.modelA, t.modelB),
+]);
+
 // 技能 (Agent Skills): a directory under data/skills/<slug> holding SKILL.md
 // (frontmatter name/description + instructions) plus optional scripts and
 // reference files. The row carries what the prompt and ACL need; the files
