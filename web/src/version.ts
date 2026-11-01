@@ -27,6 +27,15 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-11-01',
+    items: [
+      {
+        zh: '侧栏的搜索框右边多了一个 × 按钮，点一下（或按 Esc）就清空搜索、回到对话列表。',
+        en: 'The sidebar search box now has a × button on the right; click it (or press Esc) to clear the search and get back to your chat list.',
+      },
+    ],
+  },
+  {
     date: '2026-10-30',
     items: [
       {

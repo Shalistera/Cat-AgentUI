@@ -5,7 +5,7 @@ import {
   ShieldCheck, LogOut, Sun, Moon, Pin, PinOff, Pencil, Trash2, PanelLeftClose,
   MoreHorizontal, FolderClosed, FolderOutput, Plus, ChevronRight, FileDown, FileJson, ChevronsUpDown,
   LayoutGrid,
-  Users, Smartphone, MonitorDown,
+  Users, Smartphone, MonitorDown, X,
 } from 'lucide-react';
 import { useAuth, useChats, useProjects, useUi } from '../store';
 import { adminReturn } from '../pages/admin/Admin';
@@ -480,10 +480,20 @@ export function Sidebar() {
               a deliberately quieter edge than real inputs carry. */}
           <input
             value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('搜索对话与消息')}
+            onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.preventDefault(); setQuery(''); } }}
             aria-label={t('搜索对话与消息')}
             title={t('搜索标题与消息正文。\n支持过滤:project:项目名、pinned:true、archived:true(默认不搜归档)')}
-            className="h-8 w-full rounded-md border border-line2 bg-bg1 pl-8 pr-2 text-xs text-tx placeholder:text-tx3 transition-colors hover:border-field"
+            className="h-8 w-full rounded-md border border-line2 bg-bg1 pl-8 pr-8 text-xs text-tx placeholder:text-tx3 transition-colors hover:border-field"
           />
+          {query && (
+            <button
+              type="button" title={t('清空搜索')} aria-label={t('清空搜索')}
+              onClick={() => setQuery('')}
+              className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-tx3 transition-colors hover:bg-bg2 hover:text-tx"
+            >
+              <X size={13} />
+            </button>
+          )}
         </div>
       </div>
 

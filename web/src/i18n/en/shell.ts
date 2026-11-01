@@ -69,6 +69,7 @@ export default {
     'Temporary chat: never saved to history, deleted after 24 hours idle',
   '收藏的消息': 'Bookmarked messages',
   '搜索对话与消息': 'Search chats and messages',
+  '清空搜索': 'Clear search',
   '搜索标题与消息正文。\n支持过滤:project:项目名、pinned:true、archived:true(默认不搜归档)':
     'Searches titles and message bodies.\nFilters: project:<name>, pinned:true, archived:true (archived chats are excluded by default)',
   '搜索结果': 'Results',
