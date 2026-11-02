@@ -377,7 +377,7 @@ function ProviderModal({ provider, onClose, onSaved }: {
               <Input
                 type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
                 autoComplete="new-password"
-                placeholder={isEdit && hasKey ? t('●●●●●●(已保存,留空保持不变)') : type === 'novelai' ? t('粘贴 NovelAI Persistent API Token') : 'sk-…'}
+                placeholder={isEdit && hasKey ? savedKeyPlaceholder(provider?.keyHint) : type === 'novelai' ? t('粘贴 NovelAI Persistent API Token') : 'sk-…'}
               />
               {isEdit && hasKey && (
                 <Button variant="outline" size="sm" className="shrink-0 whitespace-nowrap" onClick={clearKey}>{t('清除 Key')}</Button>
@@ -565,7 +565,7 @@ function EndpointModal({ provider, endpoint, onClose, onSaved }: {
             <Input
               type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
               autoComplete="new-password"
-              placeholder={isEdit && hasKey ? t('●●●●●●(已保存,留空保持不变)') : 'sk-…'}
+              placeholder={isEdit && hasKey ? savedKeyPlaceholder(endpoint?.keyHint) : 'sk-…'}
             />
             {isEdit && hasKey && (
               <Button variant="outline" size="sm" className="shrink-0 whitespace-nowrap" onClick={clearKey}>{t('清除 Key')}</Button>
@@ -602,6 +602,16 @@ function EndpointModal({ provider, endpoint, onClose, onSaved }: {
       </div>
     </Modal>
   );
+}
+
+// ---------- saved key fingerprint ----------
+// The server sends only a short fingerprint like `sk-ant-api03-abc...wxyz`.
+function KeyHint({ hint }: { hint: string }) {
+  return <span className="shrink-0 font-mono text-[11px] text-tx3" title={t('已保存的 Key')}>{hint}</span>;
+}
+
+function savedKeyPlaceholder(hint: string | null | undefined): string {
+  return hint ? t('已保存 {hint},留空保持不变', { hint }) : t('●●●●●●(已保存,留空保持不变)');
 }
 
 // ---------- line health ----------
@@ -679,6 +689,7 @@ function EndpointRow({ endpoint, provider, index, count, position, reload, onEdi
       <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block" title={endpoint.baseUrl ?? ''}>
         {endpoint.baseUrl || DEFAULT_URLS[provider.type]}
       </span>
+      {endpoint.keyHint && <KeyHint hint={endpoint.keyHint} />}
       {!endpoint.hasKey && <Badge tone="err">{t('未配置 Key')}</Badge>}
       {endpoint.enabled && <HealthBadge health={endpoint.health} />}
       <div className="ml-auto flex items-center gap-0.5">
@@ -768,6 +779,7 @@ function BackupLines({ provider, reload }: { provider: AdminProvider; reload(): 
         <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate font-mono text-[11px] text-tx3 md:block">
           {usesVertex ? (provider.baseUrl || vertexHost(firstLocation)) : (provider.baseUrl || DEFAULT_URLS[provider.type])}
         </span>
+        {!usesVertex && provider.keyHint && <KeyHint hint={provider.keyHint} />}
         <HealthBadge health={provider.health} />
         {(provider.health.lastError || provider.health.missingModels.length > 0) && (
           <p className="basis-full pl-7 text-[11px] text-tx3">{healthDetail(provider.health)}</p>

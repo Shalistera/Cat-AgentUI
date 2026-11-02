@@ -230,7 +230,7 @@ MCP 默认对所有登录用户共享,适合联网搜索等基础工具。文件
 管理员权限始终隐式生效。
 
 Provider API Key、Vertex 服务账号、Provider 自定义 Headers 以及 MCP env/Headers
-均使用 `SECRET_KEY` 加密落盘并按“只写不回显”处理;Provider/MCP 错误、工具结果和模型流
+均使用 `SECRET_KEY` 加密落盘并按“只写不回显”处理(API Key 只显示 `sk-ant-api03-abc...wxyz` 这样的首尾指纹);Provider/MCP 错误、工具结果和模型流
 也会做密钥脱敏。注意:Stdio MCP 是与本站同一系统账号运行的受信任代码。Shell、文件系统或
 恶意 MCP 可以读取文件并变形外传内容,不能靠字符串脱敏形成真正沙箱,因此不要向普通用户
 开放不可信的本地命令/文件工具。

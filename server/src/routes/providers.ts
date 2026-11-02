@@ -6,7 +6,7 @@ import { db, schema, now } from '../db/index.js';
 import { decryptSecret, encryptSecret, newId } from '../crypto.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import {
-  allConfiguredSecretValues, decryptSecretRecord, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
+  allConfiguredSecretValues, apiKeyHint, decryptSecretRecord, encryptSecretRecord, providerExtraHeaders, redactSensitiveText,
 } from '../secrets.js';
 import { accessUserIds, accessibleOnly, canUseSystemModel, imageModelsAllowed, replaceModelAccess } from '../model-access.js';
 import { checkModelLimit, hasModelLimit, parseLimitPeriod } from '../quota.js';
@@ -85,7 +85,8 @@ function publicHealth(key: string) {
   };
 }
 
-// SECURITY: like providers, a line's key and header values are write-only.
+// SECURITY: like providers, a line's key and header values are write-only
+// (only a short key fingerprint is shown).
 function publicEndpoint(e: EndpointRow) {
   let extraHeaderKeys: string[] = [];
   try { extraHeaderKeys = Object.keys(decryptSecretRecord(e.extraHeadersEnc)); } catch { /* keep editor usable */ }
@@ -95,6 +96,7 @@ function publicEndpoint(e: EndpointRow) {
     name: e.name,
     baseUrl: e.baseUrl,
     hasKey: !!e.apiKeyEnc,
+    keyHint: apiKeyHint(e.apiKeyEnc),
     extraHeaderKeys,
     useResponses: e.useResponses === null ? null : !!e.useResponses,
     stripModelPrefix: e.stripModelPrefix,
@@ -138,7 +140,8 @@ function publicVertexAccount(a: VertexAccountRow) {
   return { id: a.id, projectId: a.projectId, enabled: !!a.enabled };
 }
 
-// SECURITY: API keys, Vertex SA JSON, and custom header values are write-only.
+// SECURITY: API keys, Vertex SA JSON, and custom header values are write-only
+// (only a short key fingerprint is shown).
 function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: EndpointRow[], accountRows?: VertexAccountRow[]) {
   const accounts = accountRows ?? (p.type === 'gemini' ? vertexAccountsOf(p.id) : []);
   let extraHeaderKeys: string[] = [];
@@ -149,6 +152,7 @@ function publicProvider(p: ProviderRow, modelRows?: ModelRow[], endpointRows?: E
     type: p.type,
     baseUrl: p.baseUrl,
     hasKey: !!p.apiKeyEnc,
+    keyHint: apiKeyHint(p.apiKeyEnc),
     useResponses: !!p.useResponses,
     useVertex: !!p.useVertex,
     vertexProject: p.vertexProject,

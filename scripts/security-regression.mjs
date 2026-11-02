@@ -260,6 +260,8 @@ async function run() {
   assert(configured.hasKey && configured.hasExtraHeaders
     && configured.extraHeaderKeys.includes('x-audit-secret')
     && configured.extraHeaderKeys.includes('x-prefix-secret'), 'provider secret metadata');
+  // Only a short fingerprint (vendor prefix + 3 chars, last 4) comes back.
+  assert(configured.keyHint === 'PROVIDER_KEY_CAN...2f37', 'provider key fingerprint');
   const preservedProvider = await jsonReq('PATCH', `/api/admin/providers/${provider.json.id}`, {
     extraHeaders: { 'x-empty-header': '' },
     preserveExtraHeaderKeys: ['x-audit-secret', 'x-prefix-secret'],

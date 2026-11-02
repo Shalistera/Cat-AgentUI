@@ -70,6 +70,8 @@ export default {
   '{n} 条备用线路': '{n} backup routes',
   '{total} 个模型 · {enabled} 已启用': '{total} models · {enabled} enabled',
   '●●●●●●(已保存,留空保持不变)': '●●●●●● (saved — leave blank to keep)',
+  '已保存 {hint},留空保持不变': 'Saved {hint} — leave blank to keep',
+  '已保存的 Key': 'Saved key',
   '、': ', ',
   '一条回复里 spawn_subagent 的上限': 'Cap on spawn_subagent calls in one reply',
   '一次回答的主对话和所有子代理共用,管理员同样受限。0 表示禁用该工具;搜索与阅读分别计数,重复查询或同一网页复用已有结果。达到上限后收起工具并要求模型依据已有资料作答。Google 原生搜索内部的查询次数由模型服务控制。':

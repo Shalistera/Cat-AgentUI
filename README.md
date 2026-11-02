@@ -229,7 +229,7 @@ files, command execution, internal systems — should be changed to "only specif
 **Admin → MCP → Edit server → Scope**; administrator permission always applies implicitly.
 
 Provider API keys, Vertex service accounts, provider custom headers and MCP env/headers are all
-encrypted at rest with `SECRET_KEY` and treated as write-only (never echoed back); provider/MCP errors, tool results and model streams
+encrypted at rest with `SECRET_KEY` and treated as write-only (never echoed back; an API key shows only a fingerprint like `sk-ant-api03-abc...wxyz`); provider/MCP errors, tool results and model streams
 are also scrubbed of secrets. Note that a stdio MCP is trusted code running under the same system account as this site. A shell, filesystem or
 malicious MCP can read files and exfiltrate transformed content, and string scrubbing cannot make a real sandbox, so do not expose
 untrusted local command/file tools to regular users.

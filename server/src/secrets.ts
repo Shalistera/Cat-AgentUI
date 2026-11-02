@@ -54,6 +54,25 @@ export function providerExtraHeaders(row: ProviderSecretsRow): Record<string, st
   return parseRecord(row.extraHeaders);
 }
 
+/**
+ * A short fingerprint of a saved API key so admins can tell keys apart, e.g.
+ * `sk-ant-api03-abc...wxyz`. It shows the vendor prefix (through the last
+ * `-`/`_` in the first 14 chars), 3 more chars and the last 4 — at most a
+ * handful of random chars, and nothing but the tail for short keys.
+ */
+export function apiKeyHint(encrypted: string | null | undefined): string | null {
+  if (!encrypted) return null;
+  let key: string;
+  try { key = decryptSecret(encrypted).trim(); } catch { return null; }
+  if (key.length < 16) return null;
+  const tail = key.slice(-4);
+  if (key.length < 24) return `...${tail}`;
+  const window = key.slice(0, 14);
+  const sep = Math.max(window.lastIndexOf('-'), window.lastIndexOf('_'));
+  const head = sep >= 0 ? key.slice(0, sep + 4) : key.slice(0, 4);
+  return `${head}...${tail}`;
+}
+
 function addStringLeaves(value: unknown, out: Set<string>): void {
   if (typeof value === 'string') {
     if (value.length >= 4) out.add(value);

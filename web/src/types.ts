@@ -486,10 +486,11 @@ export interface LineHealth {
 }
 
 // A backup line: same vendor type and model roster, a different gateway.
-// Key/header values are write-only, like the provider's.
+// Key/header values are write-only, like the provider's; keyHint is a short
+// fingerprint (`sk-ant-api03-abc...wxyz`) for telling keys apart.
 export interface AdminProviderEndpoint {
   id: string; providerId: string; name: string;
-  baseUrl: string | null; hasKey: boolean; extraHeaderKeys: string[];
+  baseUrl: string | null; hasKey: boolean; keyHint: string | null; extraHeaderKeys: string[];
   useResponses: boolean | null;
   stripModelPrefix: string; addModelPrefix: string;
   priority: number; enabled: boolean;
@@ -498,7 +499,7 @@ export interface AdminProviderEndpoint {
 
 export interface AdminProvider {
   id: string; name: string; type: 'openai' | 'anthropic' | 'gemini' | 'claude-code' | 'novelai';
-  baseUrl: string | null; hasKey: boolean;
+  baseUrl: string | null; hasKey: boolean; keyHint: string | null;
   useResponses: boolean; useVertex: boolean;
   vertexProject: string | null; vertexLocation: string | null; hasVertexSa: boolean;
   vertexPriority: 'off' | 'fallback' | 'first_failure' | 'always';
