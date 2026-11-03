@@ -1,6 +1,7 @@
 import type {
   AdapterEvent, AdapterMessage, ChatAdapter, ChatRequest, ProviderRuntimeConfig, ToolDef,
 } from '../types.js';
+import { createHash } from 'node:crypto';
 import { sseMessages, providerError, fetchRetry } from './sse.js';
 import { stripEndpointSuffix, trimUrl } from './base-url.js';
 
@@ -33,19 +34,42 @@ function adaptiveModel(model: string): boolean {
   return /claude-(opus|sonnet)-4[-.][6-9]|claude-(opus|sonnet|haiku|fable|mythos)-[5-9]/.test(id);
 }
 
+/** Fable 5.1, Opus / Sonnet / Haiku 5.5 and later bind each thinking block to
+    the conversation that produced it — the system prompt, the tool set and
+    every earlier message. Replaying one after any of those changed is a 400
+    ("bound to a different conversation"). */
+function bindsThinking(model: string): boolean {
+  const id = (model.split('/').pop() ?? '').toLowerCase();
+  return /claude-(opus|sonnet|haiku|fable)-(5[-.][1-9]|[6-9])(?!\d)/.test(id);
+}
+
 // Thinking blocks ride on a tool call's `sig` (the slot Gemini uses for its
 // thought signature): with thinking on, the API wants the blocks that led to
 // a tool call sent back, unmodified, when the tool loop continues. The prefix
 // keeps them apart from other vendors' signatures.
 export const ANTHROPIC_SIG_PREFIX = 'anthropic-thinking:';
 type ThinkingBlock = { type: 'thinking'; thinking: string; signature: string } | { type: 'redacted_thinking'; data: string };
+type AnthropicTool = { name: string; description: string; input_schema: unknown };
 
-function thinkingFromSig(sig?: string): ThinkingBlock[] {
-  if (!sig?.startsWith(ANTHROPIC_SIG_PREFIX)) return [];
+/** What a block is bound to besides the messages: the system prompt and the
+    tool set (compared by name, so order doesn't matter). */
+function contextKey(system: string | undefined, tools: AnthropicTool[] | undefined): string {
+  const set = [...(tools ?? [])].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return createHash('sha256').update(JSON.stringify([system ?? '', set])).digest('base64url').slice(0, 22);
+}
+
+function thinkingSig(blocks: ThinkingBlock[], context: string): string {
+  return ANTHROPIC_SIG_PREFIX + JSON.stringify({ context, blocks });
+}
+
+// Signatures from before the context was recorded are a bare array.
+function thinkingFromSig(sig?: string): { blocks: ThinkingBlock[]; context?: string } {
+  if (!sig?.startsWith(ANTHROPIC_SIG_PREFIX)) return { blocks: [] };
   try {
-    const blocks = JSON.parse(sig.slice(ANTHROPIC_SIG_PREFIX.length));
-    return Array.isArray(blocks) ? blocks : [];
-  } catch { return []; }
+    const v = JSON.parse(sig.slice(ANTHROPIC_SIG_PREFIX.length));
+    if (Array.isArray(v)) return { blocks: v };
+    return { blocks: Array.isArray(v?.blocks) ? v.blocks : [], context: typeof v?.context === 'string' ? v.context : undefined };
+  } catch { return { blocks: [] }; }
 }
 
 // One AdapterMessage may expand to several Anthropic messages (tool results go back as user turns).
@@ -53,9 +77,20 @@ function thinkingFromSig(sig?: string): ThinkingBlock[] {
 // messages after the last user turn — a 追加 sent mid-reply belongs to the
 // turn it interrupted): earlier turns may have been trimmed or summarized
 // since, and a block whose preceding conversation changed is no longer valid.
-function toMessages(messages: AdapterMessage[]): { role: 'user' | 'assistant'; content: any[] }[] {
+// `context` is set for models that check that binding: the turn's system
+// prompt or tools can change between rounds (a web tool is withdrawn once
+// its quota is spent), and blocks made before such a change are left out.
+function toMessages(messages: AdapterMessage[], context?: string): { role: 'user' | 'assistant'; content: any[] }[] {
   const out: { role: 'user' | 'assistant'; content: any[] }[] = [];
   const turnStart = messages.findLastIndex((m) => m.role === 'user' && m.interjection === undefined);
+  // Only a leading run of blocks may go — a gap would void every block after
+  // it — so everything up to the last stale call is dropped.
+  const turnCalls = messages.slice(turnStart + 1).flatMap((m) => (m.role === 'assistant' ? m.parts.filter((p) => p.type === 'tool_call') : []));
+  const lastStale = context === undefined ? -1 : turnCalls.findLastIndex((p) => {
+    const made = thinkingFromSig(p.sig).context;
+    return made !== undefined && made !== context;
+  });
+  const stale = new Set(turnCalls.slice(0, lastStale + 1));
 
   for (const [index, m] of messages.entries()) {
     if (m.role === 'user') {
@@ -95,7 +130,7 @@ function toMessages(messages: AdapterMessage[]): { role: 'user' | 'assistant'; c
           blocks.push({ type: 'text', text: p.text });
         } else if (p.type === 'tool_call') {
           flushResults();
-          const thinking = replayThinking ? thinkingFromSig(p.sig) : [];
+          const thinking = replayThinking && !stale.has(p) ? thinkingFromSig(p.sig).blocks : [];
           // A message that thought must open with its thinking.
           if (thinking.length && !blocks.some((b) => b.type === 'tool_use')) blocks.unshift(...thinking);
           else blocks.push(...thinking);
@@ -140,7 +175,7 @@ function markCacheBreakpoints(messages: { role: string; content: any[] }[]) {
   }
 }
 
-function toTools(tools?: ToolDef[]) {
+function toTools(tools?: ToolDef[]): AnthropicTool[] | undefined {
   if (!tools?.length) return undefined;
   return tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
 }
@@ -186,7 +221,9 @@ function thinkingFields(req: ChatRequest): { fields: Record<string, unknown>; ma
 
 async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): AsyncGenerator<AdapterEvent> {
   const steer = thinkingFields(req);
-  const messages = toMessages(req.messages);
+  const tools = toTools(req.tools);
+  const context = contextKey(req.system, tools);
+  const messages = toMessages(req.messages, bindsThinking(req.model) ? context : undefined);
   markCacheBreakpoints(messages);
   const body: Record<string, unknown> = {
     model: req.model,
@@ -203,7 +240,6 @@ async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): As
       ? [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }]
       : req.system;
   }
-  const tools = toTools(req.tools);
   if (tools) body.tools = tools;
 
   const res = await fetchRetry(`${base(cfg)}/v1/messages`, {
@@ -257,7 +293,7 @@ async function* streamMessages(cfg: ProviderRuntimeConfig, req: ChatRequest): As
       const b = toolBlocks.get(ev.index);
       if (b) {
         toolBlocks.delete(ev.index);
-        const sig = thinkingSinceCall.length ? ANTHROPIC_SIG_PREFIX + JSON.stringify(thinkingSinceCall) : undefined;
+        const sig = thinkingSinceCall.length ? thinkingSig(thinkingSinceCall, context) : undefined;
         thinkingSinceCall = [];
         yield { type: 'tool_call', id: b.id, name: b.name, args: b.argsJson || '{}', ...(sig ? { sig } : {}) };
       }

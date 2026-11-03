@@ -27,6 +27,15 @@ export const appVersionTitle = [
  */
 export const recentChanges = [
   {
+    date: '2026-11-03',
+    items: [
+      {
+        zh: '修复用 Claude 回答需要多次联网搜索的问题时，搜到一半报错「Invalid signature in thinking block」、回复中断的问题。',
+        en: 'Fixed Claude replies that needed several web searches sometimes stopping halfway with an “Invalid signature in thinking block” error.',
+      },
+    ],
+  },
+  {
     date: '2026-11-01',
     items: [
       {

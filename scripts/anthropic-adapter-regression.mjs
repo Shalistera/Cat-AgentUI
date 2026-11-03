@@ -94,13 +94,16 @@ try {
   assert.equal(body.temperature, 0.2); assert.equal(body.thinking, undefined);
 
   // Tool loop: the thinking block rides on the call and comes back first in the turn in progress.
-  script = 'tool';
-  ({ events } = await run({ model: 'claude-opus-5-5', messages: [user('差旅标准?')], reasoning: { level: 'high', ratio: 1 } }));
-  const call = events.find((e) => e.type === 'tool_call');
-  assert(call.sig.startsWith(ANTHROPIC_SIG_PREFIX));
-  assert.deepEqual(JSON.parse(call.sig.slice(ANTHROPIC_SIG_PREFIX.length)), [{ type: 'thinking', thinking: '先查一下', signature: 'SIG-1' }]);
-  script = 'text';
   const longSystem = '项目资料'.repeat(1200);
+  const mint = async (req) => {
+    script = 'tool';
+    const { events: evs } = await run({ model: 'claude-opus-5-5', system: longSystem, reasoning: { level: 'high', ratio: 1 }, messages: [user('差旅标准?')], ...req });
+    script = 'text';
+    return evs.find((e) => e.type === 'tool_call');
+  };
+  const call = await mint({});
+  assert(call.sig.startsWith(ANTHROPIC_SIG_PREFIX));
+  assert.deepEqual(JSON.parse(call.sig.slice(ANTHROPIC_SIG_PREFIX.length)).blocks, [{ type: 'thinking', thinking: '先查一下', signature: 'SIG-1' }]);
   const earlier = { role: 'assistant', parts: [{ type: 'text', text: '之前' }, { ...call, type: 'tool_call' }, { type: 'tool_result', toolCallId: call.id, name: call.name, result: '旧结果' }, { type: 'text', text: '旧回答' }] };
   ({ body } = await run({
     model: 'claude-opus-5-5', system: longSystem, reasoning: { level: 'high', ratio: 1 },
@@ -124,7 +127,7 @@ try {
   // call, and the message rides in the user turn that carries the results.
   const secondCall = { ...call, id: 'toolu_second' };
   ({ body } = await run({
-    model: 'claude-opus-5-5', reasoning: { level: 'high', ratio: 1 },
+    model: 'claude-opus-5-5', system: longSystem, reasoning: { level: 'high', ratio: 1 },
     messages: [user('上一轮'), earlier, user('差旅标准?'),
       { role: 'assistant', parts: [{ type: 'tool_call', id: call.id, name: call.name, args: call.args, sig: call.sig }, { type: 'tool_result', toolCallId: call.id, name: call.name, result: '每天300元' }] },
       { role: 'user', interjection: '也查一下住宿', parts: [{ type: 'text', text: '用户追加:也查一下住宿' }] },
@@ -136,13 +139,38 @@ try {
   for (const at of [5, 7]) assert.equal(split[at].content[0].type, 'thinking', `call ${at} keeps its thinking across the 追加`);
   assert.deepEqual(split[6].content.map((b) => b.type), ['tool_result', 'text'], 'results first, then the 追加');
 
+  // Opus 5.5 binds thinking to the system prompt and tool set. When a web
+  // tool is withdrawn mid-turn (its quota spent), blocks made before that
+  // are left out — a leading run only — instead of failing with a 400.
+  const tool = (name) => ({ name, description: `${name} tool`, parameters: { type: 'object', properties: { query: { type: 'string' } } } });
+  const both = [tool('project_search'), tool('web_search')];
+  const searchOnly = [tool('project_search')];
+  const early = { ...(await mint({ tools: both })), id: 'toolu_early' };
+  const late = { ...(await mint({ tools: searchOnly })), id: 'toolu_late' };
+  const rounds = (calls) => [user('差旅标准?'), { role: 'assistant', parts: calls.flatMap((c) => [
+    { type: 'tool_call', id: c.id, name: c.name, args: c.args, sig: c.sig },
+    { type: 'tool_result', toolCallId: c.id, name: c.name, result: '结果' },
+  ]) }];
+  const thought = (b) => b.messages.filter((m) => m.role === 'assistant').map((m) => m.content[0].type === 'thinking');
+  ({ body } = await run({ model: 'claude-opus-5-5', system: longSystem, tools: searchOnly, reasoning: { level: 'high', ratio: 1 }, messages: rounds([early, late]) }));
+  assert.deepEqual(thought(body), [false, true], 'blocks from before the tool change are dropped, later ones kept');
+  ({ body } = await run({ model: 'claude-opus-5-5', system: longSystem, tools: [...both].reverse(), reasoning: { level: 'high', ratio: 1 }, messages: rounds([early]) }));
+  assert.deepEqual(thought(body), [true], 'reordering tools is not a change');
+  ({ body } = await run({ model: 'claude-opus-5-5', system: `${longSystem}!`, tools: both, reasoning: { level: 'high', ratio: 1 }, messages: rounds([early]) }));
+  assert.deepEqual(thought(body), [false], 'a changed system prompt drops them too');
+  ({ body } = await run({ model: 'claude-opus-5', system: longSystem, tools: searchOnly, reasoning: { level: 'high', ratio: 1 }, messages: rounds([early]) }));
+  assert.deepEqual(thought(body), [true], 'models without the binding check keep them');
+  const legacy = { ...early, sig: ANTHROPIC_SIG_PREFIX + JSON.stringify(JSON.parse(early.sig.slice(ANTHROPIC_SIG_PREFIX.length)).blocks) };
+  ({ body } = await run({ model: 'claude-opus-5-5', system: longSystem, tools: searchOnly, reasoning: { level: 'high', ratio: 1 }, messages: rounds([legacy]) }));
+  assert.deepEqual(thought(body), [true], 'a signature saved before the context was recorded replays as before');
+
   // A chat switched to Gemini: Claude's thinking signature must not be echoed as Gemini's.
   const gcfg = { ...cfg, type: 'gemini', baseUrl: `http://127.0.0.1:${server.address().port}` };
   await run({ model: 'gemini-2.5-pro', messages: [user('q'), { role: 'assistant', parts: [{ type: 'tool_call', id: 'c1', name: 'project_search', args: '{}', sig: call.sig }, { type: 'tool_result', toolCallId: 'c1', name: 'project_search', result: 'r' }] }, user('next')] }, geminiAdapter, gcfg);
   const gbody = bodies.at(-1);
   assert(gbody.url.includes(':streamGenerateContent'), gbody.url);
   assert(!JSON.stringify(gbody.body).includes('thoughtSignature'), 'no foreign signature sent to Gemini');
-  console.log('Anthropic adapter regression passed: adaptive thinking + effort, legacy budgets, thinking replay for the live tool loop only, cache breakpoints, cached-token accounting, Gemini signature guard.');
+  console.log('Anthropic adapter regression passed: adaptive thinking + effort, legacy budgets, thinking replay for the live tool loop only, stale blocks dropped after a mid-turn tool/system change, cache breakpoints, cached-token accounting, Gemini signature guard.');
 } catch (err) {
   console.error(err);
   process.exitCode = 1;
