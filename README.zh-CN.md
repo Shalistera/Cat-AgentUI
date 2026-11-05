@@ -77,7 +77,7 @@ npm start              # 监听 0.0.0.0:3000
 
 ### GPT Image 2.6 动图
 
-在 OpenAI Provider 中导入并开放 `gpt-image-2.6-sunburst` 或 `gpt-image-2.6-flare`,进入绘图工坊选择「输出格式 → GIF 动图」。可设置 2–64 帧和每帧 20–2000 毫秒(按 10 毫秒取整),默认 9 帧、200 毫秒。GIF 仅支持文生图,提示词中描述动作与循环,不能附参考图;画廊预览和下载保留完整动画。PNG、JPEG、WebP 仍可用于静态生成和编辑。每帧尺寸默认自动;需要手动设置时,先在模型详情开启质量/分辨率设置。超过上游像素预算时减少帧数、尺寸或数量。参数依据 [OpenAI 图像生成文档](https://developers.openai.com/api/docs/guides/image-generation#generate-animated-gif-output)。
+在 OpenAI Provider 中导入并开放 `gpt-image-2.6-sunburst` 或 `gpt-image-2.6-flare`,进入绘图工坊选择「输出格式 → GIF 动图」。可设置 2–64 帧和每帧 20–2000 毫秒(按 10 毫秒取整),默认 9 帧、200 毫秒。提示词中描述动作与循环;也可附参考图尝试生成 GIF,工坊会将图片和动画参数完整发送给所选服务,是否接受取决于上游。画廊预览和下载保留完整动画。PNG、JPEG、WebP 仍可用于静态生成和编辑。每帧尺寸默认自动;需要手动设置时,先在模型详情开启质量/分辨率设置。超过上游像素预算时减少帧数、尺寸或数量。参数依据 [OpenAI 图像生成文档](https://developers.openai.com/api/docs/guides/image-generation#generate-animated-gif-output)。
 
 ### NovelAI V5 绘图
 

@@ -227,9 +227,6 @@ export async function imageRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: '帧数和帧间隔仅适用于 GIF 输出' });
     }
     if (outputFormat === 'gif') {
-      if (inputUploadIds?.length || history.length) {
-        return reply.code(400).send({ error: 'GIF 仅支持文生图,请移除参考图并开始新的生成' });
-      }
       body.data.frameCount ??= 9;
       body.data.frameDurationMs ??= 200;
     }

@@ -320,7 +320,6 @@ export const openaiAdapter: ChatAdapter = {
     const prompt = req.system ? `${req.system}\n\n${req.prompt}` : req.prompt;
     // dall-e-3 has no /images/edits endpoint; ignore reference images rather than 400.
     const inputImages = req.model.startsWith('dall-e-3') ? undefined : req.inputImages;
-    if (req.outputFormat === 'gif' && req.inputImages?.length) throw new Error('GIF 仅支持文生图,请移除参考图并开始新的生成');
     let res: Response;
     if (inputImages?.length) {
       // image editing via multipart
@@ -331,6 +330,13 @@ export const openaiAdapter: ChatAdapter = {
       if (req.size && req.size !== 'auto') form.set('size', req.size);
       if (req.quality && req.quality !== 'auto' && !isDallE) form.set('quality', req.quality);
       if (req.outputFormat) form.set('output_format', req.outputFormat);
+      // Forward reference GIF requests intact. Compatible providers can differ
+      // from the public API guide; report the upstream result without silently
+      // discarding references or switching to text-only generation.
+      if (req.outputFormat === 'gif') {
+        form.set('frame_count', String(req.frameCount ?? 9));
+        form.set('frame_duration_ms', String(req.frameDurationMs ?? 200));
+      }
       inputImages.forEach((img, i) => {
         const bytes = Buffer.from(img.dataBase64, 'base64');
         const ext = extForMime(img.mime);

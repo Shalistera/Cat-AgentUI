@@ -150,7 +150,6 @@ function ImagesInner() {
   const model = genericModels?.find((m) => m.id === modelId) ?? null;
   const currentOptions = imageOptions[modelId] ?? DEFAULT_OPENAI_IMAGE_OPTIONS;
   const gifOutput = model?.providerType === 'openai' && currentOptions.outputFormat === 'gif';
-  const gifReferenceConflict = gifOutput && refSlots.some(Boolean);
   // Async job callbacks outlive the render they were created in, so they read
   // the model list through a ref instead of a stale closure.
   const modelsRef = useRef<ImageModel[] | null>(null);
@@ -235,7 +234,6 @@ function ImagesInner() {
   // Bulk entry (drag-drop / paste): fill empty slots in order, positions of
   // already-filled slots untouched.
   async function addFiles(files: File[]) {
-    if (gifOutput) { toast(t('GIF 仅支持文生图,请移除参考图并开始新的生成'), 'err'); return; }
     const imgs = files.filter((f) => f.type.startsWith('image/'));
     if (!imgs.length) return;
     const limit = Math.min(MAX_REFS, useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20);
@@ -262,7 +260,7 @@ function ImagesInner() {
   }
 
   function openSlotPicker(idx: number) {
-    if (uploading || gifOutput) return;
+    if (uploading) return;
     slotTargetRef.current = idx;
     slotFileRef.current?.click();
   }
@@ -272,7 +270,7 @@ function ImagesInner() {
     const f = e.target.files?.[0];
     e.target.value = '';
     const idx = slotTargetRef.current;
-    if (!f || !f.type.startsWith('image/') || gifOutput) return;
+    if (!f || !f.type.startsWith('image/')) return;
     const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
     if (!refSlots[idx] && refSlots.filter(Boolean).length >= limit) {
       toast(t('参考图最多 {limit} 张', { limit }), 'err'); return;
@@ -448,10 +446,6 @@ function ImagesInner() {
       const error = openaiImageAnimationError(options);
       if (error) { toast(error, 'err'); return false; }
     }
-    if ((retryRequest ? retryRequest.outputFormat : options.outputFormat) === 'gif'
-      && (retryRequest ? (retryRequest.inputUploadIds?.length || retryRequest.history?.length) : (refSlots.some(Boolean) || history?.length))) {
-      toast(t('GIF 仅支持文生图,请移除参考图并开始新的生成'), 'err'); return false;
-    }
     if (enabled && !retryRequest) {
       const error = openaiImageSizeError(options);
       if (error) { toast(error, 'err'); return false; }
@@ -516,7 +510,7 @@ function ImagesInner() {
     const last = convo?.turns.filter((t) => t.role === 'assistant').at(-1);
     return last ? detectOptions(last.text) : [];
   }, [convo]);
-  const canGenerate = !!prompt.trim() && !!model && !uploading && !busyModels.has(model.id) && !gifReferenceConflict;
+  const canGenerate = !!prompt.trim() && !!model && !uploading && !busyModels.has(model.id);
   const storageTight = !!storage && imageStorageTight(storage);
 
   // NovelAI is the only image model this user has: the studio is their workshop.
@@ -589,9 +583,6 @@ function ImagesInner() {
                   outputFormats={model.outputFormats}
                   onChange={(value) => setImageOptions((prev) => ({ ...prev, [model.id]: value }))}
                 />}
-                {gifReferenceConflict && <p role="alert" className="text-xs text-err">
-                  {t('GIF 仅支持文生图,请移除参考图并开始新的生成')}
-                </p>}
 
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
@@ -710,7 +701,7 @@ function ImagesInner() {
                           key={i}
                           type="button"
                           title={t('上传图{n}', { n: i + 1 })}
-                          disabled={uploading || gifOutput}
+                          disabled={uploading}
                           onClick={() => openSlotPicker(i)}
                           className={`flex h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed transition-colors sm:h-28 disabled:cursor-default disabled:opacity-60 ${
                             dragOver ? 'border-acc bg-acc/5 text-acc' : 'border-line2 text-tx3 hover:border-tx3 hover:text-tx'

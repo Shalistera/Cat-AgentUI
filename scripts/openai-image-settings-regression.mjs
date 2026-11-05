@@ -32,8 +32,15 @@ const upstream = http.createServer(async (req, res) => {
   const request = new Request('http://localhost' + req.url, { method: 'POST', headers: req.headers, body: bytes });
   const form = req.headers['content-type']?.startsWith('multipart/') ? await request.formData() : null;
   const body = form ? Object.fromEntries(form) : JSON.parse(bytes.toString());
-  requests.push({ url: req.url, body, imageCount: form?.getAll('image[]').length });
+  requests.push({
+    url: req.url, body, imageCount: form?.getAll('image[]').length,
+    imageBytes: form ? await Promise.all(form.getAll('image[]').map(async image => Buffer.from(await image.arrayBuffer()))) : [],
+  });
   res.setHeader('content-type', 'application/json');
+  if (behavior === 'reject-gif-edit' && form && body.output_format === 'gif') {
+    res.statusCode = 400;
+    return res.end(JSON.stringify({ error: { message: 'Fixture provider does not support GIF edits' } }));
+  }
   if (behavior === 'fail') {
     await failureGate;
     res.statusCode = 400; return res.end(JSON.stringify({ error: { message: 'fixture failure' } }));
@@ -172,7 +179,6 @@ try {
     { frameCount: 1 }, { frameCount: 65 }, { frameCount: 2.5 }, { frameCount: '9' },
     { frameDurationMs: 19 }, { frameDurationMs: 2001 }, { frameDurationMs: 20.5 },
     { size: '513x512' }, { size: '0x512' }, { inputUploadIds: ['unused-reference'] },
-    { history: [{ role: 'user', text: 'draw' }, { role: 'assistant', text: 'which one?' }] },
     { outputFormat: 'svg' }, { outputFormat: 'png', frameCount: 9 }, { outputFormat: 'webp', frameDurationMs: 200 },
   ]) {
     const r = await call('POST', '/api/images/generate', { modelId: sunburst26, prompt: 'test', outputFormat: 'gif', ...options });
@@ -226,9 +232,25 @@ try {
   assert.equal(requests.at(-1).body.quality, 'high');
   assert.equal(requests.at(-1).body.size, '2048x2048');
   assert.equal(requests.at(-1).imageCount, 1);
-  const beforeGifEdit = requests.length;
-  assert.equal((await call('POST', '/api/images/generate', { modelId: sunburst26, prompt: 'edit', outputFormat: 'gif', inputUploadIds })).status, 400);
-  assert.equal(requests.length, beforeGifEdit);
+  for (const options of [{}, { frameCount: 12, frameDurationMs: 123, size: '512x512' }]) {
+    const result = await generate(sunburst26, { outputFormat: 'gif', inputUploadIds, ...options });
+    assert.equal(result.status, 'done', JSON.stringify(result));
+    const request = requests.at(-1);
+    assert.equal(request.url, '/v1/images/edits');
+    assert.equal(request.body.output_format, 'gif');
+    assert.equal(request.body.frame_count, String(options.frameCount ?? 9));
+    assert.equal(request.body.frame_duration_ms, String(Math.round((options.frameDurationMs ?? 200) / 10) * 10));
+    assert.equal(request.imageCount, 1);
+    assert.deepEqual(request.imageBytes[0], Buffer.from(png, 'base64'), 'reference reaches the provider unchanged');
+    await assertFile(result.images[0], 'gif');
+  }
+  behavior = 'reject-gif-edit';
+  const beforeRejectedEdit = requests.length;
+  const rejectedEdit = await generate(sunburst26, { outputFormat: 'gif', inputUploadIds });
+  assert.equal(rejectedEdit.status, 'error');
+  assert.match(rejectedEdit.error, /Fixture provider does not support GIF edits/);
+  assert.equal(requests.length, beforeRejectedEdit + 1, 'upstream rejection is surfaced without silently dropping references or retrying text-only');
+  behavior = 'success';
 
   for (const outputFormat of Object.keys(fixtures).filter(format => format !== 'gif')) {
     for (const refs of [undefined, inputUploadIds]) {
@@ -245,7 +267,7 @@ try {
   behavior = 'fail';
   let releaseFailure;
   failureGate = new Promise(resolve => { releaseFailure = resolve; });
-  const failedJob = await call('POST', '/api/images/generate', { modelId: sunburst26, prompt: 'retry test', quality: 'low', size: '1536x864', outputFormat: 'gif', frameCount: 12, frameDurationMs: 123 });
+  const failedJob = await call('POST', '/api/images/generate', { modelId: sunburst26, prompt: 'retry test', quality: 'low', size: '1536x864', outputFormat: 'gif', frameCount: 12, frameDurationMs: 123, inputUploadIds });
   assert.equal(failedJob.status, 200);
   const active = (await call('GET', '/api/images/jobs/active')).data.jobs.find(j => j.modelId === sunburst26);
   releaseFailure();
@@ -256,9 +278,14 @@ try {
   assert.equal(failed.status, 'error');
   assert.equal(active.request.quality, 'low'); assert.equal(active.request.size, '1536x864');
   assert.equal(active.request.outputFormat, 'gif'); assert.equal(active.request.frameCount, 12); assert.equal(active.request.frameDurationMs, 120);
+  assert.deepEqual(active.request.inputUploadIds, inputUploadIds);
   behavior = 'success';
   assert.equal((await generate(sunburst26, active.request)).status, 'done', 'retry keeps the original options');
   assert.equal(requests.at(-1).body.quality, 'low');
+  assert.equal(requests.at(-1).url, '/v1/images/edits');
+  assert.equal(requests.at(-1).body.frame_count, '12');
+  assert.equal(requests.at(-1).body.frame_duration_ms, '120');
+  assert.deepEqual(requests.at(-1).imageBytes[0], Buffer.from(png, 'base64'));
   await patch(flare, { openaiImageSettings: false });
   assert.equal((await generate(flare)).status, 'done');
   assert.equal(requests.at(-1).body.quality, undefined);

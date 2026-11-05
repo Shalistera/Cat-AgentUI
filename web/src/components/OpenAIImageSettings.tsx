@@ -83,7 +83,7 @@ export function OpenAIImageSettings({ value, onChange, showQualitySize = true, o
             onChange={(e) => onChange({ ...value, frameDurationMs: e.target.value })} />
         </Field>
       </div>
-      <p className="text-xs leading-relaxed text-tx3">{t('仅支持文生图。请在提示词中描述动作和循环方式;帧间隔按 10 毫秒取整。')}</p>
+      <p className="text-xs leading-relaxed text-tx3">{t('请在提示词中描述动作和循环方式;帧间隔按 10 毫秒取整。参考图能否生成 GIF 取决于所选服务。')}</p>
       {!openaiImageAnimationError(value) && <p className="text-xs text-tx3">
         {t('每轮动画约 {seconds} 秒', { seconds: Number((Number(value.frameCount) * Math.round(Number(value.frameDurationMs) / 10) / 100).toFixed(2)) })}
       </p>}
