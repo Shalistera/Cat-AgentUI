@@ -15,13 +15,13 @@ import {
 import { ImageLightbox, ImageTile, TileOverlay } from '../components/ImageGallery';
 import { ImageCleanupDialog, imageStorageTight } from '../components/ImageStorage';
 import { NoWorkshopAccess } from '../components/NoWorkshopAccess';
-import { DEFAULT_OPENAI_IMAGE_OPTIONS, OpenAIImageSettings, openaiImageSize, openaiImageSizeError } from '../components/OpenAIImageSettings';
+import { DEFAULT_OPENAI_IMAGE_OPTIONS, OpenAIImageSettings, openaiImageAnimationError, openaiImageSize, openaiImageSizeError } from '../components/OpenAIImageSettings';
 import type { OpenAIImageOptions } from '../components/OpenAIImageSettings';
 import { Markdown } from '../components/Markdown';
 import { retryStatusText } from '../components/ChatMessage';
 import { t, tServer, locale } from '../i18n';
 import type { NaiOptions } from '../novelai';
-import type { ImageModel, ImageRecord, ImageStorageInfo, ProviderRetry } from '../types';
+import type { ImageModel, ImageOutputFormat, ImageRecord, ImageStorageInfo, ProviderRetry } from '../types';
 
 const PAGE_SIZE = 24;
 const MAX_REFS = 3;
@@ -35,7 +35,7 @@ const DEFAULT_QUICK_PROMPTS: QuickPrompt[] = [{ title: t('去背景'), prompt: t
 
 // A generation in flight. The server admits one job per model per user, so
 // several of these can run side by side — one per model.
-type ImageRequest = { modelId: string; prompt: string; n?: number; size?: string; quality?: string; inputUploadIds?: string[]; history?: ConvoTurn[]; novelai?: NaiOptions };
+type ImageRequest = { modelId: string; prompt: string; n?: number; size?: string; quality?: string; outputFormat?: ImageOutputFormat; frameCount?: number; frameDurationMs?: number; inputUploadIds?: string[]; history?: ConvoTurn[]; novelai?: NaiOptions };
 type RunningJob = { id: string; modelId: string; prompt: string; startedAt: number; request?: ImageRequest; retry?: ProviderRetry | null; cancelling?: boolean };
 type ActiveJobs = { jobs?: { jobId: string; modelId: string; prompt: string; createdAt: number; request?: ImageRequest; retry?: ProviderRetry | null }[] };
 type JobStatus = { status: string; images?: ImageRecord[]; trimmed?: string[]; reply?: string; turns?: ConvoTurn[]; error?: string; errorCode?: 'provider_busy'; retry?: ProviderRetry | null };
@@ -148,6 +148,9 @@ function ImagesInner() {
   const genericModels = useMemo(() => models?.filter((m) => m.providerType !== 'novelai') ?? null, [models]);
   const hasNai = !!models?.some((m) => m.providerType === 'novelai');
   const model = genericModels?.find((m) => m.id === modelId) ?? null;
+  const currentOptions = imageOptions[modelId] ?? DEFAULT_OPENAI_IMAGE_OPTIONS;
+  const gifOutput = model?.providerType === 'openai' && currentOptions.outputFormat === 'gif';
+  const gifReferenceConflict = gifOutput && refSlots.some(Boolean);
   // Async job callbacks outlive the render they were created in, so they read
   // the model list through a ref instead of a stale closure.
   const modelsRef = useRef<ImageModel[] | null>(null);
@@ -232,6 +235,7 @@ function ImagesInner() {
   // Bulk entry (drag-drop / paste): fill empty slots in order, positions of
   // already-filled slots untouched.
   async function addFiles(files: File[]) {
+    if (gifOutput) { toast(t('GIF 仅支持文生图,请移除参考图并开始新的生成'), 'err'); return; }
     const imgs = files.filter((f) => f.type.startsWith('image/'));
     if (!imgs.length) return;
     const limit = Math.min(MAX_REFS, useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20);
@@ -258,7 +262,7 @@ function ImagesInner() {
   }
 
   function openSlotPicker(idx: number) {
-    if (uploading) return;
+    if (uploading || gifOutput) return;
     slotTargetRef.current = idx;
     slotFileRef.current?.click();
   }
@@ -268,7 +272,7 @@ function ImagesInner() {
     const f = e.target.files?.[0];
     e.target.value = '';
     const idx = slotTargetRef.current;
-    if (!f || !f.type.startsWith('image/')) return;
+    if (!f || !f.type.startsWith('image/') || gifOutput) return;
     const limit = useAuth.getState().bootstrap?.maxAttachmentsPerMessage ?? 20;
     if (!refSlots[idx] && refSlots.filter(Boolean).length >= limit) {
       toast(t('参考图最多 {limit} 张', { limit }), 'err'); return;
@@ -434,8 +438,20 @@ function ImagesInner() {
 
   async function submit(mid: string, p: string, history?: ConvoTurn[], retryRequest?: ImageRequest): Promise<boolean> {
     if (uploading || busyModels.has(mid)) return false;
-    const enabled = models?.some((m) => m.id === mid && m.providerType === 'openai' && m.openaiImageSettings);
+    const targetModel = models?.find((m) => m.id === mid);
+    const enabled = targetModel?.providerType === 'openai' && targetModel.openaiImageSettings;
     const options = imageOptions[mid] ?? DEFAULT_OPENAI_IMAGE_OPTIONS;
+    if (!retryRequest && options.outputFormat !== 'auto') {
+      if (!targetModel?.outputFormats?.includes(options.outputFormat)) {
+        toast(t('该模型不支持所选输出格式'), 'err'); return false;
+      }
+      const error = openaiImageAnimationError(options);
+      if (error) { toast(error, 'err'); return false; }
+    }
+    if ((retryRequest ? retryRequest.outputFormat : options.outputFormat) === 'gif'
+      && (retryRequest ? (retryRequest.inputUploadIds?.length || retryRequest.history?.length) : (refSlots.some(Boolean) || history?.length))) {
+      toast(t('GIF 仅支持文生图,请移除参考图并开始新的生成'), 'err'); return false;
+    }
     if (enabled && !retryRequest) {
       const error = openaiImageSizeError(options);
       if (error) { toast(error, 'err'); return false; }
@@ -451,6 +467,10 @@ function ImagesInner() {
       const body: ImageRequest = retryRequest ?? {
         modelId: mid, prompt: p, n, history,
         ...(enabled ? { quality: options.quality, size: openaiImageSize(options) } : {}),
+        ...(options.outputFormat !== 'auto' ? { outputFormat: options.outputFormat } : {}),
+        ...(options.outputFormat === 'gif' ? {
+          frameCount: Number(options.frameCount), frameDurationMs: Math.round(Number(options.frameDurationMs) / 10) * 10,
+        } : {}),
         inputUploadIds: refSlots.filter((x): x is string => !!x),
       };
       const { jobId } = await api.post<{ jobId: string }>('/api/images/generate', body);
@@ -496,7 +516,7 @@ function ImagesInner() {
     const last = convo?.turns.filter((t) => t.role === 'assistant').at(-1);
     return last ? detectOptions(last.text) : [];
   }, [convo]);
-  const canGenerate = !!prompt.trim() && !!model && !uploading && !busyModels.has(model.id);
+  const canGenerate = !!prompt.trim() && !!model && !uploading && !busyModels.has(model.id) && !gifReferenceConflict;
   const storageTight = !!storage && imageStorageTight(storage);
 
   // NovelAI is the only image model this user has: the studio is their workshop.
@@ -563,10 +583,15 @@ function ImagesInner() {
                   </Field>
                 </div>
 
-                {model?.providerType === 'openai' && model.openaiImageSettings && <OpenAIImageSettings
-                  value={imageOptions[model.id] ?? DEFAULT_OPENAI_IMAGE_OPTIONS}
+                {model?.providerType === 'openai' && (model.openaiImageSettings || model.outputFormats?.length > 0) && <OpenAIImageSettings
+                  value={currentOptions}
+                  showQualitySize={model.openaiImageSettings}
+                  outputFormats={model.outputFormats}
                   onChange={(value) => setImageOptions((prev) => ({ ...prev, [model.id]: value }))}
                 />}
+                {gifReferenceConflict && <p role="alert" className="text-xs text-err">
+                  {t('GIF 仅支持文生图,请移除参考图并开始新的生成')}
+                </p>}
 
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
@@ -604,7 +629,7 @@ function ImagesInner() {
                     rows={3}
                     value={prompt}
                     maxLength={4000}
-                    placeholder={t('描述你想生成的图像,例如:一只黑猫坐在雨后的屋顶上,水彩风格…')}
+                    placeholder={gifOutput ? t('描述主体、动作和循环,例如:一只黑猫挥动爪子,回到起始姿势,镜头固定,无缝循环…') : t('描述你想生成的图像,例如:一只黑猫坐在雨后的屋顶上,水彩风格…')}
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); generate(); }
@@ -685,7 +710,7 @@ function ImagesInner() {
                           key={i}
                           type="button"
                           title={t('上传图{n}', { n: i + 1 })}
-                          disabled={uploading}
+                          disabled={uploading || gifOutput}
                           onClick={() => openSlotPicker(i)}
                           className={`flex h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed transition-colors sm:h-28 disabled:cursor-default disabled:opacity-60 ${
                             dragOver ? 'border-acc bg-acc/5 text-acc' : 'border-line2 text-tx3 hover:border-tx3 hover:text-tx'

@@ -277,6 +277,9 @@ export interface ImageGenRequest {
   prompt: string;
   size?: string; // e.g. '1024x1024' | 'auto'
   quality?: string;
+  outputFormat?: import('./openai-image-settings.js').ImageOutputFormat;
+  frameCount?: number;
+  frameDurationMs?: number;
   n?: number;
   signal: AbortSignal;
   onRetry?: (state: ProviderRetry | null) => void;

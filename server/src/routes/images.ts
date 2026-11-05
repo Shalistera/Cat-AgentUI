@@ -26,12 +26,13 @@ import {
 } from '../image-cleanup.js';
 import { allConfiguredSecretValues, redactSensitiveText } from '../secrets.js';
 import { novelaiSchema, NAI_MODELS } from '../novelai.js';
-import { openaiImageSettingsSchema } from '../openai-image-settings.js';
+import { openaiGifSizeSchema, openaiImageOutputFormats, openaiImageOutputSchema, openaiImageSettingsSchema } from '../openai-image-settings.js';
 
 const MAX_HISTORY_TURNS = 12;
 type ConvoTurn = { role: 'user' | 'assistant'; text: string };
 
 const generateSchema = z.object({
+  ...openaiImageOutputSchema.shape,
   novelai: novelaiSchema.optional(),
   modelId: z.string(),
   prompt: z.string().min(1).max(4000),
@@ -180,6 +181,7 @@ export async function imageRoutes(app: FastifyInstance) {
       .all();
     return accessibleOnly(rows, req.user!).filter(m => m.providerType !== 'novelai' || NAI_MODELS.includes(m.modelId as typeof NAI_MODELS[number])).map(({ accessMode: _, ...m }) => ({
       ...m, openaiImageSettings: m.providerType === 'openai' && !!m.openaiImageSettings,
+      outputFormats: m.providerType === 'openai' ? openaiImageOutputFormats(m.modelId, !!m.openaiImageSettings) : [],
     }));
   });
 
@@ -217,11 +219,29 @@ export async function imageRoutes(app: FastifyInstance) {
     if (!canUseModel(req.user!, model.id)) {
       return reply.code(403).send({ error: '该模型未对你开放' });
     }
+    const { outputFormat, frameCount, frameDurationMs } = body.data;
+    if (outputFormat && (provider.type !== 'openai' || !openaiImageOutputFormats(model.modelId, !!model.openaiImageSettings).includes(outputFormat))) {
+      return reply.code(400).send({ error: '该模型不支持所选输出格式' });
+    }
+    if (outputFormat !== 'gif' && (frameCount !== undefined || frameDurationMs !== undefined)) {
+      return reply.code(400).send({ error: '帧数和帧间隔仅适用于 GIF 输出' });
+    }
+    if (outputFormat === 'gif') {
+      if (inputUploadIds?.length || history.length) {
+        return reply.code(400).send({ error: 'GIF 仅支持文生图,请移除参考图并开始新的生成' });
+      }
+      body.data.frameCount ??= 9;
+      body.data.frameDurationMs ??= 200;
+    }
     if (provider.type === 'openai') {
       if (model.openaiImageSettings) {
-        const settings = openaiImageSettingsSchema.safeParse({ size, quality });
+        const settings = (outputFormat === 'gif'
+          ? openaiImageSettingsSchema.extend({ size: openaiGifSizeSchema })
+          : openaiImageSettingsSchema).safeParse({ size, quality });
         if (!settings.success) {
-          return reply.code(400).send({ error: 'OpenAI 图像质量须为 low、medium 或 high,分辨率须符合 GPT Image 2.5 的尺寸限制' });
+          return reply.code(400).send({ error: outputFormat === 'gif'
+            ? 'GIF 质量须为 low、medium 或 high,每帧宽高须为 16 的正整数倍或自动'
+            : 'OpenAI 图像质量须为 low、medium 或 high,分辨率须符合 GPT Image 2.5 的尺寸限制' });
         }
         ({ size, quality } = settings.data);
         Object.assign(body.data, settings.data);
@@ -316,6 +336,7 @@ export async function imageRoutes(app: FastifyInstance) {
         try {
           const result = await adapter.generateImages!(toRuntimeConfig(provider), {
             model: model.modelId, prompt, size, quality, n: requestedN,
+            outputFormat, frameCount: body.data.frameCount, frameDurationMs: body.data.frameDurationMs,
             novelai: body.data.novelai,
             signal, inputImages, context,
             onRetry(state) { job.retry = state; },

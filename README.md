@@ -75,6 +75,10 @@ npm start              # Listens on 0.0.0.0:3000
 
 Open `http://localhost:3000`, register the first account (which automatically becomes an administrator), then go to **Admin → Providers** to add a provider and pull its models, and you are ready to chat. After initialization, open registration is off by default and later accounts are created by an administrator; you can open it manually in the site settings if you need to.
 
+### GPT Image 2.6 animations
+
+Import and enable `gpt-image-2.6-sunburst` or `gpt-image-2.6-flare` on an OpenAI provider, then choose **Output format → Animated GIF** in Image Studio. Set 2–64 frames and 20–2000 ms per frame (rounded to 10 ms); defaults are 9 frames and 200 ms. GIF generation accepts text only: describe motion and looping without reference images. Gallery previews and downloads preserve the full animation. PNG, JPEG, and WebP remain available for still images and edits. Frame resolution defaults to auto; enable quality/resolution in model details for manual sizes. Reduce frame count, size, or quantity if the provider rejects the pixel budget. See the [OpenAI image generation guide](https://developers.openai.com/api/docs/guides/image-generation#generate-animated-gif-output).
+
 ### NovelAI V5 image generation
 
 1. Add a **NovelAI V5** provider under **Admin → Providers**. Leave the API address empty to use `https://image.novelai.net`; fill in the **Persistent API Token** from your NovelAI account settings. The token uses the same server-side encrypted storage and is never sent to the browser.

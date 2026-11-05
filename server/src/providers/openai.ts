@@ -7,6 +7,7 @@ import { isBareOrigin, stripEndpointSuffix, trimUrl } from './base-url.js';
 import { thinkingOutputCap } from './output-cap.js';
 import { config } from '../config.js';
 import { defaultLevels } from '../reasoning.js';
+import { detectImageMime, extForMime } from '../storage.js';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
 
@@ -319,6 +320,7 @@ export const openaiAdapter: ChatAdapter = {
     const prompt = req.system ? `${req.system}\n\n${req.prompt}` : req.prompt;
     // dall-e-3 has no /images/edits endpoint; ignore reference images rather than 400.
     const inputImages = req.model.startsWith('dall-e-3') ? undefined : req.inputImages;
+    if (req.outputFormat === 'gif' && req.inputImages?.length) throw new Error('GIF 仅支持文生图,请移除参考图并开始新的生成');
     let res: Response;
     if (inputImages?.length) {
       // image editing via multipart
@@ -328,9 +330,10 @@ export const openaiAdapter: ChatAdapter = {
       if (req.n) form.set('n', String(req.n));
       if (req.size && req.size !== 'auto') form.set('size', req.size);
       if (req.quality && req.quality !== 'auto' && !isDallE) form.set('quality', req.quality);
+      if (req.outputFormat) form.set('output_format', req.outputFormat);
       inputImages.forEach((img, i) => {
         const bytes = Buffer.from(img.dataBase64, 'base64');
-        const ext = img.mime.includes('jpeg') ? 'jpg' : img.mime.includes('webp') ? 'webp' : 'png';
+        const ext = extForMime(img.mime);
         form.append('image[]', new Blob([new Uint8Array(bytes)], { type: img.mime }), `input${i}.${ext}`);
       });
       res = await fetchRetry(`${base(cfg)}/images/edits`, {
@@ -340,6 +343,11 @@ export const openaiAdapter: ChatAdapter = {
       const body: Record<string, unknown> = { model: req.model, prompt, n: req.n || 1 };
       if (req.size && req.size !== 'auto') body.size = req.size;
       if (req.quality && req.quality !== 'auto') body.quality = req.quality;
+      if (req.outputFormat) body.output_format = req.outputFormat;
+      if (req.outputFormat === 'gif') {
+        body.frame_count = req.frameCount ?? 9;
+        body.frame_duration_ms = req.frameDurationMs ?? 200;
+      }
       if (isDallE) body.response_format = 'b64_json'; // gpt-image-* returns b64 by default and rejects this param
       res = await fetchRetry(`${base(cfg)}/images/generations`, {
         method: 'POST', headers: headers(cfg), body: JSON.stringify(body), signal: req.signal,
@@ -353,12 +361,27 @@ export const openaiAdapter: ChatAdapter = {
       : undefined;
     const out: GeneratedImage[] = [];
     for (const d of j?.data ?? []) {
-      if (d.b64_json) out.push({ mime: 'image/png', dataBase64: d.b64_json, usage });
+      // Base64 does not imply PNG. GIF bytes must keep their actual MIME and
+      // extension through validation, storage, preview, and downloads.
+      const format = d.output_format ?? j.output_format ?? req.outputFormat;
+      const declaredMime = format ? `image/${format}` : undefined;
+      const generationSettings = req.outputFormat ? {
+        provider: 'openai', outputFormat: req.outputFormat,
+        ...(req.outputFormat === 'gif' ? { frameCount: req.frameCount ?? 9, frameDurationMs: req.frameDurationMs ?? 200 } : {}),
+      } : undefined;
+      if (d.b64_json) out.push({
+        mime: declaredMime ?? detectImageMime(Buffer.from(d.b64_json.slice(0, 32), 'base64')) ?? 'image/png',
+        dataBase64: d.b64_json, usage, generationSettings,
+      });
       else if (d.url) {
         const imgRes = await fetch(d.url, { signal: req.signal });
         if (!imgRes.ok) throw new Error(`图片下载失败 (${imgRes.status})`);
         const buf = await readBodyLimited(imgRes, config.maxGeneratedImageBytes);
-        out.push({ mime: imgRes.headers.get('content-type') || 'image/png', dataBase64: buf.toString('base64'), usage });
+        const contentType = imgRes.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+        out.push({
+          mime: declaredMime ?? (contentType?.startsWith('image/') ? contentType : detectImageMime(buf)) ?? 'image/png',
+          dataBase64: buf.toString('base64'), usage, generationSettings,
+        });
       }
     }
     if (!out.length) throw new Error('图像生成接口未返回图片数据');

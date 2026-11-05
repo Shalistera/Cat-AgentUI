@@ -1,6 +1,22 @@
 // Studio pages: Image Studio, Gallery, OCR, PPT, Translation and NAI Studio.
 // Keys are the Chinese source strings passed to t() / tServer().
 export default {
+  '模型默认': 'Model default',
+  'GIF 动图': 'Animated GIF',
+  '帧数': 'Frame count',
+  '每帧时长(ms)': 'Frame duration (ms)',
+  '每帧分辨率': 'Frame resolution',
+  'GIF 每帧宽高须为 16 的正整数倍': 'GIF frame dimensions must be positive multiples of 16',
+  'GIF 帧数须为 2–64 的整数': 'GIF frame count must be an integer from 2 to 64',
+  'GIF 帧间隔须为 20–2000 毫秒的整数': 'GIF frame duration must be an integer from 20 to 2000 ms',
+  'GIF 质量须为 low、medium 或 high,每帧宽高须为 16 的正整数倍或自动': 'GIF quality must be low, medium, or high; frame dimensions must be positive multiples of 16 or auto',
+  '仅支持文生图。请在提示词中描述动作和循环方式;帧间隔按 10 毫秒取整。': 'Text-to-image only. Describe the motion and loop in your prompt. Frame duration is rounded to 10 ms.',
+  '每轮动画约 {seconds} 秒': 'Each animation loop is about {seconds} seconds',
+  '建议使用自动分辨率。若超过模型像素预算,请减少帧数、尺寸或生成数量。': 'Auto resolution is recommended. If the model pixel budget is exceeded, reduce the frame count, dimensions, or number of animations.',
+  '该模型不支持所选输出格式': 'This model does not support the selected output format',
+  '帧数和帧间隔仅适用于 GIF 输出': 'Frame count and duration are only available for GIF output',
+  'GIF 仅支持文生图,请移除参考图并开始新的生成': 'GIF supports text-to-image only. Remove reference images and start a new generation',
+  '描述主体、动作和循环,例如:一只黑猫挥动爪子,回到起始姿势,镜头固定,无缝循环…': 'Describe the subject, motion, and loop, e.g. a black cat waves its paw and returns to its starting pose, fixed camera, seamless loop…',
   '已更新图像设置': 'Image settings updated',
   'OpenAI 质量/分辨率设置': 'OpenAI quality / resolution settings',
   '按 GPT Image 2.5 Flare / Sunburst 规格设置,适用于支持这些参数的 OpenAI 兼容图像模型。': 'Uses GPT Image 2.5 Flare / Sunburst specifications for compatible OpenAI image models.',

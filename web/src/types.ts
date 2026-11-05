@@ -307,10 +307,13 @@ export interface McpServerInfo {
   confirmCalls: boolean;
 }
 
+export type ImageOutputFormat = 'png' | 'jpeg' | 'webp' | 'gif';
+
 export interface ImageModel {
   id: string; modelId: string; displayName: string | null;
   providerName: string; providerType: string;
   openaiImageSettings: boolean;
+  outputFormats: ImageOutputFormat[];
 }
 
 export interface ImageRecord {
